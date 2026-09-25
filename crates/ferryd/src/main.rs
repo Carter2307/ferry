@@ -186,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
     let builder = ferry_build::Builder::new(config.builds_dir(), config.repos_dir(), config.docker_bin.clone());
     let routes = ferry_proxy::RouteTable::new();
     if let Some(host) = &config.dashboard_host {
-        routes.set_service_routes("__dashboard", &[host.clone()], vec![loopback_of(config.api_addr)]);
+        routes.set_service_routes("__dashboard", std::slice::from_ref(host), vec![loopback_of(config.api_addr)]);
     }
 
     let shutdown = CancellationToken::new();
