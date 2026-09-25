@@ -23,7 +23,6 @@ chrono.workspace = true
 reqwest.workspace = true
 # Only for deleting the engine's own rows of the `settings` table (the Store
 # has no delete for settings); same version/features as the workspace.
-sqlx.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

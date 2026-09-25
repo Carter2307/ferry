@@ -5,7 +5,7 @@ use crate::schedule::Schedule;
 use crate::{Error, Result};
 
 /// Names that cannot be used for services/datastores.
-pub const RESERVED_NAMES: &[&str] = &["ferry", "localhost", "api", "proxy"];
+pub const RESERVED_NAMES: &[&str] = &["ferry", "localhost"];
 
 /// Maximum instances per service.
 pub const MAX_INSTANCES: u32 = 50;

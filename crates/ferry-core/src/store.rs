@@ -923,6 +923,12 @@ impl Store {
         Ok(())
     }
 
+    /// Delete a setting; returns whether it existed.
+    pub async fn delete_setting(&self, key: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM settings WHERE key = ?").bind(key).execute(&self.pool).await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     // -----------------------------------------------------------------------
     // derived data
 

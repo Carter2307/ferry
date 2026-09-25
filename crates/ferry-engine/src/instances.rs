@@ -57,9 +57,7 @@ pub(crate) async fn load_build_info(store: &Store, deploy_id: &str) -> Option<Bu
 /// Forget the build info of deploys (their image is gone). Best effort.
 pub(crate) async fn delete_build_info(store: &Store, deploy_ids: &[String]) {
     for id in deploy_ids {
-        let res =
-            sqlx::query("DELETE FROM settings WHERE key = ?").bind(build_info_key(id)).execute(store.pool()).await;
-        if let Err(e) = res {
+        if let Err(e) = store.delete_setting(&build_info_key(id)).await {
             debug!(deploy = %id, "cannot delete build info: {e}");
         }
     }
