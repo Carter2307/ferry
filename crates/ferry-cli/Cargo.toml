@@ -1,0 +1,29 @@
+[package]
+name = "ferry-cli"
+description = "Command-line client for Ferry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ferry"
+path = "src/main.rs"
+
+[dependencies]
+ferry-core.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+tar.workspace = true
+flate2.workspace = true
+ignore.workspace = true
+tempfile.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

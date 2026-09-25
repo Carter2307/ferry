@@ -1,0 +1,22 @@
+[package]
+name = "ferryd"
+description = "Ferry server: a self-hosted Render alternative"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-core.workspace = true
+ferry-docker.workspace = true
+ferry-build.workspace = true
+ferry-proxy.workspace = true
+ferry-tls.workspace = true
+ferry-engine.workspace = true
+ferry-api.workspace = true
+tokio.workspace = true
+axum.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rustls.workspace = true

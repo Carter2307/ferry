@@ -1,0 +1,47 @@
+# A Ferry blueprint (render.yaml-compatible). Apply with:
+#   ferry blueprint apply examples/blueprint/ferry.yaml
+envVarGroups:
+  - name: shared-settings
+    envVars:
+      - key: APP_ENV
+        value: production
+
+databases:
+  - name: app-db
+    postgresMajorVersion: "16"
+    databaseName: app
+    user: app
+
+services:
+  - type: redis
+    name: cache
+
+  - type: web
+    name: hello
+    runtime: image
+    image:
+      url: nginx:alpine
+    port: 80
+    healthCheckPath: /
+    numInstances: 2
+    envVars:
+      - fromGroup: shared-settings
+      - key: DATABASE_URL
+        fromDatabase:
+          name: app-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: cache
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+
+  - type: cron
+    name: nightly
+    runtime: image
+    image:
+      url: busybox:stable
+    schedule: "0 3 * * *"
+    startCommand: echo "nightly job ran at $(date)"

@@ -1,0 +1,1 @@
+# no dependencies — the app only uses the standard library

@@ -1,0 +1,26 @@
+[package]
+name = "ferry-engine"
+description = "Deploy orchestration, reconciliation, cron and datastores for Ferry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-core.workspace = true
+ferry-docker.workspace = true
+ferry-build.workspace = true
+ferry-proxy.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+async-stream.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

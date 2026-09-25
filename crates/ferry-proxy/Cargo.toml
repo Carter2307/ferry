@@ -1,0 +1,23 @@
+[package]
+name = "ferry-proxy"
+description = "Host-based HTTP/HTTPS reverse proxy with websocket support for Ferry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-core.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true

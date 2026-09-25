@@ -1,0 +1,98 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ferry-core",
+    "crates/ferry-docker",
+    "crates/ferry-build",
+    "crates/ferry-proxy",
+    "crates/ferry-tls",
+    "crates/ferry-engine",
+    "crates/ferry-api",
+    "crates/ferry-cli",
+    "crates/ferryd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+repository = "https://github.com/ferry-paas/ferry"
+
+[workspace.dependencies]
+# internal crates
+ferry-core = { path = "crates/ferry-core" }
+ferry-docker = { path = "crates/ferry-docker" }
+ferry-build = { path = "crates/ferry-build" }
+ferry-proxy = { path = "crates/ferry-proxy" }
+ferry-tls = { path = "crates/ferry-tls" }
+ferry-engine = { path = "crates/ferry-engine" }
+ferry-api = { path = "crates/ferry-api" }
+
+# async runtime & utilities
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tokio-stream = { version = "0.1", features = ["sync", "io-util"] }
+futures = "0.3"
+async-trait = "0.1"
+async-stream = "0.3"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# errors & logging
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# data
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
+croner = "3"
+
+# docker
+bollard = "0.21"
+
+# http
+axum = { version = "0.8", features = ["macros"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "limit"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+
+# tls / acme
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls-pemfile = "2"
+instant-acme = "0.8"
+rcgen = "0.14"
+
+# crypto & encoding
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+
+# archives & files
+tar = "0.4"
+flate2 = "1"
+ignore = "0.4"
+tempfile = "3"
+
+# cli
+clap = { version = "4", features = ["derive", "env"] }
+
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+strip = true

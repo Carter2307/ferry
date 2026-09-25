@@ -1,0 +1,9 @@
+{
+  "name": "node-hello",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Node.js web service for Ferry (no dependencies)",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

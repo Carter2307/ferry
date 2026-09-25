@@ -1,0 +1,23 @@
+[package]
+name = "ferry-tls"
+description = "Automatic HTTPS (ACME / Let's Encrypt HTTP-01) and SNI certificate resolution for Ferry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-core.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+instant-acme.workspace = true
+rcgen.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
