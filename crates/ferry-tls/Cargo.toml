@@ -16,8 +16,12 @@ tracing.workspace = true
 chrono.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
-instant-acme.workspace = true
+# ring (not the default aws-lc-rs) so the whole process uses a single crypto provider.
+instant-acme = { version = "0.8.5", default-features = false, features = ["ring", "hyper-rustls"] }
 rcgen.workspace = true
+x509-parser = "0.18.1"
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-rustls.workspace = true

@@ -10,10 +10,24 @@
 //!
 //! Uses the `git` and `docker` CLIs (via `tokio::process`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
 
-use ferry_core::{CancellationToken, LogSink, Result, Runtime, ServiceType};
+use ferry_core::{CancellationToken, Error, LogSink, Result, Runtime, ServiceType};
+
+mod archive;
+mod detect;
+mod docker;
+mod dockerfile;
+mod fsutil;
+mod git;
+mod process;
+mod redact;
+
+use crate::git::GitError;
 
 /// Where the code comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,12 +101,41 @@ pub struct GeneratedDockerfile {
     pub port_hint: Option<u16>,
 }
 
+/// Name of the Dockerfile the builder writes for native runtimes.
+pub const GENERATED_DOCKERFILE: &str = "Dockerfile.ferry";
+
+/// `.dockerignore` written next to generated Dockerfiles when the project
+/// has none.
+const DEFAULT_DOCKERIGNORE: &str = "\
+# Written by Ferry (no .dockerignore in the project)
+.git
+**/node_modules
+target
+.venv
+**/__pycache__
+Dockerfile.ferry*
+.dockerignore
+";
+
+type RepoLocks = Arc<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>;
+
 /// Builds images. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct Builder {
     builds_dir: PathBuf,
     repos_dir: PathBuf,
     docker_bin: String,
+    /// Serializes git operations on one service's cache.
+    repo_locks: RepoLocks,
+}
+
+/// What [`prepare_context`] decided.
+struct Prepared {
+    context: PathBuf,
+    dockerfile: PathBuf,
+    runtime: Runtime,
+    port_hint: Option<u16>,
+    messages: Vec<String>,
 }
 
 impl Builder {
@@ -100,7 +143,12 @@ impl Builder {
     /// after each build. `repos_dir`: persistent git caches
     /// (`<repos_dir>/<service_id>`) for fast incremental fetches.
     pub fn new(builds_dir: PathBuf, repos_dir: PathBuf, docker_bin: String) -> Self {
-        Builder { builds_dir, repos_dir, docker_bin }
+        Builder {
+            builds_dir: absolute(builds_dir),
+            repos_dir: absolute(repos_dir),
+            docker_bin,
+            repo_locks: Arc::new(StdMutex::new(HashMap::new())),
+        }
     }
 
     /// Fetch, detect, generate and build. Log lines: `==> ...` system
@@ -109,29 +157,412 @@ impl Builder {
     /// return `Error::Build` with a concise reason (the full output is in
     /// the logs). Always cleans up the scratch directory.
     pub async fn build(&self, req: &BuildRequest, logs: &LogSink, cancel: &CancellationToken) -> Result<BuildOutput> {
-        let _ = (req, logs, cancel, &self.builds_dir, &self.repos_dir, &self.docker_bin);
-        todo!("ferry-build: build")
+        match self.build_scratch(req, logs, cancel).await {
+            Ok(out) => {
+                logs.system("==> Build successful 🎉");
+                tracing::info!(service = %req.service_name, deploy = %req.deploy_id, image = %out.image, "build succeeded");
+                Ok(out)
+            }
+            Err(Error::Canceled) => {
+                logs.system("==> Build canceled");
+                tracing::info!(service = %req.service_name, deploy = %req.deploy_id, "build canceled");
+                Err(Error::Canceled)
+            }
+            Err(e) => {
+                let e = into_build_error(e);
+                let reason = match &e {
+                    Error::Build(m) => m.clone(),
+                    other => other.to_string(),
+                };
+                logs.system(format!("==> Build failed: {reason}"));
+                tracing::info!(service = %req.service_name, deploy = %req.deploy_id, "build failed: {reason}");
+                Err(e)
+            }
+        }
+    }
+
+    /// Validate the request, run the build in `<builds_dir>/<deploy_id>` and
+    /// always remove that directory afterwards.
+    async fn build_scratch(
+        &self,
+        req: &BuildRequest,
+        logs: &LogSink,
+        cancel: &CancellationToken,
+    ) -> Result<BuildOutput> {
+        if cancel.is_cancelled() {
+            return Err(Error::Canceled);
+        }
+        fsutil::safe_component("deploy id", &req.deploy_id).map_err(Error::Build)?;
+        fsutil::safe_component("service id", &req.service_id).map_err(Error::Build)?;
+        let tag = req.image_tag.trim();
+        if tag.is_empty() || tag.starts_with('-') || tag.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(Error::Build(format!("invalid image tag '{}'", req.image_tag)));
+        }
+        let scratch = fsutil::ScratchDir::create(self.builds_dir.join(&req.deploy_id))
+            .await
+            .map_err(|e| Error::Build(format!("cannot create build directory: {e}")))?;
+        let res = self.build_in(req, logs, cancel, scratch.path()).await;
+        scratch.cleanup().await;
+        res
+    }
+
+    async fn build_in(
+        &self,
+        req: &BuildRequest,
+        logs: &LogSink,
+        cancel: &CancellationToken,
+        scratch: &Path,
+    ) -> Result<BuildOutput> {
+        // 1. Fetch the source into the scratch directory.
+        let (export_root, commit_sha, commit_message) = match &req.source {
+            BuildSource::Git { repo_url, branch, commit } => {
+                let lock = self.repo_lock(&req.service_id);
+                let _guard = tokio::select! {
+                    g = lock.lock() => g,
+                    _ = cancel.cancelled() => return Err(Error::Canceled),
+                };
+                let cache = self.repos_dir.join(&req.service_id);
+                let co = git::checkout(&cache, repo_url, branch, commit.as_deref(), scratch, logs, cancel)
+                    .await
+                    .map_err(git_build_error)?;
+                for s in &co.report_skipped {
+                    logs.system(format!("==> Skipped {s}"));
+                }
+                if co.has_submodules {
+                    logs.system("==> Note: git submodules are not fetched");
+                }
+                let subject = (!co.subject.is_empty()).then_some(co.subject);
+                (scratch.to_path_buf(), Some(co.sha), subject)
+            }
+            BuildSource::Archive { path } => {
+                logs.system("==> Extracting uploaded source archive");
+                let (archive_path, dest, token) = (path.clone(), scratch.to_path_buf(), cancel.clone());
+                let root_dir = req.root_dir.clone();
+                let res = tokio::task::spawn_blocking(move || -> std::result::Result<_, archive::ExtractError> {
+                    let report = archive::extract_archive_file(&archive_path, &dest, &token)?;
+                    let root = choose_archive_root(&dest, root_dir.as_deref())?;
+                    Ok((report, root))
+                })
+                .await
+                .map_err(|e| Error::Build(format!("extraction task failed: {e}")))?;
+                let (report, root) = match res {
+                    Ok(v) => v,
+                    Err(archive::ExtractError::Canceled) => return Err(Error::Canceled),
+                    Err(e) => return Err(Error::Build(e.to_string())),
+                };
+                for s in &report.skipped {
+                    logs.system(format!("==> Skipped {s}"));
+                }
+                logs.system(format!("==> Extracted {} files ({})", report.files, human_bytes(report.bytes)));
+                (root, None, None)
+            }
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Canceled);
+        }
+
+        // 2. Context, runtime and Dockerfile (filesystem work → blocking pool).
+        let build_args: Vec<(String, String)> = {
+            let mut out: Vec<(String, String)> = Vec::new();
+            let mut skipped: Vec<&str> = Vec::new();
+            for (k, v) in &req.build_args {
+                if out.iter().any(|(seen, _)| seen == k) {
+                    continue;
+                }
+                if !dockerfile::usable_build_arg(k) || v.contains('\0') {
+                    skipped.push(k);
+                    continue;
+                }
+                out.push((k.clone(), v.clone()));
+            }
+            if !skipped.is_empty() {
+                logs.system(format!(
+                    "==> Not available at build time (reserved or invalid names): {}",
+                    skipped.join(", ")
+                ));
+            }
+            out
+        };
+        let prep_req = PrepareRequest {
+            export_root,
+            root_dir: req.root_dir.clone(),
+            runtime: req.runtime,
+            service_type: req.service_type,
+            dockerfile_path: req.dockerfile_path.clone(),
+            options: DockerfileOptions {
+                service_type: Some(req.service_type),
+                build_command: req.build_command.clone(),
+                start_command: req.start_command.clone(),
+                publish_dir: req.publish_dir.clone(),
+                build_arg_keys: build_args.iter().map(|(k, _)| k.clone()).collect(),
+            },
+        };
+        let prepared = tokio::task::spawn_blocking(move || prepare_context(&prep_req))
+            .await
+            .map_err(|e| Error::Build(format!("preparing the build failed: {e}")))?
+            .map_err(Error::Build)?;
+        for m in &prepared.messages {
+            logs.system(m.clone());
+        }
+        if cancel.is_cancelled() {
+            return Err(Error::Canceled);
+        }
+
+        // 3. docker build.
+        logs.system(format!("==> Building image {}", req.image_tag.trim()));
+        let build = docker::DockerBuild {
+            docker_bin: &self.docker_bin,
+            dockerfile: &prepared.dockerfile,
+            context: &prepared.context,
+            tag: req.image_tag.trim(),
+            labels: &req.labels,
+            build_args: &build_args,
+            no_cache: req.clear_cache,
+        };
+        docker::build(&build, logs, cancel).await?;
+
+        Ok(BuildOutput {
+            image: req.image_tag.trim().to_string(),
+            commit_sha,
+            commit_message,
+            runtime: prepared.runtime,
+            port_hint: prepared.port_hint,
+        })
     }
 
     /// Resolve the commit sha a branch currently points to (`git ls-remote`).
+    ///
+    /// Errors: `Invalid` for a malformed URL / branch or a branch that does not
+    /// exist ("branch 'x' not found in <url>"), `Internal` when the remote
+    /// cannot be reached. Credentials are never included in messages.
     pub async fn resolve_branch_head(&self, repo_url: &str, branch: &str) -> Result<String> {
-        let _ = (repo_url, branch);
-        todo!("ferry-build: resolve_branch_head")
+        git::ls_remote_branch(repo_url, branch.trim()).await.map_err(|e| match e {
+            GitError::NotFound(m) | GitError::Invalid(m) => Error::Invalid(m),
+            GitError::Canceled => Error::Canceled,
+            GitError::Failed(m) => Error::Internal(m),
+        })
     }
 
     /// Delete the git cache of a service (on service deletion).
     pub async fn remove_repo_cache(&self, service_id: &str) -> Result<()> {
-        let _ = service_id;
-        todo!("ferry-build: remove_repo_cache")
+        fsutil::safe_component("service id", service_id).map_err(Error::Invalid)?;
+        let lock = self.repo_lock(service_id);
+        {
+            let _guard = lock.lock().await;
+            fsutil::remove_dir_async(self.repos_dir.join(service_id))
+                .await
+                .map_err(|e| Error::Internal(format!("removing the git cache of {service_id}: {e}")))?;
+        }
+        if let Ok(mut locks) = self.repo_locks.lock()
+            && locks.get(service_id).is_some_and(|l| Arc::strong_count(l) <= 2)
+        {
+            locks.remove(service_id);
+        }
+        Ok(())
     }
+
+    fn repo_lock(&self, service_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.repo_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        locks.entry(service_id.to_string()).or_default().clone()
+    }
+}
+
+/// Root of an extracted archive: its single top-level directory when it has
+/// one and nothing else (`project/...` archives), else the extraction dir.
+/// When a `root_dir` only exists relative to the extraction dir itself (a
+/// monorepo whose root holds a single directory), that interpretation wins.
+fn choose_archive_root(extracted: &Path, root_dir: Option<&str>) -> io::Result<PathBuf> {
+    let Some(top) = archive::single_top_level_dir(extracted)? else {
+        return Ok(extracted.to_path_buf());
+    };
+    if let Some(rd) = root_dir.map(str::trim).filter(|r| !r.is_empty())
+        && fsutil::resolve_root_dir(&top, Some(rd)).is_err()
+        && fsutil::resolve_root_dir(extracted, Some(rd)).is_ok()
+    {
+        return Ok(extracted.to_path_buf());
+    }
+    Ok(top)
+}
+
+fn absolute(p: PathBuf) -> PathBuf {
+    std::path::absolute(&p).unwrap_or(p)
+}
+
+fn git_build_error(e: GitError) -> Error {
+    match e {
+        GitError::Canceled => Error::Canceled,
+        other => Error::Build(other.message()),
+    }
+}
+
+/// Every non-cancel failure of a build surfaces as `Error::Build`.
+fn into_build_error(e: Error) -> Error {
+    match e {
+        Error::Canceled => Error::Canceled,
+        Error::Build(m) => Error::Build(m),
+        Error::Invalid(m) | Error::Internal(m) | Error::Conflict(m) | Error::Docker(m) | Error::Unauthorized(m) => {
+            Error::Build(m)
+        }
+        other => Error::Build(other.to_string()),
+    }
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = n as f64;
+    let mut unit = 0;
+    while v >= 1024.0 && unit + 1 < UNITS.len() {
+        v /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[unit]) }
+}
+
+struct PrepareRequest {
+    export_root: PathBuf,
+    root_dir: Option<String>,
+    runtime: Runtime,
+    service_type: ServiceType,
+    dockerfile_path: Option<String>,
+    options: DockerfileOptions,
+}
+
+/// Resolve the context, choose the runtime and locate or write the
+/// Dockerfile. Blocking (filesystem); errors are user-facing messages.
+fn prepare_context(req: &PrepareRequest) -> std::result::Result<Prepared, String> {
+    let export_root = fs::canonicalize(&req.export_root).map_err(|e| format!("source directory: {e}"))?;
+    let context = fsutil::resolve_root_dir(&export_root, req.root_dir.as_deref())?;
+    let mut messages = Vec::new();
+    if context != export_root {
+        let rel = context.strip_prefix(&export_root).unwrap_or(&context);
+        messages.push(format!("==> Using root directory ./{}", rel.display()));
+    }
+
+    let dockerfile_rel = req.dockerfile_path.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    let runtime = match req.runtime {
+        Runtime::Image => {
+            return Err("runtime 'image' is not built from source (set an image on the service instead)".into());
+        }
+        Runtime::Auto => {
+            // A custom Dockerfile path means "use Docker"; the default name
+            // only when that file exists.
+            let custom_path = dockerfile_rel.filter(|p| display_rel(p) != "Dockerfile");
+            let explicit_dockerfile = custom_path.is_some()
+                || dockerfile_rel
+                    .is_some_and(|p| locate_dockerfile(&context, &export_root, p).is_ok_and(|f| f.is_some()));
+            if explicit_dockerfile {
+                Runtime::Docker
+            } else {
+                match detect::detect(&context) {
+                    Some(r) => {
+                        if r != Runtime::Docker {
+                            messages.push(format!("==> Detected {} runtime", runtime_label(r)));
+                        }
+                        r
+                    }
+                    None if req.service_type == ServiceType::StaticSite => Runtime::Static,
+                    None => {
+                        return Err("could not detect the runtime: add a Dockerfile, or a package.json, \
+                                    requirements.txt, pyproject.toml, Pipfile, go.mod, Cargo.toml, Gemfile \
+                                    or index.html, or set the runtime explicitly"
+                            .into());
+                    }
+                }
+            }
+        }
+        r => r,
+    };
+
+    if runtime == Runtime::Docker {
+        let rel = dockerfile_rel.unwrap_or("Dockerfile");
+        let dockerfile = locate_dockerfile(&context, &export_root, rel)?.ok_or_else(|| {
+            format!("Dockerfile not found at ./{} (paths are relative to the root directory)", display_rel(rel))
+        })?;
+        messages.push(format!("==> Using Dockerfile at ./{}", display_rel(rel)));
+        return Ok(Prepared { context, dockerfile, runtime, port_hint: None, messages });
+    }
+
+    let generated = generate_dockerfile(runtime, &context, &req.options).map_err(|e| match e {
+        Error::Invalid(m) | Error::Build(m) => m,
+        other => other.to_string(),
+    })?;
+    let is_static = runtime == Runtime::Static || req.service_type == ServiceType::StaticSite;
+    let used_runtime = if is_static { Runtime::Static } else { runtime };
+
+    write_dockerignore_if_missing(&context).map_err(|e| format!("writing .dockerignore: {e}"))?;
+    let dockerfile = write_generated_dockerfile(&context, &generated.contents)
+        .map_err(|e| format!("writing the generated Dockerfile: {e}"))?;
+    let name = dockerfile.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    messages.push(format!("==> Generated {name} for the {} runtime", runtime_label(used_runtime)));
+    Ok(Prepared { context, dockerfile, runtime: used_runtime, port_hint: generated.port_hint, messages })
+}
+
+fn runtime_label(r: Runtime) -> &'static str {
+    match r {
+        Runtime::Node => "Node.js",
+        Runtime::Python => "Python",
+        Runtime::Go => "Go",
+        Runtime::Rust => "Rust",
+        Runtime::Ruby => "Ruby",
+        Runtime::Static => "static site",
+        Runtime::Docker => "Docker",
+        Runtime::Image => "image",
+        Runtime::Auto => "auto",
+    }
+}
+
+fn display_rel(p: &str) -> String {
+    p.trim_start_matches("./").to_string()
+}
+
+/// A user Dockerfile relative to the context; it may live elsewhere in the
+/// checkout (`../Dockerfile`) but never outside it. `Ok(None)` when missing.
+fn locate_dockerfile(context: &Path, export_root: &Path, rel: &str) -> std::result::Result<Option<PathBuf>, String> {
+    if Path::new(rel).is_absolute() {
+        return Err(format!("Dockerfile path '{rel}' must be relative to the root directory"));
+    }
+    match fsutil::resolve_inside(context, Path::new(rel), export_root).map_err(|e| format!("Dockerfile path {e}"))? {
+        Some(p) if p.is_file() => Ok(Some(p)),
+        Some(_) => Err(format!("Dockerfile path '{rel}' is not a file")),
+        None => Ok(None),
+    }
+}
+
+fn write_dockerignore_if_missing(context: &Path) -> io::Result<()> {
+    let path = context.join(".dockerignore");
+    if fs::symlink_metadata(&path).is_ok() {
+        return Ok(());
+    }
+    match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut f) => f.write_all(DEFAULT_DOCKERIGNORE.as_bytes()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Write `Dockerfile.ferry` without ever overwriting a project file: if the
+/// name is taken, use `Dockerfile.ferry.1`, `.2`, …
+fn write_generated_dockerfile(context: &Path, contents: &str) -> io::Result<PathBuf> {
+    for i in 0..100 {
+        let name = if i == 0 { GENERATED_DOCKERFILE.to_string() } else { format!("{GENERATED_DOCKERFILE}.{i}") };
+        let path = context.join(&name);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                f.write_all(contents.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other("no free name for the generated Dockerfile"))
 }
 
 /// Detect the runtime of a source directory. Order: Dockerfile → docker;
 /// package.json → node; requirements.txt/pyproject.toml/Pipfile → python;
 /// go.mod → go; Cargo.toml → rust; Gemfile → ruby; index.html → static.
 pub fn detect_runtime(dir: &Path) -> Option<Runtime> {
-    let _ = dir;
-    todo!("ferry-build: detect_runtime")
+    detect::detect(dir)
 }
 
 /// Generate a Dockerfile for a native runtime (`Node`, `Python`, `Go`,
@@ -139,6 +570,238 @@ pub fn detect_runtime(dir: &Path) -> Option<Runtime> {
 /// runtime `Static`) are served by `nginx:alpine` on port 80, after an
 /// optional node build stage when `package.json` exists.
 pub fn generate_dockerfile(runtime: Runtime, dir: &Path, opts: &DockerfileOptions) -> Result<GeneratedDockerfile> {
-    let _ = (runtime, dir, opts);
-    todo!("ferry-build: generate_dockerfile")
+    dockerfile::generate(runtime, dir, opts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prep(
+        files: &[(&str, &str)],
+        f: impl FnOnce(&mut PrepareRequest),
+    ) -> (tempfile::TempDir, std::result::Result<Prepared, String>) {
+        let d = tempfile::tempdir().unwrap();
+        for (name, contents) in files {
+            let p = d.path().join(name);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, contents).unwrap();
+        }
+        let mut req = PrepareRequest {
+            export_root: d.path().to_path_buf(),
+            root_dir: None,
+            runtime: Runtime::Auto,
+            service_type: ServiceType::WebService,
+            dockerfile_path: None,
+            options: DockerfileOptions { service_type: Some(ServiceType::WebService), ..Default::default() },
+        };
+        f(&mut req);
+        let res = prepare_context(&req);
+        (d, res)
+    }
+
+    #[test]
+    fn prepare_uses_user_dockerfile() {
+        let (_d, res) = prep(&[("Dockerfile", "FROM busybox"), ("package.json", "{}")], |_| {});
+        let p = res.unwrap();
+        assert_eq!(p.runtime, Runtime::Docker);
+        assert!(p.dockerfile.ends_with("Dockerfile"));
+        assert_eq!(p.port_hint, None);
+        assert!(p.messages.iter().any(|m| m == "==> Using Dockerfile at ./Dockerfile"));
+        assert!(!p.context.join(".dockerignore").exists());
+    }
+
+    #[test]
+    fn prepare_custom_dockerfile_path_and_root_dir() {
+        let (_d, res) = prep(
+            &[("services/api/docker/Prod.Dockerfile", "FROM busybox"), ("services/api/package.json", "{}")],
+            |r| {
+                r.root_dir = Some("services/api".into());
+                r.dockerfile_path = Some("./docker/Prod.Dockerfile".into());
+            },
+        );
+        let p = res.unwrap();
+        assert_eq!(p.runtime, Runtime::Docker);
+        assert!(p.context.ends_with("services/api"));
+        assert!(p.messages.iter().any(|m| m.contains("root directory ./services/api")));
+
+        // explicit docker runtime with a missing Dockerfile → clear error
+        let (_d, res) = prep(&[("index.html", "")], |r| r.runtime = Runtime::Docker);
+        let err = res.err().unwrap();
+        assert!(err.contains("Dockerfile not found at ./Dockerfile"), "{err}");
+
+        // Dockerfile outside the checkout is refused
+        let (_d, res) = prep(&[("index.html", "")], |r| {
+            r.runtime = Runtime::Docker;
+            r.dockerfile_path = Some("../../../../etc/hosts".into());
+        });
+        assert!(res.is_err());
+        let (_d, res) = prep(&[("index.html", "")], |r| {
+            r.runtime = Runtime::Docker;
+            r.dockerfile_path = Some("/etc/hosts".into());
+        });
+        assert!(res.err().unwrap().contains("relative"));
+    }
+
+    #[test]
+    fn prepare_custom_dockerfile_path_with_auto_runtime() {
+        // A custom path that does not exist is an error, not a silent fallback.
+        let (_d, res) = prep(&[("package.json", "{}"), ("index.js", "")], |r| {
+            r.dockerfile_path = Some("docker/Dockerfile.prod".into());
+        });
+        let err = res.err().unwrap();
+        assert!(err.contains("Dockerfile not found at ./docker/Dockerfile.prod"), "{err}");
+        // The default name falls back to detection when absent.
+        let (_d, res) = prep(&[("package.json", "{}"), ("index.js", "")], |r| {
+            r.dockerfile_path = Some("./Dockerfile".into());
+        });
+        assert_eq!(res.unwrap().runtime, Runtime::Node);
+    }
+
+    #[test]
+    fn prepare_generates_and_never_overwrites() {
+        let (d, res) = prep(
+            &[
+                ("package.json", r#"{"scripts":{"start":"node s.js"}}"#),
+                ("Dockerfile.ferry", "user file"),
+                (".dockerignore", "custom"),
+            ],
+            |_| {},
+        );
+        let p = res.unwrap();
+        assert_eq!(p.runtime, Runtime::Node);
+        assert!(p.dockerfile.ends_with("Dockerfile.ferry.1"), "{:?}", p.dockerfile);
+        assert_eq!(fs::read_to_string(d.path().join("Dockerfile.ferry")).unwrap(), "user file");
+        assert_eq!(fs::read_to_string(d.path().join(".dockerignore")).unwrap(), "custom");
+        assert!(fs::read_to_string(&p.dockerfile).unwrap().contains("FROM node:22-alpine"));
+        assert!(p.messages.iter().any(|m| m == "==> Detected Node.js runtime"));
+
+        let (d, res) = prep(&[("index.html", "")], |_| {});
+        let p = res.unwrap();
+        assert_eq!(p.runtime, Runtime::Static);
+        assert_eq!(p.port_hint, Some(80));
+        let ignore = fs::read_to_string(d.path().join(".dockerignore")).unwrap();
+        for entry in [".git", "node_modules", "target", ".venv", "__pycache__"] {
+            assert!(ignore.contains(entry), "{ignore}");
+        }
+    }
+
+    #[test]
+    fn prepare_static_site_type() {
+        // StaticSite with a node project: node build stage + nginx
+        let (_d, res) = prep(&[("package.json", r#"{"scripts":{"build":"vite build"}}"#)], |r| {
+            r.service_type = ServiceType::StaticSite;
+            r.options.service_type = Some(ServiceType::StaticSite);
+        });
+        let p = res.unwrap();
+        assert_eq!(p.runtime, Runtime::Static);
+        assert_eq!(p.port_hint, Some(80));
+        // StaticSite with nothing detectable but a publish dir
+        let (_d, res) = prep(&[("site/index.html", "")], |r| {
+            r.service_type = ServiceType::StaticSite;
+            r.options.service_type = Some(ServiceType::StaticSite);
+            r.options.publish_dir = Some("site".into());
+        });
+        assert_eq!(res.unwrap().runtime, Runtime::Static);
+    }
+
+    #[test]
+    fn prepare_errors() {
+        let (_d, res) = prep(&[("README.md", "")], |_| {});
+        assert!(res.err().unwrap().contains("could not detect the runtime"));
+        let (_d, res) = prep(&[("index.html", "")], |r| r.runtime = Runtime::Image);
+        assert!(res.is_err());
+        let (_d, res) = prep(&[("index.html", "")], |r| r.root_dir = Some("../..".into()));
+        assert!(res.err().unwrap().contains("outside"));
+        let (_d, res) = prep(&[("index.html", "")], |r| r.root_dir = Some("missing".into()));
+        assert!(res.err().unwrap().contains("does not exist"));
+    }
+
+    #[test]
+    fn archive_root_selection() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("proj/services/api")).unwrap();
+        // single top-level dir → it becomes the root
+        assert!(choose_archive_root(d.path(), None).unwrap().ends_with("proj"));
+        assert!(choose_archive_root(d.path(), Some("services/api")).unwrap().ends_with("proj"));
+        // root_dir only valid from the extraction dir → keep the extraction dir
+        assert_eq!(choose_archive_root(d.path(), Some("proj/services/api")).unwrap(), d.path());
+        // root files → no stripping
+        fs::write(d.path().join("README"), "x").unwrap();
+        assert_eq!(choose_archive_root(d.path(), None).unwrap(), d.path());
+    }
+
+    #[test]
+    fn build_errors_are_normalized() {
+        assert!(matches!(into_build_error(Error::Canceled), Error::Canceled));
+        assert!(matches!(into_build_error(Error::invalid("x")), Error::Build(m) if m == "x"));
+        let io = into_build_error(Error::Io(io::Error::other("disk full")));
+        assert!(matches!(io, Error::Build(m) if m.contains("disk full")));
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(1536), "1.5 KiB");
+    }
+
+    #[tokio::test]
+    async fn rejects_bad_ids_and_tags() {
+        let b = Builder::new(PathBuf::from("/tmp/ferry-none/b"), PathBuf::from("/tmp/ferry-none/r"), "docker".into());
+        let mut req = BuildRequest {
+            service_id: "srv-1".into(),
+            deploy_id: "../evil".into(),
+            service_name: "web".into(),
+            service_type: ServiceType::WebService,
+            source: BuildSource::Archive { path: "/nonexistent.tar.gz".into() },
+            runtime: Runtime::Auto,
+            root_dir: None,
+            dockerfile_path: None,
+            build_command: None,
+            start_command: None,
+            publish_dir: None,
+            image_tag: "ferry/web:dep-1".into(),
+            build_args: vec![],
+            labels: BTreeMap::new(),
+            clear_cache: false,
+        };
+        let (logs, _rx) = LogSink::channel();
+        let cancel = CancellationToken::new();
+        assert!(matches!(b.build(&req, &logs, &cancel).await, Err(Error::Build(_))));
+        req.deploy_id = "dep-1".into();
+        req.image_tag = "--evil".into();
+        assert!(matches!(b.build(&req, &logs, &cancel).await, Err(Error::Build(_))));
+        cancel.cancel();
+        assert!(matches!(b.build(&req, &logs, &cancel).await, Err(Error::Canceled)));
+        assert!(b.remove_repo_cache("../x").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_archive_fails_and_cleans_up() {
+        let root = tempfile::tempdir().unwrap();
+        let b = Builder::new(root.path().join("builds"), root.path().join("repos"), "docker".into());
+        let req = BuildRequest {
+            service_id: "srv-1".into(),
+            deploy_id: "dep-1".into(),
+            service_name: "web".into(),
+            service_type: ServiceType::WebService,
+            source: BuildSource::Archive { path: root.path().join("missing.tar.gz") },
+            runtime: Runtime::Auto,
+            root_dir: None,
+            dockerfile_path: None,
+            build_command: None,
+            start_command: None,
+            publish_dir: None,
+            image_tag: "ferry/web:dep-1".into(),
+            build_args: vec![],
+            labels: BTreeMap::new(),
+            clear_cache: false,
+        };
+        let (logs, mut rx) = LogSink::channel();
+        let err = b.build(&req, &logs, &CancellationToken::new()).await.unwrap_err();
+        assert!(matches!(&err, Error::Build(m) if m.contains("not found")), "{err}");
+        assert!(!root.path().join("builds/dep-1").exists());
+        let mut lines = Vec::new();
+        while let Ok(l) = rx.try_recv() {
+            lines.push(l.line);
+        }
+        assert!(lines.iter().any(|l| l.starts_with("==> Build failed")), "{lines:?}");
+        b.remove_repo_cache("srv-1").await.unwrap();
+    }
 }

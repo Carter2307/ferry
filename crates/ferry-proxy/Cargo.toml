@@ -21,3 +21,5 @@ tokio-rustls.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true
+rcgen.workspace = true
+tokio-tungstenite = "0.30"

@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 ferry-core.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["io-util"] }
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -16,6 +16,9 @@ tracing.workspace = true
 tar.workspace = true
 flate2.workspace = true
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,5 +1,3705 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Ferry</title></head>
-<body><p>Ferry dashboard placeholder.</p></body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Ferry</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317202b'/%3E%3Cpath d='M7 17h18l-2.6 5.5H9.6z M11 17v-5h8l2.5 5' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --surface-2: #f8f9fb;
+  --sunken: #edf0f4;
+  --hover: #f1f4f7;
+  --ink: #17202b;
+  --ink-2: #384352;
+  --muted: #5f6b7c;
+  --faint: #8792a2;
+  --line: #e1e6ec;
+  --line-strong: #c9d1db;
+  --primary: #17202b;
+  --primary-hover: #2a3544;
+  --primary-ink: #ffffff;
+  --focus: #3b7cf6;
+  --link: #1f5fd1;
+  --ok: #167c43;       --ok-bg: #e3f4ea;   --ok-line: #b9e2c9;
+  --busy: #2461cf;     --busy-bg: #e6eefc; --busy-line: #bfd2f6;
+  --bad: #c42f2f;      --bad-bg: #fcebea;  --bad-line: #f2c3c1;
+  --warn: #9a5c00;     --warn-bg: #fcf1dc; --warn-line: #efd29b;
+  --off: #626b78;      --off-bg: #eceef1;  --off-line: #d3d8de;
+  --none: #7c8594;     --none-bg: #f1f3f5; --none-line: #dde1e6;
+  --log-bg: #0e141b;
+  --log-ink: #d3dbe6;
+  --log-muted: #6c7a8d;
+  --log-err: #ff9b93;
+  --log-sys: #86b7ff;
+  --log-line: #1d2631;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow-pop: 0 12px 32px rgba(16, 24, 36, .18), 0 2px 6px rgba(16, 24, 36, .08);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --side-w: 236px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141a;
+    --surface: #151b23;
+    --surface-2: #19202a;
+    --sunken: #0c1116;
+    --hover: #1c2430;
+    --ink: #e5eaf1;
+    --ink-2: #c3ccd8;
+    --muted: #95a1b2;
+    --faint: #6f7b8c;
+    --line: #242d39;
+    --line-strong: #334052;
+    --primary: #e5eaf1;
+    --primary-hover: #ffffff;
+    --primary-ink: #111820;
+    --focus: #6ea2ff;
+    --link: #7fb0ff;
+    --ok: #4fcf86;   --ok-bg: #12291d;   --ok-line: #1f4a31;
+    --busy: #74a8ff; --busy-bg: #13223a; --busy-line: #23406d;
+    --bad: #ff7b73;  --bad-bg: #321719;  --bad-line: #5a2427;
+    --warn: #f0b34d; --warn-bg: #2e2412; --warn-line: #54401b;
+    --off: #9aa4b2;  --off-bg: #1e252f;  --off-line: #303a47;
+    --none: #8b96a6; --none-bg: #1a212a; --none-line: #2b3441;
+    --log-bg: #0a0f14;
+    --log-line: #18212b;
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .35);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+code, kbd, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+h1, h2, h3 { margin: 0; line-height: 1.25; }
+h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.012em; }
+h2 { font-size: 15px; font-weight: 620; }
+h3 { font-size: 14px; font-weight: 600; }
+p { margin: 0; }
+[hidden] { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip { position: absolute; left: 12px; top: -48px; z-index: 100; background: var(--primary); color: var(--primary-ink); padding: 8px 12px; border-radius: var(--radius); }
+.skip:focus { top: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.nowrap { white-space: nowrap; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.grow { flex: 1 1 auto; min-width: 0; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stack { display: grid; gap: 12px; }
+.icon { width: 16px; height: 16px; flex: none; }
+
+/* ---------- App shell ---------- */
+.app { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); min-height: 100vh; }
+.side {
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  padding: 16px 12px;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; color: var(--ink); font-weight: 680; font-size: 17px; letter-spacing: -0.01em; }
+.brand:hover { text-decoration: none; }
+.brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--primary); color: var(--primary-ink); display: grid; place-items: center; }
+.brand-mark svg { width: 20px; height: 20px; }
+.nav { display: grid; gap: 2px; }
+.nav a {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: var(--radius);
+  color: var(--ink-2); font-weight: 500;
+}
+.nav a:hover { background: var(--hover); text-decoration: none; color: var(--ink); }
+.nav a[aria-current="page"] { background: var(--sunken); color: var(--ink); font-weight: 600; }
+.nav a .icon { color: var(--muted); }
+.nav a[aria-current="page"] .icon { color: var(--ink); }
+.side-foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--line); display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.side-foot .kv { display: flex; justify-content: space-between; gap: 8px; }
+.side-foot .kv span:last-child { color: var(--ink-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-foot .signout { margin-top: 6px; justify-self: start; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: currentColor; flex: none; }
+
+.main { min-width: 0; padding: 28px 36px 64px; }
+.main:focus { outline: none; }
+.page { max-width: 1180px; }
+
+/* ---------- Page header ---------- */
+.crumbs { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
+.crumbs a { color: var(--muted); }
+.crumbs a:hover { color: var(--ink); }
+.crumbs .sep { color: var(--faint); }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+.page-head .title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.page-head h1 { overflow-wrap: anywhere; }
+.page-head h1:focus { outline: none; }
+.page-head .sub { margin-top: 6px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+.page-head .sub a { display: inline-flex; align-items: center; gap: 4px; }
+.page-head .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* ---------- Tabs ---------- */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 0 22px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs a { padding: 9px 12px 10px; color: var(--muted); font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.tabs a:hover { color: var(--ink); text-decoration: none; }
+.tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  border-radius: var(--radius); border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--ink);
+  font-weight: 550; font-size: 13.5px; white-space: nowrap;
+  cursor: pointer; text-decoration: none;
+  transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+}
+.btn:hover { background: var(--hover); text-decoration: none; }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn-danger { color: var(--bad); border-color: var(--bad-line); }
+.btn-danger:hover { background: var(--bad-bg); }
+.btn-danger-solid { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn-danger-solid:hover { filter: brightness(1.06); background: var(--bad); }
+.btn-ghost { border-color: transparent; background: transparent; }
+.btn-ghost:hover { background: var(--hover); }
+.btn[aria-pressed="true"]:not(.btn-icon):not(.btn-ghost) { background: var(--sunken); border-color: var(--line-strong); }
+.btn-sm { height: 28px; padding: 0 9px; font-size: 13px; }
+.btn-icon { width: 32px; padding: 0; }
+.btn-sm.btn-icon { width: 28px; }
+.btn[aria-busy="true"] { position: relative; color: transparent !important; }
+.btn[aria-busy="true"]::after {
+  content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--muted); border-right-color: transparent; animation: spin .7s linear infinite;
+}
+.btn-primary[aria-busy="true"]::after { border-color: var(--primary-ink); border-right-color: transparent; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Pills & badges ---------- */
+.pill {
+  --c: var(--none); --cb: var(--none-bg); --cl: var(--none-line);
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 22px; padding: 0 9px; border-radius: 999px;
+  background: var(--cb); color: var(--c); border: 1px solid var(--cl);
+  font-size: 12px; font-weight: 600; white-space: nowrap; line-height: 1;
+}
+.pill .dot { width: 6px; height: 6px; }
+.tone-ok { --c: var(--ok); --cb: var(--ok-bg); --cl: var(--ok-line); }
+.tone-busy { --c: var(--busy); --cb: var(--busy-bg); --cl: var(--busy-line); }
+.tone-bad { --c: var(--bad); --cb: var(--bad-bg); --cl: var(--bad-line); }
+.tone-warn { --c: var(--warn); --cb: var(--warn-bg); --cl: var(--warn-line); }
+.tone-off { --c: var(--off); --cb: var(--off-bg); --cl: var(--off-line); }
+.tone-none { --c: var(--none); --cb: var(--none-bg); --cl: var(--none-line); }
+.pill.tone-busy .dot { animation: pulse 1.4s ease-in-out infinite; }
+.pill.tone-busy { background-image: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.35) 50%, transparent 70%); background-size: 220% 100%; animation: sheen 2.4s linear infinite; }
+@media (prefers-color-scheme: dark) { .pill.tone-busy { background-image: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.07) 50%, transparent 70%); } }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+@keyframes sheen { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+.badge {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px;
+  border-radius: 5px; background: var(--sunken); color: var(--ink-2);
+  font-size: 12px; font-weight: 550; white-space: nowrap; border: 1px solid var(--line);
+}
+.sha { font-family: var(--mono); font-size: 12px; color: var(--ink-2); background: var(--sunken); padding: 1px 5px; border-radius: 4px; }
+
+/* ---------- Panels, tables, lists ---------- */
+.section { margin-bottom: 28px; }
+.section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.section-head p { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 72ch; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.panel-pad { padding: 18px 20px; }
+.table-wrap { overflow-x: auto; }
+table.t { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.t th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--surface-2); }
+.t th:first-child { border-top-left-radius: var(--radius-lg); }
+.t th:last-child { border-top-right-radius: var(--radius-lg); }
+.t td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.t tr:last-child td { border-bottom: 0; }
+.t tr.click { cursor: pointer; }
+.t tr.click:hover td { background: var(--hover); }
+.t td.actions { text-align: right; white-space: nowrap; }
+.t td.fill { width: 100%; max-width: 0; }
+.t td.fill .ellipsis { display: block; }
+.t .nowrap, .t .sub { white-space: nowrap; }
+.t td.actions .btn + .btn { margin-left: 6px; }
+.t .sub { color: var(--muted); font-size: 12.5px; }
+.bar { height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; margin-top: 4px; width: 90px; }
+.bar > i { display: block; height: 100%; background: var(--busy); border-radius: 2px; }
+.bar.hot > i { background: var(--warn); }
+
+/* services list (grid rows that collapse on phones) */
+.svc-list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
+.svc-row {
+  position: relative;
+  display: grid; grid-template-columns: minmax(180px, 1.5fr) 130px 130px minmax(160px, 1.4fr) minmax(150px, 1fr);
+  gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line);
+}
+.svc-row:last-child { border-bottom: 0; }
+.svc-row.head { background: var(--surface-2); color: var(--muted); font-size: 12.5px; font-weight: 600; padding-top: 9px; padding-bottom: 9px; }
+.svc-row:not(.head):hover { background: var(--hover); }
+.svc-name { font-weight: 600; color: var(--ink); font-size: 14.5px; }
+.svc-name::after { content: ""; position: absolute; inset: 0; }
+.svc-name:hover { text-decoration: none; }
+.svc-row:not(.head):hover .svc-name { text-decoration: underline; }
+.svc-row .over { position: relative; z-index: 1; }
+.svc-deploy { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.linkish { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
+.linkish span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.search { position: relative; }
+.search input { padding-left: 32px; width: 240px; }
+.search .icon { position: absolute; left: 10px; top: 8px; color: var(--faint); pointer-events: none; }
+
+/* Definition grid */
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0; }
+.fact { padding: 14px 18px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); min-width: 0; }
+.fact dt { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.fact dd { margin: 0; overflow-wrap: anywhere; }
+.facts-wrap { overflow: hidden; }
+.facts-wrap .facts { margin: 0 -1px -1px 0; }
+
+/* Empty, loading and error states */
+.empty { text-align: left; padding: 32px; display: grid; gap: 12px; justify-items: start; }
+.empty h2 { font-size: 17px; }
+.empty p { color: var(--muted); max-width: 60ch; }
+.loading { padding: 40px 0; color: var(--muted); display: flex; gap: 10px; align-items: center; }
+.spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line-strong); border-right-color: var(--ink); animation: spin .8s linear infinite; flex: none; }
+.skel { display: grid; gap: 10px; padding: 8px 0; }
+.skel i { display: block; height: 44px; border-radius: var(--radius); background: linear-gradient(90deg, var(--sunken), var(--hover), var(--sunken)); background-size: 200% 100%; animation: sheen 1.6s linear infinite; }
+.callout { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: var(--radius-lg); border: 1px solid var(--cl, var(--line)); background: var(--cb, var(--surface-2)); color: var(--ink); margin-bottom: 18px; }
+.callout > .icon { color: var(--c, var(--muted)); margin-top: 2px; }
+.callout .grow > * + * { margin-top: 6px; }
+.callout strong { color: var(--c, var(--ink)); }
+.callout pre { margin: 0; }
+
+.code {
+  position: relative; background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 44px 10px 12px; font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); margin: 0; min-width: 0;
+}
+.code .copy { position: absolute; top: 6px; right: 6px; }
+.code .c { color: var(--faint); }
+
+/* ---------- Forms ---------- */
+.form { display: grid; gap: 26px; max-width: 760px; }
+.fieldset { display: grid; gap: 16px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.fieldset > legend, .fieldset > .legend { font-size: 15px; font-weight: 620; padding: 0; margin-bottom: 2px; }
+.fieldset > .desc { color: var(--muted); font-size: 13px; margin-top: -10px; }
+.field { display: grid; gap: 6px; min-width: 0; align-content: start; }
+.field > label, .field > .label { font-weight: 560; font-size: 13.5px; }
+.field .hint { color: var(--muted); font-size: 12.5px; }
+.field .err { color: var(--bad); font-size: 12.5px; }
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.input, select.input, textarea.input {
+  width: 100%; height: 34px; padding: 0 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink);
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+textarea.input { height: auto; padding: 8px 10px; line-height: 1.5; resize: vertical; }
+.input.mono { font-family: var(--mono); font-size: 13px; }
+.input::placeholder { color: var(--faint); }
+.input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 22%, transparent); }
+.input[aria-invalid="true"] { border-color: var(--bad); }
+select.input { padding-right: 28px; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 15px) 15px, calc(100% - 10px) 15px; background-size: 5px 5px; background-repeat: no-repeat; }
+.check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.check input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--primary); flex: none; }
+.check .hint { display: block; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.tile { position: relative; display: grid; gap: 3px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--surface); cursor: pointer; }
+.tile:hover { border-color: var(--muted); }
+.tile input { position: absolute; opacity: 0; pointer-events: none; }
+.tile strong { font-weight: 600; font-size: 13.5px; }
+.tile span { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.tile:has(input:checked) { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.tile:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.form-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.form-error { color: var(--bad); font-size: 13px; }
+.sticky-save {
+  position: sticky; bottom: 0; z-index: 5;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin-top: 14px; padding: 12px 0;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+}
+.switch { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .track { width: 34px; height: 20px; border-radius: 999px; background: var(--line-strong); position: relative; transition: background-color .15s ease; flex: none; }
+.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s ease; }
+.switch input:checked + .track { background: var(--ok); }
+.switch input:checked + .track::after { transform: translateX(14px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--focus); outline-offset: 2px; }
+.switch input:disabled + .track { opacity: .5; }
+
+/* env editor */
+.env { display: grid; gap: 8px; }
+.env-row { display: grid; grid-template-columns: minmax(140px, 2fr) minmax(0, 3fr) auto; gap: 8px; align-items: start; }
+.env-row .val { display: flex; gap: 4px; align-items: start; min-width: 0; }
+.env-row .val .input { flex: 1 1 auto; min-width: 0; }
+.env-row textarea.input { min-height: 34px; font-family: var(--mono); font-size: 13px; }
+.env-masked { flex: 1 1 auto; text-align: left; justify-content: flex-start; font-family: var(--mono); color: var(--muted); }
+.env-head { display: grid; grid-template-columns: minmax(140px, 2fr) minmax(0, 3fr) auto; gap: 8px; font-size: 12.5px; color: var(--muted); font-weight: 600; padding: 0 2px; }
+.env-head span:last-child { width: 32px; }
+.env-empty { color: var(--muted); font-size: 13px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius); }
+.env-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.env-err { color: var(--bad); font-size: 12.5px; grid-column: 1 / -1; margin-top: -4px; }
+
+/* key/value item lists (domains, linked groups) */
+.items { display: grid; }
+.item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); min-width: 0; }
+.item:last-child { border-bottom: 0; }
+.item .grow { overflow-wrap: anywhere; }
+
+.secret { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.secret .value { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 12.5px; background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; overflow-wrap: anywhere; line-height: 1.5; }
+
+/* ---------- Deploy route ---------- */
+.route { display: flex; align-items: flex-start; margin: 4px 0 20px; max-width: 640px; list-style: none; padding: 0; }
+.stop { flex: 1 1 0; position: relative; display: grid; justify-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); text-align: center; }
+.stop::before { content: ""; position: absolute; top: 8px; left: calc(-50% + 11px); right: calc(50% + 11px); height: 2px; background: var(--line-strong); }
+.stop:first-child::before { display: none; }
+.stop .node { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-strong); background: var(--surface); color: #fff; display: grid; place-items: center; position: relative; z-index: 1; }
+.stop.done { color: var(--ink-2); }
+.stop.done .node { background: var(--ok); border-color: var(--ok); }
+.stop.done::before, .stop.current::before, .stop.failed::before { background: var(--ok); }
+.stop.current { color: var(--busy); font-weight: 600; }
+.stop.current .node { border-color: var(--busy); }
+.stop.current .node::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--busy); animation: pulse 1.4s ease-in-out infinite; }
+.stop.failed { color: var(--bad); font-weight: 600; }
+.stop.failed .node { border-color: var(--bad); background: var(--bad); color: #fff; }
+.stop.halted { color: var(--off); font-weight: 600; }
+.stop.halted .node { border-color: var(--off); background: var(--off); }
+.stop .node svg { width: 10px; height: 10px; stroke-width: 3.5; }
+
+/* ---------- Log viewer ---------- */
+.log { display: flex; flex-direction: column; border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--line); background: var(--log-bg); }
+.log-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.log-bar .input { height: 28px; font-size: 13px; }
+.log-bar .search input { width: 170px; }
+.log-bar .search .icon { top: 6px; }
+.log-status { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.log-status.live { color: var(--ok); }
+.log-status.live .dot { animation: pulse 1.6s ease-in-out infinite; }
+.log-status.error { color: var(--bad); }
+.log-body { position: relative; }
+.log-scroll { height: min(64vh, 680px); min-height: 280px; overflow: auto; padding: 10px 0; color: var(--log-ink); font-family: var(--mono); font-size: 12.5px; line-height: 1.6; overscroll-behavior: contain; }
+.log-scroll:focus-visible { outline-offset: -2px; }
+.ll { display: grid; grid-template-columns: auto auto minmax(0, 1fr); column-gap: 12px; padding: 0 14px; }
+.ll:hover { background: var(--log-line); }
+.ll .ts { color: var(--log-muted); user-select: none; }
+.ll .in { color: var(--log-muted); user-select: none; min-width: 6ch; }
+.ll .tx { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.log.nowrap .ll .tx { white-space: pre; overflow-wrap: normal; }
+.log.no-inst .ll .in { display: none; }
+.ll.err .tx { color: var(--log-err); }
+.ll.sys .tx { color: var(--log-sys); font-weight: 650; }
+.ll.note .tx { color: var(--log-muted); font-style: italic; }
+.ll.hide { display: none; }
+.log-empty { color: var(--log-muted); padding: 6px 14px; font-family: var(--font); }
+.jump { position: absolute; right: 16px; bottom: 14px; box-shadow: var(--shadow-pop); }
+
+/* ---------- Menus, dialogs, toasts ---------- */
+.menu-wrap { position: relative; display: inline-flex; }
+.menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; min-width: 240px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px;
+}
+.menu button { display: grid; gap: 1px; text-align: left; padding: 8px 10px; border: 0; background: transparent; border-radius: var(--radius); cursor: pointer; }
+.menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu button span { color: var(--muted); font-size: 12.5px; }
+.menu button.danger { color: var(--bad); }
+.menu button:disabled { opacity: .5; cursor: not-allowed; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+
+dialog.dlg {
+  border: 1px solid var(--line); border-radius: 12px; padding: 0; width: min(480px, calc(100vw - 32px));
+  background: var(--surface); color: var(--ink); box-shadow: var(--shadow-pop);
+}
+dialog.dlg.wide { width: min(720px, calc(100vw - 32px)); }
+dialog.dlg::backdrop { background: rgba(10, 15, 22, .45); }
+.dlg-body { padding: 20px 22px 8px; display: grid; gap: 12px; }
+.dlg-body h2 { font-size: 17px; }
+.dlg-body p { color: var(--ink-2); }
+.dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px 18px; flex-wrap: wrap; }
+.dlg-err { color: var(--bad); font-size: 13px; }
+
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: grid; gap: 8px; width: min(400px, calc(100vw - 32px)); }
+.toast {
+  display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px 11px 14px;
+  background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--c, var(--ink));
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); animation: toast-in .18s ease-out;
+}
+.toast .grow { overflow-wrap: anywhere; padding-top: 3px; }
+.toast .grow a { margin-left: 6px; font-weight: 600; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ---------- Login ---------- */
+.login { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+.login-card { width: min(420px, 100%); display: grid; gap: 18px; }
+.login-card .brand { padding: 0; font-size: 20px; }
+.login-card .panel { padding: 24px; display: grid; gap: 16px; }
+.login-card h1 { font-size: 20px; }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1020px) {
+  .svc-row { grid-template-columns: minmax(160px, 1.5fr) 120px minmax(150px, 1.3fr) minmax(130px, 1fr); }
+  .svc-row .c-type { display: none; }
+}
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 16px 0; }
+  .brand { padding: 4px 0 8px; }
+  .nav { display: flex; gap: 2px; overflow-x: auto; margin: 0 -16px; padding: 0 12px 8px; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { white-space: nowrap; padding: 6px 10px; }
+  .side-foot { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 -16px; padding: 8px 16px; background: var(--surface-2); }
+  .side-foot .kv { gap: 6px; }
+  .side-foot .signout { margin: 0 0 0 auto; }
+  .main { padding: 20px 16px 56px; }
+  .grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .svc-row.head { display: none; }
+  .svc-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+  .svc-row .c-name { grid-column: 1; }
+  .svc-row .c-state { grid-column: 2; grid-row: 1; justify-self: end; }
+  .svc-row .c-url, .svc-row .c-deploy { grid-column: 1 / -1; }
+  .svc-row .c-type { display: block; grid-column: 1 / -1; }
+  .env-row, .env-head { grid-template-columns: minmax(0, 1fr) auto; }
+  .env-row .key { grid-column: 1 / -1; }
+  .env-head { display: none; }
+  .search input, .log-bar .search input { width: 100%; }
+  .search { flex: 1 1 100%; }
+  .page-head .actions { width: 100%; }
+  h1 { font-size: 20px; }
+  .log-scroll { height: 60vh; }
+  .ll { grid-template-columns: auto minmax(0, 1fr); }
+  .ll .in { display: none; }
+  .fact { border-right: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div id="root"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<noscript><p style="padding:24px">The Ferry dashboard needs JavaScript. Use the <code>ferry</code> CLI instead.</p></noscript>
+<script>
+'use strict';
+(() => {
+// ======================================================================
+// Ferry dashboard — single-file SPA. All API/user text is inserted with
+// textContent / DOM APIs only (never innerHTML).
+// ======================================================================
+
+const API = '/api/v1';
+const TOKEN_KEY = 'ferry.token';
+const BLUEPRINT_DRAFT_KEY = 'ferry.blueprint.draft';
+const LOG_MAX_LINES = 10000;
+const POLL_MS = 5000;
+
+// ---------- enum metadata (keys = canonical wire names from ferry-core) ----------
+const SERVICE_TYPES = {
+  web_service: { label: 'Web service', desc: 'Public HTTP app with its own URL' },
+  private_service: { label: 'Private service', desc: 'Reachable only from your other services' },
+  background_worker: { label: 'Background worker', desc: 'Long-running process without a port' },
+  cron_job: { label: 'Cron job', desc: 'Runs a command on a schedule' },
+  static_site: { label: 'Static site', desc: 'Built files served over HTTP' },
+};
+const RUNTIMES = {
+  auto: 'Auto-detect',
+  docker: 'Dockerfile',
+  image: 'Prebuilt image',
+  node: 'Node.js',
+  python: 'Python',
+  go: 'Go',
+  rust: 'Rust',
+  ruby: 'Ruby',
+  static: 'Static files',
+};
+const SERVICE_STATES = {
+  live: { label: 'Live', tone: 'ok' },
+  deploying: { label: 'Deploying', tone: 'busy' },
+  failed: { label: 'Failed', tone: 'bad' },
+  suspended: { label: 'Suspended', tone: 'off' },
+  degraded: { label: 'Degraded', tone: 'warn' },
+  not_deployed: { label: 'Not deployed', tone: 'none' },
+};
+const DEPLOY_STATUSES = {
+  queued: { label: 'Queued', tone: 'busy', active: true },
+  building: { label: 'Building', tone: 'busy', active: true },
+  deploying: { label: 'Deploying', tone: 'busy', active: true },
+  live: { label: 'Live', tone: 'ok' },
+  deactivated: { label: 'Deactivated', tone: 'none' },
+  build_failed: { label: 'Build failed', tone: 'bad' },
+  deploy_failed: { label: 'Deploy failed', tone: 'bad' },
+  canceled: { label: 'Canceled', tone: 'off' },
+};
+const DEPLOY_TRIGGERS = {
+  create: 'First deploy',
+  manual: 'Manual deploy',
+  webhook: 'Git push',
+  deploy_hook: 'Deploy hook',
+  blueprint: 'Blueprint',
+  rollback: 'Rollback',
+  restart: 'Restart',
+  env_change: 'Environment change',
+  upload: 'Upload',
+};
+const DEPLOY_SOURCE_KINDS = { git: 'Git', archive: 'Upload', image: 'Image', reuse: 'Existing image' };
+const JOB_STATUSES = {
+  pending: { label: 'Pending', tone: 'busy', active: true },
+  running: { label: 'Running', tone: 'busy', active: true },
+  succeeded: { label: 'Succeeded', tone: 'ok' },
+  failed: { label: 'Failed', tone: 'bad' },
+  canceled: { label: 'Canceled', tone: 'off' },
+};
+const JOB_TRIGGERS = { schedule: 'Schedule', manual: 'Manual' };
+const DATASTORE_KINDS = {
+  postgres: { label: 'PostgreSQL', versions: ['17', '16', '15', '14', '13'], def: '16' },
+  redis: { label: 'Redis', versions: ['7', '6'], def: '7' },
+};
+const DATASTORE_STATUSES = {
+  creating: { label: 'Creating', tone: 'busy', active: true },
+  available: { label: 'Available', tone: 'ok' },
+  failed: { label: 'Failed', tone: 'bad' },
+};
+const BLUEPRINT_ACTIONS = {
+  create: { label: 'Create', tone: 'ok' },
+  update: { label: 'Update', tone: 'busy' },
+  unchanged: { label: 'Unchanged', tone: 'none' },
+};
+const BLUEPRINT_RESOURCES = { service: 'Service', datastore: 'Datastore', env_group: 'Env group' };
+const RESERVED_NAMES = ['ferry', 'localhost', 'api', 'proxy'];
+const LISTENING_TYPES = ['web_service', 'private_service', 'static_site'];
+const PUBLIC_TYPES = ['web_service', 'static_site'];
+const DISK_TYPES = ['web_service', 'private_service', 'background_worker'];
+
+const typeLabel = (t) => (SERVICE_TYPES[t] ? SERVICE_TYPES[t].label : String(t || 'Service'));
+const runtimeLabel = (r) => RUNTIMES[r] || String(r || '—');
+const triggerLabel = (t) => DEPLOY_TRIGGERS[t] || String(t || '—');
+const isDeployActive = (d) => !!(d && DEPLOY_STATUSES[d.status] && DEPLOY_STATUSES[d.status].active);
+const isJobActive = (j) => !!(j && JOB_STATUSES[j.status] && JOB_STATUSES[j.status].active);
+const isListening = (svc) => !!svc && LISTENING_TYPES.includes(svc.type);
+const isPublic = (svc) => !!svc && PUBLIC_TYPES.includes(svc.type);
+const isCron = (svc) => !!svc && svc.type === 'cron_job';
+const isRunningState = (svc) => !!svc && (svc.state === 'live' || svc.state === 'degraded');
+const sourceOf = (svc) => (svc && svc.image ? 'image' : svc && svc.repo_url ? 'git' : 'upload');
+const canRollback = (d) => !!(d && d.image && d.status !== 'live' && !isDeployActive(d));
+
+// ---------- safe storage ----------
+const storage = {
+  get(k) { try { return window.localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { window.localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
+  del(k) { try { window.localStorage.removeItem(k); } catch { /* storage unavailable */ } },
+};
+
+// ---------- DOM builder ----------
+const PROP_ATTRS = new Set(['value', 'checked', 'disabled', 'selected', 'hidden', 'multiple', 'readOnly', 'required', 'indeterminate']);
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = String(v);
+      else if (k === 'ref' && typeof v === 'function') v(el);
+      else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+      else if (k === 'dataset') Object.assign(el.dataset, v);
+      else if (PROP_ATTRS.has(k)) el[k] = v;
+      else if (k === 'href') { const safe = safeHref(v); if (safe) el.setAttribute('href', safe); }
+      else el.setAttribute(k, v === true ? '' : String(v));
+    }
+  }
+  append(el, children);
+  return el;
+}
+function append(el, children) {
+  for (const c of children) {
+    if (c == null || c === false || c === true) continue;
+    if (Array.isArray(c)) append(el, c);
+    else el.append(c instanceof Node ? c : String(c));
+  }
+  return el;
+}
+// Only relative (#, /) links and http(s) URLs are ever put into href.
+function safeHref(v) {
+  const s = String(v);
+  if (s.startsWith('#') || (s.startsWith('/') && !s.startsWith('//'))) return s;
+  return /^https?:\/\//i.test(s) ? s : null;
+}
+const enc = encodeURIComponent;
+function linkTo(...parts) { return '#/' + parts.filter((p) => p != null && p !== '').map((p) => enc(String(p))).join('/'); }
+
+// Replace a container's children while keeping keyboard focus on an equivalent element.
+function swap(container, ...nodes) {
+  const active = document.activeElement;
+  const fk = active && container.contains(active) && active.dataset ? active.dataset.fk : null;
+  container.replaceChildren(...nodes.flat().filter(Boolean));
+  if (fk) {
+    const again = container.querySelector(`[data-fk="${CSS.escape(fk)}"]`);
+    if (again) again.focus({ preventScroll: true });
+  }
+}
+
+// Wraps a draw function so it only runs when `key` changed since the last call.
+// Background polls use it to keep reveal toggles, typed input and focus intact.
+function memo(draw) {
+  let last;
+  return (key, ...args) => {
+    const k = JSON.stringify(key);
+    if (k === last) return;
+    last = k;
+    draw(...args);
+  };
+}
+
+// ---------- icons (constant path data, drawn with DOM APIs) ----------
+const ICONS = {
+  ship: 'M4 13h16l-2.2 5.2H6.2z M8 13V9h7l2.4 4 M11 9V5.5 M2.5 21c1.6 0 1.6-.9 3.2-.9s1.6.9 3.2.9 1.6-.9 3.1-.9 1.6.9 3.2.9 1.6-.9 3.2-.9 1.6.9 3.1.9',
+  services: 'M12 3l9 4.8-9 4.8-9-4.8z M3 12.4l9 4.8 9-4.8 M3 16.8l9 4.8 9-4.8',
+  database: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6 M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  braces: 'M8 4H7a2 2 0 0 0-2 2v4l-2 2 2 2v4a2 2 0 0 0 2 2h1 M16 4h1a2 2 0 0 1 2 2v4l2 2-2 2v4a2 2 0 0 1-2 2h-1',
+  blueprint: 'M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z M14 3v5h5 M10 12.5l-2 2 2 2 M14 12.5l2 2-2 2',
+  plus: 'M12 5v14 M5 12h14',
+  x: 'M6 6l12 12 M18 6L6 18',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  chevronDown: 'M6 9l6 6 6-6',
+  chevronLeft: 'M15 6l-6 6 6 6',
+  external: 'M14 4h6v6 M20 4l-9 9 M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
+  copy: 'M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1z M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
+  eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  eyeOff: 'M3 3l18 18 M10.6 5.1C11 5 11.5 5 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3 3.9 M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.5 4.5-1.2 M9.9 9.9a3 3 0 0 0 4.2 4.2',
+  trash: 'M4 7h16 M9 7V4h6v3 M18 7l-.9 13H6.9L6 7 M10 11v6 M14 11v6',
+  logout: 'M9 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h4 M16 16l4-4-4-4 M20 12H9',
+  play: 'M7 4.5l12 7.5-12 7.5z',
+  pause: 'M7 5h3.5v14H7z M13.5 5H17v14h-3.5z',
+  restart: 'M4 12a8 8 0 1 0 2.4-5.7 M4 4.5v4.5h4.5',
+  search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M20 20l-4-4',
+  arrowDown: 'M12 5v14 M6 13l6 6 6-6',
+  alert: 'M12 3.5l9.5 16.5h-19z M12 10v4.5 M12 17.3v.2',
+  info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 11v5.5 M12 7.7v.2',
+  upload: 'M12 16V4 M7 9l5-5 5 5 M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3',
+  wrap: 'M4 6h16 M4 12h13a3 3 0 0 1 0 6h-4 M15 16l-2 2 2 2 M4 18h5',
+  scale: 'M4 8h16 M4 16h16 M8 4v8 M16 12v8',
+  download: 'M12 4v11 M7 10l5 5 5-5 M5 19h14',
+};
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function icon(name, cls) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', 'icon' + (cls ? ' ' + cls : ''));
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', ICONS[name] || '');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '1.75');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.append(path);
+  return svg;
+}
+
+// ---------- formatting ----------
+function parseTime(iso) { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? t : null; }
+function fullDate(iso) {
+  const t = parseTime(iso);
+  return t == null ? '' : new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
+}
+function ago(iso) {
+  const t = parseTime(iso);
+  if (t == null) return '—';
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 0) return 'just now';
+  if (s < 10) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const hr = Math.floor(m / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  if (d < 30) return `${d}d ago`;
+  return new Date(t).toLocaleDateString(undefined, { dateStyle: 'medium' });
+}
+function timeEl(iso, fallback = '—') {
+  if (parseTime(iso) == null) return h('span', { class: 'faint' }, fallback);
+  return h('time', { datetime: iso, title: fullDate(iso), class: 'nowrap' }, ago(iso));
+}
+function duration(startIso, endIso) {
+  const a = parseTime(startIso);
+  if (a == null) return '—';
+  const b = parseTime(endIso) ?? Date.now();
+  let s = Math.max(0, Math.round((b - a) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60); s %= 60;
+  if (m < 60) return `${m}m ${s}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+function clock(iso) {
+  const t = parseTime(iso);
+  if (t == null) return '--:--:--';
+  const d = new Date(t);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+}
+function fmtBytes(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  let v = Number(n);
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+const shortSha = (sha) => (sha ? String(sha).slice(0, 7) : '');
+const shortId = (id) => { const s = String(id || ''); return s.length > 12 ? s.slice(0, 4) + '…' + s.slice(-6) : s; };
+const firstLine = (s) => String(s || '').split('\n')[0];
+function plural(n, one, many) { return `${n} ${n === 1 ? one : many || one + 's'}`; }
+
+function pill(meta, value, extraLabel) {
+  const m = meta[value] || { label: String(value || 'Unknown'), tone: 'none' };
+  return h('span', { class: `pill tone-${m.tone}` }, h('span', { class: 'dot' }), extraLabel || m.label);
+}
+const statePill = (s) => pill(SERVICE_STATES, s);
+const deployPill = (s) => pill(DEPLOY_STATUSES, s);
+const jobPill = (s) => pill(JOB_STATUSES, s);
+const dsPill = (s) => pill(DATASTORE_STATUSES, s);
+
+function externalLink(url, label) {
+  const href = safeHref(url || '');
+  if (!href || !/^https?:/i.test(href)) return h('span', { class: 'mono' }, label || url || '');
+  return h('a', { class: 'linkish', href, target: '_blank', rel: 'noopener noreferrer' },
+    h('span', null, label || url.replace(/^https?:\/\//i, '')), icon('external'));
+}
+function commitRef(d) {
+  if (!d) return null;
+  if (d.commit_sha) return h('span', { class: 'sha', title: d.commit_sha }, shortSha(d.commit_sha));
+  return null;
+}
+function describeSource(src) {
+  if (!src || typeof src !== 'object') return '—';
+  switch (src.kind) {
+    case 'git': return `${src.repo_url || 'repository'} @ ${src.commit ? shortSha(src.commit) : src.branch || 'main'}`;
+    case 'archive': return 'Uploaded archive';
+    case 'image': return src.image || 'Image';
+    case 'reuse': return src.from_deploy ? `Image of ${shortId(src.from_deploy)}` : src.image || 'Existing image';
+    default: return DEPLOY_SOURCE_KINDS[src.kind] || '—';
+  }
+}
+
+// ---------- API client ----------
+class ApiError extends Error {
+  constructor(message, status, code) { super(message); this.name = 'ApiError'; this.status = status; this.code = code; }
+}
+let token = storage.get(TOKEN_KEY) || '';
+let serverInfo = null;
+
+async function request(method, path, body, opts = {}) {
+  const useToken = opts.token != null ? opts.token : token;
+  const headers = { Accept: 'application/json', Authorization: 'Bearer ' + useToken };
+  let payload;
+  if (body !== undefined) {
+    if (opts.contentType) { payload = body; headers['Content-Type'] = opts.contentType; }
+    else { payload = JSON.stringify(body); headers['Content-Type'] = 'application/json'; }
+  }
+  let res;
+  try {
+    res = await fetch(API + path, { method, headers, body: payload, cache: 'no-store', signal: opts.signal });
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw e;
+    throw new ApiError("Can't reach the Ferry server. Check that ferryd is running and try again.", 0, 'network');
+  }
+  if (res.status === 204) return null;
+  let raw = '';
+  try { raw = await res.text(); } catch { raw = ''; }
+  let data = null;
+  if (raw) { try { data = JSON.parse(raw); } catch { data = null; } }
+  if (!res.ok) {
+    const detail = data && typeof data === 'object' && data.error && typeof data.error === 'object' ? data.error : null;
+    const message = detail && typeof detail.message === 'string' && detail.message
+      ? detail.message
+      : `The server answered ${res.status}${res.statusText ? ' ' + res.statusText : ''}.`;
+    const err = new ApiError(message, res.status, detail && detail.code);
+    if (res.status === 401 && opts.token == null) onUnauthorized(message);
+    throw err;
+  }
+  return data;
+}
+const api = {
+  get: (path, opts) => request('GET', path, undefined, opts),
+  post: (path, body, opts) => request('POST', path, body === undefined ? {} : body, opts),
+  put: (path, body, opts) => request('PUT', path, body, opts),
+  patch: (path, body, opts) => request('PATCH', path, body, opts),
+  del: (path, opts) => request('DELETE', path, undefined, opts),
+};
+// EventSource cannot send headers: GET endpoints accept ?access_token=.
+function sseUrl(path, params) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) if (v != null) q.set(k, String(v));
+  q.set('access_token', token);
+  return API + path + '?' + q.toString();
+}
+const errMsg = (e) => (e && e.message ? e.message : 'Something went wrong.');
+const isNotFound = (e) => !!e && e.status === 404;
+
+// ---------- scopes: everything a view starts is torn down with it ----------
+const pollers = new Set();
+class Scope {
+  constructor(parent) {
+    this.alive = true;
+    this.fns = [];
+    if (parent) parent.add(() => this.dispose());
+  }
+  add(fn) {
+    if (!this.alive) { try { fn(); } catch (e) { console.error(e); } return; }
+    this.fns.push(fn);
+  }
+  child() { return new Scope(this); }
+  listen(target, type, fn, opts) {
+    target.addEventListener(type, fn, opts);
+    this.add(() => target.removeEventListener(type, fn, opts));
+  }
+  timeout(fn, ms) {
+    const id = setTimeout(() => { if (this.alive) fn(); }, ms);
+    this.add(() => clearTimeout(id));
+    return id;
+  }
+  // Calls fn every `ms` (never overlapping, paused while the tab is hidden).
+  poll(fn, ms = POLL_MS, { immediate = false } = {}) {
+    let timer = null;
+    let running = false;
+    const scope = this;
+    const p = {
+      async tick() {
+        if (!scope.alive || running) return;
+        clearTimeout(timer);
+        if (document.hidden) { p.schedule(); return; }
+        running = true;
+        try { await fn(); } catch (e) { console.error(e); } finally { running = false; p.schedule(); }
+      },
+      schedule() { clearTimeout(timer); if (scope.alive) timer = setTimeout(() => p.tick(), ms); },
+      now() { p.tick(); },
+    };
+    pollers.add(p);
+    this.add(() => { clearTimeout(timer); pollers.delete(p); });
+    if (immediate) p.tick(); else p.schedule();
+    return p;
+  }
+  dispose() {
+    if (!this.alive) return;
+    this.alive = false;
+    for (const fn of this.fns.splice(0).reverse()) { try { fn(); } catch (e) { console.error(e); } }
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) for (const p of pollers) p.now();
+});
+
+// ---------- toasts ----------
+const TOAST_TONES = { info: 'var(--ink)', ok: 'var(--ok)', error: 'var(--bad)', warn: 'var(--warn)' };
+function toast(message, kind = 'info', { href, linkLabel, timeout } = {}) {
+  const box = document.getElementById('toasts');
+  if (!box) return;
+  const iconName = kind === 'error' ? 'alert' : kind === 'ok' ? 'check' : 'info';
+  const el = h('div', { class: 'toast', role: kind === 'error' ? 'alert' : null, style: { '--c': TOAST_TONES[kind] || TOAST_TONES.info } },
+    h('span', { style: { color: TOAST_TONES[kind] || TOAST_TONES.info, paddingTop: '3px' } }, icon(iconName)),
+    h('div', { class: 'grow' }, String(message || ''), href ? h('a', { href }, linkLabel || 'View') : null),
+    h('button', { class: 'btn btn-ghost btn-sm btn-icon', type: 'button', 'aria-label': 'Dismiss', onclick: () => el.remove() }, icon('x')));
+  box.append(el);
+  while (box.children.length > 4) box.firstElementChild.remove();
+  setTimeout(() => el.remove(), timeout || (kind === 'error' ? 9000 : 4500));
+}
+const toastError = (e, prefix) => toast(prefix ? `${prefix}: ${errMsg(e)}` : errMsg(e), 'error');
+
+// ---------- busy buttons ----------
+async function busy(btn, fn) {
+  if (!btn) return fn();
+  if (btn.getAttribute('aria-busy') === 'true') return undefined;
+  const wasDisabled = btn.disabled;
+  btn.setAttribute('aria-busy', 'true');
+  btn.disabled = true;
+  try { return await fn(); } finally {
+    btn.removeAttribute('aria-busy');
+    btn.disabled = wasDisabled;
+  }
+}
+
+// ---------- clipboard ----------
+async function copyText(value, what = 'Copied to clipboard') {
+  const str = String(value == null ? '' : value);
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(str); ok = true; }
+  } catch { ok = false; }
+  if (!ok) {
+    const ta = h('textarea', { style: { position: 'fixed', top: '-1000px', opacity: '0' }, readOnly: true });
+    ta.value = str;
+    document.body.append(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+  }
+  if (ok) toast(what, 'ok', { timeout: 2200 });
+  else toast('Copying failed. Select the text and copy it manually.', 'error');
+}
+function copyButton(getValue, label = 'Copy', what) {
+  return h('button', { class: 'btn btn-sm btn-icon copy', type: 'button', title: label, 'aria-label': label,
+    onclick: (ev) => { ev.stopPropagation(); copyText(typeof getValue === 'function' ? getValue() : getValue, what); } }, icon('copy'));
+}
+function codeBlock(lines, copyValue) {
+  const pre = h('pre', { class: 'code' });
+  for (const [i, line] of lines.entries()) {
+    if (i) pre.append('\n');
+    if (Array.isArray(line)) pre.append(line[0], h('span', { class: 'c' }, line[1]));
+    else pre.append(line);
+  }
+  const value = copyValue != null ? copyValue : lines.map((l) => (Array.isArray(l) ? l[0] : l).trimEnd()).join('\n');
+  pre.append(copyButton(value, 'Copy commands'));
+  return pre;
+}
+
+// Masked value with reveal + copy (copy always copies the real value).
+function secretField(value, { mask, label = 'value' } = {}) {
+  let shown = false;
+  const masked = mask ? mask(value) : '•'.repeat(12);
+  const out = h('code', { class: 'value' }, masked);
+  const btn = h('button', { class: 'btn btn-sm btn-icon', type: 'button', 'aria-pressed': 'false', 'aria-label': `Reveal ${label}`, title: 'Reveal' }, icon('eye'));
+  btn.addEventListener('click', () => {
+    shown = !shown;
+    out.textContent = shown ? String(value || '') : masked;
+    btn.setAttribute('aria-pressed', String(shown));
+    btn.setAttribute('aria-label', `${shown ? 'Hide' : 'Reveal'} ${label}`);
+    btn.title = shown ? 'Hide' : 'Reveal';
+    btn.replaceChildren(icon(shown ? 'eyeOff' : 'eye'));
+  });
+  return h('div', { class: 'secret' }, out, btn, copyButton(() => value, `Copy ${label}`, `Copied ${label}`));
+}
+
+// ---------- dialogs ----------
+let dialogSeq = 0;
+function openDialog({ title, body, wide, onClose }) {
+  const id = `dlg-${++dialogSeq}`;
+  const opener = document.activeElement;
+  const dlg = h('dialog', { class: 'dlg' + (wide ? ' wide' : ''), 'aria-labelledby': id });
+  const foot = h('div', { class: 'dlg-foot' });
+  const err = h('p', { class: 'dlg-err', role: 'alert', hidden: true });
+  dlg.append(h('div', { class: 'dlg-body' }, h('h2', { id }, title), body, err), foot);
+  let closed = false;
+  const api_ = {
+    el: dlg, foot,
+    close(result) {
+      if (closed) return;
+      closed = true;
+      try { dlg.close(); } catch { /* already closed */ }
+      dlg.remove();
+      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
+      if (onClose) onClose(result);
+    },
+    error(msg) { err.textContent = msg || ''; err.hidden = !msg; },
+  };
+  dlg.addEventListener('cancel', (ev) => { ev.preventDefault(); if (!dlg.querySelector('[aria-busy="true"]')) api_.close(undefined); });
+  dlg.addEventListener('mousedown', (ev) => { if (ev.target === dlg && !dlg.querySelector('[aria-busy="true"]')) api_.close(undefined); });
+  document.body.append(dlg);
+  if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+  return api_;
+}
+
+// Confirm dialog. With `action`, the dialog stays open while it runs and shows its error.
+function confirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, typeToConfirm, action, extra }) {
+  return new Promise((resolve) => {
+    const input = typeToConfirm
+      ? h('input', { class: 'input mono', type: 'text', autocomplete: 'off', spellcheck: 'false', 'aria-label': `Type ${typeToConfirm} to confirm` })
+      : null;
+    const body = h('div', { class: 'stack' },
+      typeof message === 'string' ? h('p', null, message) : message,
+      extra || null,
+      input ? h('div', { class: 'field' }, h('label', null, 'Type ', h('code', null, typeToConfirm), ' to confirm'), input) : null);
+    let result = false;
+    const d = openDialog({ title, body, onClose: () => resolve(result) });
+    const cancel = h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, cancelLabel);
+    const ok = h('button', { class: 'btn ' + (danger ? 'btn-danger-solid' : 'btn-primary'), type: 'button' }, confirmLabel);
+    const sync = () => { ok.disabled = !!input && input.value.trim() !== typeToConfirm; };
+    const go_ = async () => {
+      if (ok.disabled) return;
+      if (!action) { result = true; d.close(true); return; }
+      d.error('');
+      cancel.disabled = true;
+      try {
+        await busy(ok, action);
+        result = true;
+        d.close(true);
+      } catch (e) {
+        d.error(errMsg(e));
+      } finally { cancel.disabled = false; }
+    };
+    ok.addEventListener('click', go_);
+    if (input) {
+      input.addEventListener('input', sync);
+      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); go_(); } });
+    }
+    sync();
+    d.foot.append(cancel, ok);
+    (input || (danger ? cancel : ok)).focus();
+  });
+}
+
+// Single-input dialog; resolves to the entered string (or null when cancelled).
+function promptDialog({ title, message, label, value = '', placeholder, type = 'text', min, max, hint, confirmLabel = 'Save', mono, validate, action }) {
+  return new Promise((resolve) => {
+    const input = h('input', { class: 'input' + (mono ? ' mono' : ''), type, value: String(value), placeholder, min, max, autocomplete: 'off', spellcheck: 'false' });
+    const fid = `pf-${++dialogSeq}`;
+    input.id = fid;
+    const body = h('div', { class: 'stack' },
+      message ? h('p', null, message) : null,
+      h('div', { class: 'field' }, h('label', { for: fid }, label), input, hint ? h('p', { class: 'hint' }, hint) : null));
+    let result = null;
+    const d = openDialog({ title, body, onClose: () => resolve(result) });
+    const cancel = h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, 'Cancel');
+    const ok = h('button', { class: 'btn btn-primary', type: 'button' }, confirmLabel);
+    const submit = async () => {
+      const v = input.value.trim();
+      const problem = validate ? validate(v) : null;
+      if (problem) { d.error(problem); input.setAttribute('aria-invalid', 'true'); input.focus(); return; }
+      input.removeAttribute('aria-invalid');
+      d.error('');
+      if (action) {
+        cancel.disabled = true;
+        try { await busy(ok, () => action(v)); } catch (e) { d.error(errMsg(e)); cancel.disabled = false; return; }
+      }
+      result = v;
+      d.close(v);
+    };
+    ok.addEventListener('click', submit);
+    input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } });
+    d.foot.append(cancel, ok);
+    input.focus();
+    input.select();
+  });
+}
+
+// ---------- dropdown menu ----------
+// items: () => [{ label, hint, onSelect, danger, disabled } | 'sep']
+function menuButton(label, itemsFn, { primary = false, iconName, ariaLabel, small = false } = {}) {
+  const btn = h('button', {
+    class: 'btn' + (primary ? ' btn-primary' : '') + (small ? ' btn-sm' : ''),
+    type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-label': ariaLabel,
+  }, iconName ? icon(iconName) : null, label, icon('chevronDown'));
+  const menu = h('div', { class: 'menu', role: 'menu', hidden: true });
+  const wrap = h('div', { class: 'menu-wrap' }, btn, menu);
+  const buttons = () => [...menu.querySelectorAll('button:not(:disabled)')];
+  const onDoc = (ev) => { if (!wrap.contains(ev.target)) close(); };
+  function close(focusBtn) {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', onDoc, true);
+    if (focusBtn) btn.focus();
+  }
+  function open() {
+    menu.replaceChildren();
+    for (const it of itemsFn()) {
+      if (!it) continue;
+      if (it === 'sep') { menu.append(h('hr')); continue; }
+      menu.append(h('button', {
+        type: 'button', role: 'menuitem', class: it.danger ? 'danger' : null, disabled: !!it.disabled,
+        onclick: () => { close(true); it.onSelect(); },
+      }, h('strong', { style: { fontWeight: '550' } }, it.label), it.hint ? h('span', null, it.hint) : null));
+    }
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('mousedown', onDoc, true);
+    const first = buttons()[0];
+    if (first) first.focus();
+  }
+  btn.addEventListener('click', () => (menu.hidden ? open() : close()));
+  btn.addEventListener('keydown', (ev) => { if (ev.key === 'ArrowDown' && menu.hidden) { ev.preventDefault(); open(); } });
+  menu.addEventListener('keydown', (ev) => {
+    const list = buttons();
+    const i = list.indexOf(document.activeElement);
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(true); }
+    else if (ev.key === 'ArrowDown') { ev.preventDefault(); (list[i + 1] || list[0]).focus(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); (list[i - 1] || list[list.length - 1]).focus(); }
+    else if (ev.key === 'Home') { ev.preventDefault(); list[0] && list[0].focus(); }
+    else if (ev.key === 'End') { ev.preventDefault(); list[list.length - 1] && list[list.length - 1].focus(); }
+    else if (ev.key === 'Tab') close();
+  });
+  wrap.close = close;
+  return wrap;
+}
+
+// ---------- layout helpers ----------
+function crumbs(...items) {
+  const nav = h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' });
+  items.forEach((it, i) => {
+    if (i) nav.append(h('span', { class: 'sep', 'aria-hidden': 'true' }, '/'));
+    nav.append(it.href ? h('a', { href: it.href }, it.label) : h('span', { 'aria-current': 'page' }, it.label));
+  });
+  return nav;
+}
+function pageHead({ crumbs: c, title, badges, sub, actions }) {
+  const h1 = h('h1', { tabindex: '-1' }, title);
+  const titleRow = h('div', { class: 'title' }, h1, badges || null);
+  return h('div', null, c || null,
+    h('div', { class: 'page-head' },
+      h('div', { class: 'grow' }, titleRow, sub ? h('div', { class: 'sub' }, sub) : null),
+      actions && actions.length ? h('div', { class: 'actions' }, actions) : null));
+}
+function sectionHead(title, desc, actions) {
+  return h('div', { class: 'section-head' },
+    h('div', null, h('h2', null, title), desc ? h('p', null, desc) : null),
+    actions ? h('div', { class: 'row' }, actions) : null);
+}
+const loadingState = (label = 'Loading…') => h('div', { class: 'skel', 'aria-busy': 'true', 'aria-label': label }, h('i'), h('i'), h('i'));
+const spinnerLine = (label = 'Loading…') => h('div', { class: 'loading', role: 'status' }, h('span', { class: 'spinner' }), label);
+function errorState(e, retry, title = "Couldn't load this page") {
+  return h('div', { class: 'panel empty' },
+    h('h2', null, title),
+    h('p', null, errMsg(e)),
+    retry ? h('button', { class: 'btn', type: 'button', onclick: retry }, icon('restart'), 'Try again') : null);
+}
+function callout(tone, iconName, ...content) {
+  return h('div', { class: `callout tone-${tone}`, role: tone === 'bad' ? 'alert' : null }, icon(iconName), h('div', { class: 'grow' }, content));
+}
+function facts(entries) {
+  const dl = h('dl', { class: 'facts' });
+  for (const e of entries) if (e) dl.append(h('div', { class: 'fact' }, h('dt', null, e[0]), h('dd', null, e[1])));
+  return h('div', { class: 'panel facts-wrap' }, dl);
+}
+function table(headers, rows, { empty } = {}) {
+  if (!rows.length && empty) return empty;
+  return h('div', { class: 'panel table-wrap' },
+    h('table', { class: 't' },
+      h('thead', null, h('tr', null, headers.map((x) => h('th', { scope: 'col', class: x && x.cls }, x && x.label != null ? x.label : x)))),
+      h('tbody', null, rows)));
+}
+// Clickable table row that stays keyboard accessible (Enter opens the row link).
+function clickRow(href, cells, fk) {
+  const tr = h('tr', { class: 'click', 'data-fk': fk || null }, cells);
+  tr.addEventListener('click', (ev) => {
+    if (ev.target.closest('a, button, input, select, textarea')) return;
+    location.hash = href;
+  });
+  return tr;
+}
+let fieldSeq = 0;
+function field(label, control, { hint, id, error } = {}) {
+  const fid = id || control.id || `f-${++fieldSeq}`;
+  control.id = fid;
+  const hintEl = hint ? h('p', { class: 'hint', id: `${fid}-hint` }, hint) : null;
+  const errEl = h('p', { class: 'err', id: `${fid}-err`, hidden: !error }, error || '');
+  control.setAttribute('aria-describedby', [hintEl ? `${fid}-hint` : '', `${fid}-err`].filter(Boolean).join(' '));
+  const wrap = h('div', { class: 'field' }, h('label', { for: fid }, label), control, hintEl, errEl);
+  wrap.setError = (msg) => {
+    errEl.textContent = msg || '';
+    errEl.hidden = !msg;
+    if (msg) control.setAttribute('aria-invalid', 'true'); else control.removeAttribute('aria-invalid');
+  };
+  wrap.control = control;
+  return wrap;
+}
+const input = (attrs) => h('input', Object.assign({ class: 'input', type: 'text', autocomplete: 'off', spellcheck: 'false' }, attrs));
+function select(options, value, attrs) {
+  const s = h('select', Object.assign({ class: 'input' }, attrs));
+  for (const [v, label] of options) s.append(h('option', { value: v, selected: v === value }, label));
+  if (value != null) s.value = value;
+  return s;
+}
+function checkbox(label, checked, hint, attrs) {
+  const cb = h('input', Object.assign({ type: 'checkbox', checked: !!checked }, attrs));
+  const el = h('label', { class: 'check' }, cb, h('span', null, label, hint ? h('span', { class: 'hint muted' }, hint) : null));
+  el.input = cb;
+  return el;
+}
+function switchControl(label, checked, onChange) {
+  const cb = h('input', { type: 'checkbox', role: 'switch', checked: !!checked });
+  const el = h('label', { class: 'switch' }, cb, h('span', { class: 'track', 'aria-hidden': 'true' }), h('span', null, label));
+  cb.addEventListener('change', () => onChange(cb.checked, cb));
+  el.input = cb;
+  return el;
+}
+function tiles(name, options, value, onChange) {
+  const box = h('div', { class: 'tiles', role: 'radiogroup' });
+  for (const [v, title, desc] of options) {
+    const radio = h('input', { type: 'radio', name, value: v, checked: v === value });
+    radio.addEventListener('change', () => { if (radio.checked) onChange(v); });
+    box.append(h('label', { class: 'tile' }, radio, h('strong', null, title), desc ? h('span', null, desc) : null));
+  }
+  box.value = () => { const c = box.querySelector('input:checked'); return c ? c.value : null; };
+  return box;
+}
+
+// Client-side mirrors of ferry-core validation (the server stays authoritative).
+function validateResourceName(name) {
+  if (!name) return 'Enter a name.';
+  if (name.length > 40 || !/^[a-z][a-z0-9-]*$/.test(name) || name.endsWith('-')) {
+    return 'Use 1–40 lowercase letters, digits or dashes, starting with a letter and not ending with a dash.';
+  }
+  if (RESERVED_NAMES.includes(name)) return `“${name}” is reserved. Pick another name.`;
+  return null;
+}
+function validateEnvGroupName(name) {
+  if (!name) return 'Enter a name.';
+  if (name.length > 64 || !/^[A-Za-z0-9_.-]+$/.test(name)) return 'Use up to 64 letters, digits, dots, dashes or underscores.';
+  return null;
+}
+function validateEnvKey(key) {
+  if (!key) return 'Enter a variable name.';
+  if (key.length > 256) return 'Names are limited to 256 characters.';
+  if (/[=\s\u0000]/.test(key)) return 'Names can’t contain “=”, spaces or line breaks.';
+  return null;
+}
+
+// ---------- log viewer ----------
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+// eslint-disable-next-line no-control-regex
+const CTRL_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+function cleanLine(s) {
+  let t = String(s == null ? '' : s).replace(ANSI_RE, '');
+  if (t.includes('\r')) {
+    const parts = t.split('\r').filter((p) => p.length);
+    t = parts.length ? parts[parts.length - 1] : '';
+  }
+  return t.replace(CTRL_RE, '');
+}
+function parseLogLine(data) {
+  let l;
+  try { l = JSON.parse(data); } catch { return null; }
+  if (!l || typeof l !== 'object') return null;
+  return { ts: l.ts, stream: l.stream, instance: l.instance, line: l.line };
+}
+
+function logViewer({ instances = false, emptyText = 'No output yet.', tools = [], filename = 'ferry.log' } = {}) {
+  const root = h('div', { class: 'log' + (instances ? '' : ' no-inst') });
+  const statusEl = h('span', { class: 'log-status', role: 'status' });
+  const filter = h('input', { class: 'input', type: 'search', placeholder: 'Filter lines', 'aria-label': 'Filter log lines', autocomplete: 'off', spellcheck: 'false' });
+  let wrap = true;
+  const wrapBtn = h('button', { class: 'btn btn-sm btn-icon', type: 'button', 'aria-pressed': 'true', title: 'Wrap long lines', 'aria-label': 'Wrap long lines' }, icon('wrap'));
+  wrapBtn.addEventListener('click', () => {
+    wrap = !wrap;
+    root.classList.toggle('nowrap', !wrap);
+    wrapBtn.setAttribute('aria-pressed', String(wrap));
+  });
+  const dlBtn = h('button', { class: 'btn btn-sm btn-icon', type: 'button', title: 'Download as text', 'aria-label': 'Download log as text' }, icon('download'));
+  dlBtn.addEventListener('click', () => {
+    const body = data.map((l) => `${l.ts || ''}${l.instance ? ' [' + l.instance + ']' : ''} ${l.text}`).join('\n');
+    const url = URL.createObjectURL(new Blob([body + '\n'], { type: 'text/plain' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  });
+  const bar = h('div', { class: 'log-bar' }, tools, h('span', { class: 'grow' }), statusEl,
+    h('div', { class: 'search' }, icon('search'), filter), wrapBtn, dlBtn);
+  const scroller = h('div', { class: 'log-scroll', tabindex: '0', role: 'log', 'aria-label': 'Log output', 'aria-live': 'off' });
+  const linesEl = h('div');
+  const emptyEl = h('div', { class: 'log-empty' }, emptyText);
+  scroller.append(emptyEl, linesEl);
+  const jump = h('button', { class: 'btn btn-sm btn-primary jump', type: 'button', hidden: true }, icon('arrowDown'), 'Jump to latest');
+  root.append(bar, h('div', { class: 'log-body' }, scroller, jump));
+
+  const data = [];
+  let pending = [];
+  let raf = 0;
+  let stick = true;
+  let unseen = 0;
+  let needle = '';
+  let trimmedNote = null;
+
+  const atBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+  const toBottom = () => { scroller.scrollTop = scroller.scrollHeight; };
+  scroller.addEventListener('scroll', () => {
+    stick = atBottom();
+    if (stick) { unseen = 0; jump.hidden = true; }
+  }, { passive: true });
+  jump.addEventListener('click', () => { stick = true; unseen = 0; jump.hidden = true; toBottom(); scroller.focus({ preventScroll: true }); });
+
+  let filterTimer = 0;
+  filter.addEventListener('input', () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => {
+      needle = filter.value.trim().toLowerCase();
+      for (const el of linesEl.children) el.classList.toggle('hide', !!needle && !el.fltText.includes(needle));
+      if (stick) toBottom();
+    }, 120);
+  });
+
+  function lineEl(l) {
+    const cls = l.stream === 'stderr' ? ' err' : l.sys ? ' sys' : l.stream === 'note' ? ' note' : '';
+    const el = h('div', { class: 'll' + cls },
+      h('span', { class: 'ts', title: fullDate(l.ts) }, l.ts ? clock(l.ts) : ''),
+      h('span', { class: 'in' }, l.instance || ''),
+      h('span', { class: 'tx' }, l.text || ' '));
+    el.fltText = (l.text + ' ' + (l.instance || '')).toLowerCase();
+    if (needle && !el.fltText.includes(needle)) el.classList.add('hide');
+    return el;
+  }
+  function flush() {
+    raf = 0;
+    if (!pending.length) return;
+    const frag = document.createDocumentFragment();
+    for (const l of pending) frag.append(lineEl(l));
+    const added = pending.length;
+    pending = [];
+    linesEl.append(frag);
+    emptyEl.hidden = true;
+    const overflow = data.length - LOG_MAX_LINES;
+    if (overflow > 0) {
+      data.splice(0, overflow);
+      for (let i = 0; i < overflow && linesEl.firstChild; i++) linesEl.firstChild.remove();
+      if (!trimmedNote) {
+        trimmedNote = h('div', { class: 'log-empty' }, `Showing the latest ${LOG_MAX_LINES.toLocaleString()} lines.`);
+        scroller.insertBefore(trimmedNote, linesEl);
+      }
+    }
+    if (stick) toBottom();
+    else {
+      unseen += added;
+      jump.hidden = false;
+      jump.lastChild.textContent = `${unseen.toLocaleString()} new line${unseen === 1 ? '' : 's'}`;
+    }
+  }
+  function push(l) {
+    data.push(l);
+    pending.push(l);
+    if (!raf) raf = requestAnimationFrame(flush);
+  }
+  return {
+    el: root,
+    append(line) {
+      if (!line) return;
+      const txt = cleanLine(line.line);
+      push({ ts: line.ts, stream: line.stream, instance: line.instance || '', text: txt, sys: line.stream === 'system' || txt.startsWith('==>') });
+    },
+    note(message) { push({ ts: new Date().toISOString(), stream: 'note', instance: '', text: message, sys: false }); },
+    clear() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      pending = [];
+      data.length = 0;
+      linesEl.replaceChildren();
+      if (trimmedNote) { trimmedNote.remove(); trimmedNote = null; }
+      emptyEl.hidden = false;
+      unseen = 0;
+      stick = true;
+      jump.hidden = true;
+    },
+    setEmpty(message) { emptyEl.textContent = message; },
+    status(message, kind, action) {
+      statusEl.className = 'log-status' + (kind ? ' ' + kind : '');
+      statusEl.replaceChildren();
+      append(statusEl, [kind === 'live' ? h('span', { class: 'dot' }) : null, message || '',
+        action ? h('button', { class: 'btn btn-sm', type: 'button', onclick: action.onClick }, action.label) : null]);
+    },
+    get count() { return data.length; },
+  };
+}
+
+// Follow a finite log stream (deploy / job). The server replays the stored log
+// from the start on every connection, so after a reconnect the lines we
+// already have are skipped by position: no gaps, no duplicates.
+function followFiniteLog(scope, viewer, { path, check, onEnd }) {
+  let es = null;
+  let received = 0;
+  let failures = 0;
+  let done = false;
+  const close = () => { if (es) { es.close(); es = null; } };
+  scope.add(() => { done = true; close(); });
+  const finish = (message) => {
+    done = true;
+    close();
+    viewer.status(message, '');
+    if (!received) viewer.setEmpty('No log output.');
+    if (onEnd) onEnd();
+  };
+  function connect(follow) {
+    close();
+    if (done || !scope.alive) return;
+    const skip = received;
+    let seen = 0;
+    let opened = false;
+    viewer.status(follow ? 'Streaming' : 'Loading…', follow ? 'live' : '');
+    const source = new EventSource(sseUrl(path, { follow: follow ? 'true' : 'false' }));
+    es = source;
+    source.onopen = () => { opened = true; };
+    source.addEventListener('log', (ev) => {
+      seen++;
+      if (seen <= skip) return;
+      // Count every event (even unparseable ones) so the replay offset stays exact.
+      received++;
+      failures = 0;
+      const l = parseLogLine(ev.data);
+      if (l) viewer.append(l);
+    });
+    source.addEventListener('end', () => finish(follow ? 'Finished' : 'End of log'));
+    source.onerror = () => {
+      if (done || !scope.alive || es !== source) return;
+      close();
+      if (!follow && opened) { finish('End of log'); return; }
+      failures++;
+      if (failures > 8) {
+        viewer.status('Disconnected', 'error', { label: 'Reconnect', onClick: () => { failures = 0; retry(); } });
+        return;
+      }
+      viewer.status('Reconnecting…', 'error');
+      scope.timeout(retry, Math.min(800 * failures, 5000));
+    };
+  }
+  async function retry() {
+    if (done || !scope.alive) return;
+    let active;
+    try {
+      active = await check();
+    } catch (e) {
+      if (!scope.alive) return;
+      if (e && (e.status === 404 || e.status === 401)) { done = true; viewer.status(errMsg(e), 'error'); return; }
+      failures++;
+      if (failures > 8) { viewer.status(errMsg(e), 'error', { label: 'Reconnect', onClick: () => { failures = 0; retry(); } }); return; }
+      scope.timeout(retry, 3000);
+      return;
+    }
+    connect(!!active);
+  }
+  connect(true);
+}
+
+// ---------- environment variables ----------
+function findClosingQuote(s, q) {
+  for (let j = 0; j < s.length; j++) {
+    if (s[j] === '\\' && q === '"') { j++; continue; }
+    if (s[j] === q) return j;
+  }
+  return -1;
+}
+// Parses .env text: comments, `export`, quoted (multi-line) values, inline comments.
+function parseDotenv(src) {
+  const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+  const vars = [];
+  const skipped = [];
+  for (let i = 0; i < lines.length; i++) {
+    const lineNo = i + 1;
+    let line = lines[i].replace(/^\s+/, '');
+    if (!line || line.startsWith('#')) continue;
+    line = line.replace(/^export\s+/, '');
+    const eq = line.indexOf('=');
+    if (eq <= 0) { skipped.push(lineNo); continue; }
+    const key = line.slice(0, eq).trim();
+    const rest = line.slice(eq + 1).replace(/^[ \t]+/, '');
+    let value;
+    const q = rest[0];
+    if (q === '"' || q === "'" || q === '`') {
+      let buf = rest.slice(1);
+      let end = findClosingQuote(buf, q);
+      while (end < 0 && i + 1 < lines.length) { buf += '\n' + lines[++i]; end = findClosingQuote(buf, q); }
+      value = end < 0 ? buf : buf.slice(0, end);
+      if (q === '"') value = value.replace(/\\([nrt"\\])/g, (_m, c) => ({ n: '\n', r: '\r', t: '\t' })[c] || c);
+    } else {
+      const hash = rest.search(/\s#/);
+      value = (hash >= 0 ? rest.slice(0, hash) : rest).trim();
+    }
+    if (validateEnvKey(key)) { skipped.push(lineNo); continue; }
+    vars.push({ key, value });
+  }
+  return { vars, skipped };
+}
+const normalizeVars = (vars) => (Array.isArray(vars) ? vars : [])
+  .filter((v) => v && typeof v.key === 'string')
+  .map((v) => ({ key: v.key, value: v.value == null ? '' : String(v.value) }));
+
+function envEditor(initial, { onChange } = {}) {
+  let rows = [];
+  let baseline = '';
+  const list = h('div', { class: 'env' });
+  const root = h('div', { class: 'stack' }, list);
+  let allShown = false;
+  const revealAllBtn = h('button', { class: 'btn btn-sm', type: 'button' }, icon('eye'), 'Show values');
+  revealAllBtn.addEventListener('click', () => {
+    allShown = !allShown;
+    for (const r of rows) r.shown = allShown;
+    revealAllBtn.replaceChildren(icon(allShown ? 'eyeOff' : 'eye'), allShown ? 'Hide values' : 'Show values');
+    render();
+  });
+  const addBtn = h('button', { class: 'btn btn-sm', type: 'button' }, icon('plus'), 'Add variable');
+  addBtn.addEventListener('click', () => {
+    rows.push({ key: '', value: '', shown: true });
+    render();
+    const keys = list.querySelectorAll('input.key');
+    if (keys.length) keys[keys.length - 1].focus();
+    changed();
+  });
+  const importBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openImport() }, icon('upload'), 'Import .env');
+  root.append(h('div', { class: 'env-tools' }, addBtn, importBtn, revealAllBtn));
+
+  const current = () => rows.filter((r) => r.key.trim() || r.value).map((r) => ({ key: r.key.trim(), value: r.value }));
+  const changed = () => { if (onChange) onChange(); };
+
+  function merge(vars) {
+    let added = 0;
+    let updated = 0;
+    rows = rows.filter((r) => r.key.trim() || r.value);
+    for (const v of vars) {
+      const existing = rows.find((r) => r.key.trim() === v.key);
+      if (existing) { if (existing.value !== v.value) updated++; existing.value = v.value; }
+      else { rows.push({ key: v.key, value: v.value, shown: false }); added++; }
+    }
+    render();
+    changed();
+    return { added, updated };
+  }
+  function importText(t) {
+    const { vars, skipped } = parseDotenv(t);
+    if (!vars.length) { toast('No KEY=value lines found.', 'error'); return false; }
+    const { added, updated } = merge(vars);
+    const parts = [`${plural(added, 'variable')} added`, updated ? `${updated} updated` : null,
+      skipped.length ? `skipped line${skipped.length === 1 ? '' : 's'} ${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? '…' : ''}` : null];
+    toast(parts.filter(Boolean).join(', ') + '. Save to apply.', skipped.length ? 'warn' : 'ok');
+    return true;
+  }
+  function openImport() {
+    const ta = h('textarea', { class: 'input mono', rows: 10, spellcheck: 'false', placeholder: 'DATABASE_URL=postgres://…\n# comments are ignored\nexport API_KEY="value"' });
+    const file = h('input', { type: 'file', accept: '.env,text/plain,*', class: 'sr-only', id: `envfile-${++fieldSeq}` });
+    file.addEventListener('change', async () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      if (f.size > 1024 * 1024) { toast('That file is larger than 1 MB.', 'error'); return; }
+      try { ta.value = await f.text(); } catch (e) { toastError(e, 'Reading the file failed'); }
+    });
+    const body = h('div', { class: 'stack' },
+      h('p', null, 'Paste the contents of a .env file. Existing variables with the same name are overwritten.'),
+      ta,
+      h('div', null, h('label', { class: 'btn btn-sm', for: file.id }, icon('upload'), 'Choose a file…'), file));
+    const d = openDialog({ title: 'Import variables', body, wide: true });
+    d.foot.append(
+      h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, 'Cancel'),
+      h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { if (importText(ta.value)) d.close(); } }, 'Import'));
+    ta.focus();
+  }
+
+  function rowEl(r, idx) {
+    const key = h('input', { class: 'input mono key', type: 'text', value: r.key, placeholder: 'KEY', 'aria-label': 'Variable name', autocomplete: 'off', spellcheck: 'false', 'data-fk': `env-k-${idx}` });
+    key.addEventListener('input', () => { r.key = key.value; changed(); });
+    key.addEventListener('paste', (ev) => {
+      const t = ev.clipboardData ? ev.clipboardData.getData('text') : '';
+      if (!t || !t.includes('=')) return;
+      const parsed = parseDotenv(t);
+      if (!parsed.vars.length) return;
+      ev.preventDefault();
+      if (!r.key && !r.value) rows.splice(rows.indexOf(r), 1);
+      importText(t);
+    });
+    const multiline = r.value.includes('\n');
+    let valueEl;
+    if (!r.shown) {
+      valueEl = h('button', { class: 'btn env-masked', type: 'button', title: 'Click to show and edit', 'aria-label': `Show value of ${r.key || 'variable'}` },
+        r.value ? '•'.repeat(12) + (multiline ? `  (${r.value.split('\n').length} lines)` : '') : h('span', { class: 'faint' }, 'empty'));
+      valueEl.addEventListener('click', () => {
+        r.shown = true;
+        render();
+        const again = list.querySelector(`[data-fk="env-v-${idx}"]`);
+        if (again) again.focus();
+      });
+    } else if (multiline) {
+      valueEl = h('textarea', { class: 'input', rows: Math.min(8, r.value.split('\n').length), spellcheck: 'false', 'aria-label': `Value of ${r.key || 'variable'}`, 'data-fk': `env-v-${idx}` });
+      valueEl.value = r.value;
+      valueEl.addEventListener('input', () => { r.value = valueEl.value; changed(); });
+    } else {
+      valueEl = h('input', { class: 'input mono', type: 'text', value: r.value, placeholder: 'value', 'aria-label': `Value of ${r.key || 'variable'}`, autocomplete: 'off', spellcheck: 'false', 'data-fk': `env-v-${idx}` });
+      valueEl.addEventListener('input', () => { r.value = valueEl.value; changed(); });
+      valueEl.addEventListener('paste', (ev) => {
+        const t = ev.clipboardData ? ev.clipboardData.getData('text') : '';
+        if (!t.includes('\n')) return;
+        ev.preventDefault();
+        const s = valueEl.selectionStart ?? valueEl.value.length;
+        const e = valueEl.selectionEnd ?? valueEl.value.length;
+        r.value = valueEl.value.slice(0, s) + t.replace(/\r\n?/g, '\n') + valueEl.value.slice(e);
+        render();
+        changed();
+      });
+    }
+    const eye = h('button', { class: 'btn btn-icon btn-ghost', type: 'button', 'aria-pressed': String(!!r.shown), title: r.shown ? 'Hide value' : 'Show value', 'aria-label': `${r.shown ? 'Hide' : 'Show'} value of ${r.key || 'variable'}` }, icon(r.shown ? 'eyeOff' : 'eye'));
+    eye.addEventListener('click', () => { r.shown = !r.shown; render(); });
+    const del = h('button', { class: 'btn btn-icon btn-ghost', type: 'button', title: 'Remove', 'aria-label': `Remove ${r.key || 'variable'}` }, icon('trash'));
+    del.addEventListener('click', () => { rows.splice(rows.indexOf(r), 1); render(); changed(); });
+    const row = h('div', { class: 'env-row' }, key, h('div', { class: 'val' }, valueEl, eye), del);
+    r.errEl = h('p', { class: 'env-err', hidden: true });
+    r.keyEl = key;
+    return [row, r.errEl];
+  }
+  function render() {
+    const nodes = rows.map((r, i) => rowEl(r, i)).flat();
+    swap(list, rows.length
+      ? [h('div', { class: 'env-head', 'aria-hidden': 'true' }, h('span', null, 'Key'), h('span', null, 'Value'), h('span')), ...nodes]
+      : [h('p', { class: 'env-empty' }, 'No variables yet. Add one, or import a .env file.')]);
+  }
+  const editor = {
+    el: root,
+    getVars: current,
+    setVars(vars) {
+      rows = normalizeVars(vars).map((v) => ({ key: v.key, value: v.value, shown: allShown }));
+      baseline = JSON.stringify(current());
+      render();
+    },
+    isDirty: () => JSON.stringify(current()) !== baseline,
+    // Returns the first problem (and marks rows), or null when valid.
+    validate() {
+      let first = null;
+      const seen = new Map();
+      for (const r of rows) {
+        const k = r.key.trim();
+        let msg = null;
+        if (k || r.value) {
+          msg = validateEnvKey(k);
+          if (!msg && seen.has(k)) msg = `“${k}” is defined twice.`;
+          seen.set(k, true);
+        }
+        if (r.errEl) { r.errEl.textContent = msg || ''; r.errEl.hidden = !msg; }
+        if (r.keyEl) { if (msg) r.keyEl.setAttribute('aria-invalid', 'true'); else r.keyEl.removeAttribute('aria-invalid'); }
+        if (msg && !first) { first = msg; if (r.keyEl) r.keyEl.focus(); }
+      }
+      return first;
+    },
+  };
+  editor.setVars(initial || []);
+  return editor;
+}
+
+// ======================================================================
+// Shell, login and routing
+// ======================================================================
+const root = document.getElementById('root');
+let shell = null;
+let current = { key: null, scope: null, ctrl: null };
+let lastHash = location.hash;
+let firstRoute = true;
+
+const setTitle = (t) => { document.title = t ? `${t} · Ferry` : 'Ferry'; };
+const pageDirty = () => !!(current.ctrl && typeof current.ctrl.isDirty === 'function' && current.ctrl.isDirty());
+// Toast once per scope when background refreshes keep failing (the view keeps its last data).
+function refreshFailed(scope, e) {
+  scope.failures = (scope.failures || 0) + 1;
+  if (scope.failures === 3) toast(`Couldn't refresh: ${errMsg(e)}`, 'error');
+}
+const refreshOk = (scope) => { scope.failures = 0; };
+
+function onUnauthorized(message) {
+  if (!token) return;
+  logout(message ? `Signed out: ${message}` : 'Your token was rejected. Sign in again.');
+}
+function teardownPage() {
+  if (current.scope) current.scope.dispose();
+  current = { key: null, scope: null, ctrl: null };
+}
+function logout(message) {
+  token = '';
+  storage.del(TOKEN_KEY);
+  serverInfo = null;
+  teardownPage();
+  if (shell) { shell.scope.dispose(); shell = null; }
+  renderLogin(message);
+}
+
+function brand() {
+  return h('a', { class: 'brand', href: '#/services', 'aria-label': 'Ferry home' },
+    h('span', { class: 'brand-mark' }, icon('ship')), 'Ferry');
+}
+
+function renderLogin(message) {
+  setTitle('Sign in');
+  const tokenInput = h('input', { class: 'input mono', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'fy_…', required: true });
+  const f = field('API token', tokenInput, { hint: 'Printed by ferryd when it starts, and stored in the api_token file of its data directory.' });
+  const err = h('p', { class: 'form-error', role: 'alert', hidden: !message }, message || '');
+  const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Sign in');
+  const form = h('form', { class: 'panel', novalidate: true },
+    h('div', null, h('h1', null, 'Sign in to Ferry'), h('p', { class: 'muted', style: { marginTop: '6px' } }, 'Manage services, datastores and deploys on this server.')),
+    f, err, h('div', { class: 'form-actions' }, submit));
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const candidate = tokenInput.value.trim();
+    if (!candidate) { f.setError('Paste your API token.'); tokenInput.focus(); return; }
+    f.setError('');
+    err.hidden = true;
+    await busy(submit, async () => {
+      try {
+        const info = await api.get('/info', { token: candidate });
+        token = candidate;
+        storage.set(TOKEN_KEY, candidate);
+        serverInfo = info;
+        if (!location.hash || location.hash === '#' || location.hash === '#/') history.replaceState(null, '', '#/services');
+        lastHash = location.hash;
+        route();
+      } catch (e) {
+        err.textContent = e.status === 401 ? 'That token was rejected. Check it and try again.' : errMsg(e);
+        err.hidden = false;
+        tokenInput.focus();
+        tokenInput.select();
+      }
+    });
+  });
+  root.replaceChildren(h('main', { class: 'login', id: 'main' },
+    h('div', { class: 'login-card' }, brand(), form,
+      h('div', { class: 'stack' }, h('p', { class: 'muted' }, 'Prefer the terminal? Sign in the CLI with:'),
+        codeBlock([`ferry login --server ${location.origin} --token <token>`])))));
+  tokenInput.focus();
+}
+
+const NAV = [
+  ['services', 'Services', 'services'],
+  ['datastores', 'Datastores', 'database'],
+  ['env-groups', 'Env groups', 'braces'],
+  ['blueprints', 'Blueprints', 'blueprint'],
+];
+function mountShell() {
+  const scope = new Scope();
+  const links = {};
+  const nav = h('nav', { class: 'nav', 'aria-label': 'Main' },
+    NAV.map(([key, label, ic]) => (links[key] = h('a', { href: `#/${key}` }, icon(ic), label))));
+  const foot = h('div', { class: 'side-foot' });
+  const main = h('main', { class: 'main', id: 'main', tabindex: '-1' });
+  root.replaceChildren(h('div', { class: 'app' }, h('aside', { class: 'side' }, brand(), nav, foot), main));
+  shell = { scope, main, links, foot };
+  const drawFoot = () => {
+    const i = serverInfo || {};
+    const proxy = safeHref(i.proxy_url || '');
+    swap(foot,
+      h('div', { class: 'kv' }, h('span', null, 'Ferry'), h('span', { class: 'num' }, i.version ? `v${String(i.version).replace(/^v/, '')}` : '—')),
+      h('div', { class: 'kv' }, h('span', null, 'Docker'),
+        i.docker_version
+          ? h('span', { class: 'num', title: 'Docker server version' }, i.docker_version)
+          : h('span', { style: { color: 'var(--bad)' }, title: 'ferryd could not reach the Docker daemon' }, serverInfo ? 'unreachable' : '—')),
+      h('div', { class: 'kv' }, h('span', null, 'Proxy'),
+        proxy ? h('a', { href: proxy, target: '_blank', rel: 'noopener noreferrer', title: proxy }, proxy.replace(/^https?:\/\//, '')) : h('span', null, '—')),
+      h('button', { class: 'btn btn-sm btn-ghost signout', type: 'button', onclick: () => logout() }, icon('logout'), 'Sign out'));
+  };
+  drawFoot();
+  const refreshInfo = async () => {
+    try { serverInfo = await api.get('/info'); drawFoot(); } catch (e) { console.warn('info refresh failed', e); }
+  };
+  if (!serverInfo) refreshInfo();
+  scope.poll(refreshInfo, 60000);
+}
+function setNav(section) {
+  for (const [key, a] of Object.entries(shell.links)) {
+    if (key === section) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+}
+function parseHash() {
+  const raw = location.hash.replace(/^#\/?/, '').split('?')[0];
+  return raw.split('/').filter(Boolean).map((p) => { try { return decodeURIComponent(p); } catch { return p; } });
+}
+
+function route() {
+  if (!token) { renderLogin(); return; }
+  if (!shell) mountShell();
+  const parts = parseHash();
+  const [a, b] = parts;
+  let section = a || 'services';
+  let key;
+  let mount;
+  switch (a || 'services') {
+    case 'services':
+      if (b) { key = `service:${b}`; mount = viewService; } else { key = 'services'; mount = viewServices; }
+      break;
+    case 'new-service': section = 'services'; key = 'new-service'; mount = viewNewService; break;
+    case 'datastores':
+      if (b) { key = `datastore:${b}`; mount = viewDatastore; } else { key = 'datastores'; mount = viewDatastores; }
+      break;
+    case 'new-datastore': section = 'datastores'; key = 'new-datastore'; mount = viewNewDatastore; break;
+    case 'env-groups':
+      if (b) { key = `env-group:${b}`; mount = viewEnvGroup; } else { key = 'env-groups'; mount = viewEnvGroups; }
+      break;
+    case 'new-env-group': section = 'env-groups'; key = 'new-env-group'; mount = viewNewEnvGroup; break;
+    case 'blueprints': key = 'blueprints'; mount = viewBlueprints; break;
+    default: section = null; key = 'not-found'; mount = viewNotFound;
+  }
+  setNav(section);
+  // Same page (e.g. switching tabs of one service): let it update in place.
+  if (current.key === key && current.ctrl && typeof current.ctrl.update === 'function') {
+    current.ctrl.update(parts);
+    return;
+  }
+  teardownPage();
+  const scope = new Scope();
+  const page = h('div', { class: 'page' });
+  shell.main.replaceChildren(page);
+  current = { key, scope, ctrl: null };
+  window.scrollTo(0, 0);
+  try {
+    current.ctrl = mount(scope, page, parts) || null;
+  } catch (e) {
+    console.error(e);
+    page.replaceChildren(errorState(e, () => route(), 'This page failed to render'));
+  }
+  if (!firstRoute) {
+    const h1 = page.querySelector('h1');
+    (h1 || shell.main).focus({ preventScroll: true });
+  }
+  firstRoute = false;
+}
+window.addEventListener('hashchange', () => {
+  if (!token) return;
+  if (location.hash !== lastHash && pageDirty() && !window.confirm('You have unsaved changes. Leave without saving?')) {
+    history.replaceState(null, '', lastHash || '#/services');
+    return;
+  }
+  lastHash = location.hash;
+  route();
+});
+window.addEventListener('beforeunload', (ev) => {
+  if (pageDirty()) { ev.preventDefault(); ev.returnValue = ''; }
+});
+function navigate(hash) {
+  if (location.hash === hash) route(); else location.hash = hash;
+}
+
+function viewNotFound(scope, page) {
+  setTitle('Not found');
+  page.append(pageHead({ title: 'Page not found' }),
+    h('div', { class: 'panel empty' }, h('p', null, 'There is nothing at this address.'), h('a', { class: 'btn', href: '#/services' }, 'Go to services')));
+}
+
+// ======================================================================
+// Services list
+// ======================================================================
+function addressCell(svc) {
+  if (isPublic(svc) && svc.url) return h('span', { class: 'over' }, externalLink(svc.url));
+  if (isCron(svc)) return h('span', { class: 'muted' }, h('code', null, svc.schedule || '—'), ' UTC');
+  if (svc.type === 'private_service') {
+    return h('code', { class: 'muted' }, svc.internal_port ? `${svc.internal_host || svc.name}:${svc.internal_port}` : (svc.internal_host || svc.name));
+  }
+  if (svc.type === 'background_worker') return h('span', { class: 'faint' }, 'No port');
+  return h('span', { class: 'faint' }, '—');
+}
+function deploySummary(d) {
+  if (!d) return h('span', { class: 'faint' }, 'Never deployed');
+  const when = d.finished_at || d.started_at || d.created_at;
+  return h('span', { class: 'svc-deploy' },
+    timeEl(when),
+    commitRef(d) || h('span', null, triggerLabel(d.trigger)),
+    DEPLOY_STATUSES[d.status] && DEPLOY_STATUSES[d.status].tone === 'bad' ? h('span', { style: { color: 'var(--bad)' } }, DEPLOY_STATUSES[d.status].label) : null);
+}
+function servicesList(list) {
+  const box = h('div', { class: 'svc-list', role: 'list' },
+    h('div', { class: 'svc-row head', 'aria-hidden': 'true' },
+      h('div', { class: 'c-name' }, 'Name'), h('div', { class: 'c-type' }, 'Type'), h('div', { class: 'c-state' }, 'Status'),
+      h('div', { class: 'c-url' }, 'URL or address'), h('div', { class: 'c-deploy' }, 'Last deploy')));
+  for (const svc of list) {
+    box.append(h('div', { class: 'svc-row', role: 'listitem' },
+      h('div', { class: 'c-name ellipsis' }, h('a', { class: 'svc-name', href: linkTo('services', svc.name), 'data-fk': `svc-${svc.name}` }, svc.name)),
+      h('div', { class: 'c-type' }, h('span', { class: 'badge' }, typeLabel(svc.type))),
+      h('div', { class: 'c-state' }, statePill(svc.state)),
+      h('div', { class: 'c-url ellipsis' }, addressCell(svc)),
+      h('div', { class: 'c-deploy' }, deploySummary(svc.latest_deploy))));
+  }
+  return box;
+}
+function cliQuickstart() {
+  return codeBlock([
+    [`ferry login --server ${location.origin} --token <token>`, ''],
+    ['cd my-app && ferry up', '        # build and deploy this directory'],
+    ['ferry create api --repo https://github.com/you/app', ''],
+  ]);
+}
+function viewServices(scope, page) {
+  setTitle('Services');
+  let services = null;
+  let needle = '';
+  const search = h('input', { class: 'input', type: 'search', placeholder: 'Filter by name or type', 'aria-label': 'Filter services', autocomplete: 'off' });
+  const toolbar = h('div', { class: 'toolbar', hidden: true }, h('div', { class: 'search' }, icon('search'), search));
+  const body = h('div', null, loadingState());
+  page.append(pageHead({ title: 'Services', actions: [h('a', { class: 'btn btn-primary', href: '#/new-service' }, icon('plus'), 'New service')] }), toolbar, body);
+  const draw = () => {
+    if (!services) return;
+    if (!services.length) {
+      toolbar.hidden = true;
+      swap(body, h('div', { class: 'panel empty' },
+        h('h2', null, 'Deploy your first service'),
+        h('p', null, 'Create a service from a Git repository or a Docker image, or ship a local directory straight from your terminal.'),
+        cliQuickstart(),
+        h('a', { class: 'btn btn-primary', href: '#/new-service' }, icon('plus'), 'New service')));
+      return;
+    }
+    toolbar.hidden = services.length < 6 && !needle;
+    const shown = needle ? services.filter((s) => String(s.name).includes(needle) || typeLabel(s.type).toLowerCase().includes(needle)) : services;
+    swap(body, shown.length ? servicesList(shown) : h('div', { class: 'panel empty' }, h('p', null, `No services match “${needle}”.`)));
+  };
+  search.addEventListener('input', () => { needle = search.value.trim().toLowerCase(); draw(); });
+  const load = async () => {
+    try {
+      const list = await api.get('/services');
+      if (!scope.alive) return;
+      refreshOk(scope);
+      services = (Array.isArray(list) ? list : []).slice().sort((x, y) => String(x.name).localeCompare(String(y.name)));
+      draw();
+    } catch (e) {
+      if (!scope.alive) return;
+      if (!services) swap(body, errorState(e, () => { swap(body, loadingState()); load(); }));
+      else refreshFailed(scope, e);
+    }
+  };
+  load();
+  scope.poll(load);
+}
+
+// ======================================================================
+// New service
+// ======================================================================
+// Build & deploy fields shared by the New service form and the Settings tab.
+// `svc` (optional) pre-fills the values; `withInstances` shows the instances field.
+function serviceFields(svc, { withInstances = true } = {}) {
+  const val = (k) => (svc && svc[k] != null ? String(svc[k]) : '');
+  const mono = (k, placeholder, extra) => input(Object.assign({ class: 'input mono', value: val(k), placeholder }, extra));
+  const F = {};
+  const mk = (key, label, control, hint) => { F[key] = field(label, control, { hint }); return F[key]; };
+  mk('repo_url', 'Repository', mono('repo_url', 'https://github.com/you/app.git', { inputmode: 'url' }), 'HTTPS or SSH URL, or a path to a repository on the Ferry host.');
+  mk('branch', 'Branch', mono('branch', 'main', { value: val('branch') || 'main' }));
+  mk('image', 'Image', mono('image', 'nginx:alpine'), 'Any public image reference. The latest tag is pulled again on every deploy.');
+  mk('runtime', 'Runtime', select(Object.entries(RUNTIMES).filter(([k]) => k !== 'image'), svc && svc.runtime && svc.runtime !== 'image' ? svc.runtime : 'auto'),
+    'Auto-detect looks for a Dockerfile, package.json, requirements.txt, go.mod, Cargo.toml or Gemfile.');
+  mk('root_dir', 'Root directory', mono('root_dir', '.'), 'Build from a subdirectory of the repository (monorepos).');
+  mk('dockerfile_path', 'Dockerfile path', mono('dockerfile_path', 'Dockerfile'), 'Relative to the root directory.');
+  mk('build_command', 'Build command', mono('build_command', 'npm ci && npm run build'));
+  mk('start_command', 'Start command', mono('start_command', 'npm start'), 'Runs with sh -c and overrides the image’s default command.');
+  mk('publish_dir', 'Publish directory', mono('publish_dir', 'dist'), 'Directory of built files to serve.');
+  mk('port', 'Port', input({ type: 'number', min: 1, max: 65535, placeholder: 'Auto', value: val('port'), inputmode: 'numeric' }),
+    'Leave empty to use the PORT variable, the image’s EXPOSE, or 10000.');
+  mk('health_check_path', 'Health check path', mono('health_check_path', '/healthz'), 'New deploys receive traffic only after this path answers.');
+  mk('instances', 'Instances', input({ type: 'number', min: 1, max: 50, value: val('instances') || '1', inputmode: 'numeric' }), 'Requests are balanced round-robin across instances.');
+  mk('schedule', 'Schedule', mono('schedule', '*/15 * * * *'), 'Five-field cron expression in UTC. Aliases such as @hourly also work.');
+  mk('disk_mount_path', 'Disk mount path', mono('disk_mount_path', '/var/data'),
+    svc ? 'Clearing it detaches the disk on the next deploy.' : 'Optional persistent volume. Services with a disk run one instance and stop before each deploy.');
+  const v = (k) => F[k].control.value.trim();
+  const grid = (...fs) => h('div', { class: 'grid-2' }, fs);
+  return {
+    F,
+    v,
+    // Visible value of a field, or undefined when hidden/empty.
+    opt: (k) => (F[k].hidden ? undefined : v(k) || undefined),
+    sourceEls: [grid(F.repo_url, F.branch), F.image],
+    buildEls: [grid(F.runtime, F.root_dir), F.dockerfile_path, F.build_command, F.start_command, F.publish_dir,
+      grid(F.port, F.health_check_path), F.schedule, grid(F.instances, F.disk_mount_path)],
+    sync(type, src) {
+      const rt = F.runtime.control.value;
+      F.repo_url.hidden = F.branch.hidden = src !== 'git';
+      F.image.hidden = src !== 'image';
+      F.runtime.hidden = F.root_dir.hidden = src === 'image';
+      F.dockerfile_path.hidden = src === 'image' || !(rt === 'auto' || rt === 'docker');
+      F.build_command.hidden = src === 'image' || rt === 'docker';
+      F.start_command.hidden = type === 'static_site';
+      F.publish_dir.hidden = !(type === 'static_site' || (src !== 'image' && rt === 'static'));
+      F.port.hidden = F.health_check_path.hidden = !LISTENING_TYPES.includes(type);
+      F.instances.hidden = !withInstances || type === 'cron_job';
+      F.schedule.hidden = type !== 'cron_job';
+      F.disk_mount_path.hidden = !DISK_TYPES.includes(type);
+    },
+    // Marks invalid visible fields and returns them (first one first).
+    validate(src) {
+      const problems = [];
+      const check = (k, msg) => { F[k].setError(msg && !F[k].hidden ? msg : ''); if (msg && !F[k].hidden) problems.push(F[k]); };
+      const spaces = (k) => /\s/.test(v(k));
+      check('repo_url', src !== 'git' ? null : !v('repo_url') ? 'Enter a repository URL or path.' : spaces('repo_url') ? 'The URL can’t contain spaces.' : null);
+      check('branch', src === 'git' && spaces('branch') ? 'Branch names can’t contain spaces.' : null);
+      check('image', src !== 'image' ? null : !v('image') ? 'Enter an image, for example nginx:alpine.' : spaces('image') ? 'Image references can’t contain spaces.' : null);
+      const p = Number(v('port'));
+      check('port', v('port') && !(Number.isInteger(p) && p >= 1 && p <= 65535) ? 'Use a port between 1 and 65535.' : null);
+      check('health_check_path', v('health_check_path') && !/^\/\S*$/.test(v('health_check_path')) ? 'Start the path with / and leave out spaces.' : null);
+      const inst = F.instances.hidden ? (svc ? svc.instances : 1) : Number(v('instances') || '1');
+      check('instances', !(Number.isInteger(inst) && inst >= 1 && inst <= 50) ? 'Use between 1 and 50 instances.' : null);
+      const s = v('schedule');
+      check('schedule', !s ? 'Cron jobs need a schedule.' : !s.startsWith('@') && s.split(/\s+/).length !== 5 ? 'Use five fields: minute hour day-of-month month day-of-week.' : null);
+      const d = v('disk_mount_path');
+      check('disk_mount_path', !d ? null : !/^\/./.test(d) || d.includes('..') ? 'Use an absolute path other than /.'
+        : inst > 1 ? (F.instances.hidden ? 'Scale to 1 instance before attaching a disk.' : 'Services with a disk run a single instance.') : null);
+      return problems;
+    },
+  };
+}
+
+function viewNewService(scope, page) {
+  setTitle('New service');
+  let touched = false;
+  let submitted = false;
+  const st = { type: 'web_service', source: 'git' };
+  page.append(pageHead({ crumbs: crumbs({ label: 'Services', href: '#/services' }, { label: 'New service' }), title: 'New service' }));
+  const sf = serviceFields(null);
+  const sync = () => {
+    sf.sync(st.type, st.source);
+    const n = name.value.trim() || '<name>';
+    uploadBox.hidden = st.source !== 'upload';
+    if (st.source === 'upload') {
+      swap(uploadBox, h('p', { class: 'muted' }, 'Create the service, then run this from your project directory to upload and deploy it:'), codeBlock([`ferry up ${n}`]));
+    }
+    autoDeploy.hidden = st.source !== 'git';
+    deployNow.hidden = st.source === 'upload';
+    const b = serverInfo && serverInfo.base_domain;
+    hostPreview.textContent = PUBLIC_TYPES.includes(st.type) && b ? `Public URL: ${n}.${b}` : '';
+    hostPreview.hidden = !hostPreview.textContent;
+  };
+  const typeTiles = tiles('svc-type', Object.entries(SERVICE_TYPES).map(([k, m]) => [k, m.label, m.desc]), st.type, (k) => { st.type = k; sync(); });
+  const srcTiles = tiles('svc-source', [
+    ['git', 'Git repository', 'Clone a branch and build it'],
+    ['image', 'Docker image', 'Run a prebuilt image'],
+    ['upload', 'Upload later', 'Deploy a local directory with ferry up'],
+  ], st.source, (k) => { st.source = k; sync(); });
+  const name = input({ class: 'input mono', placeholder: 'my-app', maxlength: 40 });
+  const fName = field('Name', name, { hint: 'Lowercase letters, digits and dashes. It is also the hostname on the private network.' });
+  const hostPreview = h('p', { class: 'hint' });
+  fName.append(hostPreview);
+  const uploadBox = h('div', { class: 'stack' });
+  const env = envEditor([], { onChange: () => { touched = true; } });
+  const groupsBox = h('div', { class: 'stack' }, spinnerLine('Loading env groups…'));
+  const autoDeploy = checkbox('Auto-deploy on push', true, 'Deploy when commits are pushed to the branch (requires the GitHub webhook).');
+  const deployNow = checkbox('Deploy right away', true, 'Start the first deploy as soon as the service is created.');
+  const formErr = h('p', { class: 'form-error', role: 'alert', hidden: true });
+  const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Create service');
+
+  const groupChecks = [];
+  (async () => {
+    try {
+      const groups = await api.get('/env-groups');
+      if (!scope.alive) return;
+      const list = Array.isArray(groups) ? groups : [];
+      if (!list.length) {
+        swap(groupsBox, h('p', { class: 'muted' }, 'No env groups yet. ', h('a', { href: '#/new-env-group' }, 'Create one'), ' to share variables between services.'));
+        return;
+      }
+      swap(groupsBox, list.map((g) => {
+        const c = checkbox(g.name, false, plural((g.vars || []).length, 'variable'), { value: g.name });
+        groupChecks.push(c.input);
+        return c;
+      }));
+    } catch (e) {
+      if (scope.alive) swap(groupsBox, h('p', { class: 'form-error' }, `Couldn't load env groups: ${errMsg(e)}`));
+    }
+  })();
+
+  const form = h('form', { class: 'form', novalidate: true },
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Service type'), typeTiles),
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Source'), srcTiles, sf.sourceEls, uploadBox),
+    h('div', { class: 'fieldset' }, fName),
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Build and deploy'), sf.buildEls),
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Environment'), h('p', { class: 'desc' }, ENV_HELP), env.el),
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Env groups'), groupsBox),
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Deploy'), autoDeploy, deployNow),
+    formErr,
+    h('div', { class: 'form-actions' }, submit, h('a', { class: 'btn btn-ghost', href: '#/services' }, 'Cancel')));
+  page.append(form);
+  form.addEventListener('input', () => { touched = true; });
+  sf.F.runtime.control.addEventListener('change', sync);
+  name.addEventListener('input', sync);
+  sync();
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    formErr.hidden = true;
+    const nameProblem = validateResourceName(name.value.trim());
+    fName.setError(nameProblem);
+    const problems = sf.validate(st.source);
+    if (nameProblem) problems.unshift(fName);
+    const envProblem = env.validate();
+    if (problems.length || envProblem) {
+      formErr.textContent = envProblem && !problems.length ? `Environment: ${envProblem}` : 'Fix the highlighted fields.';
+      formErr.hidden = false;
+      if (problems.length) problems[0].control.focus();
+      return;
+    }
+    const { v, opt } = sf;
+    const body = { name: name.value.trim(), type: st.type };
+    if (st.source === 'git') { body.repo_url = v('repo_url'); body.branch = v('branch') || 'main'; body.auto_deploy = autoDeploy.input.checked; }
+    if (st.source === 'image') body.image = v('image');
+    if (st.source !== 'image') {
+      body.runtime = sf.F.runtime.control.value;
+      body.root_dir = opt('root_dir');
+      body.dockerfile_path = opt('dockerfile_path');
+      body.build_command = opt('build_command');
+      body.publish_dir = opt('publish_dir');
+    }
+    body.start_command = opt('start_command');
+    if (opt('port')) body.port = Number(v('port'));
+    body.health_check_path = opt('health_check_path');
+    if (!sf.F.instances.hidden) body.instances = Number(v('instances') || '1');
+    body.schedule = opt('schedule');
+    body.disk_mount_path = opt('disk_mount_path');
+    const vars = env.getVars();
+    if (vars.length) body.env = vars;
+    const groups = groupChecks.filter((c) => c.checked).map((c) => c.value);
+    if (groups.length) body.env_groups = groups;
+    if (st.source !== 'upload') body.deploy = deployNow.input.checked;
+    await busy(submit, async () => {
+      try {
+        const created = await api.post('/services', body);
+        submitted = true;
+        const svcName = (created && created.name) || body.name;
+        toast(`Created ${svcName}.`, 'ok');
+        const dep = created && created.latest_deploy;
+        navigate(dep && dep.id ? linkTo('services', svcName, 'deploys', dep.id) : linkTo('services', svcName));
+      } catch (e) {
+        formErr.textContent = errMsg(e);
+        formErr.hidden = false;
+        toastError(e, 'Creating the service failed');
+      }
+    });
+  });
+  name.focus();
+  return { isDirty: () => touched && !submitted };
+}
+
+// ======================================================================
+// Service page: header + tabs
+// ======================================================================
+const SERVICE_TABS = [
+  ['overview', 'Overview', tabOverview],
+  ['deploys', 'Deploys', tabDeploys],
+  ['logs', 'Logs', tabLogs],
+  ['environment', 'Environment', tabEnvironment],
+  ['settings', 'Settings', tabSettings],
+  ['jobs', 'Jobs', tabJobs],
+];
+
+function viewService(scope, page, parts) {
+  const name = parts[1];
+  setTitle(name);
+  const ctx = { name, svc: null, scope, tab: null, sub: null, tabScope: null, tabCtrl: null, listeners: new Set() };
+  const badges = h('span', { class: 'row' });
+  const sub = h('div', { class: 'sub' });
+  const actions = h('div', { class: 'actions' });
+  const h1 = h('h1', { tabindex: '-1' }, name);
+  const crumb = crumbs({ label: 'Services', href: '#/services' }, { label: name });
+  const head = h('div', null, crumb,
+    h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('div', { class: 'title' }, h1, badges), sub), actions));
+  const tabsNav = h('nav', { class: 'tabs', 'aria-label': 'Service sections' });
+  const tabLinks = {};
+  for (const [key, label] of SERVICE_TABS) tabsNav.append(tabLinks[key] = h('a', { href: linkTo('services', name, key === 'overview' ? null : key) }, label));
+  const body = h('div', null, loadingState());
+  page.append(head, tabsNav, body);
+  tabsNav.hidden = true;
+
+  ctx.onService = (fn) => { ctx.listeners.add(fn); return () => ctx.listeners.delete(fn); };
+  ctx.apply = (svc) => {
+    if (!svc || typeof svc !== 'object') return;
+    ctx.svc = svc;
+    drawHeader();
+    for (const fn of [...ctx.listeners]) { try { fn(svc); } catch (e) { console.error(e); } }
+  };
+  ctx.refresh = async () => {
+    try {
+      const svc = await api.get(`/services/${enc(name)}`);
+      if (!scope.alive) return null;
+      refreshOk(scope);
+      ctx.apply(svc);
+      return svc;
+    } catch (e) {
+      if (!scope.alive) return null;
+      if (isNotFound(e) && ctx.svc) {
+        toast(`${name} no longer exists.`, 'error');
+        navigate('#/services');
+      } else if (ctx.svc) refreshFailed(scope, e);
+      throw e;
+    }
+  };
+
+  const deployMenu = menuButton('Manual deploy', () => deployMenuItems(ctx), { primary: true });
+  function drawHeader() {
+    const svc = ctx.svc;
+    // The route may use the id; show the name once it is known.
+    if (svc.name && h1.textContent !== svc.name) { h1.textContent = svc.name; crumb.lastChild.textContent = svc.name; }
+    swap(badges, h('span', { class: 'badge' }, typeLabel(svc.type)), statePill(svc.state));
+    const bits = [];
+    if (isPublic(svc) && svc.url) bits.push(externalLink(svc.url));
+    else if (isListening(svc)) bits.push(h('code', { title: 'Address on the private network' }, svc.internal_port ? `${svc.internal_host || svc.name}:${svc.internal_port}` : svc.internal_host || svc.name));
+    if (isCron(svc)) bits.push(h('span', null, 'Runs ', h('code', null, svc.schedule || '—'), ' UTC'));
+    const src = sourceOf(svc);
+    if (src === 'git') bits.push(h('span', { class: 'ellipsis', style: { maxWidth: '420px' }, title: svc.repo_url }, svc.repo_url, ' @ ', h('code', null, svc.branch || 'main')));
+    else if (src === 'image') bits.push(h('code', { class: 'ellipsis', style: { maxWidth: '420px' } }, svc.image));
+    else bits.push(h('span', null, 'Deployed with ', h('code', null, 'ferry up')));
+    swap(sub, bits);
+    if (!actions.firstChild) actions.append(deployMenu);
+  }
+
+  function mountTab(tab, subId) {
+    ctx.tab = tab;
+    ctx.sub = subId || null;
+    if (ctx.tabScope) ctx.tabScope.dispose();
+    ctx.tabScope = scope.child();
+    ctx.tabCtrl = null;
+    for (const [key, a] of Object.entries(tabLinks)) {
+      if (key === tab) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    }
+    const entry = SERVICE_TABS.find(([key]) => key === tab);
+    const label = entry ? entry[1] : 'Not found';
+    setTitle(`${label} · ${name}`);
+    body.replaceChildren();
+    if (!entry) {
+      body.append(h('div', { class: 'panel empty' }, h('p', null, 'This section doesn’t exist.'), h('a', { class: 'btn', href: linkTo('services', name) }, 'Go to overview')));
+      return;
+    }
+    try {
+      ctx.tabCtrl = entry[2](ctx, ctx.tabScope, body) || null;
+    } catch (e) {
+      console.error(e);
+      body.replaceChildren(errorState(e, () => mountTab(tab, subId), 'This section failed to render'));
+    }
+  }
+
+  (async () => {
+    try {
+      await ctx.refresh();
+    } catch (e) {
+      if (!scope.alive) return;
+      if (isNotFound(e)) {
+        swap(body, h('div', { class: 'panel empty' }, h('h2', null, `There’s no service named “${name}”`),
+          h('p', null, 'It may have been deleted, or the address is mistyped.'), h('a', { class: 'btn', href: '#/services' }, 'Back to services')));
+      } else {
+        swap(body, errorState(e, () => route()));
+      }
+      return;
+    }
+    if (!scope.alive) return;
+    tabsNav.hidden = false;
+    const now = parseHash();
+    mountTab(now[2] || 'overview', now[3]);
+    scope.poll(() => ctx.refresh().catch(() => {}));
+  })();
+
+  return {
+    update(p) {
+      if (!ctx.svc) return;
+      const tab = p[2] || 'overview';
+      const subId = p[3] || null;
+      if (tab === ctx.tab && subId === ctx.sub) return;
+      mountTab(tab, subId);
+      window.scrollTo(0, 0);
+    },
+    isDirty: () => !!(ctx.tabCtrl && typeof ctx.tabCtrl.isDirty === 'function' && ctx.tabCtrl.isDirty()),
+  };
+}
+
+// ---------- service actions ----------
+function deployMenuItems(ctx) {
+  const svc = ctx.svc;
+  if (!svc) return [];
+  const off = !!svc.suspended;
+  const why = off ? 'Resume the service to deploy' : null;
+  const src = sourceOf(svc);
+  if (src === 'git') {
+    return [
+      { label: 'Deploy latest commit', hint: why || `Build the tip of ${svc.branch || 'main'}`, disabled: off, onSelect: () => startDeploy(ctx, {}) },
+      { label: 'Deploy a specific commit…', hint: why || 'Build an exact commit SHA', disabled: off, onSelect: () => deployCommitDialog(ctx) },
+      'sep',
+      { label: 'Clear build cache & deploy', hint: why || 'Rebuild every layer from scratch', disabled: off, onSelect: () => startDeploy(ctx, { clear_cache: true }) },
+    ];
+  }
+  if (src === 'image') {
+    return [{ label: 'Deploy image', hint: why || `Pull ${svc.image} and roll it out`, disabled: off, onSelect: () => startDeploy(ctx, {}) }];
+  }
+  return [
+    { label: 'Redeploy last upload', hint: why || 'Rebuild the most recent ferry up archive', disabled: off, onSelect: () => startDeploy(ctx, {}) },
+    { label: 'Clear build cache & redeploy', hint: why || 'Rebuild every layer from scratch', disabled: off, onSelect: () => startDeploy(ctx, { clear_cache: true }) },
+  ];
+}
+async function startDeploy(ctx, { commit, clear_cache } = {}) {
+  try {
+    const d = await api.post(`/services/${enc(ctx.name)}/deploys`, { commit: commit || undefined, clear_cache: !!clear_cache });
+    toast(clear_cache ? 'Deploy queued without build cache.' : 'Deploy queued.', 'ok');
+    ctx.refresh().catch(() => {});
+    if (d && d.id) navigate(linkTo('services', ctx.name, 'deploys', d.id));
+  } catch (e) {
+    toastError(e, 'Couldn’t start the deploy');
+  }
+}
+function deployCommitDialog(ctx) {
+  promptDialog({
+    title: 'Deploy a specific commit', label: 'Commit SHA', mono: true, placeholder: 'a1b2c3d',
+    hint: `A commit reachable from ${ctx.svc && ctx.svc.repo_url ? 'the repository' : 'the branch'}. Short SHAs work.`,
+    confirmLabel: 'Deploy', validate: (v) => (/^[0-9a-fA-F]{4,40}$/.test(v) ? null : 'Enter a hexadecimal commit SHA (4–40 characters).'),
+  }).then((sha) => { if (sha) startDeploy(ctx, { commit: sha }); });
+}
+function restartDialog(ctx) {
+  const svc = ctx.svc;
+  let dep = null;
+  confirmDialog({
+    title: `Restart ${ctx.name}?`,
+    message: svc && svc.disk_mount_path
+      ? 'Ferry redeploys the live image with the current settings and environment. Because this service has a disk, the running instance stops before the new one starts.'
+      : 'Ferry redeploys the live image with the current settings and environment. Traffic moves over once the new instances pass their health check.',
+    confirmLabel: 'Restart',
+    action: async () => { dep = await api.post(`/services/${enc(ctx.name)}/restart`); },
+  }).then((ok) => {
+    if (!ok) return;
+    ctx.refresh().catch(() => {});
+    toast('Restart queued.', 'ok', dep && dep.id ? { href: linkTo('services', ctx.name, 'deploys', dep.id), linkLabel: 'View deploy' } : {});
+  });
+}
+function suspendDialog(ctx) {
+  confirmDialog({
+    title: `Suspend ${ctx.name}?`,
+    message: isCron(ctx.svc)
+      ? 'The schedule pauses and no new runs start until you resume the service.'
+      : 'Every instance stops and requests get a 503 until you resume the service. Deploys are blocked while suspended.',
+    confirmLabel: 'Suspend', danger: true,
+    action: async () => { ctx.apply(await api.post(`/services/${enc(ctx.name)}/suspend`)); },
+  }).then((ok) => { if (ok) toast(`Suspended ${ctx.name}.`, 'ok'); });
+}
+async function resumeService(ctx, btn) {
+  await busy(btn, async () => {
+    try {
+      ctx.apply(await api.post(`/services/${enc(ctx.name)}/resume`));
+      toast(`Resuming ${ctx.name}.`, 'ok');
+    } catch (e) { toastError(e, 'Couldn’t resume'); }
+  });
+}
+function scaleDialog(ctx) {
+  const svc = ctx.svc;
+  const max = svc && svc.disk_mount_path ? 1 : 50;
+  promptDialog({
+    title: `Scale ${ctx.name}`, label: 'Instances', type: 'number', min: 1, max, value: svc ? svc.instances : 1,
+    hint: max === 1 ? 'Services with a disk run a single instance.' : 'Between 1 and 50. Instances are added or removed in place, without a new deploy.',
+    confirmLabel: 'Scale',
+    validate: (v) => { const n = Number(v); return Number.isInteger(n) && n >= 1 && n <= max ? null : `Enter a whole number from 1 to ${max}.`; },
+    action: async (v) => { ctx.apply(await api.post(`/services/${enc(ctx.name)}/scale`, { instances: Number(v) })); },
+  }).then((v) => { if (v != null) toast(`Scaling ${ctx.name} to ${plural(Number(v), 'instance')}.`, 'ok'); });
+}
+function deleteServiceDialog(ctx) {
+  const shown = (ctx.svc && ctx.svc.name) || ctx.name;
+  confirmDialog({
+    title: `Delete ${shown}?`,
+    message: 'This stops every instance and permanently removes the service with its deploy history, built images, environment variables and disk. This can’t be undone.',
+    confirmLabel: 'Delete service', danger: true, typeToConfirm: shown,
+    action: () => api.del(`/services/${enc(ctx.name)}`),
+  }).then((ok) => {
+    if (!ok) return;
+    toast(`Deleted ${shown}.`, 'ok');
+    if (current.ctrl) current.ctrl.isDirty = () => false;
+    navigate('#/services');
+  });
+}
+function cancelDeployDialog(ctx, d, after) {
+  confirmDialog({
+    title: 'Cancel this deploy?',
+    message: 'The build or rollout stops and whatever is live now keeps serving.',
+    confirmLabel: 'Cancel deploy', cancelLabel: 'Keep deploying', danger: true,
+    action: () => api.post(`/deploys/${enc(d.id)}/cancel`),
+  }).then((ok) => { if (ok) { toast('Deploy canceled.', 'ok'); ctx.refresh().catch(() => {}); if (after) after(); } });
+}
+function rollbackDialog(ctx, d) {
+  let dep = null;
+  confirmDialog({
+    title: 'Roll back to this deploy?',
+    message: h('p', null, 'Ferry redeploys the image built by ', h('code', null, shortId(d.id)),
+      d.commit_sha ? [' (commit ', h('code', null, shortSha(d.commit_sha)), ')'] : null,
+      ' using the service’s current settings and environment.'),
+    confirmLabel: 'Roll back',
+    action: async () => { dep = await api.post(`/services/${enc(ctx.name)}/rollback`, { deploy_id: d.id }); },
+  }).then((ok) => {
+    if (!ok) return;
+    toast('Rollback queued.', 'ok');
+    ctx.refresh().catch(() => {});
+    if (dep && dep.id) navigate(linkTo('services', ctx.name, 'deploys', dep.id));
+  });
+}
+
+// ======================================================================
+// Overview tab
+// ======================================================================
+const STATE_HELP = {
+  live: 'Serving the latest successful deploy.',
+  deploying: 'A deploy is in progress.',
+  failed: 'The latest deploy failed and nothing is live.',
+  suspended: 'Stopped by a user.',
+  degraded: 'Fewer instances are running than desired.',
+  not_deployed: 'No deploy has succeeded yet.',
+};
+function dockerStateTone(s) {
+  return s === 'running' ? 'ok' : s === 'restarting' ? 'warn' : s === 'exited' || s === 'dead' ? 'bad' : 'none';
+}
+function usageCell(label, ratio) {
+  const pct = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : null;
+  return h('div', { class: 'num nowrap' }, label,
+    pct == null ? null : h('div', { class: 'bar' + (pct > 0.85 ? ' hot' : ''), role: 'presentation' }, h('i', { style: { width: `${(pct * 100).toFixed(1)}%` } })));
+}
+function tabOverview(ctx, scope, body) {
+  const alerts = h('div');
+  const factsBox = h('div', { class: 'section' });
+  const instBox = h('div', { class: 'section' });
+  const actionsBox = h('div', { class: 'section' });
+  body.append(alerts, factsBox, instBox, actionsBox);
+  let status = null;
+  let statusErr = null;
+
+  function drawAlerts(svc) {
+    const out = [];
+    const d = svc.latest_deploy;
+    if (svc.state === 'suspended') {
+      const btn = h('button', { class: 'btn btn-sm', type: 'button', 'data-fk': 'resume-alert' }, icon('play'), 'Resume');
+      btn.addEventListener('click', () => resumeService(ctx, btn));
+      out.push(callout('off', 'pause', h('strong', null, 'Suspended'),
+        h('p', null, isCron(svc) ? 'The schedule is paused.' : 'Instances are stopped and requests get a 503.'), h('div', null, btn)));
+    } else if (d && isDeployActive(d)) {
+      out.push(callout('busy', 'info', h('strong', null, `${DEPLOY_STATUSES[d.status].label}…`),
+        h('p', null, `${triggerLabel(d.trigger)} started `, timeEl(d.created_at), '. ', h('a', { href: linkTo('services', ctx.name, 'deploys', d.id) }, 'Follow the logs'))));
+    } else if (d && DEPLOY_STATUSES[d.status] && DEPLOY_STATUSES[d.status].tone === 'bad') {
+      out.push(callout('bad', 'alert', h('strong', null, svc.live_deploy_id ? 'The latest deploy failed. The previous deploy is still live.' : 'The latest deploy failed.'),
+        d.error ? h('p', { class: 'mono' }, d.error) : null,
+        h('p', null, h('a', { href: linkTo('services', ctx.name, 'deploys', d.id) }, 'View deploy logs'))));
+    }
+    if (sourceOf(svc) === 'upload' && !svc.live_deploy_id && !(d && isDeployActive(d))) {
+      out.push(callout('none', 'upload', h('strong', null, 'Upload your code'),
+        h('p', null, 'This service has no repository or image. Run this from your project directory to build and deploy it:'),
+        codeBlock([`ferry up ${ctx.name}`])));
+    }
+    swap(alerts, out);
+  }
+  function drawFacts(svc) {
+    const d = svc.latest_deploy;
+    const src = sourceOf(svc);
+    const internal = svc.internal_port ? `${svc.internal_host || svc.name}:${svc.internal_port}` : svc.internal_host || svc.name;
+    const customs = Array.isArray(svc.custom_domains) ? svc.custom_domains : [];
+    swap(factsBox, facts([
+      ['Status', h('div', { class: 'stack', style: { gap: '4px' } }, h('div', null, statePill(svc.state)), h('span', { class: 'muted' }, STATE_HELP[svc.state] || ''))],
+      isPublic(svc) ? ['Public URL', h('div', null, svc.url ? externalLink(svc.url) : h('span', { class: 'faint' }, '—'),
+        customs.length ? h('div', { class: 'muted' }, `+ ${plural(customs.length, 'custom domain')}`) : null)] : null,
+      isListening(svc) ? ['Private address', h('div', null, h('code', null, internal),
+        svc.internal_port ? null : h('div', { class: 'muted' }, 'Port is known after the first deploy'))] : null,
+      !isListening(svc) && !isCron(svc) ? ['Private hostname', h('code', null, svc.internal_host || svc.name)] : null,
+      ['Source', src === 'git' ? h('div', null, h('div', { class: 'ellipsis', title: svc.repo_url }, svc.repo_url), h('div', { class: 'muted' }, 'Branch ', h('code', null, svc.branch || 'main')))
+        : src === 'image' ? h('code', null, svc.image) : h('span', null, 'Local uploads with ', h('code', null, 'ferry up'))],
+      src !== 'image' ? ['Runtime', runtimeLabel(svc.runtime)] : null,
+      isCron(svc) ? ['Schedule', h('span', null, h('code', null, svc.schedule || '—'), ' UTC')] : null,
+      !isCron(svc) ? ['Instances', h('span', { class: 'num' }, String(svc.instances ?? '—'))] : null,
+      svc.disk_mount_path ? ['Disk', h('code', null, svc.disk_mount_path)] : null,
+      ['Latest deploy', d ? h('div', { class: 'stack', style: { gap: '4px' } },
+        h('div', { class: 'row' }, deployPill(d.status), commitRef(d)),
+        h('span', { class: 'muted' }, h('a', { href: linkTo('services', ctx.name, 'deploys', d.id) }, triggerLabel(d.trigger)), ', ', timeEl(d.created_at)))
+        : h('span', { class: 'faint' }, 'Never deployed')],
+      ['Created', timeEl(svc.created_at)],
+    ]));
+  }
+  function drawInstances(svc) {
+    if (isCron(svc)) {
+      swap(instBox, sectionHead('Runs', null),
+        h('div', { class: 'panel panel-pad muted' }, 'Cron jobs run in short-lived containers on their schedule. ',
+          h('a', { href: linkTo('services', ctx.name, 'jobs') }, 'See the run history'), '.'));
+      return;
+    }
+    const scaleBtn = h('button', { class: 'btn btn-sm', type: 'button', 'data-fk': 'scale', onclick: () => scaleDialog(ctx) }, icon('scale'), 'Scale');
+    const list = status && Array.isArray(status.instances) ? status.instances : [];
+    const running = list.filter((i) => i.state === 'running').length;
+    const desired = status && status.desired_instances != null ? status.desired_instances : svc.instances;
+    const summary = status ? `${running} of ${plural(desired, 'instance')} running` : statusErr ? `Status unavailable: ${statusErr}` : 'Loading…';
+    let content;
+    if (!status && !statusErr) content = loadingState();
+    else if (!list.length) {
+      content = h('div', { class: 'panel panel-pad muted' },
+        svc.suspended ? 'Suspended: no instances are running.' : svc.live_deploy_id ? 'No instances are running right now.' : 'Instances appear here after the first successful deploy.');
+    } else {
+      content = table(
+        ['Instance', 'State', 'Deploy', 'Started', { label: 'Restarts', cls: 'num' }, 'CPU', 'Memory'],
+        list.map((i) => {
+          const short = String(i.name || i.container_id || '').slice(-6);
+          const mem = i.memory_bytes;
+          const lim = i.memory_limit_bytes;
+          return h('tr', null,
+            h('td', null, h('code', { title: i.name || i.container_id }, short || '—')),
+            h('td', null, h('span', { class: `pill tone-${dockerStateTone(i.state)}` }, h('span', { class: 'dot' }), i.state || 'unknown')),
+            h('td', { class: 'nowrap' }, i.deploy_id ? h('a', { href: linkTo('services', ctx.name, 'deploys', i.deploy_id), class: 'mono' }, shortId(i.deploy_id)) : '—',
+              i.deploy_id && i.deploy_id === svc.live_deploy_id ? h('span', { class: 'sub' }, ' live') : null),
+            h('td', null, i.state === 'running' ? timeEl(i.started_at) : h('span', { class: 'faint' }, '—')),
+            h('td', { class: 'num' }, i.restart_count != null ? String(i.restart_count) : '—'),
+            h('td', null, i.cpu_percent != null ? usageCell(`${Number(i.cpu_percent).toFixed(1)}%`, Number(i.cpu_percent) / 100) : h('span', { class: 'faint' }, '—')),
+            h('td', null, mem != null ? usageCell(`${fmtBytes(mem)}${lim ? ' / ' + fmtBytes(lim) : ''}`, lim ? mem / lim : NaN) : h('span', { class: 'faint' }, '—')));
+        }));
+    }
+    swap(instBox, sectionHead('Instances', summary, [scaleBtn]), content);
+  }
+  function drawActions(svc) {
+    const hasLive = !!svc.live_deploy_id;
+    const restartBtn = h('button', { class: 'btn', type: 'button', 'data-fk': 'restart', disabled: !hasLive || svc.suspended, onclick: () => restartDialog(ctx) }, icon('restart'), 'Restart');
+    const suspendBtn = svc.suspended
+      ? h('button', { class: 'btn', type: 'button', 'data-fk': 'suspend' }, icon('play'), 'Resume')
+      : h('button', { class: 'btn', type: 'button', 'data-fk': 'suspend', onclick: () => suspendDialog(ctx) }, icon('pause'), 'Suspend');
+    if (svc.suspended) suspendBtn.addEventListener('click', () => resumeService(ctx, suspendBtn));
+    const row = (title, desc, btn) => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('h3', null, title), h('p', { class: 'muted' }, desc)), btn);
+    swap(actionsBox, sectionHead('Actions'),
+      h('div', { class: 'panel items' },
+        row('Restart service', hasLive ? 'Redeploy the live image with the current settings and environment.' : 'Available once a deploy is live.', restartBtn),
+        row(svc.suspended ? 'Resume service' : 'Suspend service',
+          svc.suspended ? 'Start the live deploy’s instances again.' : isCron(svc) ? 'Pause the schedule.' : 'Stop every instance; requests get a 503.', suspendBtn),
+        row('Delete service', 'Permanently remove the service, its deploys, images, variables and disk.',
+          h('button', { class: 'btn btn-danger', type: 'button', 'data-fk': 'delete', onclick: () => deleteServiceDialog(ctx) }, icon('trash'), 'Delete'))));
+  }
+  const draw = (svc) => { drawAlerts(svc); drawFacts(svc); drawInstances(svc); drawActions(svc); };
+  scope.add(ctx.onService(draw));
+  draw(ctx.svc);
+  if (!isCron(ctx.svc)) {
+    const loadStatus = async () => {
+      try {
+        const s = await api.get(`/services/${enc(ctx.name)}/status`);
+        if (!scope.alive) return;
+        status = s;
+        statusErr = null;
+      } catch (e) {
+        if (!scope.alive) return;
+        statusErr = errMsg(e);
+      }
+      drawInstances(ctx.svc);
+    };
+    scope.poll(loadStatus, POLL_MS, { immediate: true });
+  }
+}
+
+// ======================================================================
+// Deploys tab + deploy detail
+// ======================================================================
+function deployRoute(d, svc) {
+  const cron = isCron(svc);
+  const kind = d.source && d.source.kind;
+  const buildLabel = kind === 'image' ? 'Pull' : kind === 'reuse' ? 'Prepare' : 'Build';
+  const stages = cron ? ['Queued', buildLabel, 'Live'] : ['Queued', buildLabel, 'Deploy', 'Live'];
+  const deployAt = cron ? 1 : 2;
+  let at = 0;
+  let mode = 'current';
+  switch (d.status) {
+    case 'queued': at = 0; break;
+    case 'building': at = 1; break;
+    case 'deploying': at = deployAt; break;
+    case 'live': case 'deactivated': at = stages.length - 1; mode = 'done'; break;
+    case 'build_failed': at = 1; mode = 'failed'; break;
+    case 'deploy_failed': at = deployAt; mode = 'failed'; break;
+    case 'canceled': at = !d.started_at ? 0 : d.image ? deployAt : 1; mode = 'halted'; break;
+    default: at = 0;
+  }
+  const ol = h('ol', { class: 'route', 'aria-label': 'Deploy progress' });
+  stages.forEach((label, i) => {
+    let cls = '';
+    let mark = null;
+    let state = 'not started';
+    if (i < at || (mode === 'done' && i === at)) { cls = 'done'; mark = icon('check'); state = 'done'; }
+    else if (i === at) {
+      if (mode === 'failed') { cls = 'failed'; mark = icon('x'); state = 'failed'; }
+      else if (mode === 'halted') { cls = 'halted'; mark = icon('x'); state = 'canceled'; }
+      else { cls = 'current'; state = 'in progress'; }
+    }
+    ol.append(h('li', { class: `stop ${cls}`, 'aria-current': cls === 'current' ? 'step' : null },
+      h('span', { class: 'node' }, mark), h('span', null, label, h('span', { class: 'sr-only' }, `: ${state}`))));
+  });
+  return ol;
+}
+function deployActions(ctx, d, { compact = false, after } = {}) {
+  const out = [];
+  if (isDeployActive(d)) {
+    out.push(h('button', { class: 'btn btn-danger' + (compact ? ' btn-sm' : ''), type: 'button', 'data-fk': `cancel-${d.id}`, onclick: (ev) => { ev.stopPropagation(); cancelDeployDialog(ctx, d, after); } }, 'Cancel'));
+  } else if (canRollback(d)) {
+    out.push(h('button', { class: 'btn' + (compact ? ' btn-sm' : ''), type: 'button', 'data-fk': `rollback-${d.id}`, title: 'Redeploy this deploy’s image', onclick: (ev) => { ev.stopPropagation(); rollbackDialog(ctx, d); } }, 'Rollback'));
+  }
+  return out;
+}
+function tabDeploys(ctx, scope, body) {
+  if (ctx.sub) return deployDetail(ctx, scope, body, ctx.sub);
+  let limit = 25;
+  let deploys = null;
+  const listBox = h('div', null, loadingState());
+  const more = h('button', { class: 'btn', type: 'button', hidden: true }, 'Show older deploys');
+  body.append(listBox, h('div', { style: { marginTop: '12px' } }, more));
+  const draw = () => {
+    const rows = deploys.map((d) => {
+      const href = linkTo('services', ctx.name, 'deploys', d.id);
+      const msg = firstLine(d.commit_message);
+      return clickRow(href, [
+        h('td', null, deployPill(d.status)),
+        h('td', { class: 'nowrap' }, h('a', { href, class: 'mono', 'data-fk': `dep-${d.id}` }, shortId(d.id)), h('div', { class: 'sub' }, triggerLabel(d.trigger))),
+        h('td', { class: 'fill' },
+          d.commit_sha ? h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, commitRef(d), h('span', { class: 'ellipsis', title: d.commit_message || '' }, msg))
+            : h('span', { class: 'muted ellipsis', style: { display: 'block' } }, describeSource(d.source)),
+          d.error ? h('div', { class: 'sub ellipsis', style: { color: 'var(--bad)' }, title: d.error }, d.error) : null),
+        h('td', null, timeEl(d.created_at)),
+        h('td', { class: 'num nowrap' }, d.started_at ? duration(d.started_at, d.finished_at) : h('span', { class: 'faint' }, '—')),
+        h('td', { class: 'actions' }, deployActions(ctx, d, { compact: true, after: load })),
+      ], `row-${d.id}`);
+    });
+    swap(listBox, table(['Status', 'Deploy', 'Commit', 'Started', 'Duration', { label: h('span', { class: 'sr-only' }, 'Actions') }], rows, {
+      empty: h('div', { class: 'panel empty' }, h('h2', null, 'No deploys yet'),
+        h('p', null, sourceOf(ctx.svc) === 'upload' ? 'Upload code with ferry up to create the first deploy.' : 'Start one with Manual deploy.'),
+        sourceOf(ctx.svc) === 'upload' ? codeBlock([`ferry up ${ctx.name}`]) : null),
+    }));
+    more.hidden = deploys.length < limit || limit >= 200;
+  };
+  async function load() {
+    try {
+      const list = await api.get(`/services/${enc(ctx.name)}/deploys?limit=${limit}`);
+      if (!scope.alive) return;
+      deploys = Array.isArray(list) ? list : [];
+      refreshOk(scope);
+      draw();
+    } catch (e) {
+      if (!scope.alive) return;
+      if (!deploys) swap(listBox, errorState(e, () => { swap(listBox, loadingState()); load(); }));
+      else refreshFailed(scope, e);
+    }
+  }
+  more.addEventListener('click', () => busy(more, async () => { limit = Math.min(200, limit + 25); await load(); }));
+  load();
+  scope.poll(load);
+  return null;
+}
+
+function deployDetail(ctx, scope, body, id) {
+  const back = h('a', { href: linkTo('services', ctx.name, 'deploys'), class: 'row muted', style: { display: 'inline-flex', marginBottom: '14px', gap: '4px' } }, icon('chevronLeft'), 'All deploys');
+  const headBox = h('div', null, loadingState());
+  const viewer = logViewer({ emptyText: 'Waiting for output…', filename: `${ctx.name}-${id}.log` });
+  body.append(back, headBox, viewer.el);
+  let dep = null;
+  const draw = () => {
+    const d = dep;
+    const meta = [h('span', null, triggerLabel(d.trigger))];
+    if (d.commit_sha) meta.push(h('span', { class: 'row', style: { gap: '6px' } }, commitRef(d), d.commit_message ? h('span', { class: 'ellipsis', style: { maxWidth: '420px' }, title: d.commit_message }, firstLine(d.commit_message)) : null));
+    else meta.push(h('span', { class: 'ellipsis', style: { maxWidth: '420px' } }, describeSource(d.source)));
+    meta.push(h('span', null, 'Started ', timeEl(d.started_at || d.created_at)));
+    if (d.started_at) meta.push(h('span', { class: 'num' }, `${isDeployActive(d) ? 'Running for' : 'Took'} ${duration(d.started_at, d.finished_at)}`));
+    swap(headBox,
+      h('div', { class: 'page-head', style: { marginBottom: '14px' } },
+        h('div', { class: 'grow' },
+          h('div', { class: 'title' }, h('h2', { style: { fontSize: '17px' } }, 'Deploy ', h('code', { title: d.id }, shortId(d.id))), deployPill(d.status), copyButton(d.id, 'Copy deploy ID', 'Copied deploy ID')),
+          h('div', { class: 'sub' }, meta)),
+        h('div', { class: 'actions' }, deployActions(ctx, d, { after: () => load().catch(() => {}) }))),
+      deployRoute(d, ctx.svc),
+      d.error ? callout('bad', 'alert', h('strong', null, DEPLOY_STATUSES[d.status] ? DEPLOY_STATUSES[d.status].label : 'Failed'), h('p', { class: 'mono' }, d.error)) : null,
+      d.image && !isDeployActive(d) ? h('p', { class: 'muted', style: { margin: '-6px 0 14px' } }, 'Image ', h('code', null, d.image)) : null);
+  };
+  async function load() {
+    const d = await api.get(`/deploys/${enc(id)}`);
+    if (!scope.alive) return d;
+    dep = d;
+    draw();
+    return d;
+  }
+  (async () => {
+    try { await load(); } catch (e) {
+      if (!scope.alive) return;
+      swap(headBox, isNotFound(e)
+        ? h('div', { class: 'panel empty' }, h('h2', null, 'Deploy not found'), h('p', null, 'It may belong to a deleted service.'))
+        : errorState(e, () => route()));
+      viewer.el.hidden = true;
+      return;
+    }
+    if (!scope.alive) return;
+    followFiniteLog(scope, viewer, {
+      path: `/deploys/${enc(id)}/logs`,
+      check: async () => isDeployActive(await load()),
+      onEnd: () => { load().catch(() => {}); ctx.refresh().catch(() => {}); },
+    });
+    scope.poll(async () => { if (dep && isDeployActive(dep)) await load().catch(() => {}); else if (dep) draw(); }, 3000);
+  })();
+  return null;
+}
+
+// ======================================================================
+// Logs tab (runtime logs)
+// ======================================================================
+function tabLogs(ctx, scope, body) {
+  if (isCron(ctx.svc)) {
+    body.append(callout('none', 'info', h('strong', null, 'Cron jobs log per run'),
+      h('p', null, 'Each run’s output is kept with the run. ', h('a', { href: linkTo('services', ctx.name, 'jobs') }, 'Open the job history'), '.')));
+    return null;
+  }
+  let follow = true;
+  const followBtn = h('button', { class: 'btn btn-sm', type: 'button', 'aria-pressed': 'true', title: 'Stream new lines as they arrive' }, icon('pause'), 'Pause');
+  const tailSel = select([['100', 'Last 100 lines'], ['500', 'Last 500 lines'], ['1000', 'Last 1,000 lines'], ['5000', 'Last 5,000 lines']], '500', { 'aria-label': 'Lines of history to load', style: { width: 'auto', height: '28px' } });
+  const clearBtn = h('button', { class: 'btn btn-sm', type: 'button', title: 'Clear the view (logs stay on the server)' }, 'Clear');
+  const viewer = logViewer({ instances: true, tools: [followBtn, tailSel, clearBtn], emptyText: 'Connecting…', filename: `${ctx.name}-runtime.log` });
+  body.append(viewer.el);
+
+  const emptyText = () => {
+    const svc = ctx.svc;
+    if (svc.suspended) return 'The service is suspended, so no instances are running.';
+    if (!svc.live_deploy_id) return 'No instances yet. Logs appear once a deploy is live.';
+    return follow ? 'No output yet. New lines appear here as instances write them.' : 'No output.';
+  };
+  // Dedupe across reconnects (a new connection replays the last lines of each instance).
+  const seen = new Set();
+  const seenQueue = [];
+  const remember = (key) => {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    seenQueue.push(key);
+    if (seenQueue.length > 6000) seen.delete(seenQueue.shift());
+    return true;
+  };
+  let es = null;
+  let gen = 0;
+  let backoff = 0;
+  const close = () => { if (es) { es.close(); es = null; } };
+  scope.add(close);
+  const DELAYS = [1000, 2000, 3000, 5000, 8000, 12000, 15000];
+  function connect(tail) {
+    close();
+    const myGen = ++gen;
+    let got = 0;
+    viewer.status(follow ? 'Connecting…' : 'Loading…', '');
+    const source = new EventSource(sseUrl(`/services/${enc(ctx.name)}/logs`, { follow: follow ? 'true' : 'false', tail }));
+    es = source;
+    source.onopen = () => { if (myGen === gen && follow) viewer.status('Live', 'live'); };
+    source.addEventListener('log', (ev) => {
+      if (myGen !== gen) return;
+      const l = parseLogLine(ev.data);
+      if (!l) return;
+      got++;
+      backoff = 0;
+      if (remember(`${l.ts}|${l.instance || ''}|${l.line}`)) viewer.append(l);
+    });
+    const ended = (errored) => {
+      if (myGen !== gen || !scope.alive) return;
+      close();
+      viewer.setEmpty(emptyText());
+      if (!follow) {
+        viewer.status(errored && !got ? 'Couldn’t load logs' : 'Paused', errored && !got ? 'error' : '');
+        return;
+      }
+      // Instances come and go (deploys, restarts): reconnect to pick up the current set.
+      backoff = Math.min(backoff + 1, DELAYS.length - 1);
+      viewer.status(errored ? 'Reconnecting…' : 'Waiting for instances…', errored ? 'error' : '');
+      scope.timeout(() => { if (myGen === gen && follow) connect(100); }, DELAYS[backoff]);
+    };
+    source.addEventListener('end', () => ended(false));
+    source.onerror = () => ended(true);
+  }
+  followBtn.addEventListener('click', () => {
+    follow = !follow;
+    followBtn.setAttribute('aria-pressed', String(follow));
+    followBtn.replaceChildren(icon(follow ? 'pause' : 'play'), follow ? 'Pause' : 'Resume');
+    if (follow) { backoff = 0; connect(Number(tailSel.value)); }
+    else { gen++; close(); viewer.status('Paused', ''); }
+  });
+  tailSel.addEventListener('change', () => {
+    viewer.clear();
+    seen.clear();
+    seenQueue.length = 0;
+    gen++;
+    close();
+    if (!follow) { follow = true; followBtn.setAttribute('aria-pressed', 'true'); followBtn.replaceChildren(icon('pause'), 'Pause'); }
+    connect(Number(tailSel.value));
+  });
+  clearBtn.addEventListener('click', () => { viewer.clear(); viewer.setEmpty('Cleared. New lines appear here.'); });
+  connect(Number(tailSel.value));
+  return null;
+}
+
+// ======================================================================
+// Environment tab
+// ======================================================================
+const ENV_HELP = 'Available at build time and in every instance. Reference other resources with ${{datastore.NAME.connectionString}} or ${{service.NAME.hostport}}.';
+function envSaveBar(getEditor, { onSave, restartLabel, showRestart }) {
+  const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Save changes');
+  const restartBtn = h('button', { class: 'btn', type: 'button' }, restartLabel);
+  const discardBtn = h('button', { class: 'btn btn-ghost', type: 'button' }, 'Discard');
+  const bar = h('div', { class: 'sticky-save', hidden: true }, saveBtn, restartBtn, discardBtn, h('span', { class: 'muted' }, 'You have unsaved changes.'));
+  const run = (btn, restart) => busy(btn, async () => {
+    const ed = getEditor();
+    if (!ed) return;
+    const problem = ed.validate();
+    if (problem) { toast(problem, 'error'); return; }
+    await onSave(ed.getVars(), restart);
+  });
+  saveBtn.addEventListener('click', () => run(saveBtn, false));
+  restartBtn.addEventListener('click', () => run(restartBtn, true));
+  bar.discard = discardBtn;
+  bar.sync = () => {
+    const ed = getEditor();
+    bar.hidden = !(ed && ed.isDirty());
+    restartBtn.hidden = !showRestart();
+  };
+  return bar;
+}
+function tabEnvironment(ctx, scope, body) {
+  let editor = null;
+  let loaded = [];
+  const editorBox = h('div', null, loadingState());
+  const bar = envSaveBar(() => editor, {
+    restartLabel: 'Save and restart',
+    showRestart: () => isRunningState(ctx.svc),
+    onSave: async (vars, restart) => {
+      try {
+        const saved = await api.put(`/services/${enc(ctx.name)}/env?restart=${restart ? 'true' : 'false'}`, { vars });
+        if (!scope.alive) return;
+        loaded = normalizeVars(saved);
+        editor.setVars(loaded);
+        bar.sync();
+        toast(restart && isRunningState(ctx.svc) ? `Saved. Restarting ${ctx.name} with the new environment.`
+          : isRunningState(ctx.svc) ? 'Saved. Restart or deploy to apply the changes.' : 'Saved. Changes apply on the next deploy.', 'ok');
+        ctx.refresh().catch(() => {});
+      } catch (e) { toastError(e, 'Saving failed'); }
+    },
+  });
+  bar.discard.addEventListener('click', () => { if (editor) { editor.setVars(loaded); bar.sync(); } });
+  const groupsBox = h('div');
+  body.append(
+    h('div', { class: 'section' }, sectionHead('Environment variables', ENV_HELP), editorBox, bar),
+    h('div', { class: 'section' }, groupsBox));
+
+  const load = async () => {
+    try {
+      const vars = await api.get(`/services/${enc(ctx.name)}/env`);
+      if (!scope.alive) return;
+      loaded = normalizeVars(vars);
+      editor = envEditor(loaded, { onChange: () => bar.sync() });
+      swap(editorBox, editor.el);
+      bar.sync();
+    } catch (e) {
+      if (scope.alive) swap(editorBox, errorState(e, () => { swap(editorBox, loadingState()); load(); }, 'Couldn’t load variables'));
+    }
+  };
+  load();
+
+  let allGroups = null;
+  const drawGroups = () => {
+    const svc = ctx.svc;
+    const linked = Array.isArray(svc.env_groups) ? svc.env_groups : [];
+    const items = linked.map((g) => {
+      const btn = h('button', { class: 'btn btn-sm', type: 'button', 'data-fk': `unlink-${g}` }, 'Unlink');
+      btn.addEventListener('click', () => confirmDialog({
+        title: `Unlink ${g}?`, message: `${ctx.name} stops receiving the variables of ${g} on its next deploy or restart.`,
+        confirmLabel: 'Unlink', danger: true,
+        action: async () => { ctx.apply(await api.del(`/services/${enc(ctx.name)}/env-groups/${enc(g)}`)); },
+      }).then((ok) => { if (ok) toast(`Unlinked ${g}. Restart to apply.`, 'ok'); }));
+      return h('div', { class: 'item' }, icon('braces'), h('a', { class: 'grow', href: linkTo('env-groups', g) }, g), btn);
+    });
+    const available = (allGroups || []).map((g) => g.name).filter((n) => !linked.includes(n));
+    let adder = null;
+    if (allGroups && available.length) {
+      const sel = select(available.map((n) => [n, n]), available[0], { 'aria-label': 'Env group to link', style: { width: 'auto', minWidth: '200px' }, 'data-fk': 'link-sel' });
+      const add = h('button', { class: 'btn', type: 'button', 'data-fk': 'link-btn' }, icon('plus'), 'Link group');
+      add.addEventListener('click', () => busy(add, async () => {
+        try {
+          ctx.apply(await api.post(`/services/${enc(ctx.name)}/env-groups`, { group: sel.value }));
+          toast(`Linked ${sel.value}. Restart to apply.`, 'ok');
+        } catch (e) { toastError(e, 'Linking failed'); }
+      }));
+      adder = h('div', { class: 'row', style: { marginTop: '10px' } }, sel, add);
+    } else if (allGroups && !allGroups.length) {
+      adder = h('p', { class: 'muted', style: { marginTop: '10px' } }, 'No env groups exist yet. ', h('a', { href: '#/new-env-group' }, 'Create one'), ' to share variables between services.');
+    }
+    swap(groupsBox,
+      sectionHead('Linked env groups', 'Group variables apply first, in link order; the service’s own variables win on conflicts. Changes apply on the next deploy or restart.'),
+      items.length ? h('div', { class: 'panel items' }, items) : h('p', { class: 'env-empty' }, 'No env groups linked.'),
+      adder);
+  };
+  const loadGroups = async () => {
+    try { const g = await api.get('/env-groups'); if (!scope.alive) return; allGroups = Array.isArray(g) ? g : []; } catch (e) { allGroups = null; console.warn(e); }
+    if (scope.alive) drawGroupsM(groupsKey());
+  };
+  const drawGroupsM = memo(drawGroups);
+  const groupsKey = () => [ctx.svc.env_groups, allGroups && allGroups.map((g) => g.name)];
+  drawGroupsM(groupsKey());
+  loadGroups();
+  scope.add(ctx.onService(() => { drawGroupsM(groupsKey()); bar.sync(); }));
+  return { isDirty: () => !!(editor && editor.isDirty()) };
+}
+
+// ======================================================================
+// Settings tab
+// ======================================================================
+function tabSettings(ctx, scope, body) {
+  const formBox = h('div', { class: 'section' });
+  const domainsBox = h('div', { class: 'section' });
+  const hookBox = h('div', { class: 'section' });
+  const autoBox = h('div', { class: 'section' });
+  const dangerBox = h('div', { class: 'section' });
+  body.append(formBox, domainsBox, autoBox, hookBox, dangerBox);
+  let form = null;
+
+  // ----- build & deploy -----
+  const SETTINGS_KEYS = ['repo_url', 'branch', 'image', 'runtime', 'root_dir', 'dockerfile_path', 'build_command', 'start_command',
+    'publish_dir', 'port', 'health_check_path', 'schedule', 'disk_mount_path'];
+  function buildForm(svc) {
+    const st = { source: sourceOf(svc) };
+    let dirty = false;
+    const sf = serviceFields(svc, { withInstances: false });
+    const sync = () => sf.sync(svc.type, st.source);
+    const srcTiles = tiles(`src-${++fieldSeq}`, [['git', 'Git repository', 'Clone and build'], ['image', 'Docker image', 'Pull a prebuilt image'], ['upload', 'Uploads', 'Deploy with ferry up']],
+      st.source, (k) => { st.source = k; dirty = true; sync(); });
+    const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Save changes');
+    const saveDeployBtn = h('button', { class: 'btn', type: 'button' }, 'Save and deploy');
+    const el = h('form', { class: 'form', novalidate: true },
+      h('fieldset', { class: 'fieldset' }, h('legend', null, 'Source'), srcTiles, sf.sourceEls),
+      h('fieldset', { class: 'fieldset' }, h('legend', null, 'Build and deploy'), h('p', { class: 'desc' }, 'Changes take effect on the next deploy.'), sf.buildEls),
+      err, h('div', { class: 'form-actions' }, saveBtn, saveDeployBtn));
+    el.addEventListener('input', () => { dirty = true; });
+    sf.F.runtime.control.addEventListener('change', sync);
+    sync();
+    // UpdateService with only the fields that changed ("" clears a string, port 0 = auto).
+    function diff() {
+      const { v } = sf;
+      const patch = {};
+      const str = (key, value) => { if (!sf.F[key].hidden && value !== (svc[key] || '')) patch[key] = value; };
+      if (st.source === 'git') {
+        if (v('repo_url') !== (svc.repo_url || '')) patch.repo_url = v('repo_url');
+        if ((v('branch') || 'main') !== svc.branch) patch.branch = v('branch') || 'main';
+        if (svc.image) patch.image = '';
+      } else if (st.source === 'image') {
+        if (v('image') !== (svc.image || '')) patch.image = v('image');
+        if (svc.repo_url) patch.repo_url = '';
+      } else {
+        if (svc.repo_url) patch.repo_url = '';
+        if (svc.image) patch.image = '';
+      }
+      if (st.source !== 'image') {
+        if (sf.F.runtime.control.value !== svc.runtime) patch.runtime = sf.F.runtime.control.value;
+        for (const k of ['root_dir', 'dockerfile_path', 'build_command', 'publish_dir']) str(k, v(k));
+      }
+      for (const k of ['start_command', 'health_check_path', 'schedule', 'disk_mount_path']) str(k, v(k));
+      if (!sf.F.port.hidden) {
+        const p = v('port') ? Number(v('port')) : null;
+        if (p !== (svc.port ?? null)) patch.port = p == null ? 0 : p;
+      }
+      return patch;
+    }
+    async function save(andDeploy) {
+      err.hidden = true;
+      const problems = sf.validate(st.source);
+      if (problems.length) { problems[0].control.focus(); err.textContent = 'Fix the highlighted fields.'; err.hidden = false; return; }
+      const patch = diff();
+      try {
+        if (Object.keys(patch).length) {
+          const view = await api.patch(`/services/${enc(ctx.name)}`, patch);
+          dirty = false;
+          ctx.apply(view);
+          toast(andDeploy ? 'Settings saved.' : 'Settings saved. They apply on the next deploy.', 'ok');
+        } else if (!andDeploy) {
+          toast('Nothing changed.', 'info');
+        }
+        dirty = false;
+        if (andDeploy) await startDeploy(ctx, {});
+      } catch (e) {
+        err.textContent = errMsg(e);
+        err.hidden = false;
+        toastError(e, 'Saving failed');
+      }
+    }
+    el.addEventListener('submit', (ev) => { ev.preventDefault(); busy(saveBtn, () => save(false)); });
+    saveDeployBtn.addEventListener('click', () => busy(saveDeployBtn, () => save(true)));
+    return { el, isDirty: () => dirty };
+  }
+  function drawForm(svc) {
+    form = buildForm(svc);
+    swap(formBox, form.el);
+  }
+
+  // ----- custom domains -----
+  let domains = null;
+  function drawDomains(svc) {
+    if (!isPublic(svc)) { domainsBox.hidden = true; return; }
+    domainsBox.hidden = false;
+    const tls = serverInfo && serverInfo.tls_enabled;
+    const custom = domains || (Array.isArray(svc.custom_domains) ? svc.custom_domains : []);
+    const defaults = (Array.isArray(svc.hosts) ? svc.hosts : []).filter((x) => !custom.includes(x));
+    const rows = [
+      ...defaults.map((d) => h('div', { class: 'item' }, h('code', { class: 'grow' }, d), h('span', { class: 'badge' }, 'Default'))),
+      ...custom.map((d) => {
+        const rm = h('button', { class: 'btn btn-sm', type: 'button', 'aria-label': `Remove ${d}`, 'data-fk': `dom-${d}` }, 'Remove');
+        rm.addEventListener('click', () => confirmDialog({
+          title: `Remove ${d}?`, message: 'Requests for this domain stop reaching the service.', confirmLabel: 'Remove domain', danger: true,
+          action: async () => { domains = await api.del(`/services/${enc(ctx.name)}/domains/${enc(d)}`); },
+        }).then((ok) => { if (ok) { toast(`Removed ${d}.`, 'ok'); drawDomainsM(domainsKey(ctx.svc), ctx.svc); ctx.refresh().catch(() => {}); } }));
+        return h('div', { class: 'item' }, h('code', { class: 'grow' }, d), rm);
+      }),
+    ];
+    const inp = input({ class: 'input mono', placeholder: 'app.example.com', 'aria-label': 'Custom domain', style: { maxWidth: '360px' }, 'data-fk': 'dom-input' });
+    const addBtn = h('button', { class: 'btn', type: 'submit', 'data-fk': 'dom-add' }, icon('plus'), 'Add domain');
+    const errEl = h('p', { class: 'form-error', role: 'alert', hidden: true });
+    const addForm = h('form', { class: 'row', style: { marginTop: '10px' }, novalidate: true }, inp, addBtn);
+    addForm.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const d = inp.value.trim().toLowerCase().replace(/\.$/, '');
+      const ok = d.length <= 253 && d.includes('.') && d.split('.').every((l) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(l));
+      if (!ok) { errEl.textContent = 'Enter a domain name such as app.example.com.'; errEl.hidden = false; inp.focus(); return; }
+      errEl.hidden = true;
+      busy(addBtn, async () => {
+        try {
+          domains = await api.post(`/services/${enc(ctx.name)}/domains`, { domain: d });
+          toast(`Added ${d}.`, 'ok');
+          drawDomainsM(domainsKey(ctx.svc), ctx.svc);
+          ctx.refresh().catch(() => {});
+        } catch (e) { errEl.textContent = errMsg(e); errEl.hidden = false; }
+      });
+    });
+    swap(domainsBox,
+      sectionHead('Custom domains', tls
+        ? 'Point a CNAME or A record at this server. Ferry gets a Let’s Encrypt certificate automatically once DNS resolves.'
+        : 'Point a CNAME or A record at this server. Automatic HTTPS is off on this server, so domains are served over HTTP.'),
+      h('div', { class: 'panel items' }, rows.length ? rows : h('div', { class: 'item muted' }, 'No domains.')),
+      addForm, errEl);
+  }
+  const loadDomains = async () => {
+    if (!isPublic(ctx.svc)) return;
+    try { const d = await api.get(`/services/${enc(ctx.name)}/domains`); if (!scope.alive) return; domains = Array.isArray(d) ? d : []; drawDomainsM(domainsKey(ctx.svc), ctx.svc); } catch (e) { console.warn(e); }
+  };
+
+  // ----- auto-deploy, deploy hook, danger zone -----
+  function drawAuto(svc) {
+    if (sourceOf(svc) !== 'git') {
+      swap(autoBox, sectionHead('Auto-deploy', 'Available for services that build from a Git repository.'));
+      return;
+    }
+    const sw = switchControl(`Deploy on every push to ${svc.branch || 'main'}`, svc.auto_deploy, async (checked, cb) => {
+      cb.disabled = true;
+      try {
+        ctx.apply(await api.patch(`/services/${enc(ctx.name)}`, { auto_deploy: checked }));
+        toast(checked ? 'Auto-deploy is on.' : 'Auto-deploy is off.', 'ok');
+      } catch (e) { cb.checked = !checked; toastError(e, 'Couldn’t change auto-deploy'); } finally { cb.disabled = false; }
+    });
+    sw.input.dataset.fk = 'auto-deploy';
+    const hookUrl = `${location.origin}/hooks/github`;
+    const gh = serverInfo && serverInfo.github_webhook_enabled
+      ? h('div', { class: 'stack', style: { gap: '6px', marginTop: '12px' } },
+        h('p', { class: 'muted' }, 'In the repository’s GitHub settings, add a webhook for push events with content type application/json, this payload URL, and the secret ferryd was started with:'),
+        h('div', { class: 'secret' }, h('code', { class: 'value' }, hookUrl), copyButton(hookUrl, 'Copy webhook URL', 'Copied webhook URL')))
+      : h('p', { class: 'muted', style: { marginTop: '12px' } }, 'GitHub webhooks are off on this server. Start ferryd with --github-webhook-secret to receive pushes.');
+    swap(autoBox, sectionHead('Auto-deploy'), h('div', { class: 'panel panel-pad' }, sw, gh));
+  }
+  function drawHook(svc) {
+    if (!svc.deploy_hook_path) { hookBox.hidden = true; return; }
+    hookBox.hidden = false;
+    const url = location.origin + svc.deploy_hook_path;
+    swap(hookBox,
+      sectionHead('Deploy hook', 'Send a GET or POST to this secret URL to start a deploy, for example from CI. Anyone with the URL can deploy this service.'),
+      h('div', { class: 'panel panel-pad stack' },
+        secretField(url, { mask: (u) => u.replace(/([?&]key=)[^&]*/, (_m, p) => p + '•'.repeat(16)), label: 'deploy hook URL' }),
+        h('p', { class: 'muted' }, 'Example: ', h('code', null, 'curl -X POST "$FERRY_DEPLOY_HOOK"'))));
+  }
+  function drawDanger() {
+    swap(dangerBox, sectionHead('Delete service'),
+      h('div', { class: 'panel items' }, h('div', { class: 'item' },
+        h('p', { class: 'grow muted' }, 'Permanently remove the service, its deploys, images, variables and disk.'),
+        h('button', { class: 'btn btn-danger', type: 'button', onclick: () => deleteServiceDialog(ctx) }, icon('trash'), 'Delete service'))));
+  }
+  const drawFormM = memo(drawForm);
+  const drawDomainsM = memo(drawDomains);
+  const drawAutoM = memo(drawAuto);
+  const drawHookM = memo(drawHook);
+  const domainsKey = (svc) => [svc.type, svc.hosts, svc.custom_domains, domains, serverInfo && serverInfo.tls_enabled];
+  const drawAll = (svc) => {
+    if (!form || !form.isDirty()) drawFormM([svc.type, SETTINGS_KEYS.map((k) => svc[k])], svc);
+    drawDomainsM(domainsKey(svc), svc);
+    drawAutoM([sourceOf(svc), svc.branch, svc.auto_deploy, serverInfo && serverInfo.github_webhook_enabled], svc);
+    drawHookM([svc.deploy_hook_path], svc);
+  };
+  drawAll(ctx.svc);
+  drawDanger();
+  loadDomains();
+  scope.add(ctx.onService(drawAll));
+  return { isDirty: () => !!(form && form.isDirty()) };
+}
+
+// ======================================================================
+// Jobs tab
+// ======================================================================
+function tabJobs(ctx, scope, body) {
+  if (ctx.sub) return jobDetail(ctx, scope, body, ctx.sub);
+  const svc = ctx.svc;
+  const cron = isCron(svc);
+  const cmd = input({ class: 'input mono', placeholder: cron ? (svc.start_command || 'Scheduled command') : 'npm run migrate', 'aria-label': 'Command' });
+  const f = field(cron ? 'Command (optional)' : 'Command', cmd, {
+    hint: cron ? 'Leave empty to run the scheduled command.' : 'Runs with sh -c in a new container from the live image, with the service’s environment and private network.',
+  });
+  const runBtn = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('play'), cron ? 'Run now' : 'Run job');
+  const runForm = h('form', { class: 'panel panel-pad stack', novalidate: true }, f, h('div', { class: 'row' }, runBtn,
+    svc.live_deploy_id ? null : h('span', { class: 'muted' }, 'Jobs need a live deploy.')));
+  runForm.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const command = cmd.value.trim();
+    if (!cron && !command) { f.setError('Enter a command to run.'); cmd.focus(); return; }
+    f.setError('');
+    busy(runBtn, async () => {
+      try {
+        const job = await api.post(`/services/${enc(ctx.name)}/jobs`, { command: command || undefined });
+        toast('Job started.', 'ok');
+        if (job && job.id) navigate(linkTo('services', ctx.name, 'jobs', job.id));
+      } catch (e) { f.setError(errMsg(e)); toastError(e, 'Couldn’t start the job'); }
+    });
+  });
+  let limit = 25;
+  let jobs = null;
+  const listBox = h('div', null, loadingState());
+  const more = h('button', { class: 'btn', type: 'button', hidden: true }, 'Show older runs');
+  body.append(
+    h('div', { class: 'section' }, sectionHead(cron ? 'Run now' : 'Run a one-off job',
+      cron ? 'Start a run outside the schedule.' : 'Useful for migrations, seeds and maintenance scripts.'), runForm),
+    h('div', { class: 'section' }, sectionHead('History', cron ? h('span', null, 'Scheduled ', h('code', null, svc.schedule || '—'), ' (UTC) and manual runs.') : null),
+      listBox, h('div', { style: { marginTop: '12px' } }, more)));
+  const draw = () => {
+    const rows = jobs.map((j) => {
+      const href = linkTo('services', ctx.name, 'jobs', j.id);
+      return clickRow(href, [
+        h('td', null, jobPill(j.status)),
+        h('td', { class: 'nowrap' }, h('a', { href, class: 'mono', 'data-fk': `job-${j.id}` }, shortId(j.id)), h('div', { class: 'sub' }, JOB_TRIGGERS[j.trigger] || j.trigger || '')),
+        h('td', { class: 'fill' }, j.command ? h('code', { class: 'ellipsis', style: { display: 'block' }, title: j.command }, j.command) : h('span', { class: 'faint' }, 'Default command'),
+          j.error ? h('div', { class: 'sub ellipsis', style: { color: 'var(--bad)' }, title: j.error }, j.error) : null),
+        h('td', null, timeEl(j.started_at || j.created_at)),
+        h('td', { class: 'num nowrap' }, j.started_at ? duration(j.started_at, j.finished_at) : h('span', { class: 'faint' }, '—')),
+        h('td', { class: 'num' }, j.exit_code != null ? h('span', { style: { color: j.exit_code === 0 ? 'var(--ok)' : 'var(--bad)' } }, String(j.exit_code)) : h('span', { class: 'faint' }, '—')),
+      ], `row-${j.id}`);
+    });
+    swap(listBox, table(['Status', 'Run', 'Command', 'Started', 'Duration', 'Exit code'], rows, {
+      empty: h('div', { class: 'panel empty' }, h('p', null, cron ? 'No runs yet. The first scheduled run appears here once the job is live.' : 'No jobs have run yet.')),
+    }));
+    more.hidden = jobs.length < limit || limit >= 200;
+  };
+  const load = async () => {
+    try {
+      const list = await api.get(`/services/${enc(ctx.name)}/jobs?limit=${limit}`);
+      if (!scope.alive) return;
+      jobs = Array.isArray(list) ? list : [];
+      refreshOk(scope);
+      draw();
+    } catch (e) {
+      if (!scope.alive) return;
+      if (!jobs) swap(listBox, errorState(e, () => { swap(listBox, loadingState()); load(); }));
+      else refreshFailed(scope, e);
+    }
+  };
+  more.addEventListener('click', () => busy(more, async () => { limit = Math.min(200, limit + 25); await load(); }));
+  load();
+  scope.poll(load);
+  return null;
+}
+function jobDetail(ctx, scope, body, id) {
+  const back = h('a', { href: linkTo('services', ctx.name, 'jobs'), class: 'row muted', style: { display: 'inline-flex', marginBottom: '14px', gap: '4px' } }, icon('chevronLeft'), 'All jobs');
+  const headBox = h('div', null, loadingState());
+  const viewer = logViewer({ emptyText: 'Waiting for output…', filename: `${ctx.name}-${id}.log` });
+  body.append(back, headBox, viewer.el);
+  let job = null;
+  const draw = () => {
+    const j = job;
+    const meta = [h('span', null, JOB_TRIGGERS[j.trigger] || j.trigger || 'Job')];
+    meta.push(h('span', null, 'Started ', timeEl(j.started_at || j.created_at)));
+    if (j.started_at) meta.push(h('span', { class: 'num' }, `${isJobActive(j) ? 'Running for' : 'Took'} ${duration(j.started_at, j.finished_at)}`));
+    if (j.exit_code != null) meta.push(h('span', { class: 'num' }, 'Exit code ', h('code', null, String(j.exit_code))));
+    swap(headBox,
+      h('div', { class: 'page-head', style: { marginBottom: '14px' } },
+        h('div', { class: 'grow' },
+          h('div', { class: 'title' }, h('h2', { style: { fontSize: '17px' } }, 'Run ', h('code', { title: j.id }, shortId(j.id))), jobPill(j.status), copyButton(j.id, 'Copy job ID', 'Copied job ID')),
+          h('div', { class: 'sub' }, meta))),
+      j.command ? h('div', { style: { marginBottom: '14px' } }, codeBlock([j.command])) : null,
+      j.error ? callout('bad', 'alert', h('strong', null, 'The job failed'), h('p', { class: 'mono' }, j.error)) : null);
+  };
+  async function load() {
+    const j = await api.get(`/jobs/${enc(id)}`);
+    if (!scope.alive) return j;
+    job = j;
+    draw();
+    return j;
+  }
+  (async () => {
+    try { await load(); } catch (e) {
+      if (!scope.alive) return;
+      swap(headBox, isNotFound(e) ? h('div', { class: 'panel empty' }, h('h2', null, 'Job not found')) : errorState(e, () => route()));
+      viewer.el.hidden = true;
+      return;
+    }
+    if (!scope.alive) return;
+    followFiniteLog(scope, viewer, {
+      path: `/jobs/${enc(id)}/logs`,
+      check: async () => isJobActive(await load()),
+      onEnd: () => { load().catch(() => {}); },
+    });
+    scope.poll(async () => { if (job && isJobActive(job)) await load().catch(() => {}); else if (job) draw(); }, 3000);
+  })();
+  return null;
+}
+
+// ======================================================================
+// Datastores
+// ======================================================================
+const kindLabel = (k) => (DATASTORE_KINDS[k] ? DATASTORE_KINDS[k].label : String(k || 'Datastore'));
+const maskSecret = (textValue, secret) => (secret ? String(textValue || '').split(secret).join('•'.repeat(12)) : String(textValue || ''));
+
+function viewDatastores(scope, page) {
+  setTitle('Datastores');
+  let list = null;
+  const body = h('div', null, loadingState());
+  page.append(pageHead({ title: 'Datastores', actions: [h('a', { class: 'btn btn-primary', href: '#/new-datastore' }, icon('plus'), 'New datastore')] }), body);
+  const draw = () => {
+    const rows = list.map((d) => {
+      const href = linkTo('datastores', d.name);
+      return clickRow(href, [
+        h('td', null, h('a', { href, style: { fontWeight: '600' }, 'data-fk': `ds-${d.name}` }, d.name)),
+        h('td', null, h('span', { class: 'badge' }, `${kindLabel(d.kind)} ${d.version || ''}`.trim())),
+        h('td', null, dsPill(d.status), d.status === 'failed' && d.error ? h('div', { class: 'sub ellipsis', style: { color: 'var(--bad)', maxWidth: '260px' }, title: d.error }, d.error) : null),
+        h('td', null, h('code', { class: 'muted' }, `${d.internal_host || d.name}:${d.internal_port ?? ''}`)),
+        h('td', null, timeEl(d.created_at)),
+      ], `row-${d.name}`);
+    });
+    swap(body, table(['Name', 'Type', 'Status', 'Private address', 'Created'], rows, {
+      empty: h('div', { class: 'panel empty' },
+        h('h2', null, 'No datastores yet'),
+        h('p', null, 'Run managed PostgreSQL or Redis next to your services, with persistent storage and ready-made connection strings.'),
+        codeBlock(['ferry db create app-db', 'ferry db create cache --kind redis']),
+        h('a', { class: 'btn btn-primary', href: '#/new-datastore' }, icon('plus'), 'New datastore')),
+    }));
+  };
+  const load = async () => {
+    try {
+      const l = await api.get('/datastores');
+      if (!scope.alive) return;
+      list = (Array.isArray(l) ? l : []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      refreshOk(scope);
+      draw();
+    } catch (e) {
+      if (!scope.alive) return;
+      if (!list) swap(body, errorState(e, () => { swap(body, loadingState()); load(); }));
+      else refreshFailed(scope, e);
+    }
+  };
+  load();
+  scope.poll(load);
+}
+
+function viewNewDatastore(scope, page) {
+  setTitle('New datastore');
+  let touched = false;
+  let submitted = false;
+  let kind = 'postgres';
+  page.append(pageHead({ crumbs: crumbs({ label: 'Datastores', href: '#/datastores' }, { label: 'New datastore' }), title: 'New datastore' }));
+  const name = input({ class: 'input mono', placeholder: 'app-db', maxlength: 40 });
+  const fName = field('Name', name, { hint: 'Lowercase letters, digits and dashes. Also its hostname on the private network, so it can’t match a service name.' });
+  const versionBox = h('div');
+  let version = null;
+  const database = input({ class: 'input mono', placeholder: 'Same as the name' });
+  const username = input({ class: 'input mono', placeholder: 'Same as the database' });
+  const fDb = field('Database name', database, { hint: 'Optional. Defaults to the name with dashes turned into underscores.' });
+  const fUser = field('User', username, { hint: 'Optional.' });
+  const pgOnly = h('div', { class: 'grid-2' }, fDb, fUser);
+  const drawVersion = () => {
+    const meta = DATASTORE_KINDS[kind];
+    version = select(meta.versions.map((v) => [v, `${meta.label} ${v}`]), meta.def);
+    swap(versionBox, field('Version', version, { hint: kind === 'postgres' ? 'Runs postgres:<version>-alpine.' : 'Runs redis:<version>-alpine with append-only persistence.' }));
+    pgOnly.hidden = kind !== 'postgres';
+  };
+  const kindTiles = tiles('ds-kind', [
+    ['postgres', 'PostgreSQL', 'Relational database'],
+    ['redis', 'Redis', 'Key-value store and cache'],
+  ], kind, (v) => { kind = v; drawVersion(); });
+  drawVersion();
+  const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
+  const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Create datastore');
+  const form = h('form', { class: 'form', novalidate: true },
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Type'), kindTiles),
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Details'), fName, versionBox, pgOnly),
+    err, h('div', { class: 'form-actions' }, submit, h('a', { class: 'btn btn-ghost', href: '#/datastores' }, 'Cancel')));
+  page.append(form);
+  form.addEventListener('input', () => { touched = true; });
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    err.hidden = true;
+    const n = name.value.trim();
+    const problem = validateResourceName(n);
+    fName.setError(problem);
+    if (problem) { name.focus(); return; }
+    const body = { name: n, kind, version: version.value };
+    if (kind === 'postgres') {
+      if (database.value.trim()) body.database = database.value.trim();
+      if (username.value.trim()) body.username = username.value.trim();
+    }
+    busy(submit, async () => {
+      try {
+        const ds = await api.post('/datastores', body);
+        submitted = true;
+        toast(`Creating ${n}…`, 'ok');
+        navigate(linkTo('datastores', (ds && ds.name) || n));
+      } catch (e) { err.textContent = errMsg(e); err.hidden = false; toastError(e, 'Creating the datastore failed'); }
+    });
+  });
+  name.focus();
+  return { isDirty: () => touched && !submitted };
+}
+
+function viewDatastore(scope, page, parts) {
+  const name = parts[1];
+  setTitle(name);
+  const badges = h('span', { class: 'row' });
+  const delBtn = h('button', { class: 'btn btn-danger', type: 'button' }, icon('trash'), 'Delete');
+  const head = pageHead({ crumbs: crumbs({ label: 'Datastores', href: '#/datastores' }, { label: name }), title: name, badges, actions: [delBtn] });
+  const body = h('div', null, loadingState());
+  page.append(head, body);
+  let ds = null;
+  delBtn.addEventListener('click', () => confirmDialog({
+    title: `Delete ${name}?`,
+    message: 'This removes the container and its data volume. Every row or key it holds is permanently lost, and services that reference it will fail to start.',
+    confirmLabel: 'Delete datastore', danger: true, typeToConfirm: name,
+    action: () => api.del(`/datastores/${enc(name)}`),
+  }).then((ok) => { if (ok) { toast(`Deleted ${name}.`, 'ok'); navigate('#/datastores'); } }));
+
+  const draw = () => {
+    const d = ds;
+    swap(badges, h('span', { class: 'badge' }, `${kindLabel(d.kind)} ${d.version || ''}`.trim()), dsPill(d.status));
+    const pw = d.password || '';
+    const pg = d.kind === 'postgres';
+    const envKey = pg ? 'DATABASE_URL' : 'REDIS_URL';
+    const ref = `${envKey}=\${{datastore.${d.name}.connectionString}}`;
+    const out = [];
+    if (d.status === 'creating') out.push(callout('busy', 'info', h('strong', null, 'Provisioning…'), h('p', null, 'Pulling the image and starting the container. This page updates by itself.')));
+    if (d.status === 'failed') out.push(callout('bad', 'alert', h('strong', null, 'Provisioning failed'), d.error ? h('p', { class: 'mono' }, d.error) : null));
+    const cli = d.external_url ? (pg ? `psql "${d.external_url}"` : `redis-cli -u "${d.external_url}"`) : null;
+    out.push(h('div', { class: 'section' },
+      sectionHead('Connections'),
+      h('div', { class: 'panel panel-pad stack', style: { gap: '18px' } },
+        h('div', { class: 'field' }, h('span', { class: 'label' }, 'Internal URL'),
+          secretField(d.internal_url || '', { mask: (u) => maskSecret(u, pw), label: 'internal URL' }),
+          h('p', { class: 'hint' }, 'Use this from services on Ferry’s private network.')),
+        h('div', { class: 'field' }, h('span', { class: 'label' }, 'External URL'),
+          d.external_url
+            ? secretField(d.external_url, { mask: (u) => maskSecret(u, pw), label: 'external URL' })
+            : h('p', { class: 'muted' }, 'Assigned once the datastore is available.'),
+          h('p', { class: 'hint' }, 'Connect from the machine running Ferry, for example with a database client.')),
+        cli ? h('div', { class: 'field' }, h('span', { class: 'label' }, pg ? 'psql' : 'redis-cli'), codeBlock([maskSecret(cli, pw)], cli)) : null)));
+    out.push(h('div', { class: 'section' }, sectionHead('Details'), facts([
+      ['Hostname', h('code', null, d.internal_host || d.name)],
+      ['Port', h('code', null, String(d.internal_port ?? '—'))],
+      ['External port', d.host_port ? h('code', null, String(d.host_port)) : h('span', { class: 'faint' }, '—')],
+      ['User', h('code', null, d.username || '—')],
+      ['Password', secretField(pw, { label: 'password' })],
+      pg ? ['Database', h('code', null, d.database || '—')] : null,
+      ['Created', timeEl(d.created_at)],
+    ])));
+    out.push(h('div', { class: 'section' },
+      sectionHead('Use it from a service', 'Add this variable to a service’s environment. Ferry fills in the connection string each time the service starts, so it stays correct if the password changes.'),
+      codeBlock([ref])));
+    swap(body, out);
+  };
+  const drawM = memo(draw);
+  let polling = false;
+  const load = async () => {
+    try {
+      const d = await api.get(`/datastores/${enc(name)}`);
+      if (!scope.alive) return;
+      ds = d;
+      refreshOk(scope);
+      drawM([d]);
+      // Poll only once the datastore is known to exist.
+      if (!polling) { polling = true; scope.poll(load); }
+    } catch (e) {
+      if (!scope.alive) return;
+      if (!ds) {
+        delBtn.hidden = true;
+        swap(body, isNotFound(e)
+          ? h('div', { class: 'panel empty' }, h('h2', null, `There’s no datastore named “${name}”`), h('a', { class: 'btn', href: '#/datastores' }, 'Back to datastores'))
+          : errorState(e, () => { swap(body, loadingState()); load(); }));
+      } else if (isNotFound(e)) {
+        toast(`${name} no longer exists.`, 'error');
+        navigate('#/datastores');
+      } else refreshFailed(scope, e);
+    }
+  };
+  load();
+}
+
+// ======================================================================
+// Env groups
+// ======================================================================
+function viewEnvGroups(scope, page) {
+  setTitle('Env groups');
+  let list = null;
+  const body = h('div', null, loadingState());
+  page.append(pageHead({
+    title: 'Env groups',
+    sub: 'Share one set of environment variables between several services.',
+    actions: [h('a', { class: 'btn btn-primary', href: '#/new-env-group' }, icon('plus'), 'New env group')],
+  }), body);
+  const load = async () => {
+    try {
+      const l = await api.get('/env-groups');
+      if (!scope.alive) return;
+      list = (Array.isArray(l) ? l : []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      refreshOk(scope);
+      const rows = list.map((g) => {
+        const href = linkTo('env-groups', g.name);
+        const svcs = Array.isArray(g.services) ? g.services : [];
+        return clickRow(href, [
+          h('td', null, h('a', { href, style: { fontWeight: '600' }, 'data-fk': `eg-${g.name}` }, g.name)),
+          h('td', { class: 'num' }, plural((g.vars || []).length, 'variable')),
+          h('td', null, svcs.length ? svcs.map((s, i) => [i ? ', ' : null, h('a', { href: linkTo('services', s) }, s)]) : h('span', { class: 'faint' }, 'Not linked')),
+          h('td', null, timeEl(g.updated_at)),
+        ], `row-${g.name}`);
+      });
+      swap(body, table(['Name', 'Variables', 'Linked services', 'Updated'], rows, {
+        empty: h('div', { class: 'panel empty' }, h('h2', null, 'No env groups yet'),
+          h('p', null, 'Put shared settings such as API keys or feature flags in a group, then link it to every service that needs them.'),
+          h('a', { class: 'btn btn-primary', href: '#/new-env-group' }, icon('plus'), 'New env group')),
+      }));
+    } catch (e) {
+      if (!scope.alive) return;
+      if (!list) swap(body, errorState(e, () => { swap(body, loadingState()); load(); }));
+      else refreshFailed(scope, e);
+    }
+  };
+  load();
+  scope.poll(load, 10000);
+}
+
+function viewNewEnvGroup(scope, page) {
+  setTitle('New env group');
+  let touched = false;
+  let submitted = false;
+  page.append(pageHead({ crumbs: crumbs({ label: 'Env groups', href: '#/env-groups' }, { label: 'New env group' }), title: 'New env group' }));
+  const name = input({ class: 'input mono', placeholder: 'shared-settings', maxlength: 64 });
+  const fName = field('Name', name, { hint: 'Letters, digits, dots, dashes and underscores.' });
+  const editor = envEditor([], { onChange: () => { touched = true; } });
+  const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
+  const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Create env group');
+  const form = h('form', { class: 'form', novalidate: true },
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Name'), fName),
+    h('fieldset', { class: 'fieldset' }, h('legend', null, 'Variables'), h('p', { class: 'desc' }, ENV_HELP), editor.el),
+    err, h('div', { class: 'form-actions' }, submit, h('a', { class: 'btn btn-ghost', href: '#/env-groups' }, 'Cancel')));
+  page.append(form);
+  form.addEventListener('input', () => { touched = true; });
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    err.hidden = true;
+    const n = name.value.trim();
+    const problem = validateEnvGroupName(n);
+    fName.setError(problem);
+    if (problem) { name.focus(); return; }
+    const envProblem = editor.validate();
+    if (envProblem) { err.textContent = envProblem; err.hidden = false; return; }
+    busy(submit, async () => {
+      try {
+        const g = await api.post('/env-groups', { name: n, vars: editor.getVars() });
+        submitted = true;
+        toast(`Created ${n}.`, 'ok');
+        navigate(linkTo('env-groups', (g && g.name) || n));
+      } catch (e) { err.textContent = errMsg(e); err.hidden = false; toastError(e, 'Creating the group failed'); }
+    });
+  });
+  name.focus();
+  return { isDirty: () => touched && !submitted };
+}
+
+function viewEnvGroup(scope, page, parts) {
+  const name = parts[1];
+  setTitle(name);
+  let group = null;
+  let editor = null;
+  const delBtn = h('button', { class: 'btn btn-danger', type: 'button', hidden: true }, icon('trash'), 'Delete');
+  page.append(pageHead({ crumbs: crumbs({ label: 'Env groups', href: '#/env-groups' }, { label: name }), title: name, actions: [delBtn] }));
+  const body = h('div', null, loadingState());
+  page.append(body);
+  const linked = () => (group && Array.isArray(group.services) ? group.services : []);
+  const bar = envSaveBar(() => editor, {
+    restartLabel: 'Save and restart linked services',
+    showRestart: () => linked().length > 0,
+    onSave: async (vars, restart) => {
+      try {
+        const g = await api.put(`/env-groups/${enc(name)}/env?restart=${restart ? 'true' : 'false'}`, { vars });
+        if (!scope.alive) return;
+        group = g;
+        editor.setVars(g.vars);
+        bar.sync();
+        drawLinked();
+        toast(restart ? 'Saved. Restarting linked services that are live.' : linked().length ? 'Saved. Linked services pick this up on their next deploy or restart.' : 'Saved.', 'ok');
+      } catch (e) { toastError(e, 'Saving failed'); }
+    },
+  });
+  bar.discard.addEventListener('click', () => { if (editor && group) { editor.setVars(group.vars); bar.sync(); } });
+  const linkedBox = h('div', { class: 'section' });
+  function drawLinked() {
+    const svcs = linked();
+    swap(linkedBox, sectionHead('Linked services', 'Link or unlink this group from a service’s Environment tab.'),
+      svcs.length
+        ? h('div', { class: 'panel items' }, svcs.map((s) => h('div', { class: 'item' }, icon('services'), h('a', { class: 'grow', href: linkTo('services', s) }, s),
+          h('a', { class: 'btn btn-sm', href: linkTo('services', s, 'environment') }, 'Environment'))))
+        : h('p', { class: 'env-empty' }, 'No services use this group yet.'));
+  }
+  delBtn.addEventListener('click', () => {
+    const svcs = linked();
+    confirmDialog({
+      title: `Delete ${name}?`,
+      message: svcs.length
+        ? `It is linked to ${svcs.join(', ')}. Those services lose these variables on their next deploy or restart.`
+        : 'The group and its variables are permanently removed.',
+      confirmLabel: 'Delete env group', danger: true, typeToConfirm: svcs.length ? name : undefined,
+      action: () => api.del(`/env-groups/${enc(name)}`),
+    }).then((ok) => {
+      if (!ok) return;
+      toast(`Deleted ${name}.`, 'ok');
+      if (current.ctrl) current.ctrl.isDirty = () => false;
+      navigate('#/env-groups');
+    });
+  });
+  (async () => {
+    try {
+      group = await api.get(`/env-groups/${enc(name)}`);
+    } catch (e) {
+      if (!scope.alive) return;
+      swap(body, isNotFound(e)
+        ? h('div', { class: 'panel empty' }, h('h2', null, `There’s no env group named “${name}”`), h('a', { class: 'btn', href: '#/env-groups' }, 'Back to env groups'))
+        : errorState(e, () => route()));
+      return;
+    }
+    if (!scope.alive) return;
+    delBtn.hidden = false;
+    editor = envEditor(group.vars, { onChange: () => bar.sync() });
+    swap(body, h('div', { class: 'section' }, sectionHead('Variables', ENV_HELP), editor.el, bar), linkedBox);
+    drawLinked();
+    bar.sync();
+  })();
+  return { isDirty: () => !!(editor && editor.isDirty()) };
+}
+
+// ======================================================================
+// Blueprints
+// ======================================================================
+const BLUEPRINT_EXAMPLE = `# ferry.yaml or render.yaml
+services:
+  - type: web
+    name: hello
+    image: nginx:alpine
+    port: 80
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: app-db, property: connectionString }
+databases:
+  - name: app-db`;
+function viewBlueprints(scope, page) {
+  setTitle('Blueprints');
+  page.append(pageHead({ title: 'Blueprints', sub: 'Describe services, datastores and env groups in YAML and apply them in one step. Existing resources are updated in place; nothing is ever deleted.' }));
+  const ta = h('textarea', { class: 'input mono', rows: 20, spellcheck: 'false', placeholder: BLUEPRINT_EXAMPLE, 'aria-label': 'Blueprint YAML' });
+  ta.value = storage.get(BLUEPRINT_DRAFT_KEY) || '';
+  let draftTimer = 0;
+  ta.addEventListener('input', () => {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => storage.set(BLUEPRINT_DRAFT_KEY, ta.value), 400);
+  });
+  scope.add(() => { clearTimeout(draftTimer); storage.set(BLUEPRINT_DRAFT_KEY, ta.value); });
+  const file = h('input', { type: 'file', accept: '.yaml,.yml,application/yaml,text/yaml', class: 'sr-only', id: 'bp-file' });
+  const readFile = async (f) => {
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { toast('That file is larger than 2 MB.', 'error'); return; }
+    try { ta.value = await f.text(); storage.set(BLUEPRINT_DRAFT_KEY, ta.value); toast(`Loaded ${f.name}.`, 'ok', { timeout: 2000 }); } catch (e) { toastError(e, 'Reading the file failed'); }
+  };
+  file.addEventListener('change', () => { readFile(file.files && file.files[0]); file.value = ''; });
+  ta.addEventListener('dragover', (ev) => { ev.preventDefault(); });
+  ta.addEventListener('drop', (ev) => {
+    const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if (f) { ev.preventDefault(); readFile(f); }
+  });
+  const dryBtn = h('button', { class: 'btn', type: 'button' }, 'Dry run');
+  const applyBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Apply blueprint');
+  const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
+  const result = h('div', { class: 'section', style: { marginTop: '28px' }, 'aria-live': 'polite' });
+  page.append(
+    h('div', { class: 'stack', style: { maxWidth: '900px' } },
+      h('div', { class: 'row' }, h('label', { class: 'btn btn-sm', for: 'bp-file' }, icon('upload'), 'Open a file…'), file,
+        h('span', { class: 'muted' }, 'or paste YAML below. You can also drop a file on the editor.')),
+      ta, err,
+      h('div', { class: 'form-actions' }, dryBtn, applyBtn, h('span', { class: 'muted' }, 'A dry run shows what would change without touching anything.'))),
+    result);
+
+  async function run(dry, btn) {
+    err.hidden = true;
+    const yaml = ta.value;
+    if (!yaml.trim()) { err.textContent = 'Paste a blueprint or open a file first.'; err.hidden = false; ta.focus(); return; }
+    await busy(btn, async () => {
+      try {
+        const r = await api.post('/blueprints/apply', { yaml, dry_run: dry });
+        if (!scope.alive) return;
+        let names = {};
+        const deploys = r && Array.isArray(r.deploys) ? r.deploys : [];
+        if (deploys.length) {
+          try { const svcs = await api.get('/services'); for (const s of svcs || []) names[s.id] = s.name; } catch { names = {}; }
+        }
+        if (!scope.alive) return;
+        drawResult(r || {}, names);
+        if (!dry) toast('Blueprint applied.', 'ok');
+      } catch (e) {
+        err.textContent = errMsg(e);
+        err.hidden = false;
+        swap(result);
+      }
+    });
+  }
+  dryBtn.addEventListener('click', () => run(true, dryBtn));
+  applyBtn.addEventListener('click', () => run(false, applyBtn));
+
+  function resourceLink(a, exists) {
+    if (!exists) return h('code', null, a.name);
+    const href = a.resource === 'service' ? linkTo('services', a.name) : a.resource === 'datastore' ? linkTo('datastores', a.name) : a.resource === 'env_group' ? linkTo('env-groups', a.name) : null;
+    return href ? h('a', { href, class: 'mono' }, a.name) : h('code', null, a.name);
+  }
+  function drawResult(r, names) {
+    const actions = Array.isArray(r.actions) ? r.actions : [];
+    const warnings = Array.isArray(r.warnings) ? r.warnings : [];
+    const deploys = Array.isArray(r.deploys) ? r.deploys : [];
+    const count = (k) => actions.filter((a) => a.action === k).length;
+    const summary = r.dry_run
+      ? `${count('create')} to create, ${count('update')} to update, ${count('unchanged')} unchanged.`
+      : `${count('create')} created, ${count('update')} updated, ${count('unchanged')} unchanged.`;
+    const out = [sectionHead(r.dry_run ? 'Dry run: nothing was changed' : 'Blueprint applied', summary)];
+    if (warnings.length) {
+      out.push(callout('warn', 'alert', h('strong', null, plural(warnings.length, 'warning')), h('ul', { style: { margin: '0', paddingLeft: '18px' } }, warnings.map((w) => h('li', null, w)))));
+    }
+    out.push(table(['Resource', 'Name', 'Action', 'Changes'], actions.map((a) => h('tr', null,
+      h('td', null, BLUEPRINT_RESOURCES[a.resource] || a.resource),
+      h('td', null, resourceLink(a, !(r.dry_run && a.action === 'create'))),
+      h('td', null, pill(BLUEPRINT_ACTIONS, a.action)),
+      h('td', null, Array.isArray(a.changes) && a.changes.length
+        ? h('ul', { style: { margin: '0', paddingLeft: '18px' } }, a.changes.map((c) => h('li', null, c)))
+        : h('span', { class: 'faint' }, '—')))),
+    { empty: h('div', { class: 'panel empty' }, h('p', null, 'The blueprint doesn’t define any resources.')) }));
+    if (deploys.length) {
+      out.push(h('div', { class: 'section', style: { marginTop: '22px' } }, sectionHead('Deploys started'),
+        h('div', { class: 'panel items' }, deploys.map((d) => {
+          const svcName = names[d.service_id] || d.service_id;
+          return h('div', { class: 'item' }, deployPill(d.status),
+            h('a', { class: 'grow', href: linkTo('services', svcName, 'deploys', d.id) }, svcName),
+            h('span', { class: 'muted' }, triggerLabel(d.trigger)));
+        }))));
+    }
+    swap(result, out);
+    result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+// ======================================================================
+// Boot
+// ======================================================================
+// The skip link must not touch the hash (the router owns it): focus <main> directly.
+const skipLink = document.querySelector('.skip');
+if (skipLink) {
+  skipLink.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const target = document.querySelector('.page h1') || document.getElementById('main');
+    if (target) { if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1'); target.focus(); }
+  });
+}
+if (!token) renderLogin();
+else route();
+})();
+</script>
+</body>
 </html>

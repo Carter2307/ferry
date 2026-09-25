@@ -9,6 +9,25 @@
 //!
 //! The [`RouteTable`] is shared with the engine, which updates it atomically
 //! after each deploy (blue/green swap).
+//!
+//! Request handling, in order:
+//! 1. `GET /.well-known/acme-challenge/<token>` on plain HTTP (when
+//!    `tls_hooks` is set) → the key authorization (200 `text/plain`) or 404.
+//! 2. Host = HTTP/2 `:authority` / absolute-form URI authority, else `Host`;
+//!    missing or invalid → 400.
+//! 3. `redirect_https` + plain HTTP + `has_certificate(host)` → 308 to HTTPS.
+//! 4. [`RouteTable::resolve`] → 404 / 503 (suspended) / 503 + `Retry-After`
+//!    (no upstreams) error pages, or an upstream.
+//! 5. Forward as HTTP/1.1 to `http://<upstream><path?query>` with the original
+//!    `Host`, streamed bodies, hop-by-hop headers stripped and
+//!    `X-Forwarded-{For,Proto,Host,Port}`, `X-Real-IP`, `X-Request-Id` set.
+//!    Bodyless GET/HEAD requests are retried once on another upstream when
+//!    the connection fails; otherwise failures → 502.
+//! 6. `101 Switching Protocols` (websockets) → both sides are spliced.
+//!
+//! Proxy-generated error pages carry an `x-ferry-error: <kind>` header
+//! (`bad_request`, `not_found`, `method_not_allowed`, `suspended`,
+//! `no_upstreams`, `bad_gateway`).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -16,75 +35,17 @@ use std::sync::Arc;
 use ferry_core::tls::TlsHooks;
 use ferry_core::{CancellationToken, Result};
 
-/// Result of looking up a host.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Resolution {
-    /// Forward to this upstream (already round-robin picked).
-    Upstream(SocketAddr),
-    /// Service is suspended → 503 "Service suspended" page.
-    Suspended,
-    /// Known host but no healthy instance (e.g. first deploy in progress) → 503.
-    NoUpstreams,
-    /// Unknown host → 404 page.
-    NotFound,
-}
+mod body;
+mod handler;
+mod headers;
+mod pages;
+mod routes;
+mod server;
 
-/// A route as seen by `snapshot`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteSnapshot {
-    pub host: String,
-    pub service_id: String,
-    pub upstreams: Vec<SocketAddr>,
-    pub suspended: bool,
-}
+#[cfg(test)]
+mod tests;
 
-/// Shared, thread-safe host → upstreams table. Cheap to clone.
-#[derive(Debug, Clone, Default)]
-pub struct RouteTable {
-    inner: Arc<std::sync::RwLock<()>>,
-}
-
-impl RouteTable {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Atomically make `hosts` (case-insensitive, port ignored) point at
-    /// `upstreams` for `service_id`, removing any other host previously
-    /// routed to that service. An empty `upstreams` yields `NoUpstreams`.
-    pub fn set_service_routes(&self, service_id: &str, hosts: &[String], upstreams: Vec<SocketAddr>) {
-        let _ = (service_id, hosts, upstreams, &self.inner);
-        todo!("ferry-proxy: set_service_routes")
-    }
-
-    /// Route `hosts` of `service_id` to the "suspended" page.
-    pub fn set_service_suspended(&self, service_id: &str, hosts: &[String]) {
-        let _ = (service_id, hosts);
-        todo!("ferry-proxy: set_service_suspended")
-    }
-
-    /// Remove every route of a service.
-    pub fn remove_service(&self, service_id: &str) {
-        let _ = service_id;
-        todo!("ferry-proxy: remove_service")
-    }
-
-    /// Look up a `Host` header value (may include `:port`; case-insensitive).
-    pub fn resolve(&self, host: &str) -> Resolution {
-        let _ = host;
-        todo!("ferry-proxy: resolve")
-    }
-
-    /// All routed hostnames (sorted) — used by the TLS manager.
-    pub fn hosts(&self) -> Vec<String> {
-        todo!("ferry-proxy: hosts")
-    }
-
-    /// Current routes (sorted by host), for debugging / status.
-    pub fn snapshot(&self) -> Vec<RouteSnapshot> {
-        todo!("ferry-proxy: snapshot")
-    }
-}
+pub use routes::{Resolution, RouteSnapshot, RouteTable, normalize_host};
 
 /// Proxy listeners and TLS settings.
 #[derive(Clone)]
@@ -120,7 +81,23 @@ impl ProxyConfig {
 
 /// Run the proxy until `shutdown` is cancelled (then drain gracefully, max ~10s).
 /// Returns an error if a listener cannot bind.
+///
+/// Also returns an `Invalid` error when `https_addr` is set without `tls`.
+/// `tls` without `https_addr` is ignored. Redirects to HTTPS only happen while
+/// an HTTPS listener is running; they target its port.
 pub async fn serve(config: ProxyConfig, routes: RouteTable, shutdown: CancellationToken) -> Result<()> {
-    let _ = (config, routes, shutdown);
-    todo!("ferry-proxy: serve")
+    if let (Some(addr), None) = (config.https_addr, &config.tls) {
+        return Err(ferry_core::Error::invalid(format!(
+            "proxy HTTPS address {addr} is set but no TLS configuration was provided"
+        )));
+    }
+    let http = server::bind(config.http_addr, "HTTP").await?;
+    let https = match config.https_addr {
+        Some(addr) => Some(server::bind(addr, "HTTPS").await?),
+        None => None,
+    };
+    if config.tls.is_some() && https.is_none() {
+        tracing::debug!("proxy: TLS configuration given without an HTTPS address; serving plain HTTP only");
+    }
+    server::serve_on(&config, http, https, routes, shutdown, server::DRAIN_TIMEOUT).await
 }

@@ -16,6 +16,7 @@ axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 http.workspace = true
+http-body-util.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,7 +26,11 @@ chrono.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true
+subtle = "2.6"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 http-body-util.workspace = true
+flate2.workspace = true
+tar.workspace = true
