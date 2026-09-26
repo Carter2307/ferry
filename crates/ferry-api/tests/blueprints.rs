@@ -400,6 +400,35 @@ async fn env_group_change_restarts_live_linked_services() {
 }
 
 #[tokio::test]
+async fn cron_command_changes_restart_and_no_op_env_changes_dont() {
+    let app = TestApp::new().await;
+    let yaml = "envVarGroups:\n  - name: shared\n    envVars:\n      - {key: A, value: '1'}\nservices:\n  - {type: cron, name: tick, image: busybox, schedule: '* * * * *', startCommand: echo one}\n  - {type: worker, name: bg, image: busybox, envVars: [{key: A, value: '1'}, {fromGroup: shared}]}\n";
+    assert_eq!(apply(&app, yaml, false).await.0, StatusCode::OK);
+    let tick = app.store.require_service("tick").await.unwrap();
+    app.make_live("tick", None).await;
+    app.make_live("bg", None).await;
+
+    // a live cron job's new command → restart (no rebuild)
+    app.engine.clear();
+    let (status, res) = apply(&app, &yaml.replace("echo one", "echo two"), false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(action_of(&res, "tick")["changes"], json!(["start_command: echo one → echo two"]));
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {} restart", tick.id)]);
+    assert!(app.engine.calls_with("deploy ").is_empty(), "{:?}", app.engine.calls());
+    assert_eq!(res["deploys"].as_array().unwrap().len(), 1);
+
+    // the group changes, but bg overrides A with the same value: its
+    // effective environment doesn't change → no restart
+    app.engine.clear();
+    let changed_group =
+        yaml.replace("echo one", "echo two").replacen("{key: A, value: '1'}", "{key: A, value: '2'}", 1);
+    let (status, res) = apply(&app, &changed_group, false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(action_of(&res, "shared")["action"], "update");
+    assert!(app.engine.calls_with("restart").is_empty(), "{:?}", app.engine.calls());
+}
+
+#[tokio::test]
 async fn apply_the_example_blueprint() {
     let app = TestApp::new().await;
     let (status, res) = apply(&app, EXAMPLE, false).await;
@@ -500,6 +529,32 @@ async fn invalid_entries_fail_the_whole_apply() {
             "connectionString",
         ),
         ("services: {}\n", "services"),
+        // references to the wrong kind of datastore
+        (
+            "databases:\n  - {name: pg}\nservices:\n  - {type: web, name: w, envVars: [{key: R, fromService: {type: redis, name: pg, property: connectionString}}]}\n",
+            "'pg' is a Postgres database, not a key value",
+        ),
+        (
+            "services:\n  - {type: keyvalue, name: kv}\n  - {type: web, name: w, envVars: [{key: D, fromDatabase: {name: kv, property: connectionString}}]}\n",
+            "'kv' is a key value (Redis), not a database",
+        ),
+        // properties the referenced service can't provide
+        (
+            "services:\n  - {type: pserv, name: p}\n  - {type: web, name: w, envVars: [{key: U, fromService: {type: pserv, name: p, property: url}}]}\n",
+            "service 'p' is a private service (pserv) and has no public URL",
+        ),
+        (
+            "services:\n  - {type: worker, name: bg}\n  - {type: web, name: w, envVars: [{key: U, fromService: {name: bg, property: url}}]}\n",
+            "has no public URL",
+        ),
+        (
+            "services:\n  - {type: worker, name: bg}\n  - {type: web, name: w, envVars: [{key: H, fromService: {type: worker, name: bg, property: hostport}}]}\n",
+            "service 'bg' is a background worker and doesn't listen on a port",
+        ),
+        (
+            "services:\n  - {type: cron, name: c, schedule: '* * * * *'}\n  - {type: web, name: w, envVars: [{key: P, fromService: {type: cron, name: c, property: port}}]}\n",
+            "service 'c' is a cron job and doesn't listen on a port",
+        ),
     ];
     for (yaml, needle) in cases {
         let (status, res) = apply(&app, yaml, false).await;
@@ -511,6 +566,31 @@ async fn invalid_entries_fail_the_whole_apply() {
     assert!(app.store.list_env_groups().await.unwrap().is_empty());
     assert!(app.store.list_datastores().await.unwrap().is_empty());
     assert!(app.engine.calls().is_empty());
+
+    // the same rules against existing resources
+    app.post("/api/v1/datastores", json!({"name": "kv", "kind": "redis"})).await;
+    app.create_service(json!({"name": "bg", "type": "worker"})).await;
+    for (yaml, needle) in [
+        (
+            "services:\n  - {type: web, name: w, envVars: [{key: D, fromDatabase: {name: kv, property: connectionString}}]}\n",
+            "not a database",
+        ),
+        (
+            "services:\n  - {type: web, name: w, envVars: [{key: U, fromService: {name: bg, property: url}}]}\n",
+            "public URL",
+        ),
+        (
+            "services:\n  - {type: web, name: w, envVars: [{key: U, fromService: {name: bg, property: internalUrl}}]}\n",
+            "doesn't listen",
+        ),
+    ] {
+        let (status, res) = apply(&app, yaml, false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{yaml}: {res}");
+        assert_eq!(res["error"]["code"], "invalid_request", "{res}");
+        let msg = res["error"]["message"].as_str().unwrap();
+        assert!(msg.contains(needle) && msg.contains("service 'w'"), "{msg} should mention {needle}");
+    }
+    assert!(app.store.find_service("w").await.unwrap().is_none());
 
     // name clashes with existing resources of the other kind → 409
     app.create_service(json!({"name": "taken"})).await;

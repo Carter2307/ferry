@@ -1,4 +1,4 @@
-//! Auth, liveness, dashboard, fallbacks and server info.
+//! Auth, liveness, the web client, fallbacks and server info.
 
 mod common;
 
@@ -18,14 +18,45 @@ async fn healthz_and_dashboard_need_no_auth() {
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.text(), "ok");
 
-    for path in ["/", "/index.html"] {
+    // The web client (built or placeholder: these checks don't depend on
+    // `web/dist`). Client-side routes get index.html too (SPA fallback).
+    let index = ferry_api::web::embedded_file("index.html").expect("an index.html is always embedded");
+    for path in ["/", "/index.html", "/services", "/services/web/deploys/dep-1?x=1", "/nope"] {
         let r = app.send(req(Method::GET, path).body(Body::empty()).unwrap()).await;
         assert_eq!(r.status, StatusCode::OK, "{path}");
-        assert!(r.headers["content-type"].to_str().unwrap().starts_with("text/html"));
-        assert_eq!(r.headers["cache-control"], "no-cache");
-        assert_eq!(r.headers["x-frame-options"], "DENY");
-        assert_eq!(r.text(), ferry_api::DASHBOARD_HTML);
+        assert_eq!(r.headers["content-type"], "text/html; charset=utf-8", "{path}");
+        assert_eq!(r.headers["cache-control"], "no-cache", "{path}");
+        assert_eq!(r.headers["x-frame-options"], "DENY", "{path}");
+        assert_eq!(r.body, index, "{path}");
     }
+    // revalidation with the ETag
+    let r = app.send(req(Method::GET, "/").body(Body::empty()).unwrap()).await;
+    let etag = r.headers["etag"].to_str().unwrap().to_string();
+    let r = app.send(req(Method::GET, "/services").header("if-none-match", &etag).body(Body::empty()).unwrap()).await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED);
+    assert!(r.body.is_empty());
+    // HEAD
+    let r = app.send(req(Method::HEAD, "/").body(Body::empty()).unwrap()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.body.is_empty());
+}
+
+#[tokio::test]
+async fn embedded_assets_are_served_with_long_lived_caching() {
+    // Whatever `web/dist` contained at build time (maybe nothing).
+    let app = TestApp::new().await;
+    for path in ferry_api::web::embedded_paths() {
+        let r = app.send(req(Method::GET, &format!("/{path}")).body(Body::empty()).unwrap()).await;
+        assert_eq!(r.status, StatusCode::OK, "{path}");
+        assert_eq!(r.headers["content-type"], ferry_api::web::content_type(path), "{path}");
+        assert_eq!(r.body, ferry_api::web::embedded_file(path).unwrap(), "{path}");
+        let cache = if path.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
+        assert_eq!(r.headers["cache-control"], cache, "{path}");
+    }
+    // a missing hashed asset is a 404 (never HTML parsed as a script)
+    let r = app.send(req(Method::GET, "/assets/index-00000000.js").body(Body::empty()).unwrap()).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(r.code(), "not_found");
 }
 
 #[tokio::test]
@@ -105,10 +136,13 @@ async fn unknown_routes_are_json_404s() {
     // unauthenticated unknown API path: auth runs first
     let r = app.send(req(Method::GET, "/api/v1/nope").body(Body::empty()).unwrap()).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
-    // outside /api
-    let r = app.send(req(Method::GET, "/nope").body(Body::empty()).unwrap()).await;
-    assert_eq!(r.status, StatusCode::NOT_FOUND);
-    assert_eq!(r.code(), "not_found");
+    // outside /api: webhooks and liveness keep JSON 404s (everything else
+    // is the web client's SPA fallback)
+    for path in ["/hooks", "/hooks/nope", "/hooks/deploy", "/healthz/x"] {
+        let r = app.send(req(Method::GET, path).body(Body::empty()).unwrap()).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(r.code(), "not_found", "{path}");
+    }
     // wrong method on a known route
     let r = app.call(Method::PUT, "/api/v1/services", Some(json!({}))).await;
     assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED);
@@ -170,7 +204,12 @@ async fn server_info() {
 #[tokio::test]
 async fn every_error_outside_the_api_is_json_too() {
     let app = TestApp::new().await;
-    for (method, path) in [(Method::POST, "/healthz"), (Method::DELETE, "/"), (Method::PUT, "/index.html")] {
+    for (method, path) in [
+        (Method::POST, "/healthz"),
+        (Method::DELETE, "/"),
+        (Method::PUT, "/index.html"),
+        (Method::POST, "/services/web"),
+    ] {
         let r = app.send(req(method.clone(), path).body(Body::empty()).unwrap()).await;
         assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED, "{method} {path}");
         assert_eq!(r.headers["content-type"], "application/json", "{method} {path}");

@@ -113,10 +113,17 @@ pub async fn github(State(st): State<AppState>, headers: HeaderMap, ApiBytes(bod
         "ping" => Ok(Json(json!({"ok": true})).into_response()),
         "push" => {
             let payload = github_payload(&headers, &body)?;
-            let delivery = header_str(&headers, "x-github-delivery").unwrap_or("-").to_string();
+            // GitHub's delivery ids are GUIDs; anything unusual isn't used for dedupe.
+            let delivery = header_str(&headers, "x-github-delivery")
+                .map(str::trim)
+                .filter(|d| d.len() <= 128)
+                .unwrap_or("")
+                .to_string();
             // Finish (deploys + replay bookkeeping) even if GitHub hangs up.
             let body_hash = hex::encode(Sha256::digest(&body));
-            let outcome = crate::locks::detached(async move { handle_push(&st, &payload, &body_hash).await }).await?;
+            let seen = Delivery { id: delivery.clone(), body_hash };
+            let outcome = crate::locks::detached(async move { handle_push(&st, &payload, &seen).await }).await?;
+            let delivery = if delivery.is_empty() { "-".to_string() } else { delivery };
             match outcome {
                 PushOutcome::Deployed(deploys) => {
                     let deploys: Vec<Deploy> = deploys.into_iter().map(public_deploy).collect();
@@ -146,20 +153,28 @@ const PUSH_HISTORY: usize = 256;
 /// Serializes the read-modify-write of [`PushState`].
 static PUSH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// What protects `/hooks/github` against replays. The HMAC covers only the
-/// body (no timestamp) and `X-GitHub-Delivery` isn't signed, so:
-/// * `payloads`: hashes of recently processed push bodies — the exact same
-///   signed body is never processed twice (replays, duplicate deliveries);
-/// * `superseded`: `repo|branch|sha` of commits a later push moved away from
-///   (its `before`) — an older push replayed or delivered late is ignored
-///   instead of rolling the service back. Force pushes and branch creations
-///   may legitimately move back, so they are exempt.
+/// Identity of one delivery, for deduplication.
+struct Delivery {
+    /// `X-GitHub-Delivery` (empty when absent). GitHub keeps it on redeliveries.
+    id: String,
+    /// SHA-256 of the raw (signed) body.
+    body_hash: String,
+}
+
+/// What protects `/hooks/github` against replays and duplicate deliveries.
+/// The HMAC covers only the body (no timestamp) and `X-GitHub-Delivery`
+/// isn't signed, so a push is ignored when its exact signed body
+/// (`payloads`) or its delivery id (`deliveries`) was already processed.
+///
+/// Commits are deliberately *not* compared with earlier pushes: pushing a
+/// commit the branch was at before (a fast-forward re-push after a
+/// force-push rollback, a revert of a revert...) is a legitimate deploy.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PushState {
     #[serde(default)]
     payloads: Vec<String>,
     #[serde(default)]
-    superseded: Vec<String>,
+    deliveries: Vec<String>,
 }
 
 impl PushState {
@@ -174,7 +189,7 @@ impl PushState {
     }
 
     async fn save(mut self, store: &Store) -> ferry_core::Result<()> {
-        for list in [&mut self.payloads, &mut self.superseded] {
+        for list in [&mut self.payloads, &mut self.deliveries] {
             if list.len() > PUSH_HISTORY {
                 list.drain(..list.len() - PUSH_HISTORY);
             }
@@ -182,6 +197,17 @@ impl PushState {
         let raw = serde_json::to_string(&self)
             .map_err(|e| ferry_core::Error::internal(format!("encoding the GitHub push state: {e}")))?;
         store.set_setting(PUSH_STATE_KEY, &raw).await
+    }
+
+    fn seen(&self, d: &Delivery) -> bool {
+        self.payloads.contains(&d.body_hash) || (!d.id.is_empty() && self.deliveries.contains(&d.id))
+    }
+
+    fn record(&mut self, d: &Delivery) {
+        self.payloads.push(d.body_hash.clone());
+        if !d.id.is_empty() {
+            self.deliveries.push(d.id.clone());
+        }
     }
 }
 
@@ -191,7 +217,7 @@ fn payload_sha<'a>(payload: &'a Value, field: &str) -> Option<&'a str> {
 }
 
 /// Deploy every auto-deploy service tracking the pushed repository + branch.
-async fn handle_push(st: &AppState, payload: &Value, body_hash: &str) -> ApiResult<PushOutcome> {
+async fn handle_push(st: &AppState, payload: &Value, delivery: &Delivery) -> ApiResult<PushOutcome> {
     let Some(branch) = payload.get("ref").and_then(Value::as_str).and_then(|r| r.strip_prefix("refs/heads/")) else {
         tracing::debug!("ignoring push to a non-branch ref");
         return Ok(PushOutcome::Deployed(Vec::new()));
@@ -204,7 +230,6 @@ async fn handle_push(st: &AppState, payload: &Value, body_hash: &str) -> ApiResu
     if let Some(c) = &commit {
         validate::commit(c).map_err(|e| ApiError::bad_request(format!("invalid GitHub push payload: 'after': {e}")))?;
     }
-    let before = payload_sha(payload, "before").filter(|c| validate::commit(c).is_ok());
     let repo = payload.get("repository");
     let urls: Vec<String> = ["clone_url", "ssh_url", "git_url", "html_url", "url"]
         .iter()
@@ -215,23 +240,11 @@ async fn handle_push(st: &AppState, payload: &Value, body_hash: &str) -> ApiResu
     if urls.is_empty() {
         return Err(ApiError::bad_request("push payload has no repository URL"));
     }
-    let flag = |k: &str| payload.get(k).and_then(Value::as_bool).unwrap_or(false);
-    let (forced, created) = (flag("forced"), flag("created"));
-    let branch_key = format!("{}|{branch}", urls[0]);
 
     let _guard = PUSH_LOCK.lock().await;
     let mut state = PushState::load(&st.store).await?;
-    if state.payloads.iter().any(|h| h == body_hash) {
+    if state.seen(delivery) {
         return Ok(PushOutcome::Ignored("this push was already processed (duplicate or replayed delivery)".into()));
-    }
-    if let Some(c) = &commit
-        && !forced
-        && !created
-        && state.superseded.contains(&format!("{branch_key}|{}", c.to_ascii_lowercase()))
-    {
-        return Ok(PushOutcome::Ignored(format!(
-            "commit {c} was already superseded by a newer push to {branch} (replayed or out-of-order delivery)"
-        )));
     }
 
     let mut deploys = Vec::new();
@@ -255,10 +268,7 @@ async fn handle_push(st: &AppState, payload: &Value, body_hash: &str) -> ApiResu
         }
     }
 
-    state.payloads.push(body_hash.to_string());
-    if let Some(b) = before {
-        state.superseded.push(format!("{branch_key}|{}", b.to_ascii_lowercase()));
-    }
+    state.record(delivery);
     if let Err(e) = state.save(&st.store).await {
         // The deploys are queued; only the replay protection is degraded.
         tracing::warn!("saving the GitHub push state failed: {e}");
@@ -301,9 +311,25 @@ mod tests {
         let store = Store::open_in_memory().await.unwrap();
         let mut state = PushState::load(&store).await.unwrap();
         state.payloads = (0..PUSH_HISTORY + 10).map(|i| i.to_string()).collect();
+        state.deliveries = (0..PUSH_HISTORY + 1).map(|i| format!("d{i}")).collect();
         state.save(&store).await.unwrap();
         let state = PushState::load(&store).await.unwrap();
         assert_eq!(state.payloads.len(), PUSH_HISTORY);
         assert_eq!(state.payloads[0], "10");
+        assert_eq!((state.deliveries.len(), state.deliveries[0].as_str()), (PUSH_HISTORY, "d1"));
+    }
+
+    #[tokio::test]
+    async fn older_push_state_is_still_readable() {
+        // Written by versions that also tracked superseded commits.
+        let store = Store::open_in_memory().await.unwrap();
+        store.set_setting(PUSH_STATE_KEY, r#"{"payloads":["h1"],"superseded":["x|main|abc"]}"#).await.unwrap();
+        let state = PushState::load(&store).await.unwrap();
+        assert!(state.seen(&Delivery { id: String::new(), body_hash: "h1".into() }));
+        assert!(!state.seen(&Delivery { id: String::new(), body_hash: "h2".into() }));
+        let mut state = state;
+        state.record(&Delivery { id: "d-9".into(), body_hash: "h2".into() });
+        assert!(state.seen(&Delivery { id: "d-9".into(), body_hash: "other".into() }));
+        assert!(!state.seen(&Delivery { id: "d-10".into(), body_hash: "other".into() }));
     }
 }

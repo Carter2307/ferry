@@ -301,3 +301,200 @@ async fn one_connection_slot_serves_both_listeners() {
         assert_eq!(r.headers()["x-upstream"], "a");
     }
 }
+
+// ------------------------------------------------------ request bodies ----
+
+/// `request_body_timeout` of the request body tests.
+const BODY_TIMEOUT: Duration = Duration::from_millis(400);
+
+async fn body_timeout_proxy() -> TestProxy {
+    proxy_with(ConnectionLimits { request_body_timeout: BODY_TIMEOUT, ..ConnectionLimits::default() }).await
+}
+
+/// A request body that sends `first`, then nothing ever again.
+fn stalled_body(
+    first: &'static [u8],
+) -> StreamBody<impl futures::Stream<Item = Result<Frame<Bytes>, BoxError>> + Unpin> {
+    let first = futures::stream::iter([Ok::<_, BoxError>(Frame::data(Bytes::from_static(first)))]);
+    StreamBody::new(first.chain(futures::stream::pending()))
+}
+
+/// Read everything until the peer closes (EOF or reset).
+async fn read_until_closed<S: AsyncRead + Unpin>(stream: &mut S) -> String {
+    let mut out = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match within("the proxy closing the connection", stream.read(&mut buf)).await {
+            Ok(0) | Err(_) => return String::from_utf8_lossy(&out).into_owned(),
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+        }
+    }
+}
+
+/// A client that declares a 1000-byte body, sends 1 byte and then trickles
+/// one more only every few timeouts gets a 408 once the body stalls for
+/// `request_body_timeout`, and its connection is closed; the upstream sees
+/// the request aborted, never completed with a short body. (It used to stay
+/// open for as long as the client kept trickling.)
+#[tokio::test]
+async fn stalled_request_bodies_get_a_408() {
+    let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
+    let up = spawn_upstream(move |req: Request<hyper::body::Incoming>| {
+        let seen = seen_tx.clone();
+        async move {
+            let outcome = match req.into_body().collect().await {
+                Ok(body) => format!("complete ({} bytes)", body.to_bytes().len()),
+                Err(_) => "aborted".to_string(),
+            };
+            let _ = seen.send(outcome);
+            Response::new(body::full("done"))
+        }
+    })
+    .await;
+    let proxy = body_timeout_proxy().await;
+    proxy.route("srv", &["app.test"], &[up.addr]);
+
+    let (mut reader, mut writer) = TcpStream::connect(proxy.http).await.unwrap().into_split();
+    writer.write_all(b"POST /upload HTTP/1.1\r\nHost: app.test\r\nContent-Length: 1000\r\n\r\nx").await.unwrap();
+    let started = Instant::now();
+    let trickle = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(BODY_TIMEOUT * 3).await;
+            if writer.write_all(b"x").await.is_err() {
+                break;
+            }
+        }
+    });
+    let response = read_until_closed(&mut reader).await.to_ascii_lowercase();
+    let took = started.elapsed();
+    trickle.abort();
+
+    assert!(response.starts_with("http/1.1 408"), "{response}");
+    assert!(response.contains("x-ferry-error: request_timeout"), "{response}");
+    assert!(response.contains("connection: close"), "{response}");
+    assert!(response.contains("request body stopped arriving"), "{response}");
+    assert!(took >= BODY_TIMEOUT / 2, "timed out too early: {took:?}");
+    assert!(took < BODY_TIMEOUT + Duration::from_secs(2), "timed out late: {took:?}");
+    assert_eq!(within("upstream outcome", seen_rx.recv()).await.unwrap(), "aborted");
+}
+
+/// Same over HTTP/2 (a 408 on the stream) and for chunked HTTP/1 bodies.
+#[tokio::test]
+async fn stalled_request_bodies_time_out_over_http2_and_chunked() {
+    let up = echo_upstream("a").await;
+    let proxy = body_timeout_proxy().await;
+    proxy.route("srv", &["app.test"], &[up.addr]);
+
+    let stream = TcpStream::connect(proxy.http).await.unwrap();
+    let (mut h2, conn) =
+        hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream)).await.unwrap();
+    tokio::spawn(conn);
+    let req = Request::post(format!("http://app.test:{}/", proxy.http.port())).body(stalled_body(b"x")).unwrap();
+    let resp = collect(within("h2 request", h2.send_request(req)).await.unwrap()).await;
+    assert_eq!(resp.status, 408);
+    assert_eq!(resp.headers["x-ferry-error"], "request_timeout");
+    assert!(resp.headers.get("connection").is_none());
+
+    let stream = TcpStream::connect(proxy.http).await.unwrap();
+    let (mut h1, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.unwrap();
+    let h1_conn = tokio::spawn(conn);
+    let req = Request::post("/").header("host", "app.test").body(stalled_body(b"x")).unwrap();
+    let resp = collect(within("h1 request", h1.send_request(req)).await.unwrap()).await;
+    assert_eq!(resp.status, 408);
+    assert_eq!(resp.headers["x-ferry-error"], "request_timeout");
+    assert_eq!(resp.headers["connection"], "close");
+    // The rest of the body is never read: the connection is not reused.
+    let _ = within("the connection closing", h1_conn).await;
+}
+
+/// When the upstream is already answering (full duplex) and the request
+/// body stalls, the exchange is aborted: the response stream fails instead
+/// of hanging.
+#[tokio::test]
+async fn stalled_request_bodies_abort_responses_in_progress() {
+    // Echoes the request body back as it arrives.
+    let up =
+        spawn_upstream(
+            |req: Request<hyper::body::Incoming>| async move { Response::new(body::stream(req.into_body())) },
+        )
+        .await;
+    let proxy = body_timeout_proxy().await;
+    proxy.route("srv", &["app.test"], &[up.addr]);
+
+    let stream = TcpStream::connect(proxy.http).await.unwrap();
+    let (mut h1, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.unwrap();
+    tokio::spawn(conn);
+    let req = Request::post("/").header("host", "app.test").body(stalled_body(b"ping")).unwrap();
+    let resp = within("h1 request", h1.send_request(req)).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let mut body = resp.into_body();
+    let first = within("echoed data", body.frame()).await.unwrap().unwrap();
+    assert_eq!(first.into_data().unwrap(), "ping");
+    let started = Instant::now();
+    let rest = within("the response failing", body.collect()).await;
+    assert!(rest.is_err(), "the response completed although the request body stalled");
+    assert!(started.elapsed() < BODY_TIMEOUT + Duration::from_secs(2), "{:?}", started.elapsed());
+}
+
+/// The body timeout only bounds gaps in the request body: slow uploads
+/// whose pieces keep coming, time the upstream takes to read a body
+/// (back-pressure), responses streamed after the body (SSE) and websocket
+/// tunnels all outlive it.
+#[tokio::test]
+async fn request_body_timeout_spares_slow_uploads_responses_and_tunnels() {
+    let up = slow_stream_upstream(BODY_TIMEOUT * 2).await;
+    let (ws_addr, ws_task) = ws_echo().await;
+    // Waits well past the timeout before reading a large body.
+    let lazy = spawn_upstream(|req: Request<hyper::body::Incoming>| async move {
+        tokio::time::sleep(BODY_TIMEOUT * 3).await;
+        let mut body = req.into_body();
+        let mut n = 0usize;
+        while let Some(frame) = body.frame().await {
+            match frame {
+                Ok(frame) => n += frame.data_ref().map_or(0, Bytes::len),
+                Err(e) => return Response::new(body::full(format!("error: {e}"))),
+            }
+        }
+        Response::new(body::full(n.to_string()))
+    })
+    .await;
+    let proxy = body_timeout_proxy().await;
+    proxy.route("srv", &["app.test"], &[up.addr]);
+    proxy.route("lazy", &["lazy.test"], &[lazy.addr]);
+    proxy.route("ws", &["ws.test"], &[ws_addr]);
+    let c = client_for(&["app.test", "lazy.test"]).build().unwrap();
+
+    // 10 pieces, each well within the timeout, 2.5 timeouts in total; then a
+    // response with a 2-timeout gap.
+    let upload = futures::stream::unfold(0u8, |i| async move {
+        if i == 10 {
+            return None;
+        }
+        if i > 0 {
+            tokio::time::sleep(BODY_TIMEOUT / 4).await;
+        }
+        Some((Ok::<_, std::io::Error>(Bytes::from_static(b"ab")), i + 1))
+    });
+    let started = Instant::now();
+    let r = c.post(proxy.url("app.test", "/")).body(reqwest::Body::wrap_stream(upload)).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.text().await.unwrap(), "20:one:two");
+    assert!(started.elapsed() > BODY_TIMEOUT * 2, "{:?}", started.elapsed());
+
+    // An upstream that doesn't read for 3 timeouts: the client is blocked
+    // by back-pressure, not stalling.
+    let size = 16 << 20;
+    let r = c.post(proxy.url("lazy.test", "/")).body(vec![7u8; size]).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.text().await.unwrap(), size.to_string());
+
+    // A websocket tunnel quiet for longer than the timeout.
+    let stream = TcpStream::connect(proxy.http).await.unwrap();
+    let url = format!("ws://ws.test:{}/", proxy.http.port());
+    let (mut ws, _) = within("websocket handshake", tokio_tungstenite::client_async(url, stream)).await.unwrap();
+    tokio::time::sleep(BODY_TIMEOUT * 2).await;
+    ws.send(Message::text("still there")).await.unwrap();
+    let msg = within("websocket echo", ws.next()).await.unwrap().unwrap();
+    assert_eq!(msg.to_text().unwrap(), "still there");
+    ws_task.abort();
+}

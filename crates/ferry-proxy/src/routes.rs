@@ -14,7 +14,8 @@ pub enum Resolution {
     Upstream(SocketAddr),
     /// Service is suspended → 503 "Service suspended" page.
     Suspended,
-    /// Known host but no healthy instance (e.g. first deploy in progress) → 503.
+    /// Known host but no running instance (not deployed yet, last deploy
+    /// failed, deploy in progress…) → 503.
     NoUpstreams,
     /// Unknown host → 404 page.
     NotFound,

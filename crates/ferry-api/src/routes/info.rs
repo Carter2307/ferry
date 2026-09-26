@@ -1,15 +1,13 @@
-//! Server info, liveness, dashboard and fallbacks.
+//! Server info, liveness and API fallbacks.
 
 use std::net::SocketAddr;
 
 use axum::Json;
 use axum::extract::{OriginalUri, State};
-use axum::response::{IntoResponse, Response};
 use ferry_core::dto::ServerInfo;
-use http::{HeaderValue, Uri, header};
 
+use crate::AppState;
 use crate::error::ApiError;
-use crate::{AppState, DASHBOARD_HTML};
 
 /// `http://<host>[:port]` for a listen address; unspecified IPs become `localhost`.
 pub fn url_for_addr(addr: SocketAddr) -> String {
@@ -42,27 +40,10 @@ pub async fn healthz() -> &'static str {
     "ok"
 }
 
-/// `GET /` and `GET /index.html`
-pub async fn dashboard() -> Response {
-    let mut resp = DASHBOARD_HTML.into_response();
-    let h = resp.headers_mut();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-    resp
-}
-
 /// Unknown `/api` route (the full path: the nested router only sees the part
 /// after `/api`).
 pub async fn api_not_found(OriginalUri(uri): OriginalUri) -> ApiError {
     ApiError::not_found(format!("no API route for {}", uri.path()))
-}
-
-/// Unknown route outside `/api`.
-pub async fn not_found(uri: Uri) -> ApiError {
-    ApiError::not_found(format!("{} not found", uri.path()))
 }
 
 /// Known route, wrong method.

@@ -141,7 +141,7 @@ async fn list_get_by_id_or_name_and_404() {
 }
 
 #[tokio::test]
-async fn internal_port_falls_back_to_the_live_deploy() {
+async fn internal_port_is_the_live_deploys_port() {
     let app = TestApp::new().await;
     app.create_service(json!({"name": "backend", "type": "pserv"})).await;
     assert_eq!(app.get("/api/v1/services/backend").await.json()["internal_port"], Value::Null);
@@ -149,6 +149,18 @@ async fn internal_port_falls_back_to_the_live_deploy() {
     let v = app.get("/api/v1/services/backend").await.json();
     assert_eq!(v["internal_port"], 3000);
     assert_eq!(state_of(&v), ServiceState::Live);
+
+    // A changed port setting only applies from the next deploy: the view
+    // keeps the port the live instances listen on until then.
+    let r = app.patch("/api/v1/services/backend", json!({"port": 4000})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["port"], 4000);
+    assert_eq!(r.json()["internal_port"], 3000);
+    app.make_live("backend", Some(4000)).await;
+    assert_eq!(app.get("/api/v1/services/backend").await.json()["internal_port"], 4000);
+    // a live deploy without a recorded port falls back to the setting
+    app.make_live("backend", None).await;
+    assert_eq!(app.get("/api/v1/services/backend").await.json()["internal_port"], 4000);
 }
 
 #[tokio::test]
@@ -632,6 +644,50 @@ async fn cron_jobs_have_no_instances_and_logs_point_at_job_runs() {
     assert_eq!(events.last().unwrap().0, "end", "{}", r.text());
     assert!(r.text().contains("ferry jobs tick") && r.text().contains("Latest run: job-"), "{}", r.text());
     assert!(app.engine.calls_with("service_logs").is_empty());
+}
+
+#[tokio::test]
+async fn a_live_cron_jobs_new_command_applies_through_a_restart() {
+    let app = TestApp::new().await;
+    let v = app
+        .create_service(json!({"name": "tick", "type": "cron", "schedule": "* * * * *", "image": "busybox", "start_command": "echo one", "deploy": false}))
+        .await;
+    let id = v["id"].as_str().unwrap().to_string();
+    // not deployed yet: the next deploy picks the command up
+    let r = app.patch("/api/v1/services/tick", json!({"start_command": "echo two"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(app.engine.calls_with("restart").is_empty());
+
+    app.make_live("tick", None).await;
+    app.engine.clear();
+    // runs use the live deploy's snapshot: a changed command needs a restart
+    let r = app.patch("/api/v1/services/tick", json!({"start_command": "echo three"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["start_command"], "echo three");
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {id} restart")]);
+    // same command, other settings: no restart
+    app.engine.clear();
+    app.patch("/api/v1/services/tick", json!({"start_command": "echo three", "schedule": "*/5 * * * *"})).await;
+    assert!(app.engine.calls_with("restart").is_empty());
+    // a failed restart is reported, the setting is saved
+    app.engine.fail_restart.store(true, std::sync::atomic::Ordering::SeqCst);
+    let r = app.patch("/api/v1/services/tick", json!({"start_command": "echo four"})).await;
+    assert!(r.status.is_server_error(), "{}", r.text());
+    assert!(r.json()["error"]["message"].as_str().unwrap().contains("settings saved"), "{}", r.text());
+    assert_eq!(app.store.require_service("tick").await.unwrap().start_command.as_deref(), Some("echo four"));
+    app.engine.fail_restart.store(false, std::sync::atomic::Ordering::SeqCst);
+    // suspended: nothing to restart
+    app.store.set_suspended(&id, true).await.unwrap();
+    app.engine.clear();
+    assert_eq!(app.patch("/api/v1/services/tick", json!({"start_command": "echo five"})).await.status, StatusCode::OK);
+    assert!(app.engine.calls_with("restart").is_empty());
+
+    // other service types: the command applies with the next deploy
+    app.create_service(json!({"name": "web", "image": "nginx", "deploy": false})).await;
+    app.make_live("web", Some(80)).await;
+    app.engine.clear();
+    app.patch("/api/v1/services/web", json!({"start_command": "nginx -g 'daemon off;'"})).await;
+    assert!(app.engine.calls_with("restart").is_empty());
 }
 
 #[tokio::test]

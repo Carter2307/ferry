@@ -65,7 +65,11 @@ pub async fn create(
     // Row + provisioning: a client disconnect must not leave a row that is
     // `creating` forever.
     locks::detached(async move {
-        st.store.create_datastore(&ds).await?;
+        {
+            // Datastores share their namespace with services.
+            let _names = locks::names().await;
+            st.store.create_datastore(&ds).await?;
+        }
         tracing::info!(datastore = %ds.name, kind = %ds.kind, "created datastore");
         let ds = match st.engine.provision_datastore(&ds.id).await {
             Ok(()) => st.store.require_datastore(&ds.id).await?,

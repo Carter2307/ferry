@@ -167,3 +167,28 @@ async fn parallel_env_patches_are_all_kept() {
     assert_eq!(app.get("/api/v1/services/web/env").await.json().as_array().unwrap().len(), 20);
     assert_eq!(app.get("/api/v1/env-groups/g").await.json()["vars"].as_array().unwrap().len(), 20);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn services_and_datastores_share_one_namespace_under_concurrency() {
+    let app = Arc::new(TestApp::new().await);
+    for round in 0..15 {
+        let name = format!("n{round}");
+        let blueprint = format!("databases:\n  - {{name: {name}}}\n");
+        let mut reqs = vec![
+            (Method::POST, "/api/v1/services".to_string(), json!({"name": name, "deploy": false})),
+            (Method::POST, "/api/v1/datastores".to_string(), json!({"name": name, "kind": "redis"})),
+            (Method::POST, "/api/v1/blueprints/apply".to_string(), json!({"yaml": blueprint})),
+        ];
+        reqs.rotate_left(round % 3);
+        let statuses = concurrently(&app, reqs).await;
+        let created = statuses.iter().filter(|s| s.is_success()).count();
+        assert_eq!(created, 1, "round {round}: {statuses:?}");
+        assert!(
+            statuses.iter().filter(|s| !s.is_success()).all(|s| *s == StatusCode::CONFLICT),
+            "round {round}: {statuses:?}"
+        );
+        let services = app.store.list_services().await.unwrap().into_iter().filter(|s| s.name == name).count();
+        let datastores = app.store.list_datastores().await.unwrap().into_iter().filter(|d| d.name == name).count();
+        assert_eq!(services + datastores, 1, "round {round}");
+    }
+}

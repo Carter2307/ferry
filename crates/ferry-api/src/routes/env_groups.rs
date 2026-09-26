@@ -78,10 +78,13 @@ pub async fn delete(
             ))
             .into());
         }
+        let before = ops::EnvSnapshot::capture_services(&st.store, &linked).await?;
         st.store.delete_env_group(&g.id).await?;
         tracing::info!(group = %g.name, linked = linked.len(), "deleted env group");
         if q.restart {
-            ops::restart_services(&st.store, st.engine.as_ref(), &linked).await;
+            // Only the services that really lose (or see changed) variables.
+            let changed = before.changed_services(&st.store, &linked).await;
+            ops::restart_services(&st.store, st.engine.as_ref(), &changed).await;
         }
         Ok(StatusCode::NO_CONTENT)
     })
@@ -99,15 +102,23 @@ enum Change {
 async fn change_env(st: AppState, id: String, restart: bool, change: Change) -> ApiResult<Json<EnvGroupView>> {
     let g = st.store.require_env_group(&id).await?;
     let _guard = locks::owner(&g.id).await;
+    let current = st.store.list_env(&g.id).await?;
     let next = match &change {
         Change::Replace(vars) => vars.clone(),
-        Change::Patch { set, unset } => checks::patched_env(&st.store.list_env(&g.id).await?, set, unset),
+        Change::Patch { set, unset } => checks::patched_env(&current, set, unset),
     };
     validate::env_vars(&next)?;
-    for svc in st.store.env_group_services(&g.id).await? {
+    let linked = st.store.env_group_services(&g.id).await?;
+    for svc in &linked {
         let env_change = EnvChange { group: Some((g.id.as_str(), next.as_slice())), ..Default::default() };
-        checks::check_service_env(&st.store, &svc, env_change).await?;
+        checks::check_service_env(&st.store, svc, env_change).await?;
     }
+    if ops::same_env(&current, &next) {
+        // Nothing to write, nothing to restart.
+        tracing::info!(group = %g.name, "env group vars unchanged");
+        return Ok(Json(env_group_view(&st.store, g).await?));
+    }
+    let before = ops::EnvSnapshot::capture_services(&st.store, &linked).await?;
     match &change {
         Change::Replace(vars) => st.store.replace_env(&g.id, vars).await?,
         Change::Patch { set, unset } => st.store.patch_env(&g.id, set, unset).await?,
@@ -115,7 +126,8 @@ async fn change_env(st: AppState, id: String, restart: bool, change: Change) -> 
     st.store.touch_env_group(&g.id).await?;
     tracing::info!(group = %g.name, vars = next.len(), "changed env group vars");
     if restart {
-        ops::restart_group_services(&st.store, st.engine.as_ref(), &g.id).await?;
+        // Services that override every changed variable keep their environment.
+        ops::restart_group_services(&st.store, st.engine.as_ref(), &g.id, &before).await?;
     }
     let g = st.store.require_env_group(&g.id).await?;
     Ok(Json(env_group_view(&st.store, g).await?))

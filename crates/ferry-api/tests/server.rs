@@ -100,3 +100,40 @@ async fn real_socket_roundtrip() {
     let path = d["source"]["path"].as_str().unwrap();
     assert_eq!(std::fs::metadata(path).unwrap().len(), data.len() as u64);
 }
+
+/// Read from `s` until `needle` shows up in the accumulated (raw) response.
+async fn read_until(s: &mut TcpStream, buf: &mut Vec<u8>, needle: &str) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !String::from_utf8_lossy(buf).contains(needle) {
+        let mut chunk = [0u8; 4096];
+        let n = tokio::time::timeout_at(deadline, s.read(&mut chunk))
+            .await
+            .unwrap_or_else(|_| panic!("no {needle:?} within 5s: {}", String::from_utf8_lossy(buf)))
+            .unwrap();
+        assert!(n > 0, "connection closed before {needle:?}: {}", String::from_utf8_lossy(buf));
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
+#[tokio::test]
+async fn change_feed_streams_over_a_real_socket_and_ends_on_shutdown() {
+    let app = TestApp::new().await;
+    let addr = serve(&app).await;
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    let head =
+        format!("GET /api/v1/events?access_token={TOKEN} HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n");
+    s.write_all(head.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    read_until(&mut s, &mut buf, "event: ready\ndata: {}\n\n").await;
+    let head = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 200"), "{head}");
+    assert!(head.contains("content-type: text/event-stream"), "{head}");
+
+    let v = app.create_service(json!({"name": "web"})).await;
+    let id = v["id"].as_str().unwrap();
+    read_until(&mut s, &mut buf, &format!(r#""kind":"service","id":"{id}""#)).await;
+
+    // shutdown ends the response (the chunked body terminates)
+    app.shutdown.cancel();
+    read_until(&mut s, &mut buf, "\r\n0\r\n\r\n").await;
+}

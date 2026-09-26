@@ -118,7 +118,9 @@ async fn create_service(st: AppState, req: CreateService) -> ApiResult<(StatusCo
     checks::effective_env_size(&svc.name, &layers)?;
 
     {
-        // Host uniqueness is check-then-write across services.
+        // Name (shared with datastores) and host uniqueness are
+        // check-then-write across tables / services.
+        let _names = locks::names().await;
         let _domains = locks::domains().await;
         let existing = st.store.list_services().await?;
         checks::check_default_host_free(&st.config, &existing, &svc.name)?;
@@ -328,9 +330,21 @@ async fn update_service(st: AppState, id: String, req: UpdateService) -> ApiResu
     }
     if suspend == Some(false) {
         st.engine.resume(&service_id).await.map_err(failed(format!("resuming '{name}'"), applied))?;
+        applied = true;
     }
     if domains_changed {
         ops::refresh_routes_logged(st.engine.as_ref(), &row).await;
+    }
+    if ops::cron_command_changed(&current, &row) {
+        // Cron runs use the command of the live deploy's snapshot: without a
+        // restart the new command would never run.
+        let fresh = st.store.require_service(&service_id).await?;
+        if fresh.suspended && fresh.live_deploy_id.is_some() {
+            tracing::info!(service = %name, "cron command changed while suspended: restart after resuming to apply it");
+        }
+        ops::restart_if_deployed(&st.store, st.engine.as_ref(), &fresh, DeployTrigger::Restart)
+            .await
+            .map_err(failed(format!("restarting '{name}' to apply the new command"), applied))?;
     }
     let svc = st.store.require_service(&service_id).await?;
     Ok(Json(service_view(&st.store, &st.config, svc).await?))

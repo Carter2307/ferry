@@ -9,11 +9,14 @@
 //! shutting down with builds in flight) kills their group, groups still
 //! running when the process calls `exit` (which skips destructors, e.g. a
 //! forced shutdown) are killed by an `atexit` hook, and on Linux the direct
-//! child also gets `SIGKILL` if the server dies abruptly (`kill -9`).
+//! child also gets `SIGKILL` if the server dies abruptly (`kill -9`). Within
+//! [`record_children_in`], running children are also recorded on disk so
+//! that the next server can reap what a `kill -9` left ([`crate::orphans`]).
 
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
+use std::path::PathBuf;
 use std::process::{ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -126,6 +129,30 @@ mod live_groups {
     }
 }
 
+tokio::task_local! {
+    /// Where the running build records its children (see [`record_children_in`]).
+    static CHILD_RECORDS: PathBuf;
+}
+
+/// Run `fut`, recording every child it spawns in `dir` (created on demand)
+/// for as long as the child runs, so a server killed with SIGKILL leaves a
+/// trace of them for [`crate::orphans::reap`].
+pub(crate) async fn record_children_in<F: Future>(dir: PathBuf, fut: F) -> F::Output {
+    CHILD_RECORDS.scope(dir, fut).await
+}
+
+fn record_child(pid: Option<u32>, program: &std::ffi::OsStr) -> Option<PathBuf> {
+    let pid = pid?;
+    let dir = CHILD_RECORDS.try_with(Clone::clone).ok()?;
+    match crate::orphans::write_record(&dir, pid, program) {
+        Ok(path) => Some(path),
+        Err(e) => {
+            tracing::debug!(pid, dir = %dir.display(), "cannot record a build child: {e}");
+            None
+        }
+    }
+}
+
 /// Cap on captured stdout/stderr of [`run_capture`] (git output is small).
 const CAPTURE_LIMIT: u64 = 8 * 1024 * 1024;
 
@@ -140,7 +167,8 @@ fn spawn(cmd: &mut Command) -> Result<(Child, GroupGuard), RunError> {
     supervise(cmd);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = cmd.spawn().map_err(RunError::Spawn)?;
-    let guard = GroupGuard::new(child.id());
+    let record = record_child(child.id(), cmd.as_std().get_program());
+    let guard = GroupGuard::new(child.id(), record);
     Ok((child, guard))
 }
 
@@ -370,19 +398,21 @@ fn signal_group(_pid: Option<u32>, _sig: Signal) {
 }
 
 /// Kills the child's whole process group if the owning future is dropped
-/// before the child was reaped (e.g. the build task was aborted).
+/// before the child was reaped (e.g. the build task was aborted), and
+/// removes the child's record (see [`record_children_in`]).
 struct GroupGuard {
     pid: Option<u32>,
     armed: bool,
+    record: Option<PathBuf>,
 }
 
 impl GroupGuard {
-    fn new(pid: Option<u32>) -> Self {
+    fn new(pid: Option<u32>, record: Option<PathBuf>) -> Self {
         #[cfg(unix)]
         if let Some(pgid) = pid.and_then(|p| i32::try_from(p).ok()) {
             live_groups::add(pgid);
         }
-        GroupGuard { pid, armed: true }
+        GroupGuard { pid, armed: true, record }
     }
 
     fn pid(&self) -> Option<u32> {
@@ -399,6 +429,9 @@ impl Drop for GroupGuard {
     fn drop(&mut self) {
         if self.armed {
             signal_group(self.pid, Signal::Kill);
+        }
+        if let Some(record) = &self.record {
+            let _ = std::fs::remove_file(record);
         }
         #[cfg(unix)]
         if let Some(pgid) = self.pid.and_then(|p| i32::try_from(p).ok()) {
@@ -731,6 +764,27 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(5), "child {pid} outlived its parent");
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[tokio::test]
+    async fn children_are_recorded_while_they_run() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("children");
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("echo $$; cat '{}'/$$", dir.display())]);
+        let out = record_children_in(dir.clone(), run_capture(cmd, None, None)).await.unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let mut lines = stdout.lines();
+        let pid = lines.next().unwrap();
+        let record = crate::orphans::parse_record(lines.next().unwrap()).unwrap();
+        assert_eq!((record.pid.to_string().as_str(), record.program.as_str()), (pid, "sh"));
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "the record outlived the child");
+
+        // Outside a build nothing is recorded.
+        let mut cmd = Command::new("true");
+        cmd.arg("x");
+        run_capture(cmd, None, None).await.unwrap();
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
     }
 
     #[tokio::test]

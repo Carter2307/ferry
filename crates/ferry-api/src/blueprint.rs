@@ -132,12 +132,21 @@ impl ServiceSpec {
 /// What a reference (`fromDatabase` / `fromService … property`) points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefTarget {
-    /// `fromDatabase`, or `fromService` with `type: redis|keyvalue`.
-    Datastore,
+    /// `fromDatabase`: a Postgres database.
+    Database,
+    /// `fromService` with `type: redis|keyvalue`: a Key Value (Redis) instance.
+    KeyValue,
     /// `fromService` with a service type.
     Service,
     /// `fromService` without a `type`: resolved by name.
     Any,
+}
+
+impl RefTarget {
+    /// A datastore reference (`fromDatabase`, or `fromService` of a key value).
+    pub fn is_datastore(self) -> bool {
+        matches!(self, RefTarget::Database | RefTarget::KeyValue)
+    }
 }
 
 /// One entry of `envVars`.

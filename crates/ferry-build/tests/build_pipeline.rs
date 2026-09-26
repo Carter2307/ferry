@@ -278,7 +278,8 @@ async fn failed_docker_build_reports_concise_reason() {
     req.deploy_id = "dep-py2".into();
     req.source = BuildSource::Git { repo_url: repo.to_string_lossy().into_owned(), branch: "dev".into(), commit: None };
     let err = fake.builder.build(&req, &LogSink::noop(), &CancellationToken::new()).await.unwrap_err();
-    assert!(matches!(&err, Error::Build(m) if m == &format!("branch 'dev' not found in {}", repo.display())), "{err}");
+    let expected = format!("branch 'dev' not found in {} (the default branch is 'main')", repo.display());
+    assert!(matches!(&err, Error::Build(m) if m == &expected), "{err}");
 }
 
 #[tokio::test]
@@ -295,26 +296,40 @@ async fn cancel_kills_docker_and_cleans_up() {
     );
     let (logs, mut rx) = LogSink::channel();
     let cancel = CancellationToken::new();
+    let records_dir = fake.root.join("data/builds/dep-slow1/children");
     let watcher = {
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            // Cancel once the fake docker is running.
+            // Cancel once the fake docker is running, after looking at the
+            // records of the running children (for `reap_orphans`).
+            let mut records = Vec::new();
             while let Some(l) = rx.recv().await {
                 if l.line == "started" {
+                    for e in fs::read_dir(&records_dir).unwrap() {
+                        records.push(fs::read_to_string(e.unwrap().path()).unwrap());
+                    }
                     cancel.cancel();
                     break;
                 }
             }
-            rx
+            (rx, records)
         })
     };
     let started = Instant::now();
     let res = tokio::time::timeout(Duration::from_secs(30), fake.builder.build(&req, &logs, &cancel)).await.unwrap();
     assert!(matches!(res, Err(Error::Canceled)), "{res:?}");
     assert!(started.elapsed() < Duration::from_secs(15), "cancel took {:?}", started.elapsed());
-    let mut rx = watcher.await.unwrap();
+    let (mut rx, records) = watcher.await.unwrap();
     assert!(drain(&mut rx).iter().any(|l| l == "==> Build canceled"));
     assert!(fake.builds_dir_is_empty());
+    // The running docker CLI was recorded, outside the build context.
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(records[0].trim_end().ends_with(" fake-docker"), "{records:?}");
+    let context = fake.read("context");
+    assert!(context.lines().any(|l| l == "index.html"), "{context}");
+    assert!(!context.lines().any(|l| l == "children" || l == "src"), "{context}");
+    // Nothing is left to reap after a canceled build.
+    assert_eq!(fake.builder.reap_orphans(), 0);
 }
 
 #[tokio::test]
@@ -347,4 +362,39 @@ async fn archive_path_traversal_is_rejected() {
     assert!(!fake.root.join("data/builds/escaped.txt").exists());
     assert!(fake.builds_dir_is_empty());
     assert!(!Path::new(&fake.out.join("argv")).exists(), "docker must not run");
+}
+
+/// Regression: `--runtime go|rust --build-cmd X` on a Python project built
+/// "successfully" and crashed at start; the runtime check now also runs
+/// with a build command, before docker is ever started.
+#[tokio::test]
+async fn explicit_runtime_is_checked_even_with_a_build_command() {
+    let fake = Fake::new(Mode::Succeed);
+    let src = fake.root.join("py");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("requirements.txt"), "flask\n").unwrap();
+    fs::write(src.join("app.py"), "print('hi')\n").unwrap();
+    let archive = fake.root.join("py.tar.gz");
+    tar_gz(&src, None, &archive);
+    for (runtime, manifest) in [(Runtime::Go, "go.mod"), (Runtime::Rust, "Cargo.toml")] {
+        let mut req = request(
+            "srv-py",
+            &format!("dep-{runtime}"),
+            "py",
+            ServiceType::WebService,
+            BuildSource::Archive { path: archive.clone() },
+            "ferrytest/py:dep-x",
+        );
+        req.runtime = runtime;
+        req.build_command = Some("make".into());
+        req.start_command = Some("./app".into());
+        let err = fake.builder.build(&req, &LogSink::noop(), &CancellationToken::new()).await.unwrap_err();
+        let expected = format!(
+            "runtime '{runtime}' was selected but the root directory has no {manifest} \
+             (it looks like a Python project: set the runtime to 'python' or 'auto')"
+        );
+        assert!(matches!(&err, Error::Build(m) if m == &expected), "{err}");
+    }
+    assert!(fake.read("argv").is_empty(), "docker must not run");
+    assert!(fake.builds_dir_is_empty());
 }

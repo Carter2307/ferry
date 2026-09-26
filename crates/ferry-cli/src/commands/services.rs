@@ -295,7 +295,7 @@ pub async fn show(ctx: &Ctx, name: &str) -> Result<()> {
     if let Some(live) = &s.live_deploy_id {
         pairs.push(("Live deploy", Cell::new(live.as_str())));
     }
-    pairs.push(("Deploy hook", Cell::new(format!("{}{}", ctx.client.server(), v.deploy_hook_path))));
+    pairs.push(("Deploy hook", Cell::new(deploy_hook_url(ctx, v))));
     pairs.push(("Created", Cell::new(fmt_time(s.created_at))));
     pairs.push(("Updated", Cell::new(fmt_time(s.updated_at))));
     outln!("{}", output::render_kv(&pairs, output::stdout_color()).trim_end())?;
@@ -310,8 +310,9 @@ fn fmt_time(t: DateTime<Utc>) -> String {
     )
 }
 
-/// Settings that only take effect with the next deploy (except the start
-/// command of a cron job, which is read at each run).
+/// Settings that only take effect with the next deploy. The start command
+/// of a cron job is the exception: when it changes, the server restarts the
+/// live cron job, so the new command applies from its next run.
 fn needs_redeploy(a: &UpdateArgs, service_type: ServiceType) -> bool {
     let s = &a.settings;
     a.repo.is_some()
@@ -333,7 +334,7 @@ fn update_hints(a: &UpdateArgs, svc: &Service) -> Vec<String> {
     let mut hints = Vec::new();
     if svc.service_type == ServiceType::CronJob && a.settings.start_cmd.is_some() {
         hints.push(format!(
-            "The new command is used from the next run (scheduled, or now with: ferry run {})",
+            "The new start command applies from the next run (scheduled, or now with: ferry run {})",
             svc.name
         ));
     }
@@ -511,6 +512,44 @@ fn try_open_browser(url: &str) {
         c
     };
     let _ = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+}
+
+// Deploy hook --------------------------------------------------------------
+
+/// The deploy hook URL: the server URL plus the hook path (which carries the
+/// secret key). The hook is served by the API, like `/api/v1`.
+pub(super) fn deploy_hook_url(ctx: &Ctx, v: &ServiceView) -> String {
+    format!("{}{}", ctx.client.server(), v.deploy_hook_path)
+}
+
+pub async fn deploy_hook_show(ctx: &Ctx, name: &str) -> Result<()> {
+    let resp = ctx.client.get::<ServiceView>(&["services", name], &[]).await?;
+    let url = deploy_hook_url(ctx, &resp.data);
+    if ctx.json {
+        return print_json(&serde_json::json!({ "service": resp.data.service.name, "url": url }));
+    }
+    outln!("{url}")?;
+    Ok(())
+}
+
+/// `ferry deploy-hook rotate NAME`: a new secret key; the old URL stops working.
+pub async fn deploy_hook_rotate(ctx: &Ctx, name: &str, yes: bool) -> Result<()> {
+    // Resolve an id to the service's real name for the prompt and messages.
+    let service = ctx.client.get::<ServiceView>(&["services", name], &[]).await?.data.service;
+    confirm(&format!("rotate the deploy hook of '{}' (its current URL stops working)", service.name), yes).await?;
+    let resp = match ctx.client.post_empty::<ServiceView>(&["services", &service.id, "deploy-hook", "rotate"]).await {
+        Ok(r) => r,
+        Err(e) if crate::client::is_missing_route(&e) => {
+            return Err(e.context("this Ferry server can't rotate deploy hooks: upgrade ferryd"));
+        }
+        Err(e) => return Err(e),
+    };
+    if ctx.json {
+        return print_json(&resp.raw);
+    }
+    errln!("Rotated the deploy hook of '{}': the old URL no longer works. New URL:", resp.data.service.name);
+    outln!("{}", deploy_hook_url(ctx, &resp.data))?;
+    Ok(())
 }
 
 // Domains ------------------------------------------------------------------

@@ -68,7 +68,10 @@ pub(crate) fn generate(runtime: Runtime, dir: &Path, opts: &DockerfileOptions) -
 }
 
 /// A runtime chosen explicitly must match the source: fail with a clear
-/// message instead of deep inside `npm` / `bundle` / `go build`.
+/// message instead of deep inside `npm` / `bundle` / `go build`, or with a
+/// build that "succeeds" and an app that cannot start. A build command does
+/// not lift the check (the generated images still expect the runtime's
+/// project layout); it only lets Go build loose `.go` files without go.mod.
 fn check_sources(runtime: Runtime, dir: &Path, opts: &DockerfileOptions) -> Result<()> {
     let has = |f: &str| dir.join(f).is_file();
     let custom_build = nonempty(&opts.build_command).is_some();
@@ -80,8 +83,8 @@ fn check_sources(runtime: Runtime, dir: &Path, opts: &DockerfileOptions) -> Resu
         {
             Some("requirements.txt, pyproject.toml, Pipfile or .py file")
         }
-        Runtime::Go if !custom_build && !has("go.mod") => Some("go.mod"),
-        Runtime::Rust if !custom_build && !has("Cargo.toml") => Some("Cargo.toml"),
+        Runtime::Go if !(has("go.mod") || (custom_build && has_extension(dir, "go"))) => Some("go.mod"),
+        Runtime::Rust if !has("Cargo.toml") => Some("Cargo.toml"),
         Runtime::Ruby if !has("Gemfile") => Some("Gemfile"),
         _ => None,
     };
@@ -1081,20 +1084,37 @@ fn nginx_config_lines() -> Vec<&'static str> {
     ]
 }
 
-/// Normalized, shell/Dockerfile-safe publish directory (`None` = context root).
-fn publish_dir(opts: &DockerfileOptions) -> Result<Option<String>> {
-    let Some(raw) = nonempty(&opts.publish_dir) else { return Ok(None) };
+/// What a static site serves, from its publish directory setting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Publish {
+    /// Not set: a build output (dist, build, out, ...) when there is one,
+    /// else the root directory.
+    Auto,
+    /// Explicitly the root directory (`.`): served as-is, even when build
+    /// output directories exist.
+    Root,
+    /// This directory (normalized, shell/Dockerfile-safe).
+    Dir(String),
+}
+
+fn publish_dir(opts: &DockerfileOptions) -> Result<Publish> {
+    let Some(raw) = nonempty(&opts.publish_dir) else { return Ok(Publish::Auto) };
     let rel = crate::fsutil::normalize_relative("publish directory", raw).map_err(Error::invalid)?;
     let s = rel.to_string_lossy().replace('\\', "/");
     if s.is_empty() {
-        return Ok(None);
+        return Ok(Publish::Root);
     }
     if !s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '@' | '+')) {
         return Err(Error::invalid(format!(
             "publish directory '{raw}' contains unsupported characters (use letters, digits, '.', '_', '-', '/')"
         )));
     }
-    Ok(Some(s))
+    Ok(Publish::Dir(s))
+}
+
+/// Ferry's own build files and the git metadata are never served.
+fn strip_ferry_files(dir: &str) -> String {
+    format!("rm -rf {dir}/Dockerfile.ferry* {dir}/.git")
 }
 
 fn nginx_stage(df: &mut Df) {
@@ -1211,11 +1231,17 @@ fn static_site(dir: &Path, runtime: Runtime, opts: &DockerfileOptions) -> Result
             static_build_stage(&mut df, dir, kind, plan, &build);
             // The output directory only exists after the build: pick it then.
             let select = match &publish {
-                Some(p) => format!(
+                Publish::Dir(p) => format!(
                     "mkdir -p /ferry-publish && if [ -d \"{p}\" ]; then cp -a \"{p}/.\" /ferry-publish/; \
                      else echo \"error: publish directory '{p}' not found after the build\" >&2; exit 1; fi"
                 ),
-                None => {
+                // An explicit `.` wins over any build output directory.
+                Publish::Root => format!(
+                    "mkdir -p /ferry-publish && echo \"Publishing the root directory\" && cp -a ./. /ferry-publish/ \
+                     && {}",
+                    strip_ferry_files("/ferry-publish")
+                ),
+                Publish::Auto => {
                     let list = PUBLISH_CANDIDATES.join(" ");
                     format!(
                         "mkdir -p /ferry-publish && for d in {list}; do if [ -d \"$d\" ]; then \
@@ -1231,25 +1257,27 @@ fn static_site(dir: &Path, runtime: Runtime, opts: &DockerfileOptions) -> Result
         }
         None => {
             nginx_stage(&mut df);
-            // No build step: an explicit publish dir, else the context root when
-            // it holds index.html, else a committed dist/build/out/public.
-            let publish = publish.or_else(|| {
-                if dir.join("index.html").is_file() {
-                    return None;
-                }
-                PUBLISH_CANDIDATES.iter().find(|c| dir.join(c).join("index.html").is_file()).map(|c| c.to_string())
-            });
+            // No build step: an explicit publish dir (`.` included), else the
+            // context root when it holds index.html, else a committed
+            // dist/build/out/public.
+            let publish = match publish {
+                Publish::Auto if dir.join("index.html").is_file() => Publish::Root,
+                Publish::Auto => PUBLISH_CANDIDATES
+                    .iter()
+                    .find(|c| dir.join(c).join("index.html").is_file())
+                    .map_or(Publish::Root, |c| Publish::Dir(c.to_string())),
+                explicit => explicit,
+            };
             match &publish {
-                Some(p) => {
+                Publish::Dir(p) => {
                     if !dir.join(p).is_dir() {
                         return Err(Error::invalid(format!("publish directory '{p}' does not exist")));
                     }
                     df.line(format!("COPY {p}/ {NGINX_HTML}/"));
                 }
-                None => {
+                Publish::Root | Publish::Auto => {
                     df.line(format!("COPY . {NGINX_HTML}/"));
-                    // Never ship Ferry's own build files or the git metadata.
-                    df.run(&[], &format!("rm -rf {NGINX_HTML}/Dockerfile.ferry* {NGINX_HTML}/.git"));
+                    df.run(&[], &strip_ferry_files(NGINX_HTML));
                 }
             }
         }
@@ -1732,6 +1760,49 @@ mod tests {
     }
 
     #[test]
+    fn explicit_root_publish_dir_is_honored() {
+        let root = || DockerfileOptions { publish_dir: Some(".".into()), ..opts() };
+        // Regression: a vite-like app (build script → dist/, root
+        // index.html) with publish_dir '.' served dist/ anyway.
+        let vite = [
+            ("package.json", r#"{"scripts":{"build":"vite build"}}"#),
+            ("package-lock.json", ""),
+            ("index.html", "<script src=\"/dist/app.js\"></script>"),
+            ("dist/index.html", "built"),
+        ];
+        for publish in [".", "./", " ./ "] {
+            let df = gen_ok(Runtime::Static, &vite, DockerfileOptions { publish_dir: Some(publish.into()), ..opts() });
+            assert!(has_line(&df, "RUN npm run build"), "{df}");
+            let step = instruction(&df, "/ferry-publish &&");
+            assert!(step.contains("cp -a ./. /ferry-publish/"), "{step}");
+            assert!(step.contains("rm -rf /ferry-publish/Dockerfile.ferry* /ferry-publish/.git"), "{step}");
+            assert!(!df.contains("for d in dist"), "{df}");
+            assert!(has_line(&df, "COPY --from=build /ferry-publish/ /usr/share/nginx/html/"), "{df}");
+        }
+        // Without a build step, `.` wins over committed output directories.
+        for files in
+            [&[("public/index.html", ""), ("README.md", "")][..], &[("dist/index.html", ""), ("index.html", "")][..]]
+        {
+            let df = gen_ok(Runtime::Static, files, root());
+            assert!(has_line(&df, "COPY . /usr/share/nginx/html/"), "{df}");
+            assert!(!df.contains("COPY public/") && !df.contains("COPY dist/"), "{df}");
+            assert!(df.contains("rm -rf /usr/share/nginx/html/Dockerfile.ferry* /usr/share/nginx/html/.git"), "{df}");
+        }
+        // Unset still auto-detects (unchanged behavior).
+        let df = gen_ok(Runtime::Static, &[("public/index.html", ""), ("README.md", "")], opts());
+        assert!(has_line(&df, "COPY public/ /usr/share/nginx/html/"), "{df}");
+        let df = gen_ok(Runtime::Static, &vite, opts());
+        assert!(df.contains("for d in dist build out public _site site"), "{df}");
+        // An explicit directory is honored even if another candidate exists.
+        let df = gen_ok(
+            Runtime::Static,
+            &[("public/index.html", ""), ("site/index.html", "")],
+            DockerfileOptions { publish_dir: Some("site".into()), ..opts() },
+        );
+        assert!(has_line(&df, "COPY site/ /usr/share/nginx/html/"), "{df}");
+    }
+
+    #[test]
     fn unsupported_runtimes() {
         let d = tempfile::tempdir().unwrap();
         assert!(generate(Runtime::Docker, d.path(), &opts()).is_err());
@@ -1812,12 +1883,47 @@ mod tests {
         assert_eq!(err, "runtime 'rust' was selected but the root directory has no Cargo.toml");
         let err = gen_with(Runtime::Python, &[("README.md", "")], opts()).unwrap_err().to_string();
         assert!(err.contains("no requirements.txt, pyproject.toml, Pipfile or .py file"), "{err}");
-        // A lone script is a valid Python app; custom Go/Rust builds are trusted.
+        // A lone script is a valid Python app.
         assert!(gen_with(Runtime::Python, &[("main.py", "")], opts()).is_ok());
-        let custom =
-            DockerfileOptions { build_command: Some("make".into()), start_command: Some("x".into()), ..opts() };
-        assert!(gen_with(Runtime::Go, &[("Makefile", "")], custom.clone()).is_ok());
-        assert!(gen_with(Runtime::Rust, &[("Makefile", "")], custom).is_ok());
+    }
+
+    #[test]
+    fn build_command_does_not_skip_the_runtime_check() {
+        // Regression: `--runtime go|rust --build-cmd X` on a Python project
+        // "built" fine, then crashed at start (or failed on target/release).
+        let custom = |b: &str| DockerfileOptions {
+            build_command: Some(b.into()),
+            start_command: Some("./app".into()),
+            ..opts()
+        };
+        let python = [("requirements.txt", "flask\n"), ("app.py", "")];
+        for (runtime, manifest) in [
+            (Runtime::Go, "go.mod"),
+            (Runtime::Rust, "Cargo.toml"),
+            (Runtime::Node, "package.json"),
+            (Runtime::Ruby, "Gemfile"),
+        ] {
+            let err = gen_with(runtime, &python, custom("make")).unwrap_err().to_string();
+            assert_eq!(
+                err,
+                format!(
+                    "runtime '{runtime}' was selected but the root directory has no {manifest} \
+                     (it looks like a Python project: set the runtime to 'python' or 'auto')"
+                )
+            );
+        }
+        let err = gen_with(Runtime::Python, &[("Makefile", "")], custom("make")).unwrap_err().to_string();
+        assert!(err.contains("has no requirements.txt"), "{err}");
+        let err = gen_with(Runtime::Rust, &[("Makefile", "")], custom("make")).unwrap_err().to_string();
+        assert_eq!(err, "runtime 'rust' was selected but the root directory has no Cargo.toml");
+        let err = gen_with(Runtime::Go, &[("Makefile", "")], custom("make")).unwrap_err().to_string();
+        assert_eq!(err, "runtime 'go' was selected but the root directory has no go.mod");
+        // A custom build of loose Go files (no module) is still possible.
+        let df = gen_ok(Runtime::Go, &[("main.go", "package main")], custom("go build -o /out/app main.go"));
+        assert!(df.contains("go build -o /out/app main.go"), "{df}");
+        // Matching projects keep building with their own commands.
+        assert!(gen_with(Runtime::Go, &[("go.mod", "module x\n"), ("Makefile", "")], custom("make")).is_ok());
+        assert!(gen_with(Runtime::Rust, &[("Cargo.toml", "[package]\nname = \"x\"\n")], custom("make")).is_ok());
     }
 
     #[test]

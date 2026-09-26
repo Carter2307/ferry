@@ -494,7 +494,7 @@ fn parse_env_var(v: &Value, ctx: &str, warnings: &mut Vec<String>) -> Result<Env
         let name = r.required_string("name")?;
         let property = r.required_string("property")?;
         r.finish(warnings);
-        EnvVarSpec::Reference { key, target: RefTarget::Datastore, name, property }
+        EnvVarSpec::Reference { key, target: RefTarget::Database, name, property }
     } else if let Some(svc) = from_svc {
         let mut r = Entry::new(svc, &format!("{ctx}: fromService"));
         let name = r.required_string("name")?;
@@ -505,7 +505,7 @@ fn parse_env_var(v: &Value, ctx: &str, warnings: &mut Vec<String>) -> Result<Env
         r.finish(warnings);
         let target = match ty.as_deref().map(|t| t.trim().to_ascii_lowercase()) {
             None => RefTarget::Any,
-            Some(t) if matches!(t.as_str(), "redis" | "keyvalue" | "key_value") => RefTarget::Datastore,
+            Some(t) if matches!(t.as_str(), "redis" | "keyvalue" | "key_value") => RefTarget::KeyValue,
             Some(t) => match ServiceType::from_str(&t) {
                 Ok(_) => RefTarget::Service,
                 Err(_) => return Err(Error::invalid(format!("{rctx}: unknown type '{t}'"))),
@@ -517,7 +517,7 @@ fn parse_env_var(v: &Value, ctx: &str, warnings: &mut Vec<String>) -> Result<Env
             }
             (Some(property), None) => EnvVarSpec::Reference { key, target, name, property: property.trim().into() },
             (None, Some(env_var_key)) => {
-                if target == RefTarget::Datastore {
+                if target.is_datastore() {
                     return Err(Error::invalid(format!("{rctx}: envVarKey is only supported for services")));
                 }
                 EnvVarSpec::CopyFrom { key, service: name, env_var_key: env_var_key.trim().into() }
@@ -854,7 +854,7 @@ services:
         assert!(s.env_vars.contains(&EnvVarSpec::Unsynced { key: "C".into() }));
         assert!(s.env_vars.contains(&EnvVarSpec::Reference {
             key: "E".into(),
-            target: RefTarget::Datastore,
+            target: RefTarget::KeyValue,
             name: "cache".into(),
             property: "connectionString".into()
         }));

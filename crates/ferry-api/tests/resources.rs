@@ -69,6 +69,85 @@ async fn service_env_put_and_patch() {
 }
 
 #[tokio::test]
+async fn env_writes_that_change_nothing_restart_nothing() {
+    let app = TestApp::new().await;
+    app.post("/api/v1/env-groups", json!({"name": "shared", "vars": [{"key": "X", "value": "1"}]})).await;
+    let web = app
+        .create_service(json!({"name": "web", "env": [{"key": "A", "value": "1"}, {"key": "B", "value": "2"}], "env_groups": ["shared"]}))
+        .await;
+    let api = app.create_service(json!({"name": "api", "env_groups": ["shared"]})).await;
+    let (web_id, api_id) = (web["id"].as_str().unwrap().to_string(), api["id"].as_str().unwrap().to_string());
+    app.make_live("web", Some(80)).await;
+    app.make_live("api", Some(80)).await;
+    app.engine.clear();
+
+    // identical values (in another order), unsets of missing keys
+    let same = json!({"vars": [{"key": "B", "value": "2"}, {"key": "A", "value": "1"}]});
+    assert_eq!(app.put("/api/v1/services/web/env?restart=true", same).await.status, StatusCode::OK);
+    let r = app
+        .patch("/api/v1/services/web/env?restart=true", json!({"set": [{"key": "A", "value": "1"}], "unset": ["NOPE"]}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json(), json!([{"key": "A", "value": "1"}, {"key": "B", "value": "2"}]));
+    // an own variable shadowing a group variable with the same value: stored,
+    // but the effective environment is the same
+    let r = app.patch("/api/v1/services/web/env?restart=true", json!({"set": [{"key": "X", "value": "1"}]})).await;
+    assert_eq!(r.json().as_array().unwrap().len(), 3);
+    assert!(app.engine.calls_with("restart").is_empty(), "{:?}", app.engine.calls());
+
+    // env group: identical values → nothing written, nothing restarted
+    let before = app.store.require_env_group("shared").await.unwrap().updated_at;
+    let r = app.put("/api/v1/env-groups/shared/env?restart=true", json!({"vars": [{"key": "X", "value": "1"}]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let r = app.patch("/api/v1/env-groups/shared/env?restart=true", json!({"unset": ["NOPE"]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(app.store.require_env_group("shared").await.unwrap().updated_at, before);
+    assert!(app.engine.calls_with("restart").is_empty(), "{:?}", app.engine.calls());
+
+    // a group change only restarts the services that don't override it
+    let r = app.put("/api/v1/env-groups/shared/env?restart=true", json!({"vars": [{"key": "X", "value": "2"}]})).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {api_id} env_change")]);
+
+    // a real change of the service's own vars restarts it
+    app.engine.clear();
+    app.patch("/api/v1/services/web/env?restart=true", json!({"set": [{"key": "A", "value": "9"}]})).await;
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {web_id} env_change")]);
+
+    // deleting the group (forced, restart=true) only restarts services that lose variables
+    app.engine.clear();
+    let r = app.delete("/api/v1/env-groups/shared?force=true&restart=true").await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {api_id} env_change")]);
+}
+
+#[tokio::test]
+async fn unknown_fields_of_nested_env_vars_are_json_400s() {
+    let app = TestApp::new().await;
+    app.create_service(json!({"name": "web"})).await;
+    app.post("/api/v1/env-groups", json!({"name": "shared"})).await;
+    let extra = json!({"key": "A", "value": "1", "secret": true});
+    let cases = [
+        (Method::PUT, "/api/v1/services/web/env", json!({"vars": [extra.clone()]})),
+        (Method::PATCH, "/api/v1/services/web/env", json!({"set": [extra.clone()]})),
+        (Method::PUT, "/api/v1/env-groups/shared/env", json!({"vars": [extra.clone()]})),
+        (Method::PATCH, "/api/v1/env-groups/shared/env", json!({"set": [extra.clone()]})),
+        (Method::POST, "/api/v1/env-groups", json!({"name": "g2", "vars": [extra.clone()]})),
+        (Method::POST, "/api/v1/services", json!({"name": "svc2", "env": [extra.clone()]})),
+    ];
+    for (method, uri, body) in cases {
+        let r = app.call(method.clone(), uri, Some(body)).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{method} {uri}: {}", r.text());
+        assert_eq!(r.code(), "invalid_request", "{method} {uri}");
+        let msg = r.json()["error"]["message"].as_str().unwrap().to_string();
+        assert!(msg.contains("unknown field") && msg.contains("secret"), "{method} {uri}: {msg}");
+    }
+    assert!(app.store.list_env(&app.store.require_service("web").await.unwrap().id).await.unwrap().is_empty());
+    assert!(app.store.find_env_group("g2").await.unwrap().is_none());
+    assert!(app.store.find_service("svc2").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn env_groups_crud_link_unlink_restart() {
     let app = TestApp::new().await;
     let r = app.post("/api/v1/env-groups", json!({"name": "shared", "vars": [{"key": "X", "value": "1"}]})).await;
@@ -234,6 +313,20 @@ async fn jobs() {
     assert!(r.text().ends_with("event: end\ndata: \n\n"));
     assert!(app.engine.calls().contains(&format!("job_logs {job_id} follow=true")));
     assert_eq!(app.get("/api/v1/jobs/job-nope/logs").await.status, StatusCode::NOT_FOUND);
+
+    // cancel: a pending job → canceled; a finished one → 409
+    let r = app.post(&format!("/api/v1/jobs/{job_id}/cancel"), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["status"], "canceled");
+    assert_eq!(r.json()["id"], job_id);
+    assert!(app.engine.calls().contains(&format!("cancel_job {job_id}")));
+    app.engine.clear();
+    let r = app.call(Method::POST, &format!("/api/v1/jobs/{job_id}/cancel"), None).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    assert_eq!(r.code(), "conflict");
+    assert!(app.engine.calls_with("cancel_job").is_empty());
+    assert_eq!(app.post("/api/v1/jobs/job-nope/cancel", json!({})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get(&format!("/api/v1/jobs/{job_id}/cancel")).await.status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]

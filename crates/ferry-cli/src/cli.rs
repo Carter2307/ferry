@@ -47,6 +47,7 @@ pub enum Command {
     /// Show a service's settings and state
     Show(NameArg),
     /// Change a service's settings
+    #[command(after_help = UPDATE_AFTER_HELP)]
     Update(UpdateArgs),
     /// Delete a service with its containers and deploy history
     #[command(visible_alias = "rm")]
@@ -80,8 +81,8 @@ pub enum Command {
     Domains(DomainsArgs),
     /// Run a one-off job (or trigger a cron job now)
     Run(RunArgs),
-    /// List a service's job runs
-    Jobs(ListArgs),
+    /// List a service's job runs, or cancel one
+    Jobs(JobsArgs),
     /// Manage Postgres and Redis datastores
     #[command(subcommand)]
     Db(DbCommand),
@@ -93,7 +94,15 @@ pub enum Command {
     Blueprint(BlueprintCommand),
     /// Print (and try to open) a service's URL
     Open(NameArg),
+    /// Show or rotate a service's deploy hook (a secret URL that triggers a deploy)
+    #[command(subcommand, name = "deploy-hook")]
+    DeployHook(DeployHookCommand),
 }
+
+const UPDATE_AFTER_HELP: &str = "\
+Clearing settings: pass an empty value to a text setting (--start-cmd \"\", --health \"\", ...) and \
+--port 0 to clear the port setting (Ferry then detects the port again). Build & deploy settings apply \
+to the next deploy; the start command of a cron job applies from its next run.";
 
 const UP_AFTER_HELP: &str = "\
 If the service doesn't exist, it is created with these flags. If it exists, the build & deploy \
@@ -137,7 +146,7 @@ pub struct SettingsArgs {
     /// Directory of built files to serve (static sites)
     #[arg(long = "publish-dir", value_name = "DIR")]
     pub publish_dir: Option<String>,
-    /// Container port the app listens on
+    /// Container port the app listens on (--port 0 clears the port setting: Ferry detects it)
     #[arg(long, value_name = "PORT")]
     pub port: Option<u16>,
     /// Health check path, e.g. /healthz
@@ -296,6 +305,34 @@ pub struct ListArgs {
     /// Maximum number of entries
     #[arg(short = 'n', long, value_name = "N", default_value_t = 20)]
     pub limit: u32,
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+pub struct JobsArgs {
+    #[command(subcommand)]
+    pub command: Option<JobsCommand>,
+    /// Service name or id (lists its job runs)
+    #[arg(required = true)]
+    pub name: Option<String>,
+    /// Maximum number of entries
+    #[arg(short = 'n', long, value_name = "N", default_value_t = 20)]
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum JobsCommand {
+    /// List a service's job runs, newest first
+    #[command(visible_alias = "list")]
+    Ls(ListArgs),
+    /// Stop a pending or running job run
+    Cancel(JobIdArg),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct JobIdArg {
+    /// Job run id (see 'ferry jobs NAME')
+    pub job_id: String,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -599,6 +636,23 @@ pub struct BlueprintApplyArgs {
     /// Show what would change without changing anything
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DeployHookCommand {
+    /// Print the deploy hook URL (POST or GET it to deploy)
+    Show(NameArg),
+    /// Replace the hook's secret key and print the new URL (the old URL stops working)
+    Rotate(RotateHookArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RotateHookArgs {
+    /// Service name or id
+    pub name: String,
+    /// Don't ask for confirmation
+    #[arg(short, long)]
+    pub yes: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -906,7 +960,52 @@ mod tests {
         assert!(a.command.is_empty() && !a.follow);
         fails(&["run", "api", "echo"]);
         let Command::Jobs(a) = parse(&["jobs", "nightly"]).command else { panic!() };
-        assert_eq!(a.name, "nightly");
+        assert_eq!((a.name.as_deref(), a.limit, a.command.is_none()), (Some("nightly"), 20, true));
+        let Command::Jobs(a) = parse(&["jobs", "nightly", "-n", "5"]).command else { panic!() };
+        assert_eq!((a.name.as_deref(), a.limit), (Some("nightly"), 5));
+        let Command::Jobs(a) = parse(&["jobs", "ls", "nightly", "--limit", "3"]).command else { panic!() };
+        let Some(JobsCommand::Ls(l)) = a.command else { panic!() };
+        assert_eq!((l.name.as_str(), l.limit), ("nightly", 3));
+        // A service literally named "cancel" is listed with 'jobs ls cancel'.
+        let Command::Jobs(a) = parse(&["jobs", "list", "cancel"]).command else { panic!() };
+        assert!(matches!(a.command, Some(JobsCommand::Ls(ListArgs { ref name, .. })) if name == "cancel"));
+        let Command::Jobs(a) = parse(&["jobs", "cancel", "job-1"]).command else { panic!() };
+        let Some(JobsCommand::Cancel(c)) = a.command else { panic!() };
+        assert_eq!(c.job_id, "job-1");
+        fails(&["jobs"]);
+        fails(&["jobs", "cancel"]);
+        fails(&["jobs", "cancel", "job-1", "job-2"]);
+    }
+
+    #[test]
+    fn deploy_hook_commands() {
+        let Command::DeployHook(DeployHookCommand::Show(a)) = parse(&["deploy-hook", "show", "web"]).command else {
+            panic!()
+        };
+        assert_eq!(a.name, "web");
+        let Command::DeployHook(DeployHookCommand::Rotate(a)) = parse(&["deploy-hook", "rotate", "web"]).command else {
+            panic!()
+        };
+        assert_eq!((a.name.as_str(), a.yes), ("web", false));
+        let Command::DeployHook(DeployHookCommand::Rotate(a)) =
+            parse(&["deploy-hook", "rotate", "web", "--yes"]).command
+        else {
+            panic!()
+        };
+        assert!(a.yes);
+        fails(&["deploy-hook", "rotate"]);
+        fails(&["deploy-hook"]);
+    }
+
+    #[test]
+    fn update_help_explains_how_to_clear_settings() {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        let help = cmd.find_subcommand_mut("update").expect("update").render_long_help().to_string();
+        assert!(help.contains("--port 0 clears the port setting"), "{help}");
+        assert!(help.contains("--port 0 to clear the port setting"), "{help}");
+        assert!(help.contains("--start-cmd \"\""), "{help}");
+        assert!(help.contains("the start command of a cron job applies from its next run"), "{help}");
     }
 
     #[test]

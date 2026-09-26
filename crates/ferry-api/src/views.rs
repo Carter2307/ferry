@@ -13,19 +13,21 @@ pub fn deploy_hook_path(service: &Service) -> String {
 }
 
 /// Build the [`ServiceView`] of a service. Its state uses the running
-/// instances observed recently ([`runtime`]), if any.
+/// instances observed recently ([`runtime`]), if any; its `internal_port` is
+/// the live deploy's port, else the configured one.
 pub async fn service_view(store: &Store, config: &Config, service: Service) -> Result<ServiceView> {
     let latest = store.latest_deploy(&service.id).await?;
     let state = compute_service_state(&service, latest.as_ref(), runtime::running(&service));
-    let mut internal_port = service.port;
-    if internal_port.is_none()
-        && let Some(live_id) = &service.live_deploy_id
-    {
-        internal_port = match &latest {
+    // The port the live instances actually listen on wins over the setting:
+    // a changed `port` only applies from the next deploy.
+    let live_port = match &service.live_deploy_id {
+        Some(live_id) => match &latest {
             Some(d) if &d.id == live_id => d.port,
             _ => store.get_deploy(live_id).await?.and_then(|d| d.port),
-        };
-    }
+        },
+        None => None,
+    };
+    let internal_port = live_port.or(service.port);
     let env_groups = store.service_env_groups(&service.id).await?.into_iter().map(|g| g.name).collect();
     Ok(ServiceView {
         state,

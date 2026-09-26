@@ -1,4 +1,5 @@
-//! Server-Sent Events framing for log streams (DESIGN.md §9).
+//! Server-Sent Events framing for log streams (DESIGN.md §9); the change
+//! feed (`crate::events`) uses the same response headers and keep-alives.
 //!
 //! Every line is `event: log` + `data: <LogLine JSON>`. Finite streams (deploy
 //! and job logs, runtime logs without `follow`) end with `event: end` and an
@@ -82,6 +83,14 @@ pub fn log_response(stream: LogStream, finite: bool, shutdown: &CancellationToke
             }
         }
     });
+    stream_response(frames)
+}
+
+/// An SSE response streaming already framed events.
+pub fn stream_response<S>(frames: S) -> Response
+where
+    S: futures::Stream<Item = Result<Bytes, Infallible>> + Send + 'static,
+{
     let mut resp = Body::from_stream(frames).into_response();
     let headers = resp.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));

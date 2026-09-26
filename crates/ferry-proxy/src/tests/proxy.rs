@@ -71,7 +71,13 @@ async fn error_pages() {
     let cases = [
         ("unknown.test", 404, "not_found", "No service is configured for unknown.test"),
         ("sus.test", 503, "suspended", "This service is suspended"),
-        ("empty.test", 503, "no_upstreams", "No healthy instances yet — a deploy may be in progress"),
+        (
+            "empty.test",
+            503,
+            "no_upstreams",
+            "This service has no running instances right now — it may not be deployed yet, its last deploy may \
+             have failed, or a deploy is in progress.",
+        ),
         ("dead.test", 502, "bad_gateway", "Bad gateway: the service is not responding"),
     ];
     for (host, status, kind, message) in cases {
@@ -97,6 +103,25 @@ async fn error_pages() {
     // A POST with a body to a dead upstream is not retried either.
     let r = c.post(proxy.url("dead.test", "/")).body("payload").send().await.unwrap();
     assert_eq!(r.status(), 502);
+}
+
+/// A service without instances may never have been deployed, or its last
+/// deploy may have failed: the 503 page must not claim a deploy is running.
+#[tokio::test]
+async fn no_upstreams_page_does_not_assume_a_deploy_in_progress() {
+    let proxy = TestProxy::start().await;
+    // What the engine sets for a service that was never deployed (or whose
+    // deploy failed): its hosts, no upstreams.
+    proxy.route("never-deployed", &["new.test"], &[]);
+    let resp = h1_send(proxy.http, get("/", "new.test")).await;
+    assert_eq!(resp.status, 503);
+    assert_eq!(resp.headers["x-ferry-error"], "no_upstreams");
+    assert!(resp.body.contains("no running instances right now"), "{}", resp.body);
+    for reason in ["may not be deployed yet", "last deploy may have failed", "or a deploy is in progress"] {
+        assert!(resp.body.contains(reason), "missing {reason:?}: {}", resp.body);
+    }
+    assert!(!resp.body.contains("No healthy instances yet"), "{}", resp.body);
+    assert!(!resp.body.contains("a deploy may be in progress"), "{}", resp.body);
 }
 
 #[tokio::test]

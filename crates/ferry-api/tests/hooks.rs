@@ -275,7 +275,7 @@ async fn hook_responses_never_echo_repository_credentials() {
 }
 
 #[tokio::test]
-async fn github_form_deliveries_replays_and_late_pushes() {
+async fn github_form_deliveries_replays_and_re_pushes() {
     let app = app_with_secret().await;
     app.create_service(json!({"name": "echo", "repo_url": "https://github.com/acme/app", "deploy": false})).await;
 
@@ -294,19 +294,26 @@ async fn github_form_deliveries_replays_and_late_pushes() {
         assert_eq!(r.json()["deploys"], json!([]));
     }
 
-    // a newer push, then an older one delivered late (or replayed with a new
-    // body): the old commit must not roll the service back
-    let r = app.send(github_req("push", &push_of(SHA_2, SHA_3), None)).await;
-    assert_eq!(r.json()["deploys"].as_array().unwrap().len(), 1, "{}", r.text());
-    let mut late = push_of(SHA_1, SHA_2);
-    late["head_commit"] = json!({"id": SHA_2});
-    let r = app.send(github_req("push", &late, None)).await;
+    // a redelivery keeps its delivery id: ignored even if the body differs
+    let other_body = serde_json::to_vec(&push_of(SHA_2, SHA_3)).unwrap();
+    let r = app.send(signed(other_body, "application/json", "d-1")).await;
     assert_eq!(r.json()["ignored"], true, "{}", r.text());
-    // ...unless it's a force push, which may legitimately move back
-    late["forced"] = json!(true);
-    let r = app.send(github_req("push", &late, None)).await;
+
+    // Pushing a commit the branch was at before is legitimate: e.g. a force
+    // push rolls main back from 2 to 1, then 2 is pushed again (fast-forward).
+    let r = app.send(signed(serde_json::to_vec(&push_of(SHA_1, SHA_2)).unwrap(), "application/json", "d-2")).await;
     assert_eq!(r.json()["deploys"].as_array().unwrap().len(), 1, "{}", r.text());
-    assert_eq!(app.engine.calls_with("deploy ").len(), 3);
+    let mut rollback = push_of(SHA_2, SHA_1);
+    rollback["forced"] = json!(true);
+    let r = app.send(signed(serde_json::to_vec(&rollback).unwrap(), "application/json", "d-3")).await;
+    assert_eq!(r.json()["deploys"].as_array().unwrap().len(), 1, "{}", r.text());
+    let mut again = push_of(SHA_1, SHA_2);
+    again["head_commit"] = json!({"id": SHA_2, "timestamp": "2026-09-26T10:00:00Z"});
+    let r = app.send(signed(serde_json::to_vec(&again).unwrap(), "application/json", "d-4")).await;
+    assert_eq!(r.json()["deploys"].as_array().unwrap().len(), 1, "{}", r.text());
+    let deploys = app.engine.calls_with("deploy ");
+    assert_eq!(deploys.len(), 4, "{deploys:?}");
+    assert!(deploys[3].contains(&format!("commit={SHA_2}")), "{deploys:?}");
 
     // option-like / non-hex commits are refused before anything is queued
     app.engine.clear();

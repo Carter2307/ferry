@@ -59,7 +59,9 @@ pub async fn run(cli: Cli, settings: Settings) -> Result<()> {
 }
 
 async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
-    use crate::cli::{BlueprintCommand, DbCommand, DomainsCommand, EnvCommand, EnvGroupCommand};
+    use crate::cli::{
+        BlueprintCommand, DbCommand, DeployHookCommand, DomainsCommand, EnvCommand, EnvGroupCommand, JobsCommand,
+    };
     match command {
         Command::Login => bail!("internal error: 'login' needs no API client"),
         Command::Info => auth::info(ctx).await,
@@ -92,7 +94,11 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
             None => services::domains_list(ctx, a.name.as_deref().unwrap_or_default()).await,
         },
         Command::Run(a) => jobs::run(ctx, &a.name, &a.command, a.follow).await,
-        Command::Jobs(a) => jobs::list(ctx, &a.name, a.limit).await,
+        Command::Jobs(a) => match a.command {
+            Some(JobsCommand::Ls(l)) => jobs::list(ctx, &l.name, l.limit).await,
+            Some(JobsCommand::Cancel(c)) => jobs::cancel(ctx, &c.job_id).await,
+            None => jobs::list(ctx, a.name.as_deref().unwrap_or_default(), a.limit).await,
+        },
         Command::Db(c) => match c {
             DbCommand::Create(a) => db::create(ctx, a).await,
             DbCommand::Ls => db::list(ctx).await,
@@ -111,6 +117,10 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         },
         Command::Blueprint(BlueprintCommand::Apply(a)) => blueprint::apply(ctx, a).await,
         Command::Open(a) => services::open(ctx, &a.name).await,
+        Command::DeployHook(c) => match c {
+            DeployHookCommand::Show(a) => services::deploy_hook_show(ctx, &a.name).await,
+            DeployHookCommand::Rotate(a) => services::deploy_hook_rotate(ctx, &a.name, a.yes).await,
+        },
     }
 }
 

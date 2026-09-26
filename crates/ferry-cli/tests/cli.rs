@@ -300,20 +300,30 @@ async fn follow_reconnects_without_duplicating_lines() {
 #[tokio::test(flavor = "multi_thread")]
 async fn env_set_and_unset_patch_with_restart_flag() {
     let (fake, url) = Fake::start().await;
+    let web = to_json(&service_view("web", ServiceType::WebService));
+    fake.on("GET", "/api/v1/services/web", Reply::ok(web.clone()));
+    fake.on("GET", "/api/v1/services/srv-web", Reply::ok(web));
+    fake.on("GET", "/api/v1/services/srv-web/env", Reply::ok(json!([{ "key": "OLD", "value": "x" }])));
     let vars = json!([{ "key": "A", "value": "1" }, { "key": "URL", "value": "x=y" }]);
-    fake.on("PATCH", "/api/v1/services/web/env", Reply::ok(vars.clone()));
+    fake.on("PATCH", "/api/v1/services/srv-web/env", Reply::ok(vars.clone()));
     fake.on("GET", "/api/v1/services/web/env", Reply::ok(vars));
     let h = home();
 
     let out = ferry(&url, h.path(), &["env", "set", "web", "A=1", "URL=x=y"]).await;
     assert_eq!(out.code, 0, "{out:?}");
     assert_eq!(out.stdout, "A=1\nURL=x=y\n");
+    assert!(out.stderr.contains("'web' isn't live, so nothing restarts"), "{}", out.stderr);
     let out = ferry(&url, h.path(), &["env", "unset", "web", "OLD", "--no-restart"]).await;
     assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr.contains("Saved without restarting: the next deploy of 'web' uses the new environment."),
+        "{}",
+        out.stderr
+    );
     let out = ferry(&url, h.path(), &["env", "web"]).await;
     assert_eq!(out.stdout, "A=1\nURL=x=y\n");
 
-    let patches = fake.find("PATCH", "/api/v1/services/web/env");
+    let patches = fake.find("PATCH", "/api/v1/services/srv-web/env");
     assert_eq!(patches[0].query, "restart=true");
     assert_eq!(
         patches[0].json(),
@@ -846,12 +856,14 @@ async fn env_set_shows_and_follows_the_restart_deploy() {
     fake.on("GET", "/api/v1/services/web", Reply::ok(to_json(&web)));
     fake.on("GET", "/api/v1/services", Reply::ok(json!([to_json(&web)])));
     fake.on("GET", "/api/v1/datastores", Reply::ok(json!([])));
-    fake.on("PATCH", "/api/v1/services/web/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    fake.on("GET", "/api/v1/services/srv-web/env", Reply::ok(json!([])));
+    fake.on("PATCH", "/api/v1/services/srv-web/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    // After the change, the service's latest deploy is the restart.
     let mut restart = deploy("dep-new", "srv-web", DeployStatus::Queued);
     restart.trigger = DeployTrigger::EnvChange;
-    let older = deploy("dep-older", "srv-web", DeployStatus::Deactivated);
-    let history = json!([to_json(&restart), to_json(&web.latest_deploy), to_json(&older)]);
-    fake.on("GET", "/api/v1/services/srv-web/deploys", Reply::ok(history));
+    let mut after = web.clone();
+    after.latest_deploy = Some(restart.clone());
+    fake.on("GET", "/api/v1/services/srv-web", Reply::ok(to_json(&after)));
     let h = home();
 
     // The queued restart is shown like `ferry restart` shows it.
@@ -859,7 +871,7 @@ async fn env_set_shows_and_follows_the_restart_deploy() {
     assert_eq!(out.code, 0, "{out:?}");
     assert_eq!(out.stdout, "A=1\nDeploy dep-new queued (env_change)\nFollow it with: ferry logs --deploy dep-new -f\n");
     assert!(out.stderr.contains("Saved. Restarting 'web' with the new environment."), "{}", out.stderr);
-    assert_eq!(fake.find("PATCH", "/api/v1/services/web/env")[0].query, "restart=true");
+    assert_eq!(fake.find("PATCH", "/api/v1/services/srv-web/env")[0].query, "restart=true");
 
     // --follow streams it and fails like the deploy does.
     fake.on(
@@ -893,15 +905,118 @@ async fn env_set_shows_and_follows_the_restart_deploy() {
     assert!(out.stderr.contains("TPL: invalid reference"), "{}", out.stderr);
     assert_eq!(fake.requests().len(), before);
 
-    // Not live: nothing restarts, and it says so.
-    let idle = service_view("idle", ServiceType::WebService);
-    fake.on("GET", "/api/v1/services/idle", Reply::ok(to_json(&idle)));
-    fake.on("PATCH", "/api/v1/services/idle/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    // Never deployed: nothing restarts, and it says so.
+    let idle = to_json(&service_view("idle", ServiceType::WebService));
+    fake.on("GET", "/api/v1/services/idle", Reply::ok(idle.clone()));
+    fake.on("GET", "/api/v1/services/srv-idle", Reply::ok(idle));
+    fake.on(
+        "GET",
+        "/api/v1/services/srv-idle/env",
+        Reply::ok(json!([{ "key": "A", "value": "1" }, { "key": "B", "value": "2" }])),
+    );
+    fake.on("PATCH", "/api/v1/services/srv-idle/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
     let out = ferry(&url, h.path(), &["env", "unset", "idle", "B"]).await;
     assert_eq!(out.code, 0, "{out:?}");
     assert_eq!(out.stdout, "A=1\n");
     assert!(out.stderr.contains("'idle' isn't live, so nothing restarts"), "{}", out.stderr);
-    assert!(fake.find("GET", "/api/v1/services/srv-idle/deploys").is_empty());
+    assert!(!out.stderr.contains("warning"), "{}", out.stderr);
+}
+
+/// `ferry env set` while the first deploy is still running: the server
+/// queues a restart behind it, and the CLI says so (it used to claim that
+/// nothing restarts because the service wasn't live yet).
+#[tokio::test(flavor = "multi_thread")]
+async fn env_set_during_the_first_deploy_reports_the_queued_restart() {
+    let (fake, url) = Fake::start().await;
+    let mut racey = service_view("racey", ServiceType::WebService);
+    racey.state = ServiceState::Deploying;
+    racey.latest_deploy = Some(deploy("dep-first", "srv-racey", DeployStatus::Building));
+    fake.on("GET", "/api/v1/services/racey", Reply::ok(to_json(&racey)));
+    fake.on("GET", "/api/v1/services/srv-racey/env", Reply::ok(json!([{ "key": "V", "value": "one" }])));
+    fake.on("PATCH", "/api/v1/services/srv-racey/env", Reply::ok(json!([{ "key": "V", "value": "two" }])));
+    let mut restart = deploy("dep-r", "srv-racey", DeployStatus::Queued);
+    restart.trigger = DeployTrigger::EnvChange;
+    let mut after = racey.clone();
+    after.latest_deploy = Some(restart);
+    fake.on("GET", "/api/v1/services/srv-racey", Reply::ok(to_json(&after)));
+    let h = home();
+
+    let out = ferry(&url, h.path(), &["env", "set", "racey", "V=two"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "V=two\nDeploy dep-r queued (env_change)\nFollow it with: ferry logs --deploy dep-r -f\n");
+    assert!(
+        out.stderr.contains("Saved. 'racey' restarts with the new environment once its current deploy is live."),
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("nothing restarts"), "{}", out.stderr);
+    assert_eq!(fake.find("PATCH", "/api/v1/services/srv-racey/env")[0].query, "restart=true");
+
+    // A first deploy that is still queued starts with the new environment
+    // itself (the server folds the restart into it).
+    let mut queued = service_view("q", ServiceType::WebService);
+    queued.state = ServiceState::Deploying;
+    queued.latest_deploy = Some(deploy("dep-q", "srv-q", DeployStatus::Queued));
+    fake.on("GET", "/api/v1/services/q", Reply::ok(to_json(&queued)));
+    fake.on("GET", "/api/v1/services/srv-q", Reply::ok(to_json(&queued)));
+    fake.on("GET", "/api/v1/services/srv-q/env", Reply::ok(json!([])));
+    fake.on("PATCH", "/api/v1/services/srv-q/env", Reply::ok(json!([{ "key": "V", "value": "two" }])));
+    let out = ferry(&url, h.path(), &["env", "set", "q", "V=two"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "V=two\nDeploy dep-q queued (manual)\nFollow it with: ferry logs --deploy dep-q -f\n");
+    assert!(
+        out.stderr.contains("Saved. Deploy dep-q of 'q' is queued: it starts with the new environment."),
+        "{}",
+        out.stderr
+    );
+
+    // --json prints the variables; with --follow it streams the restart.
+    let out = ferry(&url, h.path(), &["env", "set", "racey", "V=two", "--json"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap(), json!([{ "key": "V", "value": "two" }]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn env_changes_that_change_nothing_say_so_and_restart_nothing() {
+    let (fake, url) = Fake::start().await;
+    let mut web = service_view("web", ServiceType::WebService);
+    web.service.live_deploy_id = Some("dep-1".into());
+    web.latest_deploy = Some(deploy("dep-1", "srv-web", DeployStatus::Live));
+    web.env_groups = vec!["shared".into()];
+    fake.on("GET", "/api/v1/services/web", Reply::ok(to_json(&web)));
+    fake.on("GET", "/api/v1/services/srv-web", Reply::ok(to_json(&web)));
+    fake.on("GET", "/api/v1/services/srv-web/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    let h = home();
+
+    // Replies of the three PATCHes below, in order.
+    fake.on("PATCH", "/api/v1/services/srv-web/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    fake.on("PATCH", "/api/v1/services/srv-web/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    fake.on("PATCH", "/api/v1/services/srv-web/env", Reply::ok(json!([])));
+
+    // Same value: saved without a restart request.
+    let out = ferry(&url, h.path(), &["env", "set", "web", "A=1"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "A=1\n");
+    assert_eq!(out.stderr, "No changes.\n");
+
+    // Removing a variable that isn't set: a warning, and no restart either.
+    let out = ferry(&url, h.path(), &["env", "unset", "web", "NOPE"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains("warning: not set on 'web', nothing to remove: NOPE"), "{}", out.stderr);
+    assert!(out.stderr.contains("ferry env-group unset"), "linked groups are mentioned: {}", out.stderr);
+    assert!(out.stderr.ends_with("No changes.\n"), "{}", out.stderr);
+    let patches = fake.find("PATCH", "/api/v1/services/srv-web/env");
+    assert_eq!((patches[0].query.as_str(), patches[1].query.as_str()), ("restart=false", "restart=false"));
+    assert_eq!(patches[1].json(), json!({ "set": [], "unset": ["NOPE"] }));
+    assert!(fake.find("GET", "/api/v1/services/srv-web").is_empty(), "no restart to look for");
+
+    // Some keys missing, others removed: warned about, and it restarts.
+    let out = ferry(&url, h.path(), &["env", "unset", "web", "NOPE", "A", "ALSO_NOPE"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains("nothing to remove: NOPE, ALSO_NOPE"), "{}", out.stderr);
+    assert_eq!(fake.find("PATCH", "/api/v1/services/srv-web/env")[2].query, "restart=true");
+    // The server queued nothing (same latest deploy): it says so.
+    assert!(out.stderr.contains("Saved, but no restart was queued"), "{}", out.stderr);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1043,4 +1158,145 @@ async fn runtime_logs_explain_when_nothing_runs() {
         "{}",
         out.stderr
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deploy_hook_is_shown_and_rotated() {
+    let (fake, url) = Fake::start().await;
+    let web = service_view("web", ServiceType::WebService);
+    fake.on("GET", "/api/v1/services/web", Reply::ok(to_json(&web)));
+    fake.on("GET", "/api/v1/services/srv-web", Reply::ok(to_json(&web)));
+    let mut rotated = web.clone();
+    rotated.deploy_hook_path = "/hooks/deploy/srv-web?key=fresh".into();
+    fake.on("POST", "/api/v1/services/srv-web/deploy-hook/rotate", Reply::ok(to_json(&rotated)));
+    let h = home();
+    let old_url = format!("{url}/hooks/deploy/srv-web?key=secret");
+    let new_url = format!("{url}/hooks/deploy/srv-web?key=fresh");
+
+    // `ferry show` lists the hook URL (server URL + the hook path).
+    let out = ferry(&url, h.path(), &["show", "web"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let line = out.stdout.lines().find(|l| l.starts_with("Deploy hook:")).expect("a deploy hook line");
+    assert!(line.ends_with(&format!(" {old_url}")), "{line}");
+    // `deploy-hook show` prints just the URL (for scripts).
+    let out = ferry(&url, h.path(), &["deploy-hook", "show", "web"]).await;
+    assert_eq!((out.code, out.stdout.as_str()), (0, format!("{old_url}\n").as_str()), "{out:?}");
+
+    // Rotating breaks whatever uses the old URL: confirmation required.
+    let out = ferry(&url, h.path(), &["deploy-hook", "rotate", "web"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("refusing to rotate the deploy hook of 'web'"), "{}", out.stderr);
+    assert!(fake.find("POST", "/api/v1/services/srv-web/deploy-hook/rotate").is_empty());
+
+    let out = ferry(&url, h.path(), &["deploy-hook", "rotate", "web", "--yes"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, format!("{new_url}\n"));
+    assert!(out.stderr.contains("Rotated the deploy hook of 'web': the old URL no longer works"), "{}", out.stderr);
+    let post = &fake.find("POST", "/api/v1/services/srv-web/deploy-hook/rotate")[0];
+    assert!(post.body.is_empty());
+
+    let out = ferry(&url, h.path(), &["deploy-hook", "rotate", "srv-web", "-y", "--json"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()["deploy_hook_path"], rotated.deploy_hook_path);
+
+    // An older server without the endpoint.
+    let old = service_view("old", ServiceType::WebService);
+    fake.on("GET", "/api/v1/services/old", Reply::ok(to_json(&old)));
+    fake.on(
+        "POST",
+        "/api/v1/services/srv-old/deploy-hook/rotate",
+        Reply::error(404, "not_found", "no API route for /api/v1/services/srv-old/deploy-hook/rotate"),
+    );
+    let out = ferry(&url, h.path(), &["deploy-hook", "rotate", "old", "--yes"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("this Ferry server can't rotate deploy hooks: upgrade ferryd"), "{}", out.stderr);
+}
+
+fn job(id: &str, status: JobStatus) -> JobRun {
+    let mut j = JobRun::new("srv-nightly", JobTrigger::Schedule, None);
+    j.id = id.to_string();
+    j.status = status;
+    j
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn jobs_cancel_stops_a_run_and_explains_finished_ones() {
+    let (fake, url) = Fake::start().await;
+    fake.on("GET", "/api/v1/jobs/job-1", Reply::ok(to_json(&job("job-1", JobStatus::Running))));
+    fake.on("POST", "/api/v1/jobs/job-1/cancel", Reply::ok(to_json(&job("job-1", JobStatus::Canceled))));
+    let h = home();
+
+    let out = ferry(&url, h.path(), &["jobs", "cancel", "job-1"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "Job job-1 canceled\n");
+    assert!(fake.find("POST", "/api/v1/jobs/job-1/cancel")[0].body.is_empty());
+    let out = ferry(&url, h.path(), &["jobs", "cancel", "job-1", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()["status"], "canceled");
+
+    // Already finished: nothing is sent.
+    fake.on("GET", "/api/v1/jobs/job-2", Reply::ok(to_json(&job("job-2", JobStatus::Succeeded))));
+    let out = ferry(&url, h.path(), &["jobs", "cancel", "job-2"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stderr.trim(), "error: job job-2 already finished (succeeded): nothing to cancel");
+    assert!(fake.find("POST", "/api/v1/jobs/job-2/cancel").is_empty());
+
+    // Finished between the lookup and the cancel: the server answers 409.
+    fake.on("GET", "/api/v1/jobs/job-3", Reply::ok(to_json(&job("job-3", JobStatus::Running))));
+    fake.on("GET", "/api/v1/jobs/job-3", Reply::ok(to_json(&job("job-3", JobStatus::Failed))));
+    fake.on("POST", "/api/v1/jobs/job-3/cancel", Reply::error(409, "conflict", "job job-3 already finished (failed)"));
+    let out = ferry(&url, h.path(), &["jobs", "cancel", "job-3"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stderr.trim(), "error: job job-3 already finished (failed): nothing to cancel");
+
+    // An older server without the endpoint.
+    fake.on("GET", "/api/v1/jobs/job-4", Reply::ok(to_json(&job("job-4", JobStatus::Pending))));
+    fake.on(
+        "POST",
+        "/api/v1/jobs/job-4/cancel",
+        Reply::error(404, "not_found", "no API route for /api/v1/jobs/job-4/cancel"),
+    );
+    let out = ferry(&url, h.path(), &["jobs", "cancel", "job-4"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("this Ferry server can't cancel jobs: upgrade ferryd"), "{}", out.stderr);
+
+    // Unknown job: the lookup fails, nothing is canceled.
+    let out = ferry(&url, h.path(), &["jobs", "cancel", "job-nope"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(fake.find("POST", "/api/v1/jobs/job-nope/cancel").is_empty());
+
+    // Listing still works, with or without `ls`.
+    fake.on("GET", "/api/v1/services/nightly/jobs", Reply::ok(json!([to_json(&job("job-1", JobStatus::Canceled))])));
+    let out = ferry(&url, h.path(), &["jobs", "nightly"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.lines().nth(1).is_some_and(|l| l.starts_with("job-1   canceled   schedule")), "{}", out.stdout);
+    let out = ferry(&url, h.path(), &["jobs", "ls", "nightly", "-n", "5"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let lists = fake.find("GET", "/api/v1/services/nightly/jobs");
+    assert_eq!((lists[0].query.as_str(), lists[1].query.as_str()), ("limit=20", "limit=5"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cron_start_command_applies_from_the_next_run() {
+    let (fake, url) = Fake::start().await;
+    let mut cron = service_view("nightly", ServiceType::CronJob);
+    cron.service.schedule = Some("0 3 * * *".into());
+    cron.service.start_command = Some("echo v2".into());
+    fake.on("PATCH", "/api/v1/services/nightly", Reply::ok(to_json(&cron)));
+    let h = home();
+    let out = ferry(&url, h.path(), &["update", "nightly", "--start-cmd", "echo v2"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(
+        out.stdout,
+        "Updated 'nightly'\nThe new start command applies from the next run (scheduled, or now with: ferry run nightly)\n"
+    );
+    assert_eq!(fake.find("PATCH", "/api/v1/services/nightly")[0].json()["start_command"], "echo v2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn update_help_says_how_to_clear_the_port() {
+    let h = home();
+    let out = ferry_in(None, h.path(), None, None, &["update", "--help"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("--port 0 clears the port setting"), "{}", out.stdout);
+    assert!(out.stdout.contains("--port 0 to clear the port setting"), "{}", out.stdout);
 }

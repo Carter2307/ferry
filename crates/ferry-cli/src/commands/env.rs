@@ -1,11 +1,12 @@
 //! `ferry env …` (service variables) and `ferry env-group …`.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use anyhow::Result;
 use ferry_core::dto::{CreateEnvGroup, DatastoreView, EnvGroupView, LinkEnvGroup, PatchEnv, ServiceView};
-use ferry_core::{Deploy, DeployTrigger, EnvVar, env};
+use ferry_core::{Deploy, DeployStatus, EnvVar, env};
 
 use super::{Ctx, confirm, print_json, queued_deploy};
 use crate::client::Json;
@@ -130,62 +131,146 @@ async fn warn_unresolved(ctx: &Ctx, vars: &[EnvVar]) {
     }
 }
 
-/// The `env_change` deploy the server queued for `before`'s service after an
-/// env change: the newest such deploy that is newer than `before`'s latest.
-async fn env_change_deploy(ctx: &Ctx, before: &ServiceView) -> Option<Json<Deploy>> {
-    let resp =
-        ctx.client.get::<Vec<Deploy>>(&["services", &before.service.id, "deploys"], &[("limit", "10".into())]).await;
-    let resp = resp.ok()?;
-    let previous = before.latest_deploy.as_ref().map(|d| d.id.as_str());
-    let i = resp
-        .data
-        .iter()
-        .take_while(|d| Some(d.id.as_str()) != previous)
-        .position(|d| d.trigger == DeployTrigger::EnvChange)?;
-    Some(Json { data: resp.data[i].clone(), raw: resp.raw.get(i).cloned().unwrap_or_default() })
+/// Keys of `unset` that aren't set in `vars` (removing them does nothing).
+fn missing_keys<'a>(vars: &[EnvVar], unset: &'a [String]) -> Vec<&'a str> {
+    unset.iter().filter(|k| !vars.iter().any(|v| &v.key == *k)).map(String::as_str).collect()
+}
+
+/// Whether applying `patch` to `vars` changes anything.
+fn changes(vars: &[EnvVar], patch: &PatchEnv) -> bool {
+    let current = |key: &str| vars.iter().find(|v| v.key == key).map(|v| v.value.as_str());
+    patch.set.iter().any(|v| current(&v.key) != Some(v.value.as_str()))
+        || patch.unset.iter().any(|k| current(k).is_some())
+}
+
+/// Same variables with the same values (order aside).
+fn same_vars(a: &[EnvVar], b: &[EnvVar]) -> bool {
+    fn map(vars: &[EnvVar]) -> BTreeMap<&str, &str> {
+        vars.iter().map(|v| (v.key.as_str(), v.value.as_str())).collect()
+    }
+    map(a) == map(b)
+}
+
+/// What an env change did to the service's deploys, from its latest deploy
+/// before and after the change.
+#[derive(Debug, Clone, PartialEq)]
+enum Restart {
+    /// A new deploy: the restart the server queued.
+    Queued(Deploy),
+    /// A deploy that was already queued: it starts with the new environment
+    /// (the server folds the restart into it).
+    AlreadyQueued(Deploy),
+    /// Nothing restarts.
+    Nothing,
+}
+
+impl Restart {
+    fn of(before: Option<&Deploy>, after: Option<&Deploy>) -> Self {
+        match after {
+            Some(d) if before.is_none_or(|b| b.id != d.id) => Restart::Queued(d.clone()),
+            Some(d) if d.status == DeployStatus::Queued => Restart::AlreadyQueued(d.clone()),
+            _ => Restart::Nothing,
+        }
+    }
+
+    fn deploy(&self) -> Option<&Deploy> {
+        match self {
+            Restart::Queued(d) | Restart::AlreadyQueued(d) => Some(d),
+            Restart::Nothing => None,
+        }
+    }
+}
+
+/// Why nothing restarted after an env change that asked for a restart.
+fn no_restart_reason(v: &ServiceView) -> String {
+    let n = &v.service.name;
+    if v.service.suspended {
+        format!(
+            "Saved. '{n}' is suspended, so nothing restarts: after resuming it, apply the new environment with: ferry restart {n}"
+        )
+    } else if v.service.live_deploy_id.is_none() {
+        format!("Saved. '{n}' isn't live, so nothing restarts: its next deploy uses the new environment.")
+    } else {
+        format!("Saved, but no restart was queued. Apply the new environment with: ferry restart {n}")
+    }
 }
 
 async fn patch(ctx: &Ctx, name: &str, body: PatchEnv, restart: bool, follow: bool) -> Result<()> {
-    // Remember the latest deploy, to recognize the restart the server queues.
-    let before = if restart { ctx.client.get::<ServiceView>(&["services", name], &[]).await.ok() } else { None };
-    let resp = ctx.client.patch::<_, Vec<EnvVar>>(&["services", name, "env"], &restart_query(restart), &body).await?;
-    let before = before.map(|b| b.data);
-    let shown = before.as_ref().map_or(name, |b| b.service.name.as_str());
-    let restarts = before.as_ref().is_some_and(|b| b.service.live_deploy_id.is_some() && !b.service.suspended);
-    let deploy = match &before {
-        Some(b) if restarts => env_change_deploy(ctx, b).await,
-        _ => None,
-    };
+    // The service and its variables before the change: to warn about keys
+    // that aren't set, to skip a restart that would change nothing, and to
+    // recognize the deploy the server queues for the restart.
+    let before = ctx.client.get::<ServiceView>(&["services", name], &[]).await?.data;
+    let (id, shown) = (before.service.id.as_str(), before.service.name.as_str());
+    let old = ctx.client.get::<Vec<EnvVar>>(&["services", id, "env"], &[]).await?.data;
+    let missing = missing_keys(&old, &body.unset);
+    if !missing.is_empty() {
+        let groups = if before.env_groups.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (variables of the linked env group(s) {} are removed with: ferry env-group unset GROUP KEY)",
+                before.env_groups.join(", ")
+            )
+        };
+        errln!(
+            "{} not set on '{shown}', nothing to remove: {}{groups}",
+            output::err(output::Color::Yellow, "warning:"),
+            missing.join(", ")
+        );
+    }
+    let restart = restart && changes(&old, &body);
+    let resp = ctx.client.patch::<_, Vec<EnvVar>>(&["services", id, "env"], &restart_query(restart), &body).await?;
+    let changed = !same_vars(&old, &resp.data);
+    // After: a latest deploy other than before's is the queued restart.
+    let after =
+        if restart { ctx.client.get::<ServiceView>(&["services", id], &[]).await.ok().map(|r| r.data) } else { None };
+    let outcome = after.as_ref().map(|a| Restart::of(before.latest_deploy.as_ref(), a.latest_deploy.as_ref()));
+    let pending = outcome.as_ref().and_then(Restart::deploy);
 
     if ctx.json {
-        return match &deploy {
-            Some(d) if follow => super::follow_deploy(ctx, &d.data.id).await,
+        return match pending {
+            Some(d) if follow => super::follow_deploy(ctx, &d.id).await,
             _ => print_json(&resp.raw),
         };
     }
     print_vars(&resp.data)?;
-    if !restart {
-        errln!("Saved without restarting. Apply with: ferry restart {shown}");
+    if !changed && pending.is_none() {
+        errln!("No changes.");
         return Ok(());
     }
-    match (&before, deploy) {
-        (_, Some(d)) => {
-            errln!("Saved. Restarting '{shown}' with the new environment.");
-            queued_deploy(ctx, &d, follow).await
+    if !restart {
+        let in_flight = before.latest_deploy.as_ref().is_some_and(|d| d.status.is_active());
+        if before.service.live_deploy_id.is_some() || in_flight {
+            errln!("Saved without restarting. Apply with: ferry restart {shown}");
+        } else {
+            errln!("Saved without restarting: the next deploy of '{shown}' uses the new environment.");
         }
-        (Some(_), None) if !restarts => {
-            errln!("Saved. '{shown}' isn't live, so nothing restarts: its next deploy uses the new environment.");
-            Ok(())
-        }
-        (Some(_), None) => {
-            errln!("Saved. '{shown}' restarts with the new environment (see: ferry deploys {shown}).");
-            Ok(())
-        }
-        (None, None) => {
-            errln!("Saved. '{shown}' restarts with the new environment if it is live.");
-            Ok(())
-        }
+        return Ok(());
     }
+    let (Some(outcome), Some(after)) = (outcome, after) else {
+        errln!("Saved. '{shown}' restarts with the new environment if it is live (see: ferry deploys {shown}).");
+        return Ok(());
+    };
+    let deploy = match outcome {
+        Restart::Queued(d) => {
+            if after.service.live_deploy_id.is_some() {
+                errln!("Saved. Restarting '{shown}' with the new environment.");
+            } else {
+                errln!("Saved. '{shown}' restarts with the new environment once its current deploy is live.");
+            }
+            d
+        }
+        Restart::AlreadyQueued(d) => {
+            errln!("Saved. Deploy {} of '{shown}' is queued: it starts with the new environment.", d.id);
+            d
+        }
+        Restart::Nothing => {
+            errln!("{}", no_restart_reason(&after));
+            return Ok(());
+        }
+    };
+    let raw = serde_json::to_value(&deploy)?;
+    queued_deploy(ctx, &Json { data: deploy, raw }, follow).await
 }
 
 pub async fn set(ctx: &Ctx, name: &str, vars: Vec<EnvVar>, restart: bool, follow: bool) -> Result<()> {
@@ -323,6 +408,81 @@ pub async fn group_unlink(ctx: &Ctx, service: &str, group: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferry_core::{DeploySource, DeployTrigger};
+
+    fn vars(pairs: &[(&str, &str)]) -> Vec<EnvVar> {
+        pairs.iter().map(|(k, v)| EnvVar::new(*k, *v)).collect()
+    }
+
+    fn keys(k: &[&str]) -> Vec<String> {
+        k.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn deploy(id: &str, status: DeployStatus) -> Deploy {
+        let mut d = Deploy::new("srv-web", DeployTrigger::Manual, DeploySource::Image { image: "x".into() });
+        d.id = id.into();
+        d.status = status;
+        d
+    }
+
+    #[test]
+    fn what_a_patch_changes() {
+        let current = vars(&[("A", "1"), ("B", "")]);
+        let set = |p: &[(&str, &str)]| PatchEnv { set: vars(p), unset: Vec::new() };
+        let unset = |k: &[&str]| PatchEnv { set: Vec::new(), unset: keys(k) };
+        assert!(!changes(&current, &set(&[("A", "1")])), "same value");
+        assert!(!changes(&current, &set(&[("B", "")])), "same empty value");
+        assert!(changes(&current, &set(&[("A", "2")])));
+        assert!(changes(&current, &set(&[("C", "")])), "a new variable, even empty");
+        assert!(!changes(&current, &unset(&["NOPE"])));
+        assert!(changes(&current, &unset(&["NOPE", "B"])));
+        assert_eq!(missing_keys(&current, &keys(&["NOPE", "B", "a"])), vec!["NOPE", "a"], "keys are case-sensitive");
+        assert!(missing_keys(&current, &[]).is_empty());
+        assert!(same_vars(&current, &vars(&[("B", ""), ("A", "1")])), "order doesn't matter");
+        assert!(!same_vars(&current, &vars(&[("A", "1")])));
+        assert!(!same_vars(&current, &vars(&[("A", "1"), ("B", "x")])));
+    }
+
+    #[test]
+    fn restart_is_read_from_the_latest_deploy_before_and_after() {
+        let live = deploy("dep-1", DeployStatus::Live);
+        let building = deploy("dep-1", DeployStatus::Building);
+        let queued = deploy("dep-1", DeployStatus::Queued);
+        let restart = deploy("dep-2", DeployStatus::Queued);
+        // A new latest deploy is the restart (also behind a first deploy still in progress).
+        assert_eq!(Restart::of(Some(&live), Some(&restart)), Restart::Queued(restart.clone()));
+        assert_eq!(Restart::of(Some(&building), Some(&restart)), Restart::Queued(restart.clone()));
+        assert_eq!(Restart::of(None, Some(&restart)), Restart::Queued(restart.clone()));
+        // The restart folded into a deploy that was already queued.
+        assert_eq!(Restart::of(Some(&queued), Some(&queued)), Restart::AlreadyQueued(queued.clone()));
+        assert_eq!(Restart::of(Some(&live), Some(&live)), Restart::Nothing);
+        assert_eq!(Restart::of(Some(&building), Some(&live)), Restart::Nothing, "same deploy, went live");
+        assert_eq!(Restart::of(None, None), Restart::Nothing);
+        assert_eq!(Restart::Queued(restart.clone()).deploy().map(|d| d.id.as_str()), Some("dep-2"));
+        assert_eq!(Restart::Nothing.deploy(), None);
+    }
+
+    #[test]
+    fn why_nothing_restarted() {
+        let mut service = ferry_core::Service::new("web", ferry_core::ServiceType::WebService);
+        let view = |service: &ferry_core::Service| ServiceView {
+            service: service.clone(),
+            state: ferry_core::ServiceState::Live,
+            url: None,
+            hosts: vec![],
+            internal_host: "web".into(),
+            internal_port: None,
+            env_groups: vec![],
+            latest_deploy: None,
+            deploy_hook_path: String::new(),
+        };
+        assert!(no_restart_reason(&view(&service)).contains("isn't live, so nothing restarts"));
+        service.live_deploy_id = Some("dep-1".into());
+        assert!(no_restart_reason(&view(&service)).contains("no restart was queued"));
+        service.suspended = true;
+        let reason = no_restart_reason(&view(&service));
+        assert!(reason.contains("is suspended") && reason.contains("ferry restart web"), "{reason}");
+    }
 
     #[test]
     fn values_that_would_break_the_listing_are_quoted() {

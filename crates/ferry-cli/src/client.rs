@@ -60,6 +60,14 @@ pub fn is_not_found(err: &anyhow::Error) -> bool {
     err.chain().any(|e| e.downcast_ref::<ApiError>().is_some_and(|a| a.status == 404))
 }
 
+/// True when `err` is a 404 for an API route the server doesn't have (an
+/// older ferryd), as opposed to a missing resource.
+pub fn is_missing_route(err: &anyhow::Error) -> bool {
+    err.chain()
+        .filter_map(|e| e.downcast_ref::<ApiError>())
+        .any(|a| a.status == 404 && (a.message.starts_with("no API route") || a.code == "http_404"))
+}
+
 /// A decoded JSON response plus the raw value (printed as-is by `--json`).
 #[derive(Debug, Clone)]
 pub struct Json<T> {

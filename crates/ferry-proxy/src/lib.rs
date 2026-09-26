@@ -25,23 +25,38 @@
 //!    `Forwarded`, `X-Forwarded-{For,Proto,Host,Port}`, `X-Real-IP` set from
 //!    what the proxy saw (it is the edge: `X-Forwarded-For` is the client's
 //!    address alone); `X-Request-Id` is set unless present.
+//!    `X-Forwarded-Port` is, by design, the **client-facing** port: the port
+//!    of the `Host` / `:authority` the client used, else the scheme's default
+//!    (80 / 443) — consistent with `X-Forwarded-Host` — not the port of the
+//!    listener that accepted the connection. Behind port forwarding (a router
+//!    mapping 443 → 8443, a container publishing 80 → 8080) the listener's
+//!    port is not the one clients connect to, and apps building absolute URLs
+//!    from it would produce broken links.
 //!    Bodyless GET/HEAD requests are retried once on another upstream when
-//!    the connection fails; otherwise failures → 502.
+//!    the connection fails; otherwise failures → 502. A client that stops
+//!    sending its request body for [`ConnectionLimits::request_body_timeout`]
+//!    gets a 408 (or, when the upstream has already started answering, the
+//!    exchange is aborted).
 //! 6. `101 Switching Protocols` (websockets, HTTP/1.1 only) → both sides are
 //!    spliced.
 //!
 //! Proxy-generated error pages carry an `x-ferry-error: <kind>` header
-//! (`bad_request`, `not_found`, `method_not_allowed`, `suspended`,
-//! `no_upstreams`, `bad_gateway`).
+//! (`bad_request`, `not_found`, `method_not_allowed`, `request_timeout`,
+//! `suspended`, `no_upstreams`, `bad_gateway`). The `no_upstreams` page does
+//! not guess why a service has no instance to route to (never deployed,
+//! last deploy failed, deploy in progress): the route table doesn't know.
 //!
 //! Client connections are bounded by [`ConnectionLimits`]: a global cap
 //! (from the open-file limit by default) and a per-address cap, a TLS
 //! handshake timeout, a deadline for the first request head (whatever the
 //! protocol turns out to be), HTTP/1 header read timeouts, an idle timeout
 //! for connections without a request in flight (HTTP/2 included) that
-//! shrinks while the cap is reached, and HTTP/2 keep-alive pings. Requests
-//! in flight (SSE, uploads) and websocket tunnels are never timed out; TCP
-//! keep-alive probes close them once the client machine is gone.
+//! shrinks while the cap is reached, HTTP/2 keep-alive pings, and an idle
+//! timeout between the pieces of a request body (a body trickled then
+//! stalled can't hold a connection forever). Otherwise requests in flight
+//! (SSE and other streamed responses, uploads that keep sending) and
+//! websocket tunnels are never timed out; TCP keep-alive probes close them
+//! once the client machine is gone.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

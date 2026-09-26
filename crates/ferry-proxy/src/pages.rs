@@ -20,6 +20,8 @@ pub(crate) enum ErrorKind {
     NotFound,
     /// Methods a reverse proxy doesn't forward (`CONNECT`).
     MethodNotAllowed,
+    /// The client stopped sending its request body.
+    RequestTimeout,
     /// The service is suspended.
     Suspended,
     /// The service has no healthy instance yet.
@@ -34,6 +36,7 @@ impl ErrorKind {
             ErrorKind::BadRequest => StatusCode::BAD_REQUEST,
             ErrorKind::NotFound => StatusCode::NOT_FOUND,
             ErrorKind::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+            ErrorKind::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             ErrorKind::Suspended | ErrorKind::NoUpstreams => StatusCode::SERVICE_UNAVAILABLE,
             ErrorKind::BadGateway => StatusCode::BAD_GATEWAY,
         }
@@ -45,6 +48,7 @@ impl ErrorKind {
             ErrorKind::BadRequest => "bad_request",
             ErrorKind::NotFound => "not_found",
             ErrorKind::MethodNotAllowed => "method_not_allowed",
+            ErrorKind::RequestTimeout => "request_timeout",
             ErrorKind::Suspended => "suspended",
             ErrorKind::NoUpstreams => "no_upstreams",
             ErrorKind::BadGateway => "bad_gateway",
@@ -212,6 +216,8 @@ mod tests {
     fn kinds_map_to_statuses() {
         assert_eq!(ErrorKind::BadRequest.status(), 400);
         assert_eq!(ErrorKind::MethodNotAllowed.status(), 405);
+        assert_eq!(ErrorKind::RequestTimeout.status(), 408);
+        assert_eq!(ErrorKind::RequestTimeout.code(), "request_timeout");
         assert_eq!(ErrorKind::Suspended.status(), 503);
         assert_eq!(ErrorKind::BadGateway.status(), 502);
         assert_eq!(ErrorKind::BadGateway.code(), "bad_gateway");

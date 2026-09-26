@@ -25,6 +25,8 @@ mod docker;
 mod dockerfile;
 mod fsutil;
 mod git;
+mod orphans;
+mod pm_errors;
 mod process;
 mod redact;
 
@@ -58,6 +60,8 @@ pub struct BuildRequest {
     /// applies it at run time instead.)
     pub start_command: Option<String>,
     /// Static sites: directory to serve (default: auto-detect dist/build/public/out, else context root).
+    /// An explicit value always wins, `.` included (the root directory, even
+    /// when build output directories exist).
     pub publish_dir: Option<String>,
     /// Full image reference to produce, e.g. `ferry/web:dep-…`.
     pub image_tag: String,
@@ -119,6 +123,13 @@ pub struct GeneratedDockerfile {
 /// Name of the Dockerfile the builder writes for native runtimes.
 pub const GENERATED_DOCKERFILE: &str = "Dockerfile.ferry";
 
+/// Default cap on the total size of an uploaded source archive's files once
+/// extracted (see [`Builder::with_upload_limits`]).
+pub const DEFAULT_MAX_UPLOAD_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Default cap on the number of entries (files, directories, links) of an
+/// uploaded source archive (see [`Builder::with_upload_limits`]).
+pub const DEFAULT_MAX_UPLOAD_ENTRIES: u64 = 200_000;
+
 /// `.dockerignore` written next to generated Dockerfiles when the project
 /// has none.
 const DEFAULT_DOCKERIGNORE: &str = "\
@@ -144,6 +155,8 @@ pub struct Builder {
     repo_locks: RepoLocks,
     /// Keys the cache digest of the build-time env.
     env_key: buildenv::EnvKey,
+    /// Decompression limits of uploaded archives.
+    upload_limits: archive::Limits,
 }
 
 /// What [`prepare_context`] decided.
@@ -169,7 +182,21 @@ impl Builder {
             repos_dir,
             docker_bin,
             repo_locks: Arc::new(StdMutex::new(HashMap::new())),
+            upload_limits: archive::Limits::upload(DEFAULT_MAX_UPLOAD_EXTRACTED_BYTES, DEFAULT_MAX_UPLOAD_ENTRIES),
         }
+    }
+
+    /// Limits for uploaded archives ([`BuildSource::Archive`]): the total
+    /// size of their files once extracted, and their number of entries.
+    /// Sizes are checked from the tar headers before anything is written, so
+    /// a decompression bomb (a few MB of gzip expanding to many GB) fails the
+    /// build with a clear error instead of filling the disk. Defaults:
+    /// [`DEFAULT_MAX_UPLOAD_EXTRACTED_BYTES`] (2 GiB) and
+    /// [`DEFAULT_MAX_UPLOAD_ENTRIES`] (200 000). Git sources keep larger
+    /// fixed limits (16 GiB, 2 000 000 entries).
+    pub fn with_upload_limits(mut self, max_extracted_bytes: u64, max_entries: u64) -> Self {
+        self.upload_limits = archive::Limits::upload(max_extracted_bytes, max_entries);
+        self
     }
 
     /// Fetch, detect, generate and build. Log lines: `==> ...` system
@@ -232,10 +259,20 @@ impl Builder {
         if tag.is_empty() || tag.starts_with('-') || tag.chars().any(|c| c.is_whitespace() || c.is_control()) {
             return Err(Error::Build(format!("invalid image tag '{}'", req.image_tag)));
         }
+        // `<deploy_id>/src` holds the source (the build context lives in it),
+        // `<deploy_id>/children` the records of running git / docker
+        // processes (see `reap_orphans`), outside the context.
         let scratch = fsutil::ScratchDir::create(self.builds_dir.join(&req.deploy_id))
             .await
             .map_err(|e| Error::Build(format!("cannot create build directory: {e}")))?;
-        let res = self.build_in(req, logs, cancel, scratch.path(), events).await;
+        let source_dir = scratch.path().join("src");
+        let res = match tokio::fs::create_dir(&source_dir).await {
+            Ok(()) => {
+                let records = scratch.path().join(orphans::CHILDREN_DIR);
+                process::record_children_in(records, self.build_in(req, logs, cancel, &source_dir, events)).await
+            }
+            Err(e) => Err(Error::Build(format!("cannot create build directory: {e}"))),
+        };
         scratch.cleanup().await;
         res
     }
@@ -245,7 +282,7 @@ impl Builder {
         req: &BuildRequest,
         logs: &LogSink,
         cancel: &CancellationToken,
-        scratch: &Path,
+        source_dir: &Path,
         events: Option<&tokio::sync::mpsc::UnboundedSender<BuildEvent>>,
     ) -> Result<BuildOutput> {
         // 1. Fetch the source into the scratch directory.
@@ -257,7 +294,7 @@ impl Builder {
                     _ = cancel.cancelled() => return Err(Error::Canceled),
                 };
                 let cache = self.repos_dir.join(&req.service_id);
-                let co = git::checkout(&cache, repo_url, branch, commit.as_deref(), scratch, logs, cancel)
+                let co = git::checkout(&cache, repo_url, branch, commit.as_deref(), source_dir, logs, cancel)
                     .await
                     .map_err(git_build_error)?;
                 for s in &co.report_skipped {
@@ -267,18 +304,19 @@ impl Builder {
                     logs.system("==> Note: git submodules are not fetched");
                 }
                 let subject = (!co.subject.is_empty()).then_some(co.subject);
-                (scratch.to_path_buf(), Some(co.sha), subject)
+                (source_dir.to_path_buf(), Some(co.sha), subject)
             }
             BuildSource::Archive { path } => {
                 logs.system("==> Extracting uploaded source archive");
-                let (archive_path, dest, token) = (path.clone(), scratch.to_path_buf(), cancel.clone());
+                let (archive_path, dest, token) = (path.clone(), source_dir.to_path_buf(), cancel.clone());
+                let limits = self.upload_limits;
                 let hints = RootHints {
                     root_dir: req.root_dir.clone(),
                     dockerfile_path: req.dockerfile_path.clone(),
                     publish_dir: req.publish_dir.clone(),
                 };
                 let res = tokio::task::spawn_blocking(move || -> std::result::Result<_, archive::ExtractError> {
-                    let report = archive::extract_archive_file(&archive_path, &dest, &token)?;
+                    let report = archive::extract_archive_file(&archive_path, &dest, limits, &token)?;
                     let root = choose_archive_root(&dest, &hints)?;
                     Ok((report, root))
                 })
@@ -383,14 +421,36 @@ impl Builder {
     /// Resolve the commit sha a branch currently points to (`git ls-remote`).
     ///
     /// Errors: `Invalid` for a malformed URL / branch or a branch that does not
-    /// exist ("branch 'x' not found in <url>"), `Internal` when the remote
-    /// cannot be reached. Credentials are never included in messages.
+    /// exist ("branch 'x' not found in <url> (the default branch is 'y')" —
+    /// the hint is best effort), `Internal` when the remote cannot be
+    /// reached. Credentials are never included in messages.
     pub async fn resolve_branch_head(&self, repo_url: &str, branch: &str) -> Result<String> {
         git::ls_remote_branch(repo_url, branch.trim()).await.map_err(|e| match e {
             GitError::NotFound(m) | GitError::Invalid(m) => Error::Invalid(m),
             GitError::Canceled => Error::Canceled,
             GitError::Failed(m) => Error::Internal(m),
         })
+    }
+
+    /// Kill the `git` / `docker build` processes a previous server left
+    /// running, and return how many process groups were killed.
+    ///
+    /// Build children run in their own process groups and are recorded in
+    /// the build's scratch directory while they run
+    /// (`<builds_dir>/<deploy_id>/children/<pid>`). A server stopped
+    /// normally kills them; one killed with SIGKILL cannot (on macOS nothing
+    /// stops them), so a `docker build` keeps running, re-parented to init.
+    /// A recorded group is killed only if its leader is still the recorded
+    /// process: same program, started no later than recorded, leading its
+    /// own group, not a child of this process — a reused pid is left alone.
+    /// Every record is removed.
+    ///
+    /// Call it once at startup, before any build starts and before stale
+    /// scratch directories are deleted (they hold the records). Blocking
+    /// (reads the scratch directories, runs `ps`); returns 0 on non-Unix
+    /// systems or when `ps` is unavailable.
+    pub fn reap_orphans(&self) -> usize {
+        orphans::reap(&self.builds_dir)
     }
 
     /// Delete the git cache of a service (on service deletion).
@@ -889,6 +949,57 @@ mod tests {
         cancel.cancel();
         assert!(matches!(b.build(&req, &logs, &cancel).await, Err(Error::Canceled)));
         assert!(b.remove_repo_cache("../x").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn oversized_uploads_fail_with_a_clear_error() {
+        use std::io::Read as _;
+        let root = tempfile::tempdir().unwrap();
+        // 3 MiB of zeros compress to a few KiB.
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_path("index.html").unwrap();
+        h.set_size(3 * 1024 * 1024);
+        h.set_mode(0o644);
+        h.set_cksum();
+        tar.append(&h, io::repeat(b' ').take(3 * 1024 * 1024)).unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&tar.into_inner().unwrap()).unwrap();
+        let archive = root.path().join("up.tar.gz");
+        fs::write(&archive, gz.finish().unwrap()).unwrap();
+
+        let b = Builder::new(root.path().join("builds"), root.path().join("repos"), "docker".into());
+        assert_eq!(b.upload_limits.max_bytes, DEFAULT_MAX_UPLOAD_EXTRACTED_BYTES);
+        assert_eq!(b.upload_limits.max_entries, DEFAULT_MAX_UPLOAD_ENTRIES);
+        let b = b.with_upload_limits(1024 * 1024, 1000);
+        let req = BuildRequest {
+            service_id: "srv-1".into(),
+            deploy_id: "dep-bomb".into(),
+            service_name: "web".into(),
+            service_type: ServiceType::StaticSite,
+            source: BuildSource::Archive { path: archive },
+            runtime: Runtime::Auto,
+            root_dir: None,
+            dockerfile_path: None,
+            build_command: None,
+            start_command: None,
+            publish_dir: None,
+            image_tag: "ferry/web:dep-bomb".into(),
+            build_args: vec![],
+            labels: BTreeMap::new(),
+            clear_cache: false,
+        };
+        let (logs, mut rx) = LogSink::channel();
+        let err = b.build(&req, &logs, &CancellationToken::new()).await.unwrap_err();
+        let expected = "the uploaded archive expands to more than 1.0 MiB (the limit for extracted sources): leave \
+                        dependencies, build outputs and large data out of it (.gitignore / .ferryignore)";
+        assert!(matches!(&err, Error::Build(m) if m == expected), "{err}");
+        assert!(!root.path().join("builds/dep-bomb").exists());
+        let mut lines = Vec::new();
+        while let Ok(l) = rx.try_recv() {
+            lines.push(l.line);
+        }
+        assert_eq!(lines.last().map(String::as_str), Some(format!("==> Build failed: {expected}").as_str()));
     }
 
     #[tokio::test]

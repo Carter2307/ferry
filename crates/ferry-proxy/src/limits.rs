@@ -49,11 +49,21 @@ pub struct ConnectionLimits {
     /// A connection with no request in flight is closed after this (the
     /// idle limit of HTTP/2 connections; HTTP/1 ones are closed sooner by
     /// `header_read_timeout`). Requests in flight — long SSE responses,
-    /// slow uploads — are never cut by these timeouts. Default 60 s.
+    /// slow uploads — are never cut by these timeouts (a request body that
+    /// stalls is: see `request_body_timeout`). Default 60 s.
     pub idle_timeout: Duration,
     /// Replaces the two timeouts above for connections with no request in
     /// flight while the connection limit is reached. Default 5 s.
     pub overload_idle_timeout: Duration,
+    /// Longest wait for the next piece of a request body (like nginx's
+    /// `client_body_timeout`): a client that stops sending mid-body gets a
+    /// `408` (or, once the upstream has started answering, the exchange is
+    /// aborted), so a body trickled byte by byte cannot hold a connection
+    /// and an upstream connection forever. Slow uploads are fine as long as
+    /// data keeps coming; time the upstream takes to read the body does not
+    /// count, and responses (SSE, long downloads) and websocket tunnels are
+    /// not affected. Default 60 s.
+    pub request_body_timeout: Duration,
 }
 
 impl Default for ConnectionLimits {
@@ -65,6 +75,7 @@ impl Default for ConnectionLimits {
             header_read_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(60),
             overload_idle_timeout: Duration::from_secs(5),
+            request_body_timeout: Duration::from_secs(60),
         }
     }
 }

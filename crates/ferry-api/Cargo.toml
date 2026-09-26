@@ -1,6 +1,6 @@
 [package]
 name = "ferry-api"
-description = "REST API, webhooks, blueprints and web dashboard for Ferry"
+description = "REST API, change feed, webhooks, blueprints and the embedded web client for Ferry"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -23,6 +23,8 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+# Read-only batch queries of the change feed (the Store's own pool).
+sqlx.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true

@@ -12,7 +12,7 @@ use ferry_api::{AppState, router};
 use ferry_core::dto::{InstanceStatus, RuntimeStatus};
 use ferry_core::{
     CancellationToken, Config, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Engine, Error, JobRun,
-    JobTrigger, LogLine, LogOptions, LogStream, Result, ServiceState, Store, compute_service_state,
+    JobStatus, JobTrigger, LogLine, LogOptions, LogStream, Result, ServiceState, Store, compute_service_state,
 };
 use http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -213,6 +213,18 @@ impl Engine for MockEngine {
         self.record(format!("run_job {service_id} {} {trigger}", command.as_deref().unwrap_or("-")));
         let j = JobRun::new(service_id, trigger, command);
         self.store.create_job_run(&j).await?;
+        Ok(j)
+    }
+
+    async fn cancel_job(&self, job_id: &str) -> Result<JobRun> {
+        self.record(format!("cancel_job {job_id}"));
+        let mut j = self.store.require_job_run(job_id).await?;
+        if j.status.is_terminal() {
+            return Err(Error::conflict(format!("job {job_id} already finished")));
+        }
+        j.status = JobStatus::Canceled;
+        j.finished_at = Some(chrono::Utc::now());
+        self.store.update_job_run(&j).await?;
         Ok(j)
     }
 

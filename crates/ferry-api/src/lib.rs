@@ -3,8 +3,10 @@
 //! The control plane's HTTP surface (axum):
 //! * `/api/v1/...` — REST API (bearer token), see DESIGN.md §API;
 //! * `/hooks/github` and `/hooks/deploy/{service_id}` — webhooks;
+//! * `/api/v1/events` — SSE change feed for the web client;
 //! * `/healthz` — liveness (no auth);
-//! * `/` — the single-page web dashboard (`assets/index.html`).
+//! * `/` — the web client (a single-page app built from `web/` and embedded
+//!   at compile time, see [`web`]), with a SPA fallback for its routes.
 //!
 //! It performs validation and plain data changes through the [`Store`] and
 //! delegates everything with side effects to the [`Engine`] trait object.
@@ -22,6 +24,7 @@ pub mod blueprint;
 mod auth;
 mod checks;
 mod error;
+pub mod events;
 mod extract;
 mod locks;
 mod ops;
@@ -29,11 +32,9 @@ mod routes;
 mod runtime;
 mod sse;
 mod views;
+pub mod web;
 
 pub use error::{ApiError, ApiResult};
-
-/// The web dashboard (single self-contained HTML file).
-pub const DASHBOARD_HTML: &str = include_str!("../assets/index.html");
 
 /// Maximum size of an uploaded source archive (`ferry up`).
 pub const UPLOAD_LIMIT: usize = 512 * 1024 * 1024;
@@ -54,12 +55,14 @@ pub struct AppState {
     pub shutdown: CancellationToken,
 }
 
-/// Build the complete router (API + hooks + dashboard + healthz).
+/// Build the complete router (API + hooks + web client + healthz).
 pub fn router(state: AppState) -> axum::Router {
     use routes::*;
 
+    let hub = events::Hub::new(state.store.clone(), state.shutdown.clone());
     let api = Router::new()
         .route("/v1/info", get(info::info))
+        .route("/v1/events", get(events::stream).layer(axum::Extension(hub.clone())))
         // services
         .route("/v1/services", get(services::list).post(services::create))
         .route("/v1/services/{id}", get(services::get).patch(services::update).delete(services::delete))
@@ -87,6 +90,7 @@ pub fn router(state: AppState) -> axum::Router {
         // jobs
         .route("/v1/services/{id}/jobs", get(jobs::list).post(jobs::run))
         .route("/v1/jobs/{job_id}", get(jobs::get))
+        .route("/v1/jobs/{job_id}/cancel", post(jobs::cancel))
         .route("/v1/jobs/{job_id}/logs", get(jobs::logs))
         // datastores
         .route("/v1/datastores", get(datastores::list).post(datastores::create))
@@ -106,14 +110,21 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/hooks/github", post(hooks::github).layer(DefaultBodyLimit::max(WEBHOOK_LIMIT)))
         .method_not_allowed_fallback(info::method_not_allowed);
 
+    // Everything else is the web client (files + SPA fallback); unknown
+    // `/hooks` and `/healthz` paths stay JSON 404s.
+    let ui = Arc::new(web::Ui::from_env());
+    let ui_fallback = move |method: http::Method, uri: http::Uri, headers: http::HeaderMap| async move {
+        ui.serve(&method, &uri, &headers).await
+    };
+
     Router::new()
         .route("/healthz", get(info::healthz))
-        .route("/", get(info::dashboard))
-        .route("/index.html", get(info::dashboard))
         .merge(hooks)
         .nest("/api", api)
         .method_not_allowed_fallback(info::method_not_allowed)
-        .fallback(info::not_found)
+        .fallback(ui_fallback)
+        // API and webhook writes are reported by the change feed at once.
+        .layer(axum::middleware::from_fn_with_state(hub, events::nudge_after_writes))
         .layer(TraceLayer::new_for_http().make_span_with(|req: &http::Request<axum::body::Body>| {
             // Path only: query strings may carry secrets (?access_token=, ?key=).
             tracing::info_span!("http", method = %req.method(), path = %req.uri().path())

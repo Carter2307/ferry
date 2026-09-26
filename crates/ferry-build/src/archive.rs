@@ -6,15 +6,123 @@
 //! Directory permissions are not restored (the tree must stay writable so it
 //! can be cleaned up); file modes are kept minus group/other write.
 
+use std::cell::RefCell;
 use std::fs;
 use std::io::{self, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 
 use ferry_core::CancellationToken;
 
-/// Hard limits protecting the disk against decompression bombs.
-pub(crate) const MAX_EXTRACTED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-pub(crate) const MAX_ENTRIES: u64 = 2_000_000;
+/// Limits protecting the disk (and memory) against decompression bombs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Limits {
+    /// Total size of the regular files once extracted.
+    pub max_bytes: u64,
+    /// Entries of any kind (files, directories, links).
+    pub max_entries: u64,
+    /// What is extracted, for messages ("the uploaded archive").
+    pub subject: &'static str,
+    /// Appended to limit errors: how to get under the limit.
+    pub advice: &'static str,
+}
+
+impl Limits {
+    /// `git archive` exports: generous, they only protect the disk.
+    pub(crate) const GIT: Limits =
+        Limits { max_bytes: 16 * 1024 * 1024 * 1024, max_entries: 2_000_000, subject: "the source tree", advice: "" };
+
+    /// Uploaded sources (`ferry up`) with the given caps.
+    pub(crate) fn upload(max_bytes: u64, max_entries: u64) -> Limits {
+        Limits {
+            max_bytes,
+            max_entries,
+            subject: "the uploaded archive",
+            advice: ": leave dependencies, build outputs and large data out of it (.gitignore / .ferryignore)",
+        }
+    }
+
+    fn too_big(&self) -> ExtractError {
+        ExtractError::Invalid(format!(
+            "{} expands to more than {} (the limit for extracted sources){}",
+            self.subject,
+            crate::human_bytes(self.max_bytes),
+            self.advice
+        ))
+    }
+
+    fn too_many(&self) -> ExtractError {
+        ExtractError::Invalid(format!(
+            "{} has more than {} entries (the limit for extracted sources){}",
+            self.subject, self.max_entries, self.advice
+        ))
+    }
+
+    /// Everything the decompressed stream may yield: the files plus tar
+    /// metadata (headers, long names, padding) for every allowed entry.
+    fn stream_budget(&self) -> u64 {
+        self.max_bytes.saturating_add(self.max_entries.saturating_mul(2048)).saturating_add(METADATA_BUDGET)
+    }
+}
+
+/// Bytes the tar reader may consume between two entries (headers, PAX / GNU
+/// long-name records, which the tar crate buffers in memory, data of
+/// skipped entries). Real archives need a few KiB.
+const METADATA_BUDGET: u64 = 16 * 1024 * 1024;
+/// Bytes read after the end-of-archive marker (a `git archive` pipe is
+/// drained so git exits cleanly; its padding is at most 10 KiB).
+const DRAIN_BUDGET: u64 = 1024 * 1024;
+
+/// Read budget shared by [`Capped`] and the extraction loop.
+#[derive(Debug)]
+struct Budget {
+    total: u64,
+    /// Extra cap for the current phase (`None`: only `total`).
+    phase: Option<u64>,
+    /// Which cap refused a read, if any.
+    exhausted: Option<Cap>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cap {
+    Total,
+    Phase,
+}
+
+/// A reader that refuses to yield more than its [`Budget`], so a
+/// decompression bomb cannot burn CPU or memory where the per-entry checks
+/// do not look.
+struct Capped<R> {
+    inner: R,
+    budget: Rc<RefCell<Budget>>,
+}
+
+impl<R: Read> Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let (allowed, cap) = {
+            let b = self.budget.borrow();
+            match b.phase {
+                Some(p) if p < b.total => (p, Cap::Phase),
+                _ => (b.total, Cap::Total),
+            }
+        };
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if allowed == 0 {
+            self.budget.borrow_mut().exhausted = Some(cap);
+            return Err(io::Error::other("extraction size limit reached"));
+        }
+        let want = buf.len().min(usize::try_from(allowed).unwrap_or(usize::MAX));
+        let n = self.inner.read(&mut buf[..want])?;
+        let mut b = self.budget.borrow_mut();
+        b.total -= n as u64;
+        if let Some(p) = b.phase.as_mut() {
+            *p -= n as u64;
+        }
+        Ok(n)
+    }
+}
 
 /// What to do with a symlink (or hard link) pointing outside the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +171,7 @@ pub(crate) struct ExtractReport {
 pub(crate) fn extract_archive_file(
     archive: &Path,
     dest: &Path,
+    limits: Limits,
     cancel: &CancellationToken,
 ) -> Result<ExtractReport, ExtractError> {
     let file = fs::File::open(archive).map_err(|e| {
@@ -81,9 +190,9 @@ pub(crate) fn extract_archive_file(
     // Re-chain the sniffed bytes in front of the rest of the stream.
     let chained = io::Cursor::new(magic[..n].to_vec()).chain(reader);
     if n == 2 && magic == [0x1f, 0x8b] {
-        extract_tar(flate2::read::MultiGzDecoder::new(chained), dest, LinkPolicy::Reject, cancel)
+        extract_tar(flate2::read::MultiGzDecoder::new(chained), dest, LinkPolicy::Reject, limits, cancel)
     } else {
-        extract_tar(chained, dest, LinkPolicy::Reject, cancel)
+        extract_tar(chained, dest, LinkPolicy::Reject, limits, cancel)
     }
 }
 
@@ -100,16 +209,33 @@ fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     Ok(n)
 }
 
-/// Extract a tar stream into `dest` (which must exist). The whole stream is
-/// consumed (so a writer on the other end of a pipe never blocks).
+/// Extract a tar stream into `dest` (which must exist), within `limits`:
+/// sizes are checked from each entry's header before anything is written,
+/// and the stream itself is capped. The stream is consumed up to a little
+/// past the end of the archive (so a writer on the other end of a pipe
+/// never blocks).
 pub(crate) fn extract_tar<R: Read>(
     reader: R,
     dest: &Path,
     links: LinkPolicy,
+    limits: Limits,
     cancel: &CancellationToken,
 ) -> Result<ExtractReport, ExtractError> {
     let root = fs::canonicalize(dest)?;
-    let mut archive = tar::Archive::new(reader);
+    let budget = Rc::new(RefCell::new(Budget { total: limits.stream_budget(), phase: None, exhausted: None }));
+    let set_phase = |phase: Option<u64>| budget.borrow_mut().phase = phase;
+    // A refused read surfaces as some I/O error of the tar crate: report the
+    // limit instead.
+    let or_limit = |e: ExtractError| match budget.borrow().exhausted {
+        Some(Cap::Total) => limits.too_big(),
+        Some(Cap::Phase) => ExtractError::Invalid(format!(
+            "{} has more than {} of tar metadata between two entries (not a usable source archive)",
+            limits.subject,
+            crate::human_bytes(METADATA_BUDGET)
+        )),
+        None => e,
+    };
+    let mut archive = tar::Archive::new(Capped { inner: reader, budget: budget.clone() });
     archive.set_preserve_permissions(false);
     archive.set_preserve_ownerships(false);
     archive.set_unpack_xattrs(false);
@@ -122,12 +248,15 @@ pub(crate) fn extract_tar<R: Read>(
     let mut report = ExtractReport::default();
     let mut entries_seen: u64 = 0;
     {
-        let entries = archive.entries().map_err(|e| invalid_archive(&e))?;
-        for entry in entries {
+        let mut entries = archive.entries().map_err(|e| invalid_archive(&e))?;
+        loop {
             if cancel.is_cancelled() {
                 return Err(ExtractError::Canceled);
             }
-            let mut entry = entry.map_err(|e| invalid_archive(&e))?;
+            set_phase(Some(METADATA_BUDGET));
+            let Some(entry) = entries.next() else { break };
+            set_phase(None);
+            let mut entry = entry.map_err(|e| or_limit(invalid_archive(&e)))?;
             let kind = entry.header().entry_type();
             if kind.is_pax_global_extensions()
                 || kind.is_pax_local_extensions()
@@ -137,8 +266,8 @@ pub(crate) fn extract_tar<R: Read>(
                 continue;
             }
             entries_seen += 1;
-            if entries_seen > MAX_ENTRIES {
-                return Err(ExtractError::Invalid(format!("archive has more than {MAX_ENTRIES} entries")));
+            if entries_seen > limits.max_entries {
+                return Err(limits.too_many());
             }
             let raw_path = entry.path().map_err(|e| invalid_archive(&e))?.into_owned();
             let rel = sanitize_entry_path(&raw_path)?;
@@ -197,26 +326,25 @@ pub(crate) fn extract_tar<R: Read>(
             } else if kind.is_file() || kind.is_contiguous() || kind.is_gnu_sparse() {
                 report.files += 1;
                 report.bytes = report.bytes.saturating_add(entry.size());
-                if report.bytes > MAX_EXTRACTED_BYTES {
-                    return Err(ExtractError::Invalid(format!(
-                        "archive expands to more than {} GiB",
-                        MAX_EXTRACTED_BYTES / (1024 * 1024 * 1024)
-                    )));
+                if report.bytes > limits.max_bytes {
+                    return Err(limits.too_big());
                 }
             } else {
                 report.skipped.push(format!("{display} (unsupported entry type {:?})", kind));
                 continue;
             }
 
-            let unpacked = entry
-                .unpack_in(&root)
-                .map_err(|e| ExtractError::Invalid(format!("cannot extract '{display}': {}", flatten_io_error(&e))))?;
+            let unpacked = entry.unpack_in(&root).map_err(|e| {
+                or_limit(ExtractError::Invalid(format!("cannot extract '{display}': {}", flatten_io_error(&e))))
+            })?;
             if !unpacked {
                 return Err(ExtractError::Invalid(format!("archive entry '{display}' escapes the source directory")));
             }
         }
     }
-    // Drain trailing padding so the producer (e.g. `git archive`) exits cleanly.
+    // Drain trailing padding so the producer (e.g. `git archive`) exits
+    // cleanly, but never a bomb hidden after the end of the archive.
+    set_phase(Some(DRAIN_BUDGET));
     let mut rest = archive.into_inner();
     let _ = io::copy(&mut rest, &mut io::sink());
 
@@ -436,7 +564,7 @@ mod tests {
 
     fn extract(bytes: Vec<u8>, policy: LinkPolicy) -> (tempfile::TempDir, Result<ExtractReport, ExtractError>) {
         let dir = tempfile::tempdir().unwrap();
-        let res = extract_tar(&bytes[..], dir.path(), policy, &CancellationToken::new());
+        let res = extract_tar(&bytes[..], dir.path(), policy, Limits::GIT, &CancellationToken::new());
         (dir, res)
     }
 
@@ -527,7 +655,7 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
         assert!(matches!(
-            extract_tar(&bytes[..], dir.path(), LinkPolicy::Reject, &cancel),
+            extract_tar(&bytes[..], dir.path(), LinkPolicy::Reject, Limits::GIT, &cancel),
             Err(ExtractError::Canceled)
         ));
     }
@@ -540,17 +668,146 @@ mod tests {
             let p = src.path().join(name);
             fs::write(&p, data).unwrap();
             let dest = tempfile::tempdir().unwrap();
-            extract_archive_file(&p, dest.path(), &CancellationToken::new()).unwrap();
+            extract_archive_file(&p, dest.path(), Limits::GIT, &CancellationToken::new()).unwrap();
             let top = single_top_level_dir(dest.path()).unwrap().unwrap();
             assert_eq!(top.file_name().unwrap(), "proj");
             assert!(top.join("package.json").exists());
         }
-        let missing = extract_archive_file(&src.path().join("nope.tar.gz"), src.path(), &CancellationToken::new());
+        let missing =
+            extract_archive_file(&src.path().join("nope.tar.gz"), src.path(), Limits::GIT, &CancellationToken::new());
         assert!(missing.unwrap_err().to_string().contains("not found"));
         let garbage = src.path().join("garbage.tar.gz");
         fs::write(&garbage, [0x1f, 0x8b, 1, 2, 3]).unwrap();
         let dest = tempfile::tempdir().unwrap();
-        assert!(extract_archive_file(&garbage, dest.path(), &CancellationToken::new()).is_err());
+        assert!(extract_archive_file(&garbage, dest.path(), Limits::GIT, &CancellationToken::new()).is_err());
+    }
+
+    fn upload_limits(max_bytes: u64, max_entries: u64) -> Limits {
+        Limits::upload(max_bytes, max_entries)
+    }
+
+    #[test]
+    fn decompression_bombs_are_refused_before_filling_the_disk() {
+        const MIB: u64 = 1024 * 1024;
+        // Regression: a 3 MB upload expanded to 3 GiB and went live. The
+        // header announces the size: refused before a byte is written.
+        let mut big = tar::Builder::new(Vec::new());
+        big.append(&header("app/zeros.bin", E::Regular, 4 * MIB), io::repeat(0).take(4 * MIB)).unwrap();
+        let big = gz(&big.into_inner().unwrap());
+        assert!(big.len() < 64 * 1024, "{}", big.len());
+        let src = tempfile::tempdir().unwrap();
+        let path = src.path().join("bomb.tar.gz");
+        fs::write(&path, &big).unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let err = extract_archive_file(&path, dest.path(), upload_limits(MIB, 100), &CancellationToken::new())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "the uploaded archive expands to more than 1.0 MiB (the limit for extracted sources): leave \
+             dependencies, build outputs and large data out of it (.gitignore / .ferryignore)"
+        );
+        assert!(!dest.path().join("app/zeros.bin").exists());
+        // Within the limit it extracts.
+        let dest = tempfile::tempdir().unwrap();
+        let report =
+            extract_archive_file(&path, dest.path(), upload_limits(8 * MIB, 100), &CancellationToken::new()).unwrap();
+        assert_eq!(report.bytes, 4 * MIB);
+
+        // The default upload limit: a 3 GiB entry is refused from its header
+        // alone (the data does not even need to follow).
+        let mut h = header("zeros.bin", E::Regular, 0);
+        h.set_size(3 * 1024 * MIB);
+        h.set_cksum();
+        let mut bytes = h.as_bytes().to_vec();
+        bytes.extend_from_slice(&[0u8; 4096]);
+        let dest = tempfile::tempdir().unwrap();
+        let limits = upload_limits(crate::DEFAULT_MAX_UPLOAD_EXTRACTED_BYTES, crate::DEFAULT_MAX_UPLOAD_ENTRIES);
+        let err =
+            extract_tar(&bytes[..], dest.path(), LinkPolicy::Reject, limits, &CancellationToken::new()).unwrap_err();
+        assert!(err.to_string().starts_with("the uploaded archive expands to more than 2.0 GiB"), "{err}");
+        assert!(fs::read_dir(dest.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn entry_count_is_limited() {
+        let names: Vec<String> = (0..20).map(|i| format!("f{i}.txt")).collect();
+        let entries: Vec<(&str, E, &[u8], Option<&str>)> =
+            names.iter().map(|n| (n.as_str(), E::Regular, &b"x"[..], None)).collect();
+        let bytes = tar_bytes(&entries);
+        let dest = tempfile::tempdir().unwrap();
+        let err = extract_tar(
+            &bytes[..],
+            dest.path(),
+            LinkPolicy::Reject,
+            upload_limits(1 << 30, 10),
+            &CancellationToken::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.starts_with("the uploaded archive has more than 10 entries (the limit for extracted sources)"),
+            "{err}"
+        );
+        let dest = tempfile::tempdir().unwrap();
+        let ok = extract_tar(
+            &bytes[..],
+            dest.path(),
+            LinkPolicy::Reject,
+            upload_limits(1 << 30, 20),
+            &CancellationToken::new(),
+        );
+        assert_eq!(ok.unwrap().files, 20);
+    }
+
+    /// Counts what the extractor pulls from the stream.
+    struct Counting<'a> {
+        inner: &'a [u8],
+        read: std::rc::Rc<std::cell::Cell<u64>>,
+    }
+
+    impl Read for Counting<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read.set(self.read.get() + n as u64);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn metadata_and_trailing_bombs_are_capped() {
+        const MIB: usize = 1024 * 1024;
+        // A 20 MiB PAX header (the tar crate would buffer it in memory).
+        let mut bytes = Vec::new();
+        let pax = vec![b'a'; 20 * MIB];
+        let mut h = header("PaxHeaders/x", E::XHeader, pax.len() as u64);
+        h.set_cksum();
+        bytes.extend_from_slice(h.as_bytes());
+        bytes.extend_from_slice(&pax);
+        bytes.extend_from_slice(&tar_bytes(&[("a.txt", E::Regular, b"a", None)]));
+        let dest = tempfile::tempdir().unwrap();
+        let read = std::rc::Rc::new(std::cell::Cell::new(0));
+        let reader = Counting { inner: &bytes, read: read.clone() };
+        let err = extract_tar(reader, dest.path(), LinkPolicy::Skip, Limits::GIT, &CancellationToken::new())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "the source tree has more than 16.0 MiB of tar metadata between two entries (not a usable source archive)"
+        );
+        assert!(read.get() <= (16 * MIB + 64 * 1024) as u64, "{}", read.get());
+
+        // Garbage after the end of the archive is not read to the end.
+        let mut bytes = tar_bytes(&[("a.txt", E::Regular, b"a", None)]);
+        let archive_len = bytes.len() as u64;
+        bytes.extend(std::iter::repeat_n(0u8, 32 * MIB));
+        let dest = tempfile::tempdir().unwrap();
+        let read = std::rc::Rc::new(std::cell::Cell::new(0));
+        let reader = Counting { inner: &bytes, read: read.clone() };
+        let report =
+            extract_tar(reader, dest.path(), LinkPolicy::Reject, Limits::GIT, &CancellationToken::new()).unwrap();
+        assert_eq!(report.files, 1);
+        assert!(read.get() <= archive_len + 2 * MIB as u64, "{}", read.get());
     }
 
     #[test]

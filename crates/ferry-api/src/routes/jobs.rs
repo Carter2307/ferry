@@ -47,6 +47,18 @@ pub async fn get(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> Ap
     Ok(Json(st.store.require_job_run(&id).await?))
 }
 
+/// `POST /api/v1/jobs/{job_id}/cancel` — stop a pending or running job
+/// (`canceled`); 409 when it already finished.
+pub async fn cancel(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<JobRun>> {
+    let job = st.store.require_job_run(&id).await?;
+    if job.status.is_terminal() {
+        return Err(Error::conflict(format!("job {} already finished ({})", job.id, job.status)).into());
+    }
+    let job = st.engine.cancel_job(&job.id).await?;
+    tracing::info!(job = %job.id, status = %job.status, "canceled job");
+    Ok(Json(job))
+}
+
 /// `GET /api/v1/jobs/{job_id}/logs?follow=` (SSE, always finite)
 pub async fn logs(
     State(st): State<AppState>,

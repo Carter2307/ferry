@@ -220,8 +220,40 @@ pub(crate) fn failure_reason(tail: &[String], status: ExitStatus) -> String {
 
 /// `process "<shell command>" did not complete successfully: exit code: N`
 /// is BuildKit's reason for any failed `RUN`: useless as a summary (it is the
-/// whole command). Explain it with the step's own output instead, from the
-/// failure summary BuildKit prints:
+/// whole command). Explain it with the step's own output instead (see
+/// [`step_output`]).
+///
+/// A package manager's error (npm, pnpm, yarn: see [`crate::pm_errors`])
+/// wins; then the last `error:`-style line (its prefix removed); otherwise
+/// the step and its exit code, plus its last output line.
+fn failed_step_reason(lines: &[&str], reason: &str) -> Option<String> {
+    if !(reason.starts_with("process \"") && reason.contains("did not complete successfully")) {
+        return None;
+    }
+    let code = reason.rsplit_once("exit code:").map(|(_, c)| c.trim().to_string());
+    let header = lines.iter().rposition(|l| l.starts_with("> [") && l.ends_with(':'));
+    let output = step_output(lines, header);
+    if let Some(summary) = crate::pm_errors::summarize(&output) {
+        return Some(summary);
+    }
+    let explicit = output.iter().rev().find_map(|l| error_message(l, true));
+    if let Some(line) = explicit.or_else(|| output.iter().rev().find_map(|l| error_message(l, false))) {
+        return Some(line);
+    }
+    let step = step_command(lines[header?]);
+    let failed = match &code {
+        Some(c) => format!("{step} failed with exit code {c}"),
+        None => format!("{step} failed"),
+    };
+    Some(match output.iter().rev().find(|l| !crate::pm_errors::is_noise(l)) {
+        Some(last) => format!("{failed}: {last}"),
+        None => failed,
+    })
+}
+
+/// The failed step's output, timestamps removed. BuildKit streams every line
+/// of it (`#8 0.763 npm error code E404`) and repeats only the last few in
+/// its failure summary:
 ///
 /// ```text
 /// ------
@@ -230,33 +262,44 @@ pub(crate) fn failure_reason(tail: &[String], status: ExitStatus) -> String {
 /// ------
 /// ```
 ///
-/// The last `error:`-style line wins (its prefix removed); otherwise the
-/// step and its exit code, plus its last output line.
-fn failed_step_reason(lines: &[&str], reason: &str) -> Option<String> {
-    if !(reason.starts_with("process \"") && reason.contains("did not complete successfully")) {
-        return None;
+/// The streamed lines are used when the tail still holds them (npm's useful
+/// line is often not among the last ones), else the summary block.
+fn step_output<'a>(lines: &[&'a str], header: Option<usize>) -> Vec<&'a str> {
+    if let Some(vertex) = failed_vertex(lines) {
+        let streamed: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| l.strip_prefix(vertex).and_then(|rest| rest.strip_prefix(' ')))
+            .filter_map(timestamped)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !streamed.is_empty() {
+            return streamed;
+        }
     }
-    let code = reason.rsplit_once("exit code:").map(|(_, c)| c.trim().to_string());
-    let header = lines.iter().rposition(|l| l.starts_with("> [") && l.ends_with(':'))?;
-    let output: Vec<&str> = lines[header + 1..]
+    let Some(header) = header else { return Vec::new() };
+    lines[header + 1..]
         .iter()
         .take_while(|l| !l.starts_with("------"))
         .map(|l| strip_timestamp(l))
         .filter(|l| !l.is_empty())
-        .collect();
-    let explicit = output.iter().rev().find_map(|l| error_message(l, true));
-    if let Some(line) = explicit.or_else(|| output.iter().rev().find_map(|l| error_message(l, false))) {
-        return Some(line);
-    }
-    let step = step_command(lines[header]);
-    let failed = match &code {
-        Some(c) => format!("{step} failed with exit code {c}"),
-        None => format!("{step} failed"),
-    };
-    Some(match output.last() {
-        Some(last) => format!("{failed}: {last}"),
-        None => failed,
+        .collect()
+}
+
+/// `#8` out of `#8 ERROR: process "…" did not complete successfully: …`.
+fn failed_vertex<'a>(lines: &[&'a str]) -> Option<&'a str> {
+    lines.iter().rev().find_map(|l| {
+        let (id, rest) = l.split_once(' ')?;
+        let numbered = id.len() > 1 && id.starts_with('#') && id[1..].chars().all(|c| c.is_ascii_digit());
+        (numbered && rest.starts_with("ERROR:")).then_some(id)
     })
+}
+
+/// `0.763 npm error …` → `npm error …`; `None` for BuildKit's own lines of
+/// the vertex (`[build 4/4] RUN …`, `DONE 0.5s`, `ERROR: …`).
+fn timestamped(rest: &str) -> Option<&str> {
+    let (t, msg) = rest.split_once(' ').unwrap_or((rest, ""));
+    let is_time = t.contains('.') && t.chars().all(|c| c.is_ascii_digit() || c == '.');
+    is_time.then(|| msg.trim())
 }
 
 /// Output lines of the summary block start with the step's elapsed time.
@@ -277,7 +320,7 @@ fn error_message(line: &str, explicit: bool) -> Option<String> {
     let lower = line.to_ascii_lowercase();
     let msg = if explicit {
         ["error:", "fatal:"].iter().find(|p| lower.starts_with(**p)).map(|p| &line[p.len()..])
-    } else if lower.contains("a complete log of this run can be found") {
+    } else if crate::pm_errors::is_noise(line) {
         None
     } else if let Some(p) = ["npm error ", "npm err! "].iter().find(|p| lower.starts_with(**p)) {
         Some(&line[p.len()..])
@@ -483,7 +526,10 @@ mod tests {
             ],
             1,
         );
-        assert_eq!(failure_reason(&t, status(1)), "404 Not Found - GET https://registry.npmjs.org/nope - Not found");
+        assert_eq!(
+            failure_reason(&t, status(1)),
+            "404 Not Found - GET https://registry.npmjs.org/nope - Not found (npm E404)"
+        );
         // No error line: the step (without its flags), exit code and last line.
         let t = step(
             "RUN --mount=type=secret,id=API_KEY,env=API_KEY --mount=type=cache,target=/root/.cache/go-build ( make site )",
@@ -500,6 +546,102 @@ mod tests {
         let t =
             tail(&["ERROR: failed to solve: dockerfile parse error on line 7: unexpected key 'env' in 'env=API_KEY'"]);
         assert!(failure_reason(&t, status(1)).contains("Docker Engine 27.3 or newer"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn npm_install_failure_names_the_missing_package() {
+        // Verbatim tail of the regression build: BuildKit's summary block
+        // only repeats npm's last lines (advice), the streamed lines of the
+        // vertex hold the explanation.
+        let t = tail(&[
+            "#8 [4/5] RUN npm install --include=dev --no-audit --no-fund",
+            "#8 0.763 npm error code E404",
+            "#8 0.763 npm error 404 Not Found - GET https://registry.npmjs.org/ferry-this-package-does-not-exist-xyz - Not found",
+            "#8 0.763 npm error 404",
+            "#8 0.763 npm error 404  'ferry-this-package-does-not-exist-xyz@1.0.0' is not in this registry.",
+            "#8 0.763 npm error 404",
+            "#8 0.763 npm error 404 Note that you can also install from a",
+            "#8 0.763 npm error 404 tarball, folder, http url, or git url.",
+            "#8 0.765 npm notice",
+            "#8 0.765 npm notice New major version of npm available! 10.9.9 -> 12.1.0",
+            "#8 0.765 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.1.0",
+            "#8 0.765 npm notice To update run: npm install -g npm@12.1.0",
+            "#8 0.765 npm notice",
+            "#8 0.766 npm error A complete log of this run can be found in: /root/.npm/_logs/2026-09-26T13_53_54_546Z-debug-0.log",
+            "#8 ERROR: process \"/bin/sh -c npm install --include=dev --no-audit --no-fund\" did not complete successfully: exit code: 1",
+            "------",
+            " > [4/5] RUN npm install --include=dev --no-audit --no-fund:",
+            "0.763 npm error 404  'ferry-this-package-does-not-exist-xyz@1.0.0' is not in this registry.",
+            "0.763 npm error 404",
+            "0.763 npm error 404 Note that you can also install from a",
+            "0.763 npm error 404 tarball, folder, http url, or git url.",
+            "0.765 npm notice",
+            "0.765 npm notice New major version of npm available! 10.9.9 -> 12.1.0",
+            "0.765 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.1.0",
+            "0.765 npm notice To update run: npm install -g npm@12.1.0",
+            "0.765 npm notice",
+            "0.766 npm error A complete log of this run can be found in: /root/.npm/_logs/2026-09-26T13_53_54_546Z-debug-0.log",
+            "------",
+            "Dockerfile.ferry:7",
+            "--------------------",
+            "   5 |     COPY package.json ./",
+            "   6 | >>> RUN npm install --include=dev --no-audit --no-fund",
+            "--------------------",
+            "ERROR: failed to build: failed to solve: process \"/bin/sh -c npm install --include=dev --no-audit --no-fund\" did not complete successfully: exit code: 1",
+        ]);
+        assert_eq!(
+            failure_reason(&t, status(1)),
+            "'ferry-this-package-does-not-exist-xyz@1.0.0' is not in this registry (npm E404)"
+        );
+        // Only the summary block left in the tail: still not the advice.
+        let summary_only: Vec<String> = t.iter().skip_while(|l| *l != "------").cloned().collect();
+        assert_eq!(
+            failure_reason(&summary_only, status(1)),
+            "'ferry-this-package-does-not-exist-xyz@1.0.0' is not in this registry"
+        );
+
+        // The project's own npm script: the tool's output, not npm's
+        // metadata lines, explains the failure.
+        let t = tail(&[
+            "#9 [build 5/5] RUN npm run build",
+            "#9 0.4 > app@1.0.0 build",
+            "#9 0.4 > tsc",
+            "#9 2.1 src/main.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.",
+            "#9 2.2 npm error Lifecycle script `build` failed with error:",
+            "#9 2.2 npm error code 2",
+            "#9 2.2 npm error path /app",
+            "#9 2.2 npm error command failed",
+            "#9 2.2 npm error command sh -c tsc",
+            "#9 ERROR: process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 2",
+            "------",
+            " > [build 5/5] RUN npm run build:",
+            "2.2 npm error command sh -c tsc",
+            "------",
+            "ERROR: failed to build: failed to solve: process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 2",
+        ]);
+        assert_eq!(
+            failure_reason(&t, status(1)),
+            "RUN npm run build failed with exit code 2: src/main.ts(3,7): error TS2322: Type 'string' is not \
+             assignable to type 'number'."
+        );
+
+        // Streamed output of other vertexes never leaks into the summary.
+        let t = tail(&[
+            "#5 0.1 npm error code E404",
+            "#5 0.1 npm error 404  'other@1.0.0' is not in this registry.",
+            "#5 DONE 0.2s",
+            "#9 [build 3/3] RUN sh build.sh",
+            "#9 0.2 building...",
+            "#9 0.3 make: *** [site] Error 2",
+            "#9 ERROR: process \"/bin/sh -c sh build.sh\" did not complete successfully: exit code: 2",
+            "------",
+            " > [build 3/3] RUN sh build.sh:",
+            "0.3 make: *** [site] Error 2",
+            "------",
+            "ERROR: failed to build: failed to solve: process \"/bin/sh -c sh build.sh\" did not complete successfully: exit code: 2",
+        ]);
+        assert_eq!(failure_reason(&t, status(1)), "RUN sh build.sh failed with exit code 2: make: *** [site] Error 2");
     }
 
     #[test]

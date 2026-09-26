@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use ferry_core::CancellationToken;
 use ferry_core::tls::TlsHooks;
-use http::header::{HOST, HeaderValue};
+use http::header::{CONNECTION, HOST, HeaderValue};
 use http::uri::{Authority, PathAndQuery, Scheme};
 use http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version};
 use hyper::body::{Body as _, Incoming};
@@ -19,7 +19,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio_util::task::TaskTracker;
 
-use crate::body::{self, ProxyBody};
+use crate::body::{self, BodyTimedOut, ProxyBody};
 use crate::headers::{self, Forwarded};
 use crate::limits::ConnSlot;
 use crate::pages::{self, ErrorKind};
@@ -34,6 +34,12 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// reuses a connection the app is closing. Reconnecting on loopback is cheap.
 const UPSTREAM_POOL_IDLE: Duration = Duration::from_secs(1);
 const UPSTREAM_POOL_MAX_IDLE_PER_HOST: usize = 64;
+/// Text of the `no_upstreams` page. The route table only knows that the
+/// service has no instance to send traffic to — not why (never deployed,
+/// last deploy failed, deploy in progress, instances restarting) — so the
+/// page lists the likely reasons without claiming one.
+pub(crate) const NO_UPSTREAMS_MESSAGE: &str = "This service has no running instances right now — it may not be deployed \
+     yet, its last deploy may have failed, or a deploy is in progress.";
 
 /// The client side of a connection.
 #[derive(Clone)]
@@ -53,6 +59,8 @@ pub(crate) struct Proxy {
     redirect_https: bool,
     /// Port of the running HTTPS listener (None → never redirect).
     https_port: Option<u16>,
+    /// Longest wait for the next piece of a client's request body.
+    request_body_timeout: Duration,
     /// Upgraded (websocket) tunnels are tracked with the connections...
     tasks: TaskTracker,
     /// ...and closed when shutdown starts.
@@ -65,6 +73,7 @@ impl Proxy {
         tls_hooks: Option<Arc<dyn TlsHooks>>,
         redirect_https: bool,
         https_port: Option<u16>,
+        request_body_timeout: Duration,
         tasks: TaskTracker,
         shutdown: CancellationToken,
     ) -> Self {
@@ -78,7 +87,7 @@ impl Proxy {
             .pool_timer(TokioTimer::new())
             .timer(TokioTimer::new())
             .build(connector);
-        Proxy { routes, client, tls_hooks, redirect_https, https_port, tasks, shutdown }
+        Proxy { routes, client, tls_hooks, redirect_https, https_port, request_body_timeout, tasks, shutdown }
     }
 
     /// hyper service entry point. Never fails: every problem becomes a response.
@@ -153,11 +162,7 @@ impl Proxy {
                 return pages::error_page(ErrorKind::Suspended, "This service is suspended", head);
             }
             (Resolution::NoUpstreams, _) => {
-                return pages::error_page(
-                    ErrorKind::NoUpstreams,
-                    "No healthy instances yet — a deploy may be in progress",
-                    head,
-                );
+                return pages::error_page(ErrorKind::NoUpstreams, NO_UPSTREAMS_MESSAGE, head);
             }
         };
 
@@ -208,7 +213,10 @@ impl Proxy {
         let replayable = (parts.method == Method::GET || parts.method == Method::HEAD)
             && incoming.is_end_stream()
             && client_upgrade.is_none();
-        let first_body = if replayable { body::empty() } else { body::stream(incoming) };
+        // A client that stops sending its body fails the upstream request
+        // (→ 408 below) instead of holding both connections forever.
+        let first_body =
+            if replayable { body::empty() } else { body::with_idle_timeout(incoming, self.request_body_timeout) };
         let retry_headers = replayable.then(|| upstream_headers.clone());
 
         log.upstream = Some(upstream);
@@ -233,6 +241,27 @@ impl Proxy {
 
         let resp = match result {
             Ok(resp) => resp,
+            Err(err) if BodyTimedOut::caused(&err) => {
+                // Nothing came back from the upstream yet, so the client can
+                // still be told; the rest of its body is never read, so its
+                // connection cannot be reused.
+                tracing::debug!(
+                    host = raw_host,
+                    upstream = %upstream,
+                    client = %conn.remote,
+                    "proxy: request aborted: {}",
+                    error_chain(&err)
+                );
+                let mut resp = pages::error_page(
+                    ErrorKind::RequestTimeout,
+                    "Request timeout: the request body stopped arriving",
+                    head,
+                );
+                if !http2 {
+                    resp.headers_mut().insert(CONNECTION, HeaderValue::from_static("close"));
+                }
+                return resp;
+            }
             Err(err) => {
                 tracing::warn!(
                     host = raw_host,

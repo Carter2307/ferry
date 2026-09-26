@@ -20,7 +20,7 @@ use ferry_core::{CancellationToken, LogSink};
 use tokio::process::Command;
 use tokio_util::io::SyncIoBridge;
 
-use crate::archive::{ExtractError, ExtractReport, LinkPolicy, extract_tar};
+use crate::archive::{ExtractError, ExtractReport, Limits, LinkPolicy, extract_tar};
 use crate::fsutil::remove_dir_async;
 use crate::process::{RunError, run_capture, run_with_stdout};
 use crate::redact::redact_text;
@@ -372,12 +372,73 @@ pub(crate) async fn ls_remote_branch(repo_url: &str, branch: &str) -> Result<Str
         )));
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
-    stdout
+    let found = stdout
         .lines()
         .filter_map(|l| l.split_once('\t'))
         .find(|(_, name)| name.trim() == refname)
-        .map(|(sha, _)| sha.trim().to_string())
-        .ok_or_else(|| GitError::NotFound(format!("branch '{branch}' not found in {}", url.display)))
+        .map(|(sha, _)| sha.trim().to_string());
+    match found {
+        Some(sha) => Ok(sha),
+        None => Err(branch_not_found(&url, branch, None).await),
+    }
+}
+
+/// What a remote says about its branches (`git ls-remote --symref`).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RemoteBranches {
+    /// The branch `HEAD` points to (the repository's default branch).
+    default: Option<String>,
+    /// Every branch, in the remote's order.
+    branches: Vec<String>,
+}
+
+fn parse_remote_branches(stdout: &str) -> RemoteBranches {
+    let mut out = RemoteBranches::default();
+    for (target, name) in stdout.lines().filter_map(|l| l.split_once('\t')) {
+        let name = name.trim();
+        if name == "HEAD" {
+            if let Some(b) = target.strip_prefix("ref:").map(str::trim).and_then(|t| t.strip_prefix("refs/heads/"))
+                && validate_branch(b).is_ok()
+            {
+                out.default = Some(b.to_string());
+            }
+        } else if let Some(b) = name.strip_prefix("refs/heads/")
+            && validate_branch(b).is_ok()
+            && !out.branches.iter().any(|x| x == b)
+        {
+            out.branches.push(b.to_string());
+        }
+    }
+    out
+}
+
+/// The "branch not found" error, with a hint about the branches the remote
+/// does have (its default branch, e.g. `master` for a service left on the
+/// default `main`). The hint is best effort: an unreachable remote just
+/// yields the plain message.
+async fn branch_not_found(url: &RepoUrl, branch: &str, cancel: Option<&CancellationToken>) -> GitError {
+    let mut cmd = git_remote_cmd(url);
+    cmd.args(["ls-remote", "--symref"]).arg(&url.git_url).args(["HEAD", "refs/heads/*"]);
+    let remote = match run_git(cmd, "git ls-remote", url, cancel, LS_REMOTE_TIMEOUT).await {
+        Ok(out) if out.status.success() => Some(parse_remote_branches(&String::from_utf8_lossy(&out.stdout))),
+        Err(GitError::Canceled) => return GitError::Canceled,
+        _ => None,
+    };
+    let hint = remote.map(|r| branch_hint(&r, branch)).unwrap_or_default();
+    GitError::NotFound(format!("branch '{branch}' not found in {}{hint}", url.display))
+}
+
+fn branch_hint(remote: &RemoteBranches, branch: &str) -> String {
+    const LISTED: usize = 5;
+    if let Some(default) = remote.default.as_deref().filter(|d| *d != branch) {
+        return format!(" (the default branch is '{default}')");
+    }
+    if remote.branches.is_empty() {
+        return " (the repository has no branches yet: push a commit first)".to_string();
+    }
+    let shown: Vec<String> = remote.branches.iter().take(LISTED).map(|b| format!("'{b}'")).collect();
+    let more = if remote.branches.len() > LISTED { ", …" } else { "" };
+    format!(" (branches: {}{more})", shown.join(", "))
 }
 
 async fn check_local_exists(url: &RepoUrl) -> Result<(), GitError> {
@@ -556,14 +617,13 @@ pub(crate) async fn checkout(
         None => {
             match fetch_branch(cache, &url, branch, fresh, logs, cancel).await {
                 Ok(()) => {}
-                Err(GitError::NotFound(_)) => {
-                    return Err(GitError::NotFound(format!("branch '{branch}' not found in {}", url.display)));
-                }
+                Err(GitError::NotFound(_)) => return Err(branch_not_found(&url, branch, Some(cancel)).await),
                 Err(e) => return Err(e),
             }
-            rev_parse(cache, &url, &format!("refs/remotes/origin/{branch}"), cancel)
-                .await?
-                .ok_or_else(|| GitError::NotFound(format!("branch '{branch}' not found in {}", url.display)))?
+            match rev_parse(cache, &url, &format!("refs/remotes/origin/{branch}"), cancel).await? {
+                Some(sha) => sha,
+                None => return Err(branch_not_found(&url, branch, Some(cancel)).await),
+            }
         }
         Some(c) => resolve_commit(cache, &url, branch, c, fresh, logs, cancel).await?,
     };
@@ -656,7 +716,9 @@ async fn export(
     let token = cancel.clone();
     let res = run_with_stdout(cmd, cancel, move |stdout| async move {
         let bridge = SyncIoBridge::new(stdout);
-        match tokio::task::spawn_blocking(move || extract_tar(bridge, &dest, LinkPolicy::Skip, &token)).await {
+        match tokio::task::spawn_blocking(move || extract_tar(bridge, &dest, LinkPolicy::Skip, Limits::GIT, &token))
+            .await
+        {
             Ok(r) => r,
             Err(e) => Err(ExtractError::Io(io::Error::other(format!("extraction task failed: {e}")))),
         }
@@ -1039,7 +1101,8 @@ mod tests {
         std::fs::create_dir_all(&dest).unwrap();
 
         let err = checkout(&cache, &url, "nope", None, &dest, &logs, &cancel).await.unwrap_err();
-        assert!(matches!(&err, GitError::NotFound(m) if m == &format!("branch 'nope' not found in {url}")), "{err:?}");
+        let expected = format!("branch 'nope' not found in {url} (the default branch is 'main')");
+        assert!(matches!(&err, GitError::NotFound(m) if m == &expected), "{err:?}");
 
         let err = checkout(&cache, &url, "main", Some("deadbeefdeadbeef"), &dest, &logs, &cancel).await.unwrap_err();
         assert!(
@@ -1105,6 +1168,68 @@ mod tests {
         let err = ls_remote_branch(&url, "missing").await.unwrap_err();
         assert!(matches!(&err, GitError::NotFound(m) if m.contains("branch 'missing' not found")), "{err:?}");
         assert!(matches!(ls_remote_branch(&url, "-x").await, Err(GitError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn missing_branch_names_the_default_branch() {
+        // Regression: a master-only repository with the service on the
+        // default `main` said only "branch 'main' not found".
+        let d = tempfile::tempdir().unwrap();
+        git_in(d.path(), &["init", "-q", "-b", "master"]);
+        std::fs::write(d.path().join("a.txt"), "a").unwrap();
+        git_in(d.path(), &["add", "-A"]);
+        git_in(d.path(), &["commit", "-q", "-m", "init"]);
+        git_in(d.path(), &["branch", "dev"]);
+        let url = d.path().to_string_lossy().into_owned();
+        let expected = format!("branch 'main' not found in {url} (the default branch is 'master')");
+
+        let err = ls_remote_branch(&url, "main").await.unwrap_err();
+        assert!(matches!(&err, GitError::NotFound(m) if m == &expected), "{err:?}");
+
+        let work = tempfile::tempdir().unwrap();
+        let dest = work.path().join("b");
+        std::fs::create_dir_all(&dest).unwrap();
+        let cancel = CancellationToken::new();
+        let err = checkout(&work.path().join("cache"), &url, "main", None, &dest, &LogSink::noop(), &cancel)
+            .await
+            .unwrap_err();
+        assert!(matches!(&err, GitError::NotFound(m) if m == &expected), "{err:?}");
+        // Through the file:// form (bare remote) too.
+        let bare = work.path().join("bare.git");
+        git_in(work.path(), &["clone", "-q", "--bare", &url, &bare.to_string_lossy()]);
+        let file_url = format!("file://{}", bare.display());
+        let err = ls_remote_branch(&file_url, "main").await.unwrap_err();
+        assert!(err.message().ends_with("(the default branch is 'master')"), "{err:?}");
+
+        // An empty repository says so.
+        let empty = tempfile::tempdir().unwrap();
+        git_in(empty.path(), &["init", "-q", "-b", "main"]);
+        let err = ls_remote_branch(&empty.path().to_string_lossy(), "main").await.unwrap_err();
+        assert!(err.message().ends_with("(the repository has no branches yet: push a commit first)"), "{err:?}");
+    }
+
+    #[test]
+    fn remote_branch_hints() {
+        let out = "ref: refs/heads/master\tHEAD\n\
+                   1111111111111111111111111111111111111111\tHEAD\n\
+                   1111111111111111111111111111111111111111\trefs/heads/dev\n\
+                   1111111111111111111111111111111111111111\trefs/heads/master\n\
+                   1111111111111111111111111111111111111111\trefs/remotes/x/refs/heads/zz\n";
+        let r = parse_remote_branches(out);
+        assert_eq!(r.default.as_deref(), Some("master"));
+        assert_eq!(r.branches, vec!["dev".to_string(), "master".to_string()]);
+        assert_eq!(branch_hint(&r, "main"), " (the default branch is 'master')");
+        // HEAD on the missing branch itself (unborn): list what exists.
+        assert_eq!(branch_hint(&r, "master"), " (branches: 'dev', 'master')");
+        let many = RemoteBranches { default: None, branches: (1..=7).map(|i| format!("b{i}")).collect() };
+        assert_eq!(branch_hint(&many, "main"), " (branches: 'b1', 'b2', 'b3', 'b4', 'b5', …)");
+        assert_eq!(
+            branch_hint(&RemoteBranches::default(), "main"),
+            " (the repository has no branches yet: push a commit first)"
+        );
+        // Names that could be mistaken for anything else are ignored.
+        let r = parse_remote_branches("ref: refs/heads/-evil\tHEAD\nx\trefs/heads/a b\n");
+        assert_eq!(r, RemoteBranches::default());
     }
 
     #[cfg(unix)]

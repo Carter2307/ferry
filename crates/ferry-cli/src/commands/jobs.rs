@@ -1,10 +1,12 @@
-//! `ferry run` (one-off jobs / trigger a cron job) and `ferry jobs`.
+//! `ferry run` (one-off jobs / trigger a cron job), `ferry jobs` and
+//! `ferry jobs cancel`.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use ferry_core::JobRun;
 use ferry_core::dto::RunJobRequest;
 
 use super::{Ctx, follow_job, print_json};
+use crate::client::ApiError;
 use crate::output::{self, Cell, Table, errln, outln};
 
 /// Quote one word for `sh` when needed (single quotes, `'` → `'\''`).
@@ -64,6 +66,39 @@ pub async fn list(ctx: &Ctx, name: &str, limit: u32) -> Result<()> {
         ]);
     }
     outln!("{}", t.render(output::stdout_color()).trim_end())?;
+    Ok(())
+}
+
+/// `ferry jobs cancel JOB_ID`: stop a pending or running job run.
+pub async fn cancel(ctx: &Ctx, job_id: &str) -> Result<()> {
+    // Look it up first: an unknown id fails here, and a finished run needs no request.
+    let job = ctx.client.get::<JobRun>(&["jobs", job_id], &[]).await?.data;
+    if job.status.is_terminal() {
+        bail!("job {} already finished ({}): nothing to cancel", job.id, job.status);
+    }
+    let resp = match ctx.client.post_empty::<JobRun>(&["jobs", &job.id, "cancel"]).await {
+        Ok(r) => r,
+        Err(e) => {
+            let status = e.chain().find_map(|c| c.downcast_ref::<ApiError>()).map(|a| a.status);
+            match status {
+                // It finished between the lookup and the cancel.
+                Some(409) => {
+                    let now = ctx.client.get::<JobRun>(&["jobs", &job.id], &[]).await.ok().map(|j| j.data.status);
+                    let status = now.filter(|s| s.is_terminal()).map(|s| format!(" ({s})")).unwrap_or_default();
+                    bail!("job {} already finished{status}: nothing to cancel", job.id);
+                }
+                _ if crate::client::is_missing_route(&e) => {
+                    return Err(e.context("this Ferry server can't cancel jobs: upgrade ferryd"));
+                }
+                _ => return Err(e),
+            }
+        }
+    };
+    if ctx.json {
+        return print_json(&resp.raw);
+    }
+    let j = &resp.data;
+    outln!("Job {} {}", j.id, output::out_opt(output::job_status_color(j.status), j.status.as_str()))?;
     Ok(())
 }
 

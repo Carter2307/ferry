@@ -23,16 +23,26 @@ pub async fn list(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> A
     Ok(Json(st.store.list_env(&svc.id).await?))
 }
 
-/// Restart after an env change when asked to (see
+/// Restart after an env change when asked to and when the service's
+/// effective environment really changed since `before` (see
 /// [`ops::restart_for_env_change`]). The variables are already saved, so a
 /// failed restart is reported as the request's error, saying so.
-async fn maybe_restart(st: &AppState, svc: &Service, restart: bool) -> ApiResult<()> {
-    if restart {
-        let fresh = st.store.require_service(&svc.id).await?;
-        ops::restart_for_env_change(&st.store, st.engine.as_ref(), &fresh).await.map_err(|e| {
-            ApiError::from(e).prefixed(format!("env vars saved, but restarting '{}' failed: ", svc.name))
-        })?;
+async fn maybe_restart(st: &AppState, svc: &Service, restart: bool, before: &ops::EnvSnapshot) -> ApiResult<()> {
+    if !restart {
+        return Ok(());
     }
+    match before.changed(&st.store, &svc.id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::info!(service = %svc.name, "environment unchanged; not restarting");
+            return Ok(());
+        }
+        Err(e) => tracing::warn!(service = %svc.name, "comparing the environment failed; restarting anyway: {e}"),
+    }
+    let fresh = st.store.require_service(&svc.id).await?;
+    ops::restart_for_env_change(&st.store, st.engine.as_ref(), &fresh)
+        .await
+        .map_err(|e| ApiError::from(e).prefixed(format!("env vars saved, but restarting '{}' failed: ", svc.name)))?;
     Ok(())
 }
 
@@ -54,9 +64,14 @@ pub async fn replace(
         let (svc, _guard) = locked_service(&st, &id).await?;
         validate::env_vars(&req.vars)?;
         checks::check_service_env(&st.store, &svc, EnvChange { own: Some(&req.vars), ..Default::default() }).await?;
-        st.store.replace_env(&svc.id, &req.vars).await?;
-        tracing::info!(service = %svc.name, vars = req.vars.len(), "replaced env vars");
-        maybe_restart(&st, &svc, q.restart).await?;
+        let before = ops::EnvSnapshot::capture(&st.store, std::slice::from_ref(&svc.id)).await?;
+        if ops::same_env(&st.store.list_env(&svc.id).await?, &req.vars) {
+            tracing::info!(service = %svc.name, "env vars unchanged");
+        } else {
+            st.store.replace_env(&svc.id, &req.vars).await?;
+            tracing::info!(service = %svc.name, vars = req.vars.len(), "replaced env vars");
+        }
+        maybe_restart(&st, &svc, q.restart, &before).await?;
         Ok(Json(st.store.list_env(&svc.id).await?))
     })
     .await
@@ -73,12 +88,18 @@ pub async fn patch(
         let (svc, _guard) = locked_service(&st, &id).await?;
         validate::env_vars(&req.set)?;
         // The limits apply to the result, not just to the request.
-        let merged = checks::patched_env(&st.store.list_env(&svc.id).await?, &req.set, &req.unset);
+        let current = st.store.list_env(&svc.id).await?;
+        let merged = checks::patched_env(&current, &req.set, &req.unset);
         validate::env_vars(&merged)?;
         checks::check_service_env(&st.store, &svc, EnvChange { own: Some(&merged), ..Default::default() }).await?;
-        st.store.patch_env(&svc.id, &req.set, &req.unset).await?;
-        tracing::info!(service = %svc.name, set = req.set.len(), unset = req.unset.len(), "patched env vars");
-        maybe_restart(&st, &svc, q.restart).await?;
+        let before = ops::EnvSnapshot::capture(&st.store, std::slice::from_ref(&svc.id)).await?;
+        if ops::same_env(&current, &merged) {
+            tracing::info!(service = %svc.name, "env vars unchanged");
+        } else {
+            st.store.patch_env(&svc.id, &req.set, &req.unset).await?;
+            tracing::info!(service = %svc.name, set = req.set.len(), unset = req.unset.len(), "patched env vars");
+        }
+        maybe_restart(&st, &svc, q.restart, &before).await?;
         Ok(Json(st.store.list_env(&svc.id).await?))
     })
     .await

@@ -13,10 +13,11 @@ use crate::{locks, ops};
 /// failures of engine side effects after the writes (deploys, restarts,
 /// provisioning) are reported as warnings.
 ///
-/// Planning and writing run under the domain lock and the row locks of every
-/// existing resource the blueprint names (see [`crate::locks`]), so API
-/// requests can't change them between the checks and the writes. Callers
-/// must not hold any of those locks.
+/// Planning and writing run under the names lock, the domain lock and the
+/// row locks of every existing resource the blueprint names (see
+/// [`crate::locks`]), so API requests can't create a clashing service or
+/// datastore, or change those resources, between the checks and the writes.
+/// Callers must not hold any of those locks.
 pub async fn apply(
     store: &Store,
     config: &Config,
@@ -31,6 +32,7 @@ pub async fn apply(
         return Ok(BlueprintResult { dry_run: true, actions: plan.actions, deploys: Vec::new(), warnings });
     }
 
+    let names_guard = locks::names().await;
     let domains_guard = locks::domains().await;
     let service_names: HashSet<&str> = bp.services.iter().map(|s| s.name.as_str()).collect();
     let group_names: HashSet<&str> = bp.env_groups.iter().map(|g| g.name.as_str()).collect();
@@ -50,6 +52,17 @@ pub async fn apply(
     let mut warnings = bp.warnings.clone();
     warnings.extend(plan.warnings.iter().cloned());
     let mut deploys = Vec::new();
+
+    // The environments the restarts below compare against: only services
+    // whose effective environment really changes are restarted.
+    let mut env_candidates: Vec<String> =
+        plan.services.iter().filter_map(|sp| sp.existing.as_ref()).map(|s| s.id.clone()).collect();
+    for gp in plan.groups.iter().filter(|gp| !gp.set.is_empty()) {
+        if let Some(g) = &gp.existing {
+            env_candidates.extend(store.env_group_services(&g.id).await?.into_iter().map(|s| s.id));
+        }
+    }
+    let env_before = ops::EnvSnapshot::capture(store, &env_candidates).await?;
 
     // 1. env groups
     let mut group_ids: HashMap<String, String> =
@@ -132,6 +145,7 @@ pub async fn apply(
     // The rows are written: API requests may proceed while the engine works.
     drop(row_guards);
     drop(domains_guard);
+    drop(names_guard);
 
     // 4. deploys, restarts, scaling, routes
     let mut group_members: HashSet<String> = HashSet::new();
@@ -169,7 +183,19 @@ pub async fn apply(
                 Ok(d) => deploys.push(d),
                 Err(e) => warnings.push(format!("service '{name}': queuing a deploy failed: {e}")),
             }
-        } else if sp.env_changed || group_members.contains(id) {
+        } else if sp.command_changed {
+            // Also applies env changes, if any.
+            if current.suspended && current.live_deploy_id.is_some() {
+                warnings.push(format!("service '{name}' is suspended: resume and restart it to apply the new command"));
+                continue;
+            }
+            match ops::restart_if_deployed(store, engine, &current, DeployTrigger::Restart).await {
+                Ok(Some(d)) => deploys.push(d),
+                Ok(None) => {}
+                Err(e) => warnings.push(format!("service '{name}': restart for the new command failed: {e}")),
+            }
+        } else if (sp.env_changed || group_members.contains(id)) && env_before.changed(store, id).await.unwrap_or(true)
+        {
             match ops::restart_for_env_change(store, engine, &current).await {
                 Ok(Some(d)) => deploys.push(d),
                 Ok(None) => {}
@@ -182,6 +208,9 @@ pub async fn apply(
     outside.sort();
     for id in outside {
         let Some(svc) = store.get_service(id).await? else { continue };
+        if !env_before.changed(store, id).await.unwrap_or(true) {
+            continue;
+        }
         match ops::restart_for_env_change(store, engine, &svc).await {
             Ok(Some(d)) => deploys.push(d),
             Ok(None) => {}

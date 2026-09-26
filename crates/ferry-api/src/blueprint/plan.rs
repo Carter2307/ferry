@@ -89,6 +89,9 @@ pub(crate) struct ServicePlan {
     pub needs_deploy: bool,
     /// Own env vars or env group links changed → restart if live.
     pub env_changed: bool,
+    /// A cron job's command changed: its runs use the command of the live
+    /// deploy's snapshot → restart if live (no rebuild needed).
+    pub command_changed: bool,
     /// Human-readable changes (updates only).
     pub changes: Vec<String>,
 }
@@ -124,7 +127,8 @@ struct Pending {
 /// What references may point at.
 struct Targets<'a> {
     datastores: HashMap<&'a str, DatastoreKind>,
-    services: HashSet<&'a str>,
+    /// Service types after the apply (the blueprint's type wins).
+    services: HashMap<&'a str, ServiceType>,
 }
 
 fn prefix_err(ctx: &str, e: Error) -> Error {
@@ -175,13 +179,13 @@ pub async fn plan(store: &Store, config: &Config, bp: &Blueprint) -> Result<Plan
 
     let mut targets = Targets {
         datastores: store_datastores.iter().map(|d| (d.name.as_str(), d.kind)).collect(),
-        services: store_services.iter().map(|s| s.name.as_str()).collect(),
+        services: store_services.iter().map(|s| (s.name.as_str(), s.service_type)).collect(),
     };
     for d in &bp.datastores {
         targets.datastores.insert(&d.name, d.kind);
     }
     for s in &bp.services {
-        targets.services.insert(&s.name);
+        targets.services.insert(&s.name, s.service_type);
     }
     let known_groups: HashSet<&str> =
         store_groups.iter().map(|g| g.name.as_str()).chain(bp.env_groups.iter().map(|g| g.name.as_str())).collect();
@@ -287,6 +291,7 @@ pub async fn plan(store: &Store, config: &Config, bp: &Blueprint) -> Result<Plan
             instances_changed: false,
             domains_changed: false,
             needs_deploy: false,
+            command_changed: false,
             changes: Vec::new(),
         };
         final_links.push(links.result);
@@ -506,14 +511,28 @@ fn compile_reference(
     targets: &Targets<'_>,
 ) -> Result<String> {
     if let Some(kind) = targets.datastores.get(name) {
-        if target == RefTarget::Service {
-            let what = match kind {
-                DatastoreKind::Postgres => "database",
-                DatastoreKind::Redis => "key value",
-            };
-            return Err(Error::invalid(format!(
-                "{ctx}: '{name}' is a {what}, not a service: use fromDatabase, or fromService with type: keyvalue"
-            )));
+        match (target, kind) {
+            (RefTarget::Service, DatastoreKind::Postgres) => {
+                return Err(Error::invalid(format!(
+                    "{ctx}: '{name}' is a Postgres database, not a service: use fromDatabase"
+                )));
+            }
+            (RefTarget::Service, DatastoreKind::Redis) => {
+                return Err(Error::invalid(format!(
+                    "{ctx}: '{name}' is a key value (Redis), not a service: use fromService with type: keyvalue"
+                )));
+            }
+            (RefTarget::KeyValue, DatastoreKind::Postgres) => {
+                return Err(Error::invalid(format!(
+                    "{ctx}: '{name}' is a Postgres database, not a key value: use fromDatabase"
+                )));
+            }
+            (RefTarget::Database, DatastoreKind::Redis) => {
+                return Err(Error::invalid(format!(
+                    "{ctx}: '{name}' is a key value (Redis), not a database: use fromService with type: keyvalue"
+                )));
+            }
+            _ => {}
         }
         if !DATASTORE_PROPS.contains(&property) {
             return Err(Error::invalid(format!(
@@ -528,8 +547,8 @@ fn compile_reference(
         }
         return Ok(reference("datastore", name, property));
     }
-    if targets.services.contains(name) {
-        if target == RefTarget::Datastore {
+    if let Some(ty) = targets.services.get(name) {
+        if target.is_datastore() {
             return Err(Error::invalid(format!("{ctx}: '{name}' is a service, not a database or key value")));
         }
         if !SERVICE_PROPS.contains(&property) {
@@ -537,14 +556,43 @@ fn compile_reference(
                 "{ctx}: unsupported property '{property}' for service '{name}' (expected host, port, hostport, url or internalUrl)"
             )));
         }
+        // Resolved when the referencing service starts: refuse what could
+        // never resolve instead of failing every deploy later (same rules
+        // as `Service::is_public_http` / `Service::listens`).
+        let public = matches!(ty, ServiceType::WebService | ServiceType::StaticSite);
+        let listens = public || *ty == ServiceType::PrivateService;
+        if matches!(property, "url" | "externalUrl") && !public {
+            return Err(Error::invalid(format!(
+                "{ctx}: service '{name}' is a {} and has no public URL (only web services and static sites do); use host, hostport or internalUrl on the private network",
+                type_label(*ty)
+            )));
+        }
+        if matches!(property, "port" | "hostport" | "internalUrl") && !listens {
+            return Err(Error::invalid(format!(
+                "{ctx}: service '{name}' is a {} and doesn't listen on a port (only web services, private services and static sites do); property '{property}' can't be resolved",
+                type_label(*ty)
+            )));
+        }
         return Ok(reference("service", name, property));
     }
     let what = match target {
-        RefTarget::Datastore => "database or key value",
+        RefTarget::Database => "database",
+        RefTarget::KeyValue => "key value",
         RefTarget::Service => "service",
         RefTarget::Any => "service or datastore",
     };
     Err(Error::invalid(format!("{ctx}: references unknown {what} '{name}'")))
+}
+
+/// Render's name of a service type, for messages.
+fn type_label(ty: ServiceType) -> &'static str {
+    match ty {
+        ServiceType::WebService => "web service",
+        ServiceType::PrivateService => "private service (pserv)",
+        ServiceType::BackgroundWorker => "background worker",
+        ServiceType::CronJob => "cron job",
+        ServiceType::StaticSite => "static site",
+    }
 }
 
 fn initial_slots(
@@ -581,7 +629,7 @@ fn initial_slots(
                 Slot::Ready(compile_reference(*target, name, property, &kctx, targets)?)
             }
             EnvVarSpec::CopyFrom { service, env_var_key, .. } => {
-                if !targets.services.contains(service.as_str()) {
+                if !targets.services.contains_key(service.as_str()) {
                     return Err(Error::invalid(format!("{kctx}: fromService references unknown service '{service}'")));
                 }
                 validate::env_key(env_var_key).map_err(|e| prefix_err(&kctx, e))?;
@@ -834,7 +882,10 @@ fn diff_service(old: &Service, sp: &mut ServicePlan) -> Vec<String> {
     field("root_dir", show(&old.root_dir), show(&new.root_dir), true);
     field("dockerfile_path", show(&old.dockerfile_path), show(&new.dockerfile_path), true);
     field("build_command", show(&old.build_command), show(&new.build_command), true);
-    field("start_command", show(&old.start_command), show(&new.start_command), true);
+    // Cron runs take their command from the deploy snapshot, not the image:
+    // a restart applies it (see `command_changed`).
+    let cron_command = crate::ops::cron_command_changed(old, new);
+    field("start_command", show(&old.start_command), show(&new.start_command), !cron_command);
     field("publish_dir", show(&old.publish_dir), show(&new.publish_dir), true);
     field("port", show(&old.port.map(|p| p.to_string())), show(&new.port.map(|p| p.to_string())), true);
     field("health_check_path", show(&old.health_check_path), show(&new.health_check_path), true);
@@ -854,6 +905,7 @@ fn diff_service(old: &Service, sp: &mut ServicePlan) -> Vec<String> {
         ));
     }
     sp.build_changed = build;
+    sp.command_changed = cron_command;
     sp.instances_changed = instances_changed;
     sp.domains_changed = domains_changed;
     sp.settings_changed = build || other || instances_changed || domains_changed;
@@ -869,23 +921,62 @@ mod tests {
         assert_eq!(reference("datastore", "db", "connectionString"), "${{datastore.db.connectionString}}");
         let targets = Targets {
             datastores: [("db", DatastoreKind::Postgres), ("cache", DatastoreKind::Redis)].into_iter().collect(),
-            services: ["api"].into_iter().collect(),
+            services: [
+                ("api", ServiceType::PrivateService),
+                ("web", ServiceType::WebService),
+                ("site", ServiceType::StaticSite),
+                ("bg", ServiceType::BackgroundWorker),
+                ("tick", ServiceType::CronJob),
+            ]
+            .into_iter()
+            .collect(),
         };
         let c = |t, n, p| compile_reference(t, n, p, "x", &targets);
-        assert_eq!(c(RefTarget::Datastore, "db", "password").unwrap(), "${{datastore.db.password}}");
+        assert_eq!(c(RefTarget::Database, "db", "password").unwrap(), "${{datastore.db.password}}");
         assert_eq!(
             c(RefTarget::Any, "cache", "hostport").unwrap(),
             "${{datastore.cache.host}}:${{datastore.cache.port}}"
         );
+        assert_eq!(
+            c(RefTarget::KeyValue, "cache", "connectionString").unwrap(),
+            "${{datastore.cache.connectionString}}"
+        );
         assert_eq!(c(RefTarget::Service, "api", "hostport").unwrap(), "${{service.api.hostport}}");
-        assert!(c(RefTarget::Datastore, "api", "host").is_err());
+        assert!(c(RefTarget::Database, "api", "host").is_err());
+        assert!(c(RefTarget::KeyValue, "api", "host").is_err());
         let err = c(RefTarget::Service, "db", "host").unwrap_err().to_string();
-        assert!(err.contains("'db' is a database, not a service"), "{err}");
+        assert!(err.contains("'db' is a Postgres database, not a service"), "{err}");
         assert!(c(RefTarget::Service, "cache", "hostport").is_err());
-        assert!(c(RefTarget::Datastore, "cache", "database").is_err());
+        assert!(c(RefTarget::KeyValue, "cache", "database").is_err());
         assert!(c(RefTarget::Service, "api", "connectionString").is_err());
         assert!(c(RefTarget::Any, "nope", "host").is_err());
-        assert!(c(RefTarget::Datastore, "db", "bogus").is_err());
+        assert!(c(RefTarget::Database, "db", "bogus").is_err());
+        // datastore kinds must match the reference
+        let err = c(RefTarget::KeyValue, "db", "connectionString").unwrap_err().to_string();
+        assert!(err.contains("'db' is a Postgres database, not a key value: use fromDatabase"), "{err}");
+        let err = c(RefTarget::Database, "cache", "connectionString").unwrap_err().to_string();
+        assert!(err.contains("'cache' is a key value (Redis), not a database"), "{err}");
+        // public URLs only for web services and static sites
+        for (svc, ok) in [("web", true), ("site", true), ("api", false), ("bg", false), ("tick", false)] {
+            for prop in ["url", "externalUrl"] {
+                let res = c(RefTarget::Any, svc, prop);
+                assert_eq!(res.is_ok(), ok, "{svc}.{prop}: {res:?}");
+                if let Err(e) = res {
+                    assert!(e.to_string().contains("has no public URL"), "{e}");
+                }
+            }
+        }
+        // ports only for services that listen
+        for (svc, ok) in [("web", true), ("site", true), ("api", true), ("bg", false), ("tick", false)] {
+            for prop in ["port", "hostport", "internalUrl"] {
+                let res = c(RefTarget::Service, svc, prop);
+                assert_eq!(res.is_ok(), ok, "{svc}.{prop}: {res:?}");
+                if let Err(e) = res {
+                    assert!(e.to_string().contains("doesn't listen on a port"), "{e}");
+                }
+            }
+            assert!(c(RefTarget::Service, svc, "host").is_ok(), "{svc}.host");
+        }
     }
 
     #[test]

@@ -6,13 +6,18 @@
 //!   each other's acknowledged changes.
 //! * Custom-domain / default-host uniqueness is a check-then-write across all
 //!   services, so it runs under one global **domain** lock.
+//! * Services and datastores share one namespace (their names are hostnames
+//!   on the private network), but each table only enforces its own
+//!   uniqueness: creating either — and the blueprint apply, which creates
+//!   both — runs under one global **names** lock, so a service and a
+//!   datastore can't be created with the same name concurrently.
 //! * [`detached`] runs a handler body on its own task: a client disconnect
 //!   drops the handler future, which must not stop a multi-step change
 //!   halfway (row written, first deploy never queued...).
 //!
-//! Lock order — never acquire against it: blueprint apply lock → domain lock
-//! → owner locks (several at once only in ascending id order). Nobody waits
-//! for the domain lock while holding an owner lock.
+//! Lock order — never acquire against it: blueprint apply lock → names lock
+//! → domain lock → owner locks (several at once only in ascending id order).
+//! Nobody waits for the names or domain lock while holding an owner lock.
 //!
 //! The locks are process-wide (one API server per process; ids are unique
 //! across stores, so independent routers in tests don't interfere).
@@ -29,6 +34,8 @@ use crate::error::ApiResult;
 static OWNER_LOCKS: LazyLock<StdMutex<HashMap<String, Arc<Mutex<()>>>>> = LazyLock::new(Default::default);
 
 static DOMAIN_LOCK: Mutex<()> = Mutex::const_new(());
+
+static NAMES_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Lock the rows of one owner (service or env group id).
 pub async fn owner(id: &str) -> OwnedMutexGuard<()> {
@@ -57,6 +64,11 @@ pub async fn owners(ids: impl IntoIterator<Item = String>) -> Vec<OwnedMutexGuar
 /// The global lock around custom-domain / default-host claims.
 pub async fn domains() -> MutexGuard<'static, ()> {
     DOMAIN_LOCK.lock().await
+}
+
+/// The global lock around creating services and datastores (shared namespace).
+pub async fn names() -> MutexGuard<'static, ()> {
+    NAMES_LOCK.lock().await
 }
 
 /// Run `fut` to completion on its own task and return its result, so that a
