@@ -10,6 +10,23 @@ pub const RESERVED_NAMES: &[&str] = &["ferry", "localhost"];
 /// Maximum instances per service.
 pub const MAX_INSTANCES: u32 = 50;
 
+/// Maximum size of one environment variable value (bytes).
+pub const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
+
+/// Maximum total size of a service's (or env group's) variables, keys + values.
+/// Keeps process environments and `docker build` well under OS `ARG_MAX`.
+pub const MAX_ENV_TOTAL_BYTES: usize = 256 * 1024;
+
+/// True if `s` has the shape of a Ferry id (`srv-`, `dep-`, `job-`, `dbs-` or
+/// `evg-` followed by 20 hex chars). Such names are rejected so id-or-name
+/// lookups can never be ambiguous.
+pub fn looks_like_id(s: &str) -> bool {
+    use crate::ids;
+    [ids::SERVICE, ids::DEPLOY, ids::JOB, ids::DATASTORE, ids::ENV_GROUP].iter().any(|p| {
+        ids::has_prefix(s, p) && s[p.len() + 1..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    })
+}
+
 /// Service / datastore names: DNS label, 1–40 chars, `[a-z0-9-]`, starts with a
 /// letter, doesn't end with `-`. They double as private-network hostnames.
 pub fn resource_name(name: &str) -> Result<()> {
@@ -26,6 +43,9 @@ pub fn resource_name(name: &str) -> Result<()> {
     if RESERVED_NAMES.contains(&name) {
         return Err(Error::invalid(format!("name '{name}' is reserved")));
     }
+    if looks_like_id(name) {
+        return Err(Error::invalid(format!("name '{name}' looks like a resource id; choose another name")));
+    }
     Ok(())
 }
 
@@ -34,13 +54,115 @@ pub fn env_group_name(name: &str) -> Result<()> {
     let ok = !name.is_empty()
         && name.len() <= 64
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
-    if ok { Ok(()) } else { Err(Error::invalid(format!("invalid env group name '{name}'"))) }
+    if !ok {
+        return Err(Error::invalid(format!(
+            "invalid env group name '{name}': use 1-64 letters, digits, '-', '_' or '.'"
+        )));
+    }
+    if looks_like_id(name) {
+        return Err(Error::invalid(format!("env group name '{name}' looks like a resource id; choose another name")));
+    }
+    Ok(())
 }
 
 /// Environment variable keys: non-empty, no `=`, whitespace or NUL, ≤ 256 chars.
 pub fn env_key(key: &str) -> Result<()> {
     let ok = !key.is_empty() && key.len() <= 256 && !key.chars().any(|c| c == '=' || c == '\0' || c.is_whitespace());
     if ok { Ok(()) } else { Err(Error::invalid(format!("invalid environment variable name '{key}'"))) }
+}
+
+/// Validate one variable (key rules plus value size / no NUL bytes).
+pub fn env_var(key: &str, value: &str) -> Result<()> {
+    env_key(key)?;
+    if value.len() > MAX_ENV_VALUE_BYTES {
+        return Err(Error::invalid(format!(
+            "value of {key} is {} bytes; the maximum is {MAX_ENV_VALUE_BYTES} bytes",
+            value.len()
+        )));
+    }
+    if value.contains('\0') {
+        return Err(Error::invalid(format!("value of {key} contains a NUL byte")));
+    }
+    Ok(())
+}
+
+/// Validate a whole set of variables: each variable, no duplicate keys, and
+/// the total size limit.
+pub fn env_vars(vars: &[crate::models::EnvVar]) -> Result<()> {
+    let mut total = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    for v in vars {
+        env_var(&v.key, &v.value)?;
+        if !seen.insert(v.key.as_str()) {
+            return Err(Error::invalid(format!("environment variable {} is set more than once", v.key)));
+        }
+        total += v.key.len() + v.value.len() + 2;
+    }
+    if total > MAX_ENV_TOTAL_BYTES {
+        return Err(Error::invalid(format!(
+            "environment variables total {total} bytes; the maximum is {MAX_ENV_TOTAL_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+/// A git commit reference given by a user: 4–64 hex characters.
+pub fn commit(sha: &str) -> Result<()> {
+    let sha = sha.trim();
+    if (4..=64).contains(&sha.len()) && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(Error::invalid(format!("invalid commit '{sha}': expected a hex commit sha")))
+    }
+}
+
+/// A git branch name (subset of `git check-ref-format --branch` rules).
+pub fn branch(b: &str) -> Result<()> {
+    let bad = b.is_empty()
+        || b.len() > 255
+        || b.starts_with('-')
+        || b.starts_with('/')
+        || b.ends_with('/')
+        || b.ends_with('.')
+        || b.ends_with(".lock")
+        || b.contains("..")
+        || b.contains("//")
+        || b.contains("@{")
+        || b.chars().any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if bad { Err(Error::invalid(format!("invalid branch '{b}'"))) } else { Ok(()) }
+}
+
+/// A repository URL: `https://…`, `http://…`, `ssh://…`, `git://…`,
+/// `file:///abs/path`, scp-style `user@host:path`, or an absolute local path.
+/// Relative paths are rejected (they would resolve against the server's
+/// working directory, not the user's).
+pub fn repo_url(url: &str) -> Result<()> {
+    let u = url.trim();
+    let invalid = |why: &str| Err(Error::invalid(format!("invalid repo_url '{u}': {why}")));
+    if u.is_empty() || u.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return invalid("must not be empty or contain whitespace");
+    }
+    if u.starts_with('-') {
+        return invalid("must not start with '-'");
+    }
+    if let Some(idx) = u.find("://") {
+        let scheme = &u[..idx];
+        return match scheme {
+            "https" | "http" | "ssh" | "git" | "file" if u.len() > idx + 3 => Ok(()),
+            _ => invalid("unsupported scheme (use https://, ssh://, git://, file:// or an absolute path)"),
+        };
+    }
+    if u.starts_with('/') {
+        return Ok(());
+    }
+    // scp-like: [user@]host:path (host without '/').
+    if let Some(colon) = u.find(':') {
+        let host = &u[..colon];
+        if !host.is_empty() && !host.contains('/') && colon + 1 < u.len() {
+            return Ok(());
+        }
+    }
+    invalid("local repositories must be given as an absolute path (or file:// URL)")
 }
 
 /// Validate and normalize (lowercase, no trailing dot) a custom domain.
@@ -54,7 +176,14 @@ pub fn domain(d: &str) -> Result<String> {
             && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     };
     let ok = d.len() <= 253 && d.contains('.') && d.split('.').all(label_ok);
-    if ok { Ok(d) } else { Err(Error::invalid(format!("invalid domain '{d}'"))) }
+    if !ok {
+        return Err(Error::invalid(format!("invalid domain '{d}'")));
+    }
+    let tld = d.rsplit('.').next().unwrap_or_default();
+    if tld.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(Error::invalid(format!("invalid domain '{d}': IP addresses can't be used as custom domains")));
+    }
+    Ok(d)
 }
 
 /// Absolute mount path other than `/`.
@@ -85,18 +214,29 @@ pub fn service(svc: &Service) -> Result<()> {
     if svc.runtime == Runtime::Image && svc.image.is_none() {
         return Err(Error::invalid("runtime 'image' requires an image"));
     }
-    if let Some(r) = &svc.repo_url
-        && (r.trim().is_empty() || r.chars().any(char::is_whitespace))
-    {
-        return Err(Error::invalid(format!("invalid repo_url '{r}'")));
+    if let Some(r) = &svc.repo_url {
+        repo_url(r)?;
     }
     if let Some(i) = &svc.image
         && (i.trim().is_empty() || i.chars().any(char::is_whitespace))
     {
         return Err(Error::invalid(format!("invalid image '{i}'")));
     }
-    if svc.branch.trim().is_empty() || svc.branch.chars().any(char::is_whitespace) {
-        return Err(Error::invalid(format!("invalid branch '{}'", svc.branch)));
+    branch(&svc.branch)?;
+    // dockerfile_path may use `../` (relative to root_dir) as long as the
+    // builder keeps it inside the checkout; the others must stay below it.
+    for (what, p, allow_parent) in [
+        ("root_dir", &svc.root_dir, false),
+        ("dockerfile_path", &svc.dockerfile_path, true),
+        ("publish_dir", &svc.publish_dir, false),
+    ] {
+        if let Some(p) = p
+            && (p.starts_with('/')
+                || p.starts_with('-')
+                || (!allow_parent && p.split(['/', '\\']).any(|seg| seg == "..")))
+        {
+            return Err(Error::invalid(format!("invalid {what} '{p}': must be a relative path inside the repository")));
+        }
     }
     match (svc.service_type, &svc.schedule) {
         (ServiceType::CronJob, Some(s)) => {
@@ -199,6 +339,31 @@ mod tests {
         assert!(resource_name("web-").is_err());
         assert!(resource_name("ferry").is_err());
         assert!(resource_name(&"a".repeat(41)).is_err());
+    }
+
+    #[test]
+    fn ids_repos_branches_env() {
+        assert!(resource_name("srv-0123456789abcdef0123").is_err());
+        assert!(resource_name("srv-web").is_ok());
+        assert!(env_group_name("evg-0123456789abcdef0123").is_err());
+        assert!(repo_url("https://github.com/a/b").is_ok());
+        assert!(repo_url("git@github.com:a/b.git").is_ok());
+        assert!(repo_url("/abs/path").is_ok());
+        assert!(repo_url("file:///abs/path").is_ok());
+        assert!(repo_url("./rel").is_err());
+        assert!(repo_url("rel/path").is_err());
+        assert!(repo_url("--upload-pack=x").is_err());
+        assert!(repo_url("ftp://x/y").is_err());
+        assert!(branch("feature/x-1").is_ok());
+        assert!(branch("-evil").is_err());
+        assert!(branch("a..b").is_err());
+        assert!(commit("abc123").is_ok());
+        assert!(commit("--help").is_err());
+        assert!(env_var("K", &"x".repeat(MAX_ENV_VALUE_BYTES + 1)).is_err());
+        let dup = vec![crate::models::EnvVar::new("A", "1"), crate::models::EnvVar::new("A", "2")];
+        assert!(env_vars(&dup).is_err());
+        assert!(domain("127.0.0.1").is_err());
+        assert!(domain("app.example.com").is_ok());
     }
 
     #[test]

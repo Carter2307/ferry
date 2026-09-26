@@ -17,18 +17,41 @@ impl Schedule {
     /// Parse a 5-field cron expression (or an alias like `@daily`).
     /// 6-field (seconds) expressions are rejected: minute granularity only.
     pub fn parse(expr: &str) -> Result<Self> {
-        let expr = expr.trim();
-        if expr.is_empty() {
+        let original = expr.trim();
+        if original.is_empty() {
             return Err(Error::invalid("cron schedule is empty"));
         }
-        if !expr.starts_with('@') && expr.split_whitespace().count() != 5 {
+        // Normalize aliases croner doesn't know.
+        let expr = match original.to_ascii_lowercase().as_str() {
+            "@midnight" => "@daily".to_string(),
+            _ => original.to_string(),
+        };
+        if expr.starts_with('@') {
+            const ALIASES: &[&str] = &["@yearly", "@annually", "@monthly", "@weekly", "@daily", "@hourly"];
+            if !ALIASES.contains(&expr.to_ascii_lowercase().as_str()) {
+                return Err(Error::invalid(format!(
+                    "invalid cron schedule '{original}': supported aliases are @yearly, @annually, @monthly, \
+                     @weekly, @daily, @midnight and @hourly"
+                )));
+            }
+        } else if expr.split_whitespace().count() != 5 {
             return Err(Error::invalid(format!(
-                "cron schedule '{expr}' must have exactly 5 fields (minute hour day-of-month month day-of-week)"
+                "invalid cron schedule '{original}': expected 5 fields (minute hour day-of-month month day-of-week), \
+                 e.g. '*/15 * * * *'"
             )));
         }
-        let cron =
-            croner::Cron::from_str(expr).map_err(|e| Error::invalid(format!("invalid cron schedule '{expr}': {e}")))?;
-        Ok(Schedule { expr: expr.to_string(), cron })
+        let cron = croner::Cron::from_str(&expr).map_err(|e| {
+            Error::invalid(format!(
+                "invalid cron schedule '{original}': {e} (fields: minute 0-59, hour 0-23, day-of-month 1-31, \
+                 month 1-12, day-of-week 0-7)"
+            ))
+        })?;
+        let schedule = Schedule { expr: original.to_string(), cron };
+        // Reject schedules that can never fire (e.g. February 30th).
+        if schedule.next_after(Utc::now()).is_none_or(|t| t > Utc::now() + chrono::Duration::days(366 * 5)) {
+            return Err(Error::invalid(format!("cron schedule '{original}' never fires")));
+        }
+        Ok(schedule)
     }
 
     pub fn expr(&self) -> &str {
@@ -62,5 +85,8 @@ mod tests {
         assert!(Schedule::parse("* * * *").is_err());
         assert!(Schedule::parse("0 * * * * *").is_err());
         assert!(Schedule::parse("61 * * * *").is_err());
+        assert!(Schedule::parse("@midnight").is_ok());
+        assert!(Schedule::parse("@often").is_err());
+        assert!(Schedule::parse("0 0 30 2 *").is_err());
     }
 }

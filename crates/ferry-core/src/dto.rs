@@ -2,7 +2,8 @@
 //! server, the CLI and (as JSON) the dashboard.
 //!
 //! Conventions: JSON, snake_case fields; `{id}` path segments accept a
-//! resource id **or** its name; errors are [`ApiErrorBody`].
+//! resource id **or** its name (an exact id match wins); errors are
+//! [`ApiErrorBody`]. Request bodies reject unknown fields.
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +46,7 @@ pub struct ServiceView {
 
 /// `POST /api/v1/services`
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateService {
     pub name: String,
     #[serde(rename = "type")]
@@ -78,6 +80,7 @@ pub struct CreateService {
 /// `suspended` suspends/resumes, `custom_domains` refreshes routes; build
 /// settings take effect on the next deploy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateService {
     pub repo_url: Option<String>,
     pub branch: Option<String>,
@@ -101,6 +104,7 @@ pub struct UpdateService {
 
 /// `POST /api/v1/services/{id}/deploys`
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TriggerDeploy {
     pub commit: Option<String>,
     #[serde(default)]
@@ -109,24 +113,28 @@ pub struct TriggerDeploy {
 
 /// `POST /api/v1/services/{id}/rollback`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RollbackRequest {
     pub deploy_id: String,
 }
 
 /// `POST /api/v1/services/{id}/scale`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScaleRequest {
     pub instances: u32,
 }
 
 /// `PUT /api/v1/services/{id}/env` (replace all) and env group equivalent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReplaceEnv {
     pub vars: Vec<EnvVar>,
 }
 
 /// `PATCH /api/v1/services/{id}/env` (and env groups): upsert `set`, delete `unset`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchEnv {
     #[serde(default)]
     pub set: Vec<EnvVar>,
@@ -136,12 +144,14 @@ pub struct PatchEnv {
 
 /// `POST /api/v1/services/{id}/domains`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DomainRequest {
     pub domain: String,
 }
 
 /// `POST /api/v1/services/{id}/jobs`
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunJobRequest {
     /// Shell command (`sh -c`). Required for non-cron services.
     pub command: Option<String>,
@@ -149,6 +159,7 @@ pub struct RunJobRequest {
 
 /// `POST /api/v1/services/{id}/env-groups`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LinkEnvGroup {
     /// Env group id or name.
     pub group: String,
@@ -181,6 +192,7 @@ pub struct RuntimeStatus {
 
 /// `POST /api/v1/datastores`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateDatastore {
     pub name: String,
     pub kind: DatastoreKind,
@@ -207,6 +219,7 @@ pub struct DatastoreView {
 
 /// `POST /api/v1/env-groups`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateEnvGroup {
     pub name: String,
     #[serde(default)]
@@ -226,6 +239,7 @@ pub struct EnvGroupView {
 /// `POST /api/v1/blueprints/apply` (JSON body) — or send the raw YAML with
 /// `Content-Type: application/yaml` and `?dry_run=true`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApplyBlueprint {
     /// Contents of `ferry.yaml` / `render.yaml`.
     pub yaml: String,

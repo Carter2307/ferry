@@ -273,14 +273,19 @@ impl Store {
         }
     }
 
-    /// Persist every mutable column of `s` (name and id are immutable) and
-    /// bump `updated_at`. Returns the stored row.
+    /// Persist the user-editable settings of `s` and bump `updated_at`.
+    /// Returns the stored row.
+    ///
+    /// Engine-owned columns — `instances`, `suspended` and `live_deploy_id` —
+    /// are NOT written (use [`Store::set_instances`], [`Store::set_suspended`],
+    /// [`Store::set_live_deploy`]), so a concurrent settings update can never
+    /// revert a scale, suspend or deploy. `name` and `id` are immutable.
     pub async fn update_service(&self, s: &Service) -> Result<Service> {
         let res = sqlx::query(
             "UPDATE services SET service_type = ?, repo_url = ?, branch = ?, image = ?, runtime = ?, root_dir = ?,
                 dockerfile_path = ?, build_command = ?, start_command = ?, publish_dir = ?, port = ?,
-                health_check_path = ?, schedule = ?, instances = ?, auto_deploy = ?, suspended = ?,
-                disk_mount_path = ?, custom_domains = ?, deploy_hook_key = ?, live_deploy_id = ?, updated_at = ?
+                health_check_path = ?, schedule = ?, auto_deploy = ?,
+                disk_mount_path = ?, custom_domains = ?, deploy_hook_key = ?, updated_at = ?
              WHERE id = ?",
         )
         .bind(s.service_type.as_str())
@@ -296,13 +301,10 @@ impl Store {
         .bind(s.port.map(i64::from))
         .bind(&s.health_check_path)
         .bind(&s.schedule)
-        .bind(i64::from(s.instances))
         .bind(s.auto_deploy)
-        .bind(s.suspended)
         .bind(&s.disk_mount_path)
         .bind(serde_json::to_string(&s.custom_domains).unwrap_or_else(|_| "[]".into()))
         .bind(&s.deploy_hook_key)
-        .bind(&s.live_deploy_id)
         .bind(ts(&Utc::now()))
         .bind(&s.id)
         .execute(&self.pool)
@@ -324,7 +326,7 @@ impl Store {
 
     /// Look up by id or name.
     pub async fn find_service(&self, id_or_name: &str) -> Result<Option<Service>> {
-        sqlx::query("SELECT * FROM services WHERE id = ?1 OR name = ?1 LIMIT 1")
+        sqlx::query("SELECT * FROM services WHERE id = ?1 OR name = ?1 ORDER BY (id = ?1) DESC LIMIT 1")
             .bind(id_or_name)
             .fetch_optional(&self.pool)
             .await?
@@ -513,7 +515,7 @@ impl Store {
     }
 
     pub async fn find_env_group(&self, id_or_name: &str) -> Result<Option<EnvGroup>> {
-        sqlx::query("SELECT * FROM env_groups WHERE id = ?1 OR name = ?1 LIMIT 1")
+        sqlx::query("SELECT * FROM env_groups WHERE id = ?1 OR name = ?1 ORDER BY (id = ?1) DESC LIMIT 1")
             .bind(id_or_name)
             .fetch_optional(&self.pool)
             .await?
@@ -876,7 +878,7 @@ impl Store {
     }
 
     pub async fn find_datastore(&self, id_or_name: &str) -> Result<Option<Datastore>> {
-        sqlx::query("SELECT * FROM datastores WHERE id = ?1 OR name = ?1 LIMIT 1")
+        sqlx::query("SELECT * FROM datastores WHERE id = ?1 OR name = ?1 ORDER BY (id = ?1) DESC LIMIT 1")
             .bind(id_or_name)
             .fetch_optional(&self.pool)
             .await?
@@ -933,17 +935,17 @@ impl Store {
     // derived data
 
     /// Datastores and service references for [`crate::env::RefContext`].
-    /// A service's port is its configured port, else its live deploy's port.
+    /// A service's port is its live deploy's port, else its configured port.
     pub async fn reference_targets(&self, config: &Config) -> Result<(Vec<Datastore>, Vec<ServiceRef>)> {
         let datastores = self.list_datastores().await?;
         let mut refs = Vec::new();
         for s in self.list_services().await? {
-            let mut port = s.port;
-            if port.is_none()
-                && let Some(live) = &s.live_deploy_id
-            {
+            // What is actually running wins over a pending (not yet deployed) setting.
+            let mut port = None;
+            if let Some(live) = &s.live_deploy_id {
                 port = self.get_deploy(live).await?.and_then(|d| d.port);
             }
+            let port = port.or(s.port);
             refs.push(ServiceRef { name: s.name.clone(), port, public_url: config.service_url(&s) });
         }
         Ok((datastores, refs))
@@ -976,9 +978,12 @@ mod tests {
         let mut upd = got.clone();
         upd.instances = 3;
         upd.suspended = true;
+        upd.live_deploy_id = Some("dep-x".into());
+        upd.start_command = Some("run".into());
         let upd = store.update_service(&upd).await.unwrap();
-        assert_eq!(upd.instances, 3);
-        assert!(upd.suspended);
+        // Engine-owned columns are not written by update_service.
+        assert_eq!((upd.instances, upd.suspended, upd.live_deploy_id.as_deref()), (1, false, None));
+        assert_eq!(upd.start_command.as_deref(), Some("run"));
         store.set_instances(&svc.id, 2).await.unwrap();
         store.set_suspended(&svc.id, false).await.unwrap();
         let s = store.require_service(&svc.id).await.unwrap();

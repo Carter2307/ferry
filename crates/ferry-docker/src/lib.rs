@@ -31,7 +31,7 @@ use bollard::models::{ExecConfig, NetworkCreateRequest, VolumeCreateRequest};
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, CreateImageOptionsBuilder, ListContainersOptionsBuilder,
     RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RemoveVolumeOptions, StatsOptionsBuilder,
-    StopContainerOptionsBuilder, WaitContainerOptionsBuilder,
+    StopContainerOptionsBuilder, TagImageOptionsBuilder, WaitContainerOptionsBuilder,
 };
 use ferry_core::{Error, LogSink, LogStream, Result};
 use futures::StreamExt;
@@ -308,6 +308,36 @@ impl Docker {
             Err(e) if errors::is_not_found(&e) => Ok(()),
             Err(e) => Err(errors::map_docker(e, &format!("removing volume {name}"))),
         }
+    }
+
+    /// True if a named volume exists.
+    pub async fn volume_exists(&self, name: &str) -> Result<bool> {
+        errors::check_object_ref("volume", name)?;
+        match self.inner.inspect_volume(name).await {
+            Ok(_) => Ok(true),
+            Err(e) if errors::is_not_found(&e) => Ok(false),
+            Err(e) => Err(errors::map_docker(e, &format!("inspecting volume {name}"))),
+        }
+    }
+
+    /// Add the reference `target` (`repo[:tag]`, tag defaults to `latest`;
+    /// digests are not allowed) to the local image `source`, e.g. to pin a
+    /// pulled `nginx:alpine` as `ferry/web:dep-…`. A missing source is
+    /// `NotFound`; an existing `target` is moved to the new image.
+    pub async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
+        errors::check_image_ref(source)?;
+        errors::check_image_ref(target)?;
+        if target.contains('@') {
+            return Err(Error::invalid(format!("cannot tag with a digest reference '{target}'")));
+        }
+        let (repo, tag) = image_ref::split_image_ref(target)?;
+        let opts = TagImageOptionsBuilder::new().repo(&repo).tag(&tag).build();
+        self.inner
+            .tag_image(source, Some(opts))
+            .await
+            .map_err(|e| errors::map_docker(e, &format!("tagging image {source} as {target}")))?;
+        debug!(source, target, "tagged image");
+        Ok(())
     }
 
     /// True if the image exists locally.

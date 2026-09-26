@@ -10,7 +10,7 @@
 pub fn normalize_repo_url(url: &str) -> String {
     let mut s = url.trim().trim_end_matches('/').to_string();
     if let Some(stripped) = s.strip_suffix(".git") {
-        s = stripped.to_string();
+        s = stripped.trim_end_matches('/').to_string();
     }
     let is_local = s.starts_with('/') || s.starts_with("file://") || s.starts_with('.');
     if is_local {
@@ -68,7 +68,7 @@ mod tests {
         ] {
             assert_eq!(normalize_repo_url(u), "github.com/owner/repo", "{u}");
         }
-        assert_eq!(normalize_repo_url("/tmp/app/.git"), "/tmp/app/");
+        assert_eq!(normalize_repo_url("/tmp/app/.git"), "/tmp/app");
         assert_eq!(normalize_repo_url("/tmp/app/"), "/tmp/app");
         assert_eq!(normalize_repo_url("file:///tmp/app"), "/tmp/app");
     }

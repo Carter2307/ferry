@@ -83,6 +83,14 @@ pub struct BuildOutput {
     pub port_hint: Option<u16>,
 }
 
+/// Progress events emitted by [`Builder::build_with_events`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildEvent {
+    /// The git source was checked out, before the image build starts (so a
+    /// failed or canceled build can still record which commit it was).
+    CheckedOut { commit_sha: String, commit_message: Option<String> },
+}
+
 /// Options for [`generate_dockerfile`].
 #[derive(Debug, Clone, Default)]
 pub struct DockerfileOptions {
@@ -157,7 +165,19 @@ impl Builder {
     /// return `Error::Build` with a concise reason (the full output is in
     /// the logs). Always cleans up the scratch directory.
     pub async fn build(&self, req: &BuildRequest, logs: &LogSink, cancel: &CancellationToken) -> Result<BuildOutput> {
-        match self.build_scratch(req, logs, cancel).await {
+        self.build_with_events(req, logs, cancel, None).await
+    }
+
+    /// Like [`Builder::build`], additionally sending [`BuildEvent`]s to
+    /// `events` as the build progresses (send errors are ignored).
+    pub async fn build_with_events(
+        &self,
+        req: &BuildRequest,
+        logs: &LogSink,
+        cancel: &CancellationToken,
+        events: Option<&tokio::sync::mpsc::UnboundedSender<BuildEvent>>,
+    ) -> Result<BuildOutput> {
+        match self.build_scratch(req, logs, cancel, events).await {
             Ok(out) => {
                 logs.system("==> Build successful 🎉");
                 tracing::info!(service = %req.service_name, deploy = %req.deploy_id, image = %out.image, "build succeeded");
@@ -188,6 +208,7 @@ impl Builder {
         req: &BuildRequest,
         logs: &LogSink,
         cancel: &CancellationToken,
+        events: Option<&tokio::sync::mpsc::UnboundedSender<BuildEvent>>,
     ) -> Result<BuildOutput> {
         if cancel.is_cancelled() {
             return Err(Error::Canceled);
@@ -201,7 +222,7 @@ impl Builder {
         let scratch = fsutil::ScratchDir::create(self.builds_dir.join(&req.deploy_id))
             .await
             .map_err(|e| Error::Build(format!("cannot create build directory: {e}")))?;
-        let res = self.build_in(req, logs, cancel, scratch.path()).await;
+        let res = self.build_in(req, logs, cancel, scratch.path(), events).await;
         scratch.cleanup().await;
         res
     }
@@ -212,6 +233,7 @@ impl Builder {
         logs: &LogSink,
         cancel: &CancellationToken,
         scratch: &Path,
+        events: Option<&tokio::sync::mpsc::UnboundedSender<BuildEvent>>,
     ) -> Result<BuildOutput> {
         // 1. Fetch the source into the scratch directory.
         let (export_root, commit_sha, commit_message) = match &req.source {
@@ -257,6 +279,9 @@ impl Builder {
                 (root, None, None)
             }
         };
+        if let (Some(tx), Some(sha)) = (events, &commit_sha) {
+            let _ = tx.send(BuildEvent::CheckedOut { commit_sha: sha.clone(), commit_message: commit_message.clone() });
+        }
         if cancel.is_cancelled() {
             return Err(Error::Canceled);
         }
