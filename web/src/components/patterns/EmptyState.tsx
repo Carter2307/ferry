@@ -109,7 +109,7 @@ export function Callout({
     info: 'border-info-border bg-info-soft [&_[data-icon]]:text-info',
     warning: 'border-warning-border bg-warning-soft [&_[data-icon]]:text-warning',
     destructive: 'border-destructive-border bg-destructive-soft [&_[data-icon]]:text-destructive',
-    success: 'border-primary/30 bg-primary-soft [&_[data-icon]]:text-primary',
+    success: 'border-success/30 bg-success-soft [&_[data-icon]]:text-success',
     neutral: 'border-border-strong bg-surface-200 [&_[data-icon]]:text-foreground-lighter',
   }[tone]
   return (

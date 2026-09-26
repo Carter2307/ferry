@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 
 const STATUS_LINE: Record<DatastoreStatus, { text: string; ring: string; Icon: typeof Check }> = {
   creating: { text: 'Provisioning…', ring: 'border-info-border text-info', Icon: Loader2 },
-  available: { text: 'Available', ring: 'border-primary/40 text-primary', Icon: Check },
+  available: { text: 'Available', ring: 'border-success/40 text-success', Icon: Check },
   failed: { text: 'Provisioning failed', ring: 'border-destructive-border text-destructive', Icon: X },
 }
 

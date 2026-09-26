@@ -144,7 +144,7 @@ export function LoginPage() {
               <span className="text-foreground-muted">$ </span>ferry up my-app --follow{'\n'}
               <span className="text-primary">==&gt; Building with node runtime</span>
               {'\n'}
-              <span className="text-primary">==&gt; Deploy live</span>
+              <span className="text-success">==&gt; Deploy live</span>
               {'\n'}
               <span className="text-foreground">http://my-app.localhost</span>
             </pre>

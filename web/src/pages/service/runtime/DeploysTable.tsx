@@ -138,7 +138,7 @@ export function DeploysTable({ service, deploys, loading, error, onCancel, onRol
               <TableRow
                 key={d.id}
                 {...rowLinkProps(() => void navigate(deployPath(service, d)))}
-                className={cn('cursor-pointer', isLive && 'bg-primary-soft/40')}
+                className={cn('cursor-pointer', isLive && 'bg-success-soft/40')}
               >
                 <TableCell className="hidden sm:table-cell">
                   <DeployStatusBadge status={d.status} />

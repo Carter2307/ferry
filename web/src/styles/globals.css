@@ -37,13 +37,16 @@
   --border-strong: oklch(0.1 0 0 / 0.146);
   --border-stronger: oklch(0.1 0 0 / 0.188);
 
-  /* brand green */
-  --primary: oklch(0.525 0.12 157.5);
-  --primary-solid: oklch(0.525 0.12 157.5);
-  --primary-solid-border: oklch(0.47 0.12 157.5);
-  --primary-bright: oklch(0.7 0.15 157.5);
-  --primary-soft: oklch(0.7 0.15 157.5 / 0.1);
+  /* primary blue (#185CC4): buttons, links, focus, selection */
+  --primary: oklch(0.497 0.176 259.5);
+  --primary-solid: oklch(0.497 0.176 259.5);
+  --primary-solid-border: oklch(0.44 0.17 259.5);
+  --primary-bright: oklch(0.62 0.19 259.5);
+  --primary-soft: oklch(0.62 0.19 259.5 / 0.1);
   --primary-foreground: oklch(1 0 0);
+  /* success green: live / succeeded / available statuses, charts */
+  --success: oklch(0.525 0.12 157.5);
+  --success-soft: oklch(0.7 0.15 157.5 / 0.1);
   --brand: #3ecf8e;
 
   /* feedback */
@@ -70,7 +73,7 @@
   --accent: var(--selection);
   --accent-foreground: var(--foreground);
   --input: var(--border-strong);
-  --ring: oklch(0.7 0.15 157.5 / 0.55);
+  --ring: oklch(0.62 0.19 259.5 / 0.55);
 
   --chart-1: var(--brand);
   --chart-2: oklch(0.72 0.16 58);
@@ -105,12 +108,14 @@
   --border-strong: oklch(0.95 0.0014 157.5 / 0.135);
   --border-stronger: oklch(0.95 0.0014 157.5 / 0.174);
 
-  --primary: oklch(0.76 0.15 157.5);
-  --primary-solid: oklch(0.436 0.11 157.5);
-  --primary-solid-border: oklch(0.52 0.12 157.5);
-  --primary-bright: oklch(0.76 0.15 157.5);
-  --primary-soft: oklch(0.76 0.15 157.5 / 0.1);
+  --primary: oklch(0.72 0.14 259.5);
+  --primary-solid: oklch(0.497 0.176 259.5);
+  --primary-solid-border: oklch(0.56 0.17 259.5);
+  --primary-bright: oklch(0.72 0.14 259.5);
+  --primary-soft: oklch(0.72 0.14 259.5 / 0.12);
   --primary-foreground: oklch(0.99 0 0);
+  --success: oklch(0.76 0.15 157.5);
+  --success-soft: oklch(0.76 0.15 157.5 / 0.1);
 
   --warning: oklch(0.8 0.14 75);
   --warning-soft: #341c00;
@@ -123,7 +128,7 @@
   --info-soft: oklch(0.75 0.12 250 / 0.08);
   --info-border: oklch(0.75 0.12 250 / 0.3);
 
-  --ring: oklch(0.76 0.15 157.5 / 0.55);
+  --ring: oklch(0.72 0.14 259.5 / 0.55);
   --shadow-card: none;
   --shadow-overlay: 0 16px 40px -8px oklch(0 0 0 / 0.5), 0 2px 8px oklch(0 0 0 / 0.3);
   --log-bg: oklch(0.17 0.0025 157.5);
@@ -164,6 +169,8 @@
   --color-primary-soft: var(--primary-soft);
   --color-primary-foreground: var(--primary-foreground);
   --color-brand: var(--brand);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
 
   --color-warning: var(--warning);
   --color-warning-soft: var(--warning-soft);

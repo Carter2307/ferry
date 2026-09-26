@@ -14,7 +14,7 @@ function Toaster(props: ToasterProps) {
       className="toaster group"
       closeButton
       icons={{
-        success: <CircleCheck className="size-4 text-primary" />,
+        success: <CircleCheck className="size-4 text-success" />,
         info: <Info className="size-4 text-info" />,
         warning: <TriangleAlert className="size-4 text-warning" />,
         error: <OctagonX className="size-4 text-destructive" />,

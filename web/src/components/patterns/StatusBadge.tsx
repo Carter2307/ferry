@@ -19,7 +19,7 @@ import {
 } from './status-tones'
 
 const pillTone: Record<StatusTone, string> = {
-  success: 'border-primary/30 bg-primary-soft text-primary',
+  success: 'border-success/30 bg-success-soft text-success',
   warning: 'border-warning-border bg-warning-soft text-warning',
   destructive: 'border-destructive-border bg-destructive-soft text-destructive',
   info: 'border-info-border bg-info-soft text-info',
@@ -101,7 +101,7 @@ export function DatastoreStatusBadge({ status, className }: { status: DatastoreS
 }
 
 const stateIconTone: Record<StatusTone, string> = {
-  success: 'border-primary/40 text-primary',
+  success: 'border-success/40 text-success',
   warning: 'border-warning-border text-warning',
   destructive: 'border-destructive-border text-destructive',
   info: 'border-info-border text-info',
