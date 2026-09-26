@@ -1,7 +1,8 @@
 //! Docker-gated end-to-end tests. They only run with `FERRY_E2E=1` (otherwise
 //! each test prints "skipped" and returns). Every Docker object they create is
-//! prefixed `ferrytest-docker-<random>`, labelled `ferry.instance=<prefix>`,
-//! and removed by a drop guard even when an assertion fails.
+//! prefixed `ferrytest-docker-<random>` (or `ferryfix-docker-<random>`),
+//! labelled `ferry.instance=<prefix>`, and removed by a drop guard even when
+//! an assertion fails.
 
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -38,8 +39,12 @@ struct Cleanup {
 
 impl Cleanup {
     fn new() -> Self {
+        Self::with_prefix("ferrytest-docker")
+    }
+
+    fn with_prefix(base: &str) -> Self {
         Cleanup {
-            prefix: format!("ferrytest-docker-{}", ids::random_secret(8)),
+            prefix: format!("{base}-{}", ids::random_secret(8)),
             volumes: Vec::new(),
             networks: Vec::new(),
             images: Vec::new(),
@@ -426,7 +431,14 @@ async fn images() {
 
     // Pull by digest: no tag changes, needs the registry.
     let inspect = docker.bollard().inspect_image(BUSYBOX).await.unwrap();
-    let digest_ref = inspect.repo_digests.unwrap_or_default().into_iter().next().expect("busybox repo digest");
+    // Other tags of the same image (made by concurrent tests) add their own
+    // repo digests, e.g. `ferryfix-docker-…/x@sha256:…`: pick busybox's.
+    let digest_ref = inspect
+        .repo_digests
+        .unwrap_or_default()
+        .into_iter()
+        .find(|d| d.starts_with("busybox@") || d.starts_with("docker.io/library/busybox@"))
+        .expect("busybox repo digest");
     let (sink, mut rx) = LogSink::channel();
     docker.pull_image(&digest_ref, &sink).await.unwrap();
     drop(sink);
@@ -446,4 +458,90 @@ async fn images() {
         other => panic!("expected a pull failure, got {other:?}"),
     }
     assert!(matches!(docker.pull_image("bad image", &LogSink::noop()).await, Err(Error::Invalid(_))));
+}
+
+/// `tag_image`, `volume_exists`, and exec errors that never reveal the
+/// command's arguments or env values (regression: a readiness probe's
+/// `redis-cli -a <password>` ended up in error messages).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tags_volumes_and_exec_secrets() {
+    require_e2e!();
+    let mut cleanup = Cleanup::with_prefix("ferryfix-docker");
+    let docker = connect().await;
+    docker.ensure_image(BUSYBOX, &LogSink::noop()).await.unwrap();
+
+    // tag_image: a second name for the same local image.
+    let tagged = format!("{}/x:1", cleanup.prefix);
+    cleanup.images.push(tagged.clone());
+    assert!(!docker.image_exists(&tagged).await.unwrap());
+    docker.tag_image(BUSYBOX, &tagged).await.unwrap();
+    assert!(docker.image_exists(&tagged).await.unwrap());
+    let source_id = docker.bollard().inspect_image(BUSYBOX).await.unwrap().id;
+    assert_eq!(docker.bollard().inspect_image(&tagged).await.unwrap().id, source_id);
+    docker.tag_image(BUSYBOX, &tagged).await.unwrap();
+    // No tag means `latest`.
+    let untagged = format!("{}/y", cleanup.prefix);
+    cleanup.images.push(format!("{untagged}:latest"));
+    docker.tag_image(BUSYBOX, &untagged).await.unwrap();
+    assert!(docker.image_exists(&format!("{untagged}:latest")).await.unwrap());
+    docker.remove_image(&untagged).await.unwrap();
+    // Errors: missing source, digest target.
+    let missing = format!("{}/missing:1", cleanup.prefix);
+    match docker.tag_image(&missing, &tagged).await {
+        Err(Error::NotFound(m)) => assert_eq!(m, format!("image '{missing}'")),
+        other => panic!("expected NotFound for a missing source, got {other:?}"),
+    }
+    let digest = source_id.clone().expect("image id");
+    assert!(matches!(
+        docker.tag_image(BUSYBOX, &format!("{}/x@{digest}", cleanup.prefix)).await,
+        Err(Error::Invalid(_))
+    ));
+    docker.remove_image(&tagged).await.unwrap();
+    assert!(!docker.image_exists(&tagged).await.unwrap());
+    assert!(docker.image_exists(BUSYBOX).await.unwrap(), "untagging must not touch the source image");
+
+    // volume_exists: false → true → false.
+    let volume = cleanup.name("vol");
+    cleanup.volumes.push(volume.clone());
+    assert!(!docker.volume_exists(&volume).await.unwrap());
+    docker.ensure_volume(&volume, &cleanup.labels(&[])).await.unwrap();
+    assert!(docker.volume_exists(&volume).await.unwrap());
+    docker.remove_volume(&volume).await.unwrap();
+    assert!(!docker.volume_exists(&volume).await.unwrap());
+    assert!(matches!(docker.volume_exists("../x").await, Err(Error::Invalid(_))));
+
+    // exec_with_env: the value reaches the command without being in argv.
+    let secret = "s3cret-value";
+    let info = docker.run_container(&cleanup.spec("exec", "sleep 300")).await.unwrap();
+    let out = docker
+        .exec_with_env(
+            &info.id,
+            &["sh", "-c", "echo \"auth=$FERRYFIX_SECRET path=$PATH\""],
+            &[("FERRYFIX_SECRET", secret)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.exit_code, 0);
+    assert!(out.output.starts_with(&format!("auth={secret} path=/")), "container env is kept: {out:?}");
+    let args = docker.exec(&info.id, &["sh", "-c", "echo \"[$FERRYFIX_SECRET]\""]).await.unwrap();
+    assert_eq!(args.output.trim(), "[]", "env is per exec");
+
+    // Errors name the program only.
+    docker.stop_container(&info.id, 1).await.unwrap();
+    for result in [
+        docker.exec(&info.id, &["redis-cli", "--no-auth-warning", "-a", secret, "ping"]).await,
+        docker.exec_with_env(&info.id, &["redis-cli", "ping"], &[("REDISCLI_AUTH", secret)]).await,
+    ] {
+        match result {
+            Err(Error::Conflict(m)) => {
+                assert!(m.starts_with(&format!("running \"redis-cli\" in container {}", info.id)), "{m}");
+                assert!(!m.contains(secret), "exec error reveals the secret: {m}");
+            }
+            other => panic!("expected a conflict on a stopped container, got {other:?}"),
+        }
+    }
+    docker.remove_container(&info.id, true).await.unwrap();
+    let err = docker.exec(&info.id, &["redis-cli", "-a", secret, "ping"]).await.unwrap_err();
+    assert!(matches!(&err, Error::NotFound(_)), "{err:?}");
+    assert!(!err.to_string().contains(secret), "{err}");
 }

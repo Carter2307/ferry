@@ -5,13 +5,58 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use ferry_core::dto::{ApplyBlueprint, BlueprintAction, BlueprintResult, ServiceView};
+use serde_yaml::Value;
 
 use super::{Ctx, print_json};
 use crate::cli::BlueprintApplyArgs;
-use crate::output::{self, Color, outln};
+use crate::output::{self, Color, errln, outln};
+use crate::repo;
 
 /// Default blueprint files, in order of preference.
 pub const DEFAULT_FILES: &[&str] = &["ferry.yaml", "render.yaml"];
+
+/// Rewrite every service's relative local `repo:` path that exists relative
+/// to `base` (the blueprint's directory) as an absolute path: the server
+/// clones it, and would resolve a relative path against its own working
+/// directory. Returns the YAML to send (the original text, byte for byte,
+/// when nothing changes) and one note per rewritten repo.
+pub fn absolutize_repos(yaml: &str, base: &Path) -> (String, Vec<String>) {
+    let unchanged = || (yaml.to_string(), Vec::new());
+    // Invalid YAML is sent as is: the server reports the error in context.
+    let Ok(mut root) = serde_yaml::from_str::<Value>(yaml) else { return unchanged() };
+    if root.apply_merge().is_err() {
+        return unchanged();
+    }
+    let mut notes = Vec::new();
+    let mut fix = |services: Option<&mut Value>| {
+        let Some(Value::Sequence(services)) = services else { return };
+        for svc in services {
+            let name = svc.get("name").and_then(Value::as_str).unwrap_or("?").to_string();
+            let Some(Value::String(r)) = svc.get_mut("repo") else { continue };
+            if let Some(abs) = repo::absolutize(r, base) {
+                notes.push(format!("service '{name}': repo '{}' → {abs}", r.trim()));
+                *r = abs;
+            }
+        }
+    };
+    fix(root.get_mut("services"));
+    if let Some(Value::Sequence(projects)) = root.get_mut("projects") {
+        for project in projects {
+            if let Some(Value::Sequence(envs)) = project.get_mut("environments") {
+                for env in envs {
+                    fix(env.get_mut("services"));
+                }
+            }
+        }
+    }
+    if notes.is_empty() {
+        return unchanged();
+    }
+    match serde_yaml::to_string(&root) {
+        Ok(text) => (text, notes),
+        Err(_) => unchanged(),
+    }
+}
 
 /// The first default blueprint file that exists in `dir`.
 pub fn find_blueprint(dir: &Path) -> Result<PathBuf> {
@@ -39,6 +84,16 @@ pub async fn apply(ctx: &Ctx, a: BlueprintApplyArgs) -> Result<()> {
         }
     };
     let yaml = tokio::fs::read_to_string(&file).await.with_context(|| format!("reading {}", file.display()))?;
+    // Local repo paths are relative to the blueprint file, not to ferryd.
+    let base = match file.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let (yaml, notes) =
+        tokio::task::spawn_blocking(move || absolutize_repos(&yaml, &base)).await.context("reading the blueprint")?;
+    for note in notes {
+        errln!("note: {note}");
+    }
     let body = ApplyBlueprint { yaml, dry_run: a.dry_run };
     let resp = ctx.client.post::<_, BlueprintResult>(&["blueprints", "apply"], &[], &body).await?;
     if ctx.json {
@@ -199,6 +254,60 @@ Follow a deploy with: ferry logs --deploy <id> -f
             out.starts_with("Blueprint render.yaml — dry run, nothing was changed\n\nWould create:\n  + service web\n")
         );
         assert!(out.ends_with("Run without --dry-run to apply.\n"));
+    }
+
+    #[test]
+    fn relative_repo_paths_become_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("mono/worker")).unwrap();
+        std::fs::create_dir_all(dir.path().join("echo")).unwrap();
+        let mono = std::fs::canonicalize(dir.path().join("mono")).unwrap();
+        let echo = std::fs::canonicalize(dir.path().join("echo")).unwrap();
+        let yaml = "\
+# comments are fine
+services:
+  - type: worker
+    name: relrepo
+    repo: ./mono
+    rootDir: worker
+    runtime: python
+    startCommand: python worker.py
+  - type: web
+    name: remote
+    repo: https://github.com/a/b
+  - type: web
+    name: missing
+    repo: ./not-here
+  - type: web
+    name: img
+    image: { url: nginx:alpine }
+projects:
+  - name: p
+    environments:
+      - name: prod
+        services:
+          - { type: web, name: nested, repo: echo, branch: main }
+";
+        let (out, notes) = absolutize_repos(yaml, dir.path());
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].starts_with("service 'relrepo': repo './mono' → "), "{notes:?}");
+        let v: Value = serde_yaml::from_str(&out).unwrap();
+        let svc = |i: usize| &v["services"][i];
+        assert_eq!(svc(0)["repo"].as_str(), mono.to_str());
+        assert_eq!(svc(0)["rootDir"], "worker");
+        assert_eq!(svc(0)["startCommand"], "python worker.py");
+        assert_eq!(svc(1)["repo"], "https://github.com/a/b");
+        assert_eq!(svc(2)["repo"], "./not-here", "left for the server to reject");
+        assert_eq!(svc(3)["image"]["url"], "nginx:alpine");
+        let nested = &v["projects"][0]["environments"][0]["services"][0];
+        assert_eq!(nested["repo"].as_str(), echo.to_str());
+        assert_eq!(nested["branch"], "main");
+
+        // Nothing to rewrite: the original text is sent untouched.
+        let plain = "services:\n  - {type: web, name: a, repo: 'https://x/y'}  # keep me\n";
+        assert_eq!(absolutize_repos(plain, dir.path()), (plain.to_string(), vec![]));
+        let broken = "services: [\n";
+        assert_eq!(absolutize_repos(broken, dir.path()).0, broken);
     }
 
     #[test]

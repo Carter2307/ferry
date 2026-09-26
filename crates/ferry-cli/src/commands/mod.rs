@@ -80,10 +80,10 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         Command::Status(a) => services::status(ctx, &a.name).await,
         Command::Logs(a) => logs::logs(ctx, a).await,
         Command::Env(a) => match a.command {
-            Some(EnvCommand::Ls(n)) => env::list(ctx, &n.name).await,
-            Some(EnvCommand::Set(s)) => env::set(ctx, &s.name, s.vars, !s.no_restart).await,
-            Some(EnvCommand::Unset(u)) => env::unset(ctx, &u.name, u.keys, !u.no_restart).await,
-            None => env::list(ctx, a.name.as_deref().unwrap_or_default()).await,
+            Some(EnvCommand::Ls(n)) => env::list(ctx, &n.name, n.effective).await,
+            Some(EnvCommand::Set(s)) => env::set(ctx, &s.name, s.vars, !s.no_restart, s.follow).await,
+            Some(EnvCommand::Unset(u)) => env::unset(ctx, &u.name, u.keys, !u.no_restart, u.follow).await,
+            None => env::list(ctx, a.name.as_deref().unwrap_or_default(), a.effective).await,
         },
         Command::Domains(a) => match a.command {
             Some(DomainsCommand::Ls(n)) => services::domains_list(ctx, &n.name).await,

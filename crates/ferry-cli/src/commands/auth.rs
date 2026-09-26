@@ -11,10 +11,17 @@ use crate::output::{self, Cell, Color, errln, outln};
 /// Verify the resolved server + token with `GET /api/v1/info` and save them.
 pub async fn login(settings: &Settings, json: bool) -> Result<()> {
     let token = settings.token.as_deref().ok_or_else(|| {
-        anyhow!(
-            "missing token: run 'ferry login --server <URL> --token <TOKEN>' \
-             (ferryd prints the token at startup and stores it in <data-dir>/api_token)"
-        )
+        let hint = "ferryd prints the token at startup and stores it in <data-dir>/api_token";
+        match &settings.saved_login_server {
+            // Never reuse the token saved for another server.
+            Some(saved) => anyhow!(
+                "missing token for {}: the saved token belongs to {saved} and is only sent there; \
+                 run 'ferry login --server {} --token <TOKEN>' ({hint})",
+                settings.server,
+                settings.server
+            ),
+            None => anyhow!("missing token: run 'ferry login --server <URL> --token <TOKEN>' ({hint})"),
+        }
     })?;
     let client = Client::new(&settings.server, token)?;
     let info = client.get::<ServerInfo>(&["info"], &[]).await?;

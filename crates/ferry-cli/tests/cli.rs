@@ -162,10 +162,32 @@ async fn login_verifies_and_saves_config_then_commands_use_it() {
     assert_eq!(out.code, 0, "{out:?}");
     assert!(out.stdout.contains("Docker:"), "{}", out.stdout);
     assert!(out.stdout.contains("27.3.1"));
-    // A flag overrides the saved server.
-    let out = ferry_in(None, h.path(), None, None, &["info", "--server", "http://127.0.0.1:9"]).await;
+    // The same server spelled differently still uses the saved token.
+    let out = ferry_in(None, h.path(), None, None, &["info", "--server", &format!("{url}/")]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    // A flag overrides the saved server (with its own token).
+    let out = ferry_in(None, h.path(), None, None, &["info", "--server", "http://127.0.0.1:9", "--token", "t"]).await;
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("cannot reach Ferry server at http://127.0.0.1:9"), "{}", out.stderr);
+
+    // ...but the token saved for this server is never sent to another one.
+    let (other, other_url) = Fake::start().await;
+    let out = ferry_in(None, h.path(), None, None, &["info", "--server", &other_url]).await;
+    assert_eq!(out.code, 1);
+    assert!(
+        out.stderr.contains(&format!("no token for {other_url}"))
+            && out.stderr.contains(&format!("saved login is for {url}")),
+        "{}",
+        out.stderr
+    );
+    let out = ferry_in(Some(h.path()), h.path(), Some(&other_url), None, &["services"]).await;
+    assert_eq!(out.code, 1);
+    let out = ferry_in(None, h.path(), None, None, &["login", "--server", &other_url]).await;
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains(&format!("missing token for {other_url}")), "{}", out.stderr);
+    assert!(other.requests().is_empty(), "the saved token leaked: {:?}", other.requests());
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(saved, json!({ "server": url, "token": TOKEN }), "a failed login keeps the saved config");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -324,6 +346,14 @@ async fn up_creates_the_service_and_uploads_a_tarball() {
     std::fs::write(dir.join("draft.html"), "x").unwrap();
     std::fs::write(dir.join("node_modules/x/i.js"), "x").unwrap();
     std::fs::write(dir.join(".git/HEAD"), "ref").unwrap();
+    // A virtualenv and a link leaving the directory: the server would reject
+    // the whole upload because of such links.
+    #[cfg(unix)]
+    {
+        std::fs::create_dir_all(dir.join("venv/bin")).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/python3", dir.join("venv/bin/python")).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/python3", dir.join("python")).unwrap();
+    }
 
     fake.on("GET", "/api/v1/services/my-site", Reply::error(404, "not_found", "service 'my-site' not found"));
     let mut created = service_view("my-site", ServiceType::StaticSite);
@@ -337,6 +367,13 @@ async fn up_creates_the_service_and_uploads_a_tarball() {
     let out = ferry_in(Some(&dir), h.path(), Some(&url), Some(TOKEN), &["up", "--type", "static", "-e", "K=V"]).await;
     assert_eq!(out.code, 0, "{out:?}");
     assert!(out.stderr.contains("Packed 4 file(s)"), "{}", out.stderr);
+    #[cfg(unix)]
+    assert!(
+        out.stderr.contains("warning: not uploading 1 symlink(s) pointing outside")
+            && out.stderr.contains("python -> /usr/bin/python3"),
+        "{}",
+        out.stderr
+    );
     assert!(out.stderr.contains("Created static site 'my-site' (srv-my-site)"), "{}", out.stderr);
     assert!(out.stdout.contains("Deploy dep-9 queued (upload)"), "{}", out.stdout);
     assert!(out.stdout.contains("ferry logs --deploy dep-9 -f"));
@@ -368,64 +405,151 @@ async fn up_creates_the_service_and_uploads_a_tarball() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn up_existing_service_skips_creation() {
+async fn up_existing_service_applies_flags_then_uploads() {
     let (fake, url) = Fake::start().await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("app.py"), "print(1)").unwrap();
-    fake.on("GET", "/api/v1/services/api-app", Reply::ok(to_json(&service_view("api-app", ServiceType::WebService))));
+    let view = service_view("api-app", ServiceType::WebService);
+    fake.on("GET", "/api/v1/services/api-app", Reply::ok(to_json(&view)));
+    let mut updated = view.clone();
+    updated.service.start_command = Some("python -m http.server $PORT".into());
+    fake.on("PATCH", "/api/v1/services/srv-api-app", Reply::ok(to_json(&updated)));
+    fake.on("PATCH", "/api/v1/services/srv-api-app/env", Reply::ok(json!([{ "key": "K", "value": "V" }])));
+    let mut linked = updated.clone();
+    linked.env_groups = vec!["shared".into()];
+    fake.on("POST", "/api/v1/services/srv-api-app/env-groups", Reply::ok(to_json(&linked)));
     let mut d = deploy("dep-10", "srv-api-app", DeployStatus::Queued);
     d.trigger = DeployTrigger::Upload;
     fake.on("POST", "/api/v1/services/srv-api-app/deploys/upload", Reply::json(202, to_json(&d)));
     let h = home();
     let dir_arg = dir.path().to_str().unwrap();
-    let out =
-        ferry(&url, h.path(), &["up", "api-app", "--dir", dir_arg, "--port", "8000", "--clear-cache", "--json"]).await;
+    let out = ferry(
+        &url,
+        h.path(),
+        &[
+            "up",
+            "api-app",
+            "--dir",
+            dir_arg,
+            "--start-cmd",
+            "python -m http.server $PORT",
+            "--port",
+            "8000",
+            "-e",
+            "K=V",
+            "--env-group",
+            "shared",
+            "--type",
+            "web",
+            "--clear-cache",
+            "--json",
+        ],
+    )
+    .await;
     assert_eq!(out.code, 0, "{out:?}");
-    assert!(out.stderr.contains("creation flags are ignored"), "{}", out.stderr);
-    assert!(fake.find("POST", "/api/v1/services").is_empty());
+    assert!(!out.stderr.contains("ignored"), "{}", out.stderr);
+    assert!(out.stderr.contains("Updated 'api-app': start command; port; env K; env group shared"), "{}", out.stderr);
+    assert!(fake.find("POST", "/api/v1/services").is_empty(), "no creation");
+    // The settings are applied before the upload, like `ferry update` would.
+    let patch = fake.find("PATCH", "/api/v1/services/srv-api-app")[0].json();
+    assert_eq!(patch["start_command"], "python -m http.server $PORT");
+    assert_eq!(patch["port"], 8000);
+    assert!(patch["instances"].is_null() && patch["custom_domains"].is_null() && patch["repo_url"].is_null());
+    let env = &fake.find("PATCH", "/api/v1/services/srv-api-app/env")[0];
+    assert_eq!(env.query, "restart=false", "the upload deploys the new env");
+    assert_eq!(env.json(), json!({ "set": [{ "key": "K", "value": "V" }], "unset": [] }));
+    assert_eq!(fake.find("POST", "/api/v1/services/srv-api-app/env-groups")[0].json(), json!({ "group": "shared" }));
+    let requests = fake.requests();
+    let pos = |m: &str, p: &str| requests.iter().position(|r| r.method == m && r.path == p).unwrap();
+    assert!(pos("PATCH", "/api/v1/services/srv-api-app") < pos("POST", "/api/v1/services/srv-api-app/deploys/upload"));
     let upload = &fake.find("POST", "/api/v1/services/srv-api-app/deploys/upload")[0];
     assert_eq!(upload.query, "clear_cache=true");
     // --json prints the raw deploy.
     let printed: Value = serde_json::from_str(&out.stdout).unwrap();
     assert_eq!(printed["id"], "dep-10");
+
+    // An existing service's type can't change: refused before anything is sent.
+    let before = fake.requests().len();
+    let out = ferry(&url, h.path(), &["up", "api-app", "--dir", dir_arg, "--type", "worker"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("is a web service") && out.stderr.contains("--type worker"), "{}", out.stderr);
+    let after: Vec<String> = fake.requests()[before..].iter().map(|r| format!("{} {}", r.method, r.path)).collect();
+    assert_eq!(after, vec!["GET /api/v1/services/api-app"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn up_refuses_a_reserved_directory_name() {
     let (_fake, url) = Fake::start().await;
     let parent = tempfile::tempdir().unwrap();
-    let dir = parent.path().join("api");
+    let dir = parent.path().join("ferry");
     std::fs::create_dir(&dir).unwrap();
     let h = home();
     let out = ferry_in(Some(&dir), h.path(), Some(&url), Some(TOKEN), &["up"]).await;
     assert_eq!(out.code, 1);
-    assert!(out.stderr.contains("reserved") && out.stderr.contains("ferry up api-app"), "{}", out.stderr);
+    assert!(out.stderr.contains("reserved") && out.stderr.contains("ferry up ferry-app"), "{}", out.stderr);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_requires_confirmation_without_a_tty() {
     let (fake, url) = Fake::start().await;
-    fake.on("DELETE", "/api/v1/services/web", Reply::no_content());
+    let web = to_json(&service_view("web", ServiceType::WebService));
+    fake.on("GET", "/api/v1/services/web", Reply::ok(web.clone()));
+    fake.on("GET", "/api/v1/services/srv-web", Reply::ok(web));
+    fake.on("DELETE", "/api/v1/services/srv-web", Reply::no_content());
+    let mut ds = Datastore::new("main", DatastoreKind::Postgres);
+    ds.id = "dbs-main".into();
+    let ds_view = DatastoreView {
+        internal_host: "main".into(),
+        internal_port: 5432,
+        internal_url: ds.internal_url(),
+        external_url: None,
+        datastore: ds,
+    };
+    fake.on("GET", "/api/v1/datastores/main", Reply::ok(to_json(&ds_view)));
+    fake.on("GET", "/api/v1/datastores/dbs-main", Reply::ok(to_json(&ds_view)));
+    fake.on("DELETE", "/api/v1/datastores/dbs-main", Reply::no_content());
+    let group = json!({
+        "id": "evg-shared", "name": "shared", "created_at": "2026-01-10T12:00:00Z",
+        "updated_at": "2026-01-10T12:00:00Z", "vars": [], "services": []
+    });
+    fake.on("GET", "/api/v1/env-groups/shared", Reply::ok(group.clone()));
+    fake.on("GET", "/api/v1/env-groups/evg-shared", Reply::ok(group));
+    fake.on("DELETE", "/api/v1/env-groups/evg-shared", Reply::no_content());
     let h = home();
     let out = ferry(&url, h.path(), &["delete", "web"]).await;
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("refusing to delete service 'web'"), "{}", out.stderr);
     assert!(out.stderr.contains("--yes"));
-    assert!(fake.find("DELETE", "/api/v1/services/web").is_empty());
+    assert!(fake.requests().iter().all(|r| r.method != "DELETE"));
 
     let out = ferry(&url, h.path(), &["delete", "web", "--yes"]).await;
     assert_eq!(out.code, 0, "{out:?}");
     assert_eq!(out.stdout, "Deleted service 'web'\n");
-    assert_eq!(fake.find("DELETE", "/api/v1/services/web").len(), 1);
+    // By id: the messages use the real name.
+    let out = ferry(&url, h.path(), &["rm", "srv-web", "--yes"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "Deleted service 'web'\n");
+    let out = ferry(&url, h.path(), &["rm", "srv-web", "--yes", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap(), json!({ "deleted": "web", "id": "srv-web" }));
+    assert_eq!(fake.find("DELETE", "/api/v1/services/srv-web").len(), 3, "deleted by id");
 
-    // Same rule for datastores and env groups.
+    // Same rules for datastores and env groups.
     let out = ferry(&url, h.path(), &["db", "rm", "main"]).await;
     assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("refusing to delete datastore 'main'"), "{}", out.stderr);
     let out = ferry(&url, h.path(), &["env-group", "rm", "shared"]).await;
     assert_eq!(out.code, 1);
-    assert!(
-        fake.requests().iter().all(|r| r.path != "/api/v1/datastores/main" && r.path != "/api/v1/env-groups/shared")
-    );
+    assert!(fake.find("DELETE", "/api/v1/datastores/dbs-main").is_empty());
+    assert!(fake.find("DELETE", "/api/v1/env-groups/evg-shared").is_empty());
+    let out = ferry(&url, h.path(), &["db", "rm", "dbs-main", "--yes"]).await;
+    assert_eq!((out.code, out.stdout.as_str()), (0, "Deleted datastore 'main'\n"), "{out:?}");
+    let out = ferry(&url, h.path(), &["env-group", "rm", "evg-shared", "--yes"]).await;
+    assert_eq!((out.code, out.stdout.as_str()), (0, "Deleted env group 'shared'\n"), "{out:?}");
+
+    // A missing resource fails before any prompt.
+    let out = ferry(&url, h.path(), &["delete", "nope"]).await;
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("no route GET /api/v1/services/nope"), "{}", out.stderr);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -711,4 +835,212 @@ async fn ctrl_c_while_following_exits_130_with_a_resume_hint() {
     let mut stderr = String::new();
     child.stderr.take().unwrap().read_to_string(&mut stderr).await.unwrap();
     assert!(stderr.contains("Resume with: ferry logs --deploy dep-7 -f"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn env_set_shows_and_follows_the_restart_deploy() {
+    let (fake, url) = Fake::start().await;
+    let mut web = service_view("web", ServiceType::WebService);
+    web.service.live_deploy_id = Some("dep-old".into());
+    web.latest_deploy = Some(deploy("dep-old", "srv-web", DeployStatus::Live));
+    fake.on("GET", "/api/v1/services/web", Reply::ok(to_json(&web)));
+    fake.on("GET", "/api/v1/services", Reply::ok(json!([to_json(&web)])));
+    fake.on("GET", "/api/v1/datastores", Reply::ok(json!([])));
+    fake.on("PATCH", "/api/v1/services/web/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    let mut restart = deploy("dep-new", "srv-web", DeployStatus::Queued);
+    restart.trigger = DeployTrigger::EnvChange;
+    let older = deploy("dep-older", "srv-web", DeployStatus::Deactivated);
+    let history = json!([to_json(&restart), to_json(&web.latest_deploy), to_json(&older)]);
+    fake.on("GET", "/api/v1/services/srv-web/deploys", Reply::ok(history));
+    let h = home();
+
+    // The queued restart is shown like `ferry restart` shows it.
+    let out = ferry(&url, h.path(), &["env", "set", "web", "A=1"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "A=1\nDeploy dep-new queued (env_change)\nFollow it with: ferry logs --deploy dep-new -f\n");
+    assert!(out.stderr.contains("Saved. Restarting 'web' with the new environment."), "{}", out.stderr);
+    assert_eq!(fake.find("PATCH", "/api/v1/services/web/env")[0].query, "restart=true");
+
+    // --follow streams it and fails like the deploy does.
+    fake.on(
+        "GET",
+        "/api/v1/deploys/dep-new/logs",
+        Reply::sse(&[&log_event("system", None, "==> Restarting with the new environment"), "event: end\n\n"]),
+    );
+    let mut failed = restart.clone();
+    failed.status = DeployStatus::DeployFailed;
+    failed.error = Some("env var DB: reference to unknown datastore 'pgx'".into());
+    fake.on("GET", "/api/v1/deploys/dep-new", Reply::ok(to_json(&failed)));
+    let out = ferry(&url, h.path(), &["env", "set", "web", "DB=${{datastore.pgx.connectionString}}", "-f"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    // Unknown targets are flagged before saving.
+    assert!(
+        out.stderr.contains("warning: DB: reference to unknown datastore 'pgx'; deploys fail until it resolves"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stdout.contains("==> Restarting with the new environment"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("Deploy dep-new failed (deploy_failed): env var DB: reference to unknown datastore 'pgx'"),
+        "{}",
+        out.stdout
+    );
+
+    // A reference that can never resolve is refused before anything is sent.
+    let before = fake.requests().len();
+    let out = ferry(&url, h.path(), &["env", "set", "web", "TPL=Hello ${{ name }}"]).await;
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("TPL: invalid reference"), "{}", out.stderr);
+    assert_eq!(fake.requests().len(), before);
+
+    // Not live: nothing restarts, and it says so.
+    let idle = service_view("idle", ServiceType::WebService);
+    fake.on("GET", "/api/v1/services/idle", Reply::ok(to_json(&idle)));
+    fake.on("PATCH", "/api/v1/services/idle/env", Reply::ok(json!([{ "key": "A", "value": "1" }])));
+    let out = ferry(&url, h.path(), &["env", "unset", "idle", "B"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "A=1\n");
+    assert!(out.stderr.contains("'idle' isn't live, so nothing restarts"), "{}", out.stderr);
+    assert!(fake.find("GET", "/api/v1/services/srv-idle/deploys").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn env_listing_quotes_values_and_shows_linked_groups() {
+    let (fake, url) = Fake::start().await;
+    let own = json!([{ "key": "NL", "value": "line1\nline2" }, { "key": "A", "value": "1" }]);
+    fake.on("GET", "/api/v1/services/web/env", Reply::ok(own.clone()));
+    fake.on("GET", "/api/v1/services/srv-web/env", Reply::ok(own));
+    let mut web = service_view("web", ServiceType::WebService);
+    web.env_groups = vec!["shared".into()];
+    fake.on("GET", "/api/v1/services/web", Reply::ok(to_json(&web)));
+    let group = json!({
+        "id": "evg-shared", "name": "shared", "created_at": "2026-01-10T12:00:00Z",
+        "updated_at": "2026-01-10T12:00:00Z", "services": ["web"],
+        "vars": [{ "key": "G1", "value": "from-group" }, { "key": "A", "value": "overridden" }]
+    });
+    fake.on("GET", "/api/v1/env-groups/shared", Reply::ok(group));
+    let h = home();
+
+    let out = ferry(&url, h.path(), &["env", "web"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "NL=\"line1\\nline2\"\nA=1\n", "one line per variable");
+    assert!(out.stderr.contains("Also inherited from linked env group(s) shared"), "{}", out.stderr);
+    assert!(out.stderr.contains("ferry env web --effective"), "{}", out.stderr);
+
+    // The merged environment: groups first, the service's own variables win.
+    let out = ferry(&url, h.path(), &["env", "ls", "web", "--effective"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "G1=from-group\nA=1\nNL=\"line1\\nline2\"\n");
+    let out = ferry(&url, h.path(), &["env", "web", "--effective", "--json"]).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&out.stdout).unwrap(),
+        json!([
+            { "key": "G1", "value": "from-group" },
+            { "key": "A", "value": "1" },
+            { "key": "NL", "value": "line1\nline2" }
+        ])
+    );
+    // --json keeps the raw values.
+    let out = ferry(&url, h.path(), &["env", "web", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()[0]["value"], "line1\nline2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn domain_messages_use_the_normalized_domain() {
+    let (fake, url) = Fake::start().await;
+    fake.on("POST", "/api/v1/services/echo2/domains", Reply::ok(json!(["spaced.com"])));
+    fake.on("DELETE", "/api/v1/services/echo2/domains/newsvc.localhost", Reply::ok(json!(["spaced.com"])));
+    let h = home();
+    let out = ferry(&url, h.path(), &["domains", "add", "echo2", " Spaced.COM "]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.starts_with("Added spaced.com. Point its DNS"), "{}", out.stderr);
+    assert_eq!(fake.find("POST", "/api/v1/services/echo2/domains")[0].json(), json!({ "domain": "spaced.com" }));
+    let out = ferry(&url, h.path(), &["domains", "rm", "echo2", "NEWSVC.localhost."]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stderr, "Removed newsvc.localhost.\n");
+    assert_eq!(out.stdout, "spaced.com\n");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relative_repo_paths_are_sent_as_absolute_paths() {
+    let (fake, url) = Fake::start().await;
+    let mut created = service_view("relrepo", ServiceType::BackgroundWorker);
+    created.state = ServiceState::NotDeployed;
+    fake.on("POST", "/api/v1/services", Reply::json(201, to_json(&created)));
+    fake.on("PATCH", "/api/v1/services/relrepo", Reply::ok(to_json(&created)));
+    let result = json!({ "dry_run": true, "actions": [], "deploys": [], "warnings": [] });
+    fake.on("POST", "/api/v1/blueprints/apply", Reply::ok(result));
+    let work = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(work.path().join("git/mono/worker")).unwrap();
+    let mono = std::fs::canonicalize(work.path().join("git/mono")).unwrap();
+    let mono = mono.to_str().unwrap();
+    let h = home();
+    let run = |args: &'static [&'static str]| ferry_in(Some(work.path()), h.path(), Some(&url), Some(TOKEN), args);
+
+    let out = run(&["create", "relrepo", "--type", "worker", "--repo", "./git/mono", "--no-deploy"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains(&format!("note: using the local repository {mono}")), "{}", out.stderr);
+    assert_eq!(fake.find("POST", "/api/v1/services")[0].json()["repo_url"], mono);
+
+    let out = run(&["update", "relrepo", "--repo", "git/mono"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let out = run(&["update", "relrepo", "--repo", ""]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let patches = fake.find("PATCH", "/api/v1/services/relrepo");
+    assert_eq!(patches[0].json()["repo_url"], mono);
+    assert_eq!(patches[1].json()["repo_url"], "", "'' still clears the repo");
+
+    // A relative path that doesn't exist here is refused locally.
+    let out = run(&["create", "relcli", "--repo", "./echo"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("--repo './echo': no such directory here"), "{}", out.stderr);
+    assert_eq!(fake.find("POST", "/api/v1/services").len(), 1);
+    // URLs are sent as given.
+    let out = run(&["create", "remote", "--repo", "git@github.com:a/b.git", "--no-deploy"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(fake.find("POST", "/api/v1/services")[1].json()["repo_url"], "git@github.com:a/b.git");
+
+    // Blueprints: relative to the blueprint file's directory.
+    std::fs::create_dir_all(work.path().join("git/deploy")).unwrap();
+    std::fs::write(
+        work.path().join("git/deploy/ferry.yaml"),
+        "services:\n  - type: worker\n    name: relrepo\n    repo: ../mono\n    rootDir: worker\n",
+    )
+    .unwrap();
+    let out = run(&["blueprint", "apply", "git/deploy/ferry.yaml", "--dry-run"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains("note: service 'relrepo': repo '../mono' → "), "{}", out.stderr);
+    let sent = fake.find("POST", "/api/v1/blueprints/apply")[0].json();
+    let yaml: serde_yaml::Value = serde_yaml::from_str(sent["yaml"].as_str().unwrap()).unwrap();
+    assert_eq!(yaml["services"][0]["repo"].as_str(), Some(mono));
+    assert_eq!(yaml["services"][0]["rootDir"].as_str(), Some("worker"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_logs_explain_when_nothing_runs() {
+    let (fake, url) = Fake::start().await;
+    let status = RuntimeStatus {
+        service_id: "srv-unknown".into(),
+        state: ServiceState::Failed,
+        desired_instances: 1,
+        instances: vec![],
+    };
+    fake.on("GET", "/api/v1/services/unknown/status", Reply::ok(to_json(&status)));
+    let mut view = service_view("unknown", ServiceType::WebService);
+    view.state = ServiceState::Failed;
+    let mut failed = deploy("dep-9", "srv-unknown", DeployStatus::BuildFailed);
+    failed.error = Some("cannot determine how to start this Python app".into());
+    view.latest_deploy = Some(failed);
+    fake.on("GET", "/api/v1/services/unknown", Reply::ok(to_json(&view)));
+    fake.on("GET", "/api/v1/services/unknown/logs", Reply::sse(&["event: end\ndata:\n\n"]));
+    let h = home();
+    let out = ferry(&url, h.path(), &["logs", "unknown"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.is_empty());
+    assert!(
+        out.stderr.contains("its latest deploy dep-9 failed (build_failed: cannot determine how to start")
+            && out.stderr.contains("See its log with 'ferry logs --deploy dep-9'"),
+        "{}",
+        out.stderr
+    );
 }
