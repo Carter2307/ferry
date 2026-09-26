@@ -6,7 +6,7 @@
 
 use axum::Json;
 use axum::extract::State;
-use ferry_core::dto::{LinkEnvGroup, PatchEnv, ReplaceEnv, ServiceView};
+use ferry_core::dto::{ApiErrorBody, LinkEnvGroup, PatchEnv, ReplaceEnv, ServiceView};
 use ferry_core::{EnvVar, Error, Service, validate};
 
 use crate::AppState;
@@ -18,6 +18,19 @@ use crate::ops;
 use crate::views::service_view;
 
 /// `GET /api/v1/services/{id}/env`
+#[utoipa::path(
+    get,
+    path = "/api/v1/services/{id}/env",
+    tag = "env",
+    operation_id = "listServiceEnv",
+    summary = "List a service's variables",
+    description = "The service's own variables (not those of its env groups).",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 200, description = "The variables.", body = [EnvVar]),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn list(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<Vec<EnvVar>>> {
     let svc = st.store.require_service(&id).await?;
     Ok(Json(st.store.list_env(&svc.id).await?))
@@ -54,6 +67,21 @@ async fn locked_service(st: &AppState, id: &str) -> ApiResult<(Service, tokio::s
 }
 
 /// `PUT /api/v1/services/{id}/env?restart=`
+#[utoipa::path(
+    put,
+    path = "/api/v1/services/{id}/env",
+    tag = "env",
+    operation_id = "replaceServiceEnv",
+    summary = "Replace a service's variables",
+    description = "The service's own variables become exactly `vars`. They are validated alone and merged with the linked env groups (size limits, `${{...}}` references).",
+    params(("id" = String, Path, description = "Service id or name."), RestartQuery),
+    request_body = ReplaceEnv,
+    responses(
+        (status = 200, description = "The service's variables.", body = [EnvVar]),
+        (status = 400, description = "Invalid variables (keys, duplicates, sizes, references).", body = ApiErrorBody),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn replace(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -78,6 +106,21 @@ pub async fn replace(
 }
 
 /// `PATCH /api/v1/services/{id}/env?restart=`
+#[utoipa::path(
+    patch,
+    path = "/api/v1/services/{id}/env",
+    tag = "env",
+    operation_id = "patchServiceEnv",
+    summary = "Set and unset variables",
+    description = "Upserts `set` and deletes `unset`; the other variables stay.",
+    params(("id" = String, Path, description = "Service id or name."), RestartQuery),
+    request_body = PatchEnv,
+    responses(
+        (status = 200, description = "The service's variables.", body = [EnvVar]),
+        (status = 400, description = "Invalid variables (keys, duplicates, sizes, references).", body = ApiErrorBody),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn patch(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -106,6 +149,21 @@ pub async fn patch(
 }
 
 /// `POST /api/v1/services/{id}/env-groups`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/env-groups",
+    tag = "env-groups",
+    operation_id = "linkEnvGroup",
+    summary = "Link an env group to a service",
+    description = "The group's variables apply from the service's next deploy or restart (its own variables win). Linking an already linked group is a no-op.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    request_body = LinkEnvGroup,
+    responses(
+        (status = 200, description = "The service with its `env_groups`.", body = ServiceView),
+        (status = 400, description = "The combined environment would be invalid (sizes).", body = ApiErrorBody),
+        (status = 404, description = "No such service or env group.", body = ApiErrorBody),
+    ),
+)]
 pub async fn link_group(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -128,6 +186,18 @@ pub async fn link_group(
 }
 
 /// `DELETE /api/v1/services/{id}/env-groups/{group}`
+#[utoipa::path(
+    delete,
+    path = "/api/v1/services/{id}/env-groups/{group}",
+    tag = "env-groups",
+    operation_id = "unlinkEnvGroup",
+    summary = "Unlink an env group from a service",
+    params(("id" = String, Path, description = "Service id or name."), ("group" = String, Path, description = "Env group id or name.")),
+    responses(
+        (status = 200, description = "The service with its `env_groups`.", body = ServiceView),
+        (status = 404, description = "No such service or env group, or the group isn't linked to it.", body = ApiErrorBody),
+    ),
+)]
 pub async fn unlink_group(
     State(st): State<AppState>,
     ApiPath((id, group)): ApiPath<(String, String)>,

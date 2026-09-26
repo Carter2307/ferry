@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::State;
-use ferry_core::dto::DomainRequest;
+use ferry_core::dto::{ApiErrorBody, DomainRequest};
 use ferry_core::{Error, validate};
 
 use crate::AppState;
@@ -13,12 +13,40 @@ use crate::locks;
 use crate::ops;
 
 /// `GET /api/v1/services/{id}/domains`
+#[utoipa::path(
+    get,
+    path = "/api/v1/services/{id}/domains",
+    tag = "domains",
+    operation_id = "listDomains",
+    summary = "List custom domains",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 200, description = "The service's custom domains.", body = [String]),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn list(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<Vec<String>>> {
     let svc = st.store.require_service(&id).await?;
     Ok(Json(svc.custom_domains))
 }
 
 /// `POST /api/v1/services/{id}/domains`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/domains",
+    tag = "domains",
+    operation_id = "addDomain",
+    summary = "Add a custom domain",
+    description = "Web services and static sites only. The domain is normalized (lowercase, no trailing dot) and must not be used by another service or be a default host.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    request_body = DomainRequest,
+    responses(
+        (status = 200, description = "The service's custom domains.", body = [String]),
+        (status = 400, description = "Invalid domain, or the service type has no public HTTP.", body = ApiErrorBody),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+        (status = 409, description = "The domain is already added, or another service uses it.", body = ApiErrorBody),
+    ),
+)]
 pub async fn add(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -57,6 +85,18 @@ pub async fn add(
 }
 
 /// `DELETE /api/v1/services/{id}/domains/{domain}`
+#[utoipa::path(
+    delete,
+    path = "/api/v1/services/{id}/domains/{domain}",
+    tag = "domains",
+    operation_id = "removeDomain",
+    summary = "Remove a custom domain",
+    params(("id" = String, Path, description = "Service id or name."), ("domain" = String, Path, description = "The custom domain.")),
+    responses(
+        (status = 200, description = "The service's remaining custom domains.", body = [String]),
+        (status = 404, description = "No such service, or the domain isn't one of its custom domains.", body = ApiErrorBody),
+    ),
+)]
 pub async fn remove(
     State(st): State<AppState>,
     ApiPath((id, domain)): ApiPath<(String, String)>,

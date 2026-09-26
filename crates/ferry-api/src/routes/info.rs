@@ -22,6 +22,15 @@ pub fn url_for_addr(addr: SocketAddr) -> String {
 }
 
 /// `GET /api/v1/info`
+#[utoipa::path(
+    get,
+    path = "/api/v1/info",
+    tag = "info",
+    operation_id = "getServerInfo",
+    summary = "Server info",
+    description = "Version, base domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
+    responses((status = 200, description = "Server info.", body = ServerInfo)),
+)]
 pub async fn info(State(st): State<AppState>) -> Json<ServerInfo> {
     let cfg = &st.config;
     Json(ServerInfo {
@@ -36,6 +45,15 @@ pub async fn info(State(st): State<AppState>) -> Json<ServerInfo> {
 }
 
 /// `GET /healthz`
+#[utoipa::path(
+    get,
+    path = "/healthz",
+    tag = "info",
+    operation_id = "healthz",
+    summary = "Liveness probe",
+    description = "Answers `ok` while the server runs. No token needed.",
+    responses((status = 200, description = "The server is up.", body = String, content_type = "text/plain", example = "ok")),
+)]
 pub async fn healthz() -> &'static str {
     "ok"
 }

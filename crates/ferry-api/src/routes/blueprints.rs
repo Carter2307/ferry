@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::State;
-use ferry_core::dto::{ApplyBlueprint, BlueprintResult};
+use ferry_core::dto::{ApiErrorBody, ApplyBlueprint, BlueprintResult};
 use http::{HeaderMap, header};
 use serde::Deserialize;
 
@@ -16,8 +16,10 @@ use crate::locks;
 /// the same resources.
 static APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct DryRunQuery {
+    /// Only report what would be done (for raw YAML bodies; JSON bodies can also set `dry_run`).
     #[serde(default, deserialize_with = "de_flag")]
     pub dry_run: bool,
 }
@@ -78,6 +80,27 @@ fn meant_as_request(body: &[u8]) -> bool {
 }
 
 /// `POST /api/v1/blueprints/apply` — JSON `{yaml, dry_run}` or raw YAML with `?dry_run=`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/blueprints/apply",
+    tag = "blueprints",
+    operation_id = "applyBlueprint",
+    summary = "Apply a blueprint",
+    description = "Creates or updates the services, datastores and env groups a `ferry.yaml` / `render.yaml` describes (nothing is deleted) and queues the deploys that follow. Send the JSON `ApplyBlueprint` request, or the YAML itself with a YAML content type (`application/yaml`, `text/yaml`) and `?dry_run=`. A dry run only reports the planned actions.",
+    params(DryRunQuery),
+    request_body(
+        description = "The blueprint: a JSON `ApplyBlueprint` request, or raw YAML.",
+        content(
+            (ApplyBlueprint = "application/json"),
+            (String = "application/yaml", example = "services:\n  - type: web\n    name: web\n    image: nginx:alpine\n"),
+        ),
+    ),
+    responses(
+        (status = 200, description = "What was (or, with `dry_run`, would be) done.", body = BlueprintResult),
+        (status = 400, description = "Invalid body or blueprint (the message points at the problem).", body = ApiErrorBody),
+        (status = 409, description = "A resource conflicts with an existing one (e.g. a name used by another kind of resource).", body = ApiErrorBody),
+    ),
+)]
 pub async fn apply(
     State(st): State<AppState>,
     ApiQuery(q): ApiQuery<DryRunQuery>,

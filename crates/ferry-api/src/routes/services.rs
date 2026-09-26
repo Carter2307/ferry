@@ -3,7 +3,9 @@
 use axum::Json;
 use axum::extract::State;
 use axum::response::Response;
-use ferry_core::dto::{CreateService, RollbackRequest, RuntimeStatus, ScaleRequest, ServiceView, UpdateService};
+use ferry_core::dto::{
+    ApiErrorBody, CreateService, RollbackRequest, RuntimeStatus, ScaleRequest, ServiceView, UpdateService,
+};
 use ferry_core::{
     Deploy, DeployRequest, DeployTrigger, EnvGroup, Error, LogLine, LogOptions, Runtime, Service, ServiceType, git,
     ids, validate,
@@ -26,6 +28,15 @@ use crate::views::service_view;
 /// The state of live services reflects their running instances (`degraded`
 /// when some are down), from counts refreshed at most every few seconds
 /// (see [`runtime`]).
+#[utoipa::path(
+    get,
+    path = "/api/v1/services",
+    tag = "services",
+    operation_id = "listServices",
+    summary = "List services",
+    description = "Every service with its computed fields. The `state` of live services reflects their running instances (`degraded` when some are down), from counts refreshed at most every few seconds.",
+    responses((status = 200, description = "All services.", body = [ServiceView])),
+)]
 pub async fn list(State(st): State<AppState>) -> ApiResult<Json<Vec<ServiceView>>> {
     let services = st.store.list_services().await?;
     runtime::refresh(&st.engine, &services).await;
@@ -37,6 +48,18 @@ pub async fn list(State(st): State<AppState>) -> ApiResult<Json<Vec<ServiceView>
 }
 
 /// `GET /api/v1/services/{id}` (state as in [`list`])
+#[utoipa::path(
+    get,
+    path = "/api/v1/services/{id}",
+    tag = "services",
+    operation_id = "getService",
+    summary = "Get a service",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 200, description = "The service.", body = ServiceView),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn get(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<ServiceView>> {
     let svc = st.store.require_service(&id).await?;
     runtime::refresh(&st.engine, std::slice::from_ref(&svc)).await;
@@ -90,6 +113,20 @@ fn new_service(req: &CreateService) -> Result<Service, Error> {
 }
 
 /// `POST /api/v1/services`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services",
+    tag = "services",
+    operation_id = "createService",
+    summary = "Create a service",
+    description = "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names.",
+    request_body = CreateService,
+    responses(
+        (status = 201, description = "The new service.", body = ServiceView),
+        (status = 400, description = "Invalid settings, name, variables or domains, or an unknown env group.", body = ApiErrorBody),
+        (status = 409, description = "The name, its default host or a custom domain is already taken.", body = ApiErrorBody),
+    ),
+)]
 pub async fn create(
     State(st): State<AppState>,
     ApiJson(req): ApiJson<CreateService>,
@@ -258,6 +295,22 @@ fn row_changed(a: &Service, b: &Service) -> bool {
 }
 
 /// `PATCH /api/v1/services/{id}`
+#[utoipa::path(
+    patch,
+    path = "/api/v1/services/{id}",
+    tag = "services",
+    operation_id = "updateService",
+    summary = "Update a service",
+    description = "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    request_body = UpdateService,
+    responses(
+        (status = 200, description = "The updated service.", body = ServiceView),
+        (status = 400, description = "Invalid settings.", body = ApiErrorBody),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+        (status = 409, description = "A source switch that doesn't clear the old source, or a custom domain another service uses.", body = ApiErrorBody),
+    ),
+)]
 pub async fn update(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -354,6 +407,23 @@ async fn update_service(st: AppState, id: String, req: UpdateService) -> ApiResu
 ///
 /// Refused (409) while other services reference this one in their env
 /// (`${{service.NAME...}}`): they would fail every later deploy / restart.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/services/{id}",
+    tag = "services",
+    operation_id = "deleteService",
+    summary = "Delete a service",
+    description = "Removes its containers, routes, deploys and variables. Refused while other services reference it in their env (`${{service.NAME...}}`), unless `force=true`.",
+    params(
+        ("id" = String, Path, description = "Service id or name."),
+        ("force" = Option<bool>, Query, description = "Delete even though other services reference it (they will fail to deploy or restart)."),
+    ),
+    responses(
+        (status = 204, description = "Deleted."),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+        (status = 409, description = "Other services reference it (the message lists them).", body = ApiErrorBody),
+    ),
+)]
 pub async fn delete(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -379,6 +449,19 @@ pub async fn delete(
 
 /// `POST /api/v1/services/{id}/deploy-hook/rotate` — replace the deploy hook
 /// key (the old hook URL stops working).
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/deploy-hook/rotate",
+    tag = "services",
+    operation_id = "rotateDeployHook",
+    summary = "Rotate the deploy hook key",
+    description = "Replaces the secret of the service's deploy hook URL: the old URL stops working, the new one is the returned `deploy_hook_path`.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 200, description = "The service with its new `deploy_hook_path`.", body = ServiceView),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn rotate_deploy_hook(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -396,6 +479,19 @@ pub async fn rotate_deploy_hook(
 }
 
 /// `GET /api/v1/services/{id}/status`
+#[utoipa::path(
+    get,
+    path = "/api/v1/services/{id}/status",
+    tag = "services",
+    operation_id = "getServiceStatus",
+    summary = "Runtime status",
+    description = "The live state of each container: Docker state, host port, restarts, CPU and memory.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 200, description = "Runtime status.", body = RuntimeStatus),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn status(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<RuntimeStatus>> {
     let svc = st.store.require_service(&id).await?;
     let status = st.engine.service_status(&svc.id).await?;
@@ -403,14 +499,30 @@ pub async fn status(State(st): State<AppState>, ApiPath(id): ApiPath<String>) ->
     Ok(Json(status))
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct LogsQuery {
+    /// Keep the stream open and send new lines as they are written.
     #[serde(default, deserialize_with = "de_flag")]
     pub follow: bool,
+    /// Start with at most this many recent lines per container.
     pub tail: Option<usize>,
 }
 
 /// `GET /api/v1/services/{id}/logs?follow=&tail=` (SSE)
+#[utoipa::path(
+    get,
+    path = "/api/v1/services/{id}/logs",
+    tag = "services",
+    operation_id = "streamServiceLogs",
+    summary = "Runtime logs (SSE)",
+    description = "The merged output of the service's current containers (`instance` names the container). Cron jobs have no long-running containers: their stream is a few `system` lines pointing at the job logs.",
+    params(("id" = String, Path, description = "Service id or name."), LogsQuery),
+    responses(
+        (status = 200, description = crate::openapi::SSE_RUNTIME_LOGS, content_type = "text/event-stream", body = String, example = "event: log\ndata: {\"ts\":\"2026-01-01T12:00:00Z\",\"stream\":\"system\",\"line\":\"==> Build succeeded\"}\n\nevent: end\ndata: \n\n"),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn logs(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -439,6 +551,20 @@ pub async fn logs(
 }
 
 /// `POST /api/v1/services/{id}/restart`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/restart",
+    tag = "services",
+    operation_id = "restartService",
+    summary = "Restart a service",
+    description = "Rolls out the live deploy's image again (a new deploy with trigger `restart`), picking up changed variables.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 202, description = "The restart deploy, queued.", body = Deploy),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+        (status = 409, description = "The service has no live deploy yet, or it is suspended or being deleted.", body = ApiErrorBody),
+    ),
+)]
 pub async fn restart(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -449,6 +575,19 @@ pub async fn restart(
 }
 
 /// `POST /api/v1/services/{id}/suspend`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/suspend",
+    tag = "services",
+    operation_id = "suspendService",
+    summary = "Suspend a service",
+    description = "Stops its containers; settings, variables and deploys stay until it is resumed.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 200, description = "The suspended service.", body = ServiceView),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn suspend(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<ServiceView>> {
     let svc = st.store.require_service(&id).await?;
     st.engine.suspend(&svc.id).await?;
@@ -457,6 +596,19 @@ pub async fn suspend(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -
 }
 
 /// `POST /api/v1/services/{id}/resume`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/resume",
+    tag = "services",
+    operation_id = "resumeService",
+    summary = "Resume a service",
+    description = "Starts the live deploy's containers again.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    responses(
+        (status = 200, description = "The resumed service.", body = ServiceView),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn resume(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<ServiceView>> {
     let svc = st.store.require_service(&id).await?;
     st.engine.resume(&svc.id).await?;
@@ -465,6 +617,21 @@ pub async fn resume(State(st): State<AppState>, ApiPath(id): ApiPath<String>) ->
 }
 
 /// `POST /api/v1/services/{id}/scale`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/scale",
+    tag = "services",
+    operation_id = "scaleService",
+    summary = "Scale a service",
+    description = "Sets the number of instances. Cron jobs can't be scaled, and services with a disk run 1 instance.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    request_body = ScaleRequest,
+    responses(
+        (status = 200, description = "The scaled service.", body = ServiceView),
+        (status = 400, description = "Invalid instance count for this service.", body = ApiErrorBody),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn scale(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -488,6 +655,22 @@ pub async fn scale(
 }
 
 /// `POST /api/v1/services/{id}/rollback`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/rollback",
+    tag = "services",
+    operation_id = "rollbackService",
+    summary = "Roll back to an earlier deploy",
+    description = "Queues a deploy (trigger `rollback`) reusing the image of an earlier deploy of this service that went live.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    request_body = RollbackRequest,
+    responses(
+        (status = 202, description = "The rollback deploy, queued.", body = Deploy),
+        (status = 400, description = "The deploy belongs to another service, never went live or has no image.", body = ApiErrorBody),
+        (status = 404, description = "No such service or deploy.", body = ApiErrorBody),
+        (status = 409, description = "The service is suspended or being deleted.", body = ApiErrorBody),
+    ),
+)]
 pub async fn rollback(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,

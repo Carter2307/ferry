@@ -9,6 +9,7 @@ import {
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { CardStatusLine } from './ResourceCard'
 import {
   DATASTORE_STATUS_TONE,
   DEPLOY_STATUS_TONE,
@@ -130,15 +131,9 @@ export function ServiceStateLine({ state, className }: { state: ServiceState; cl
     not_deployed: 'Not deployed yet',
   }[state]
   return (
-    <span className={cn('inline-flex items-center gap-2 text-[13px] text-foreground-light', className)}>
-      <span
-        aria-hidden="true"
-        className={cn('flex size-5 items-center justify-center rounded-full border bg-surface-100', stateIconTone[tone])}
-      >
-        <Icon className={cn('size-3', state === 'deploying' && 'animate-spin')} strokeWidth={2.5} />
-      </span>
+    <CardStatusLine icon={<Icon />} ring={stateIconTone[tone]} spin={state === 'deploying'} className={className}>
       {text}
-    </span>
+    </CardStatusLine>
   )
 }
 

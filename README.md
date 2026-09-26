@@ -28,9 +28,10 @@ ferry up                      # deploy the current directory → http://my-app.l
 
 ## Quick start
 
-Requirements: Docker (Docker Desktop on macOS works), Rust 1.85+ to build.
+Requirements: Docker (Docker Desktop on macOS works), Rust 1.85+ and Node.js 20+ to build.
 
 ```bash
+(cd web && npm ci && npm run build)     # the web dashboard (embedded into ferryd at compile time)
 cargo build --release
 ./target/release/ferryd                 # starts the server; prints the dashboard URL and API token
 ```
@@ -45,7 +46,8 @@ ferry up --follow                        # creates "node-hello", uploads, builds
 curl http://node-hello.localhost:8080
 ```
 
-Open the dashboard at **http://127.0.0.1:7878** (or http://ferry.localhost:8080).
+Open the dashboard at **http://127.0.0.1:7878** (or http://ferry.localhost:8080). The interactive
+API reference (Swagger UI) is at **http://127.0.0.1:7878/api/docs**, and the OpenAPI 3.1 document is at `/api/openapi.json`.
 
 ### More examples
 
@@ -151,6 +153,19 @@ crashed containers, enforces instance counts and refreshes routes.
 See [DESIGN.md](DESIGN.md) for the full architecture, API reference, blueprint
 format and internals.
 
+## Web dashboard
+
+The dashboard is a standalone React app in [`web/`](web/README.md), built with Vite,
+TypeScript, Tailwind, shadcn/ui, Zustand and TanStack Query, and styled after Supabase
+Studio. It talks to the API over HTTPS JSON (REST). Real-time updates use Server-Sent
+Events: one change feed `/api/v1/events` that keeps the cache fresh, plus log streams.
+
+```bash
+cd web && npm ci
+FERRY_API_URL=http://127.0.0.1:7878 npm run dev   # hot-reloading dev server (proxies /api to ferryd)
+npm run build                                     # → web/dist, embedded by ferry-api's build script
+```
+
 ## Development
 
 ```bash
@@ -160,7 +175,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Crates: `ferry-core` (models, store, contracts) · `ferry-docker` · `ferry-build` ·
-`ferry-proxy` · `ferry-tls` · `ferry-engine` · `ferry-api` (+ dashboard) ·
+`ferry-proxy` · `ferry-tls` · `ferry-engine` · `ferry-api` (REST + SSE + OpenAPI) ·
 `ferry-cli` (`ferry`) · `ferryd`.
 
 ## License

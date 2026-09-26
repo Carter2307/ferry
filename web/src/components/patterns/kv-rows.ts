@@ -10,6 +10,17 @@ export interface KvRow {
   value: string
 }
 
+/** Fixed-length mask for hidden values (one dot per character would leak the length). */
+export const VALUE_MASK = '••••••••••••'
+
+/**
+ * The value is only `${{…}}` references (e.g. `${{datastore.app-db.connectionString}}`):
+ * not a secret itself, so editors show it in clear.
+ */
+export function isReferenceOnly(value: string): boolean {
+  return /^(?:\$\{\{[^{}]+\}\})+$/.test(value.trim())
+}
+
 let rowSeq = 0
 /** Fresh row id. */
 export function newRowId(): string {

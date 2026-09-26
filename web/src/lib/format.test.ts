@@ -10,6 +10,7 @@ import {
   plural,
   relativeTime,
   repoName,
+  shortDateTime,
   shortId,
   shortSha,
   stripAnsi,
@@ -97,5 +98,19 @@ describe('stripAnsi', () => {
     expect(stripAnsi('\u001b[1;32m✓\u001b[39;49m ok')).toBe('✓ ok')
     expect(stripAnsi('\u001b]8;;http://x\u0007link\u001b]8;;\u0007')).toBe('link')
     expect(stripAnsi('plain')).toBe('plain')
+  })
+})
+
+describe('shortDateTime', () => {
+  it('formats month, day and 24h time', () => {
+    const d = new Date(2026, 8, 26, 20, 4, 7)
+    expect(shortDateTime(d, new Date(2026, 0, 1))).toBe('Sep 26, 20:04:07')
+  })
+  it('adds the year when it differs from now', () => {
+    const d = new Date(2025, 11, 31, 9, 0, 0)
+    expect(shortDateTime(d, new Date(2026, 0, 1))).toBe('Dec 31 2025, 09:00:00')
+  })
+  it('returns a dash for missing values', () => {
+    expect(shortDateTime(null)).toBe('—')
   })
 })

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import { ArrowUpRight } from 'lucide-react'
 
 import { MonoLabel } from '@/components/patterns/MonoLabel'
@@ -69,21 +69,77 @@ export function InnerMenu({ title, groups, footer, label, className }: InnerMenu
       </aside>
 
       {/* mobile: tab strip */}
-      <nav
-        aria-label={label ?? (typeof title === 'string' ? title : 'Section')}
-        className="sticky top-0 z-10 flex shrink-0 gap-1 overflow-x-auto border-b bg-background px-3 py-2 scrollbar-none md:hidden"
+      <MobileTabStrip items={all} label={label ?? (typeof title === 'string' ? title : 'Section')} />
+    </>
+  )
+}
+
+const FADE = 24
+
+/**
+ * Phone version of the inner menu: a horizontally scrolling pill strip. The
+ * active pill is scrolled into view on mount and on every route change, and
+ * the edges fade out while there are more pills to scroll to.
+ */
+function MobileTabStrip({ items, label }: { items: InnerMenuItem[]; label: string }) {
+  const scroller = React.useRef<HTMLDivElement>(null)
+  const { pathname } = useLocation()
+  const [edges, setEdges] = React.useState({ left: false, right: false })
+
+  const measure = React.useCallback(() => {
+    const el = scroller.current
+    if (!el) return
+    const left = el.scrollLeft > 1
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+    setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }))
+  }, [])
+
+  React.useLayoutEffect(() => {
+    const el = scroller.current
+    const active = el?.querySelector<HTMLElement>('[aria-current="page"]')
+    if (el && active) {
+      // Scroll only the strip (scrollIntoView could also move the page vertically).
+      const box = el.getBoundingClientRect()
+      const pill = active.getBoundingClientRect()
+      if (pill.left < box.left + FADE) el.scrollLeft -= box.left + FADE - pill.left
+      else if (pill.right > box.right - FADE) el.scrollLeft += pill.right - (box.right - FADE)
+    }
+    measure()
+  }, [pathname, measure])
+
+  React.useEffect(() => {
+    const el = scroller.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [measure])
+
+  const mask =
+    edges.left || edges.right
+      ? `linear-gradient(to right, ${edges.left ? 'transparent' : '#000'} 0, #000 ${FADE}px, #000 calc(100% - ${FADE}px), ${edges.right ? 'transparent' : '#000'} 100%)`
+      : undefined
+
+  return (
+    <nav aria-label={label} className="sticky top-0 z-10 shrink-0 border-b bg-background md:hidden">
+      <div
+        ref={scroller}
+        onScroll={measure}
+        className="flex gap-1 overflow-x-auto px-3 py-2 scrollbar-none"
+        style={{ maskImage: mask, WebkitMaskImage: mask }}
       >
-        {all.map((item) =>
+        {items.map((item) =>
           item.external ? (
             <a
               key={item.to}
               href={item.to}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] whitespace-nowrap text-foreground-light outline-none hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] whitespace-nowrap text-foreground-light outline-none hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             >
               {item.label}
               <ArrowUpRight className="size-3" aria-hidden="true" />
+              <span className="sr-only">(opens in a new tab)</span>
             </a>
           ) : (
             <NavLink
@@ -92,7 +148,7 @@ export function InnerMenu({ title, groups, footer, label, className }: InnerMenu
               end={item.end}
               className={({ isActive }) =>
                 cn(
-                  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+                  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
                   isActive
                     ? 'border-border-strong bg-selection font-medium text-foreground'
                     : 'border-transparent text-foreground-light hover:bg-surface-200 hover:text-foreground',
@@ -104,8 +160,8 @@ export function InnerMenu({ title, groups, footer, label, className }: InnerMenu
             </NavLink>
           ),
         )}
-      </nav>
-    </>
+      </div>
+    </nav>
   )
 }
 

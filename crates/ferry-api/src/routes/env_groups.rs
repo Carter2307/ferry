@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::State;
-use ferry_core::dto::{CreateEnvGroup, EnvGroupView, PatchEnv, ReplaceEnv};
+use ferry_core::dto::{ApiErrorBody, CreateEnvGroup, EnvGroupView, PatchEnv, ReplaceEnv};
 use ferry_core::{EnvGroup, EnvVar, Error, validate};
 use http::StatusCode;
 
@@ -15,6 +15,14 @@ use crate::ops;
 use crate::views::env_group_view;
 
 /// `GET /api/v1/env-groups`
+#[utoipa::path(
+    get,
+    path = "/api/v1/env-groups",
+    tag = "env-groups",
+    operation_id = "listEnvGroups",
+    summary = "List env groups",
+    responses((status = 200, description = "All env groups with their variables and linked services.", body = [EnvGroupView])),
+)]
 pub async fn list(State(st): State<AppState>) -> ApiResult<Json<Vec<EnvGroupView>>> {
     let mut out = Vec::new();
     for g in st.store.list_env_groups().await? {
@@ -24,6 +32,19 @@ pub async fn list(State(st): State<AppState>) -> ApiResult<Json<Vec<EnvGroupView
 }
 
 /// `POST /api/v1/env-groups`
+#[utoipa::path(
+    post,
+    path = "/api/v1/env-groups",
+    tag = "env-groups",
+    operation_id = "createEnvGroup",
+    summary = "Create an env group",
+    request_body = CreateEnvGroup,
+    responses(
+        (status = 201, description = "The new env group.", body = EnvGroupView),
+        (status = 400, description = "Invalid name or variables.", body = ApiErrorBody),
+        (status = 409, description = "The name is already taken.", body = ApiErrorBody),
+    ),
+)]
 pub async fn create(
     State(st): State<AppState>,
     ApiJson(req): ApiJson<CreateEnvGroup>,
@@ -49,6 +70,18 @@ pub async fn create(
 }
 
 /// `GET /api/v1/env-groups/{id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/env-groups/{id}",
+    tag = "env-groups",
+    operation_id = "getEnvGroup",
+    summary = "Get an env group",
+    params(("id" = String, Path, description = "Env group id or name.")),
+    responses(
+        (status = 200, description = "The env group.", body = EnvGroupView),
+        (status = 404, description = "No such env group.", body = ApiErrorBody),
+    ),
+)]
 pub async fn get(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<EnvGroupView>> {
     let g = st.store.require_env_group(&id).await?;
     Ok(Json(env_group_view(&st.store, g).await?))
@@ -60,6 +93,24 @@ pub async fn get(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> Ap
 /// lose its variables at their next restart. With `force=true` the group is
 /// deleted anyway, and `restart=true` restarts the linked live services so
 /// they drop the variables now.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/env-groups/{id}",
+    tag = "env-groups",
+    operation_id = "deleteEnvGroup",
+    summary = "Delete an env group",
+    description = "Refused while services are linked to it (they would lose its variables at their next restart), unless `force=true`; `restart=true` then restarts the linked live services so they drop the variables now.",
+    params(
+        ("id" = String, Path, description = "Env group id or name."),
+        ("force" = Option<bool>, Query, description = "Delete even though services are linked to it."),
+        ("restart" = Option<bool>, Query, description = "With `force`: restart the linked live services whose environment changes."),
+    ),
+    responses(
+        (status = 204, description = "Deleted."),
+        (status = 404, description = "No such env group.", body = ApiErrorBody),
+        (status = 409, description = "Services are linked to it (the message lists them).", body = ApiErrorBody),
+    ),
+)]
 pub async fn delete(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -134,6 +185,21 @@ async fn change_env(st: AppState, id: String, restart: bool, change: Change) -> 
 }
 
 /// `PUT /api/v1/env-groups/{id}/env?restart=`
+#[utoipa::path(
+    put,
+    path = "/api/v1/env-groups/{id}/env",
+    tag = "env-groups",
+    operation_id = "replaceEnvGroupEnv",
+    summary = "Replace an env group's variables",
+    description = "The group's variables become exactly `vars`, validated alone and in the combined environment of every linked service.",
+    params(("id" = String, Path, description = "Env group id or name."), RestartQuery),
+    request_body = ReplaceEnv,
+    responses(
+        (status = 200, description = "The env group.", body = EnvGroupView),
+        (status = 400, description = "Invalid variables, alone or for a linked service.", body = ApiErrorBody),
+        (status = 404, description = "No such env group.", body = ApiErrorBody),
+    ),
+)]
 pub async fn replace_env(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -144,6 +210,21 @@ pub async fn replace_env(
 }
 
 /// `PATCH /api/v1/env-groups/{id}/env?restart=`
+#[utoipa::path(
+    patch,
+    path = "/api/v1/env-groups/{id}/env",
+    tag = "env-groups",
+    operation_id = "patchEnvGroupEnv",
+    summary = "Set and unset an env group's variables",
+    description = "Upserts `set` and deletes `unset`; the other variables stay.",
+    params(("id" = String, Path, description = "Env group id or name."), RestartQuery),
+    request_body = PatchEnv,
+    responses(
+        (status = 200, description = "The env group.", body = EnvGroupView),
+        (status = 400, description = "Invalid variables, alone or for a linked service.", body = ApiErrorBody),
+        (status = 404, description = "No such env group.", body = ApiErrorBody),
+    ),
+)]
 pub async fn patch_env(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,

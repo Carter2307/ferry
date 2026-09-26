@@ -7,6 +7,7 @@
 use axum::Json;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
+use ferry_core::dto::ApiErrorBody;
 use ferry_core::{Deploy, DeployRequest, DeployTrigger, Store, git, validate};
 use hmac::{Hmac, Mac};
 use http::{HeaderMap, StatusCode, header};
@@ -20,14 +21,34 @@ use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiBytes, ApiPath, ApiQuery};
 use crate::views::public_deploy;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct HookQuery {
+    /// The service's deploy hook key (part of its `deploy_hook_path`).
     pub key: Option<String>,
 }
 
 /// `GET|POST /hooks/deploy/{service_id}?key=` — the path takes the service
 /// **id** only (names are guessable); an unknown id and a wrong key get the
 /// same 401, so the hook can't be used to discover services.
+#[utoipa::path(
+    post,
+    path = "/hooks/deploy/{service_id}",
+    operation_id = "deployHook",
+    summary = "Deploy hook",
+    description = "Queues a deploy of the service's configured source. The URL (`deploy_hook_path` of the service) is the secret: no token needed. Rotate it with `POST /api/v1/services/{id}/deploy-hook/rotate`.",
+    tag = "hooks",
+    params(
+        ("service_id" = String, Path, description = "The service's **id** (names are not accepted: they are guessable)."),
+        HookQuery,
+    ),
+    responses(
+        (status = 202, description = "A deploy (trigger `deploy_hook`) was queued; credentials are redacted.", body = Deploy),
+        (status = 400, description = "The service has no source to deploy.", body = ApiErrorBody),
+        (status = 401, description = "Unknown service or wrong key (the same answer for both).", body = ApiErrorBody),
+        (status = 409, description = "The service is suspended or being deleted.", body = ApiErrorBody),
+    ),
+)]
 pub async fn deploy_hook(
     State(st): State<AppState>,
     ApiPath(service_id): ApiPath<String>,
@@ -44,6 +65,34 @@ pub async fn deploy_hook(
     let d = st.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::DeployHook)).await?;
     tracing::info!(service = %svc.name, deploy = %d.id, "deploy hook triggered a deploy");
     Ok((StatusCode::ACCEPTED, Json(public_deploy(d))))
+}
+
+/// `GET /hooks/deploy/{service_id}?key=` — the same as `POST` (its own
+/// handler only so the two methods get distinct OpenAPI operations).
+#[utoipa::path(
+    get,
+    path = "/hooks/deploy/{service_id}",
+    operation_id = "deployHookGet",
+    summary = "Deploy hook (GET)",
+    description = "Same as `POST`, for tools that can only send `GET` requests.",
+    tag = "hooks",
+    params(
+        ("service_id" = String, Path, description = "The service's **id** (names are not accepted: they are guessable)."),
+        HookQuery,
+    ),
+    responses(
+        (status = 202, description = "A deploy (trigger `deploy_hook`) was queued; credentials are redacted.", body = Deploy),
+        (status = 400, description = "The service has no source to deploy.", body = ApiErrorBody),
+        (status = 401, description = "Unknown service or wrong key (the same answer for both).", body = ApiErrorBody),
+        (status = 409, description = "The service is suspended or being deleted.", body = ApiErrorBody),
+    ),
+)]
+pub async fn deploy_hook_get(
+    state: State<AppState>,
+    path: ApiPath<String>,
+    query: ApiQuery<HookQuery>,
+) -> ApiResult<(StatusCode, Json<Deploy>)> {
+    deploy_hook(state, path, query).await
 }
 
 type HmacSha256 = Hmac<Sha256>;
@@ -88,6 +137,33 @@ fn github_payload(headers: &HeaderMap, body: &[u8]) -> Result<Value, ApiError> {
 }
 
 /// `POST /hooks/github`
+#[utoipa::path(
+    post,
+    path = "/hooks/github",
+    tag = "hooks",
+    operation_id = "githubWebhook",
+    summary = "GitHub webhook",
+    description = "Set it up in GitHub with the server's webhook secret (`github_webhook_secret`). A `push` deploys (trigger `webhook`, commit = `after`) every auto-deploy service whose repository and branch match; `ping` answers `{\"ok\": true}`; other events are ignored. Replayed deliveries (same body or delivery id) are ignored too.",
+    params(
+        ("X-Hub-Signature-256" = String, Header, description = "`sha256=<hex HMAC-SHA256 of the raw body>` with the webhook secret."),
+        ("X-GitHub-Event" = String, Header, description = "`push`, `ping`, ..."),
+        ("X-GitHub-Delivery" = Option<String>, Header, description = "Delivery id (used to ignore redeliveries)."),
+    ),
+    request_body(
+        description = "The event payload: JSON, or form-encoded with the JSON in a `payload` field (GitHub's default content type). At most 25 MiB.",
+        content(
+            (Object = "application/json"),
+            ("application/x-www-form-urlencoded"),
+        ),
+    ),
+    responses(
+        (status = 200, description = "Processed (see which fields are set).", body = crate::openapi::GithubHookResponse),
+        (status = 400, description = "Invalid payload.", body = ApiErrorBody),
+        (status = 401, description = "Missing or invalid signature.", body = ApiErrorBody),
+        (status = 404, description = "GitHub webhooks are not enabled (no webhook secret configured).", body = ApiErrorBody),
+        (status = 413, description = "The payload exceeds 25 MiB.", body = ApiErrorBody),
+    ),
+)]
 pub async fn github(State(st): State<AppState>, headers: HeaderMap, ApiBytes(body): ApiBytes) -> ApiResult<Response> {
     let Some(secret) = st.config.github_webhook_secret.as_deref().filter(|s| !s.is_empty()) else {
         return Err(ApiError::not_found(

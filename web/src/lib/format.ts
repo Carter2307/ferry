@@ -50,6 +50,19 @@ export function shortDate(value: string | number | Date | null | undefined, now:
 }
 
 /** "Sep 26, 2026, 2:27:04 PM" in the viewer's locale-ish English format. */
+/**
+ * Compact local date + time for tight cells: "Sep 26, 20:44:57" (the year is
+ * added when it isn't the current one: "Sep 26 2025, 20:44:57").
+ */
+export function shortDateTime(value: string | number | Date | null | undefined, now: Date = new Date()): string {
+  const d = toDate(value)
+  if (!d) return EM_DASH
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const day = d.toLocaleString('en-US', { month: 'short', day: 'numeric' })
+  const year = d.getFullYear() === now.getFullYear() ? '' : ` ${d.getFullYear()}`
+  return `${day}${year}, ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 export function dateTime(value: string | number | Date | null | undefined): string {
   const d = toDate(value)
   if (!d) return EM_DASH

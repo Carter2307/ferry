@@ -6,6 +6,7 @@ import {
   Braces,
   ChevronsUpDown,
   CircleHelp,
+  FileCode2,
   KeyRound,
   LogOut,
   Menu,
@@ -35,8 +36,9 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
+import { ApiError } from '@/lib/api/client'
 import { useLive } from '@/lib/api/events'
-import { useDatastores, useEnvGroups, useServerInfo, useService, useServices } from '@/lib/api/queries'
+import { useDatastores, useEnvGroups, useOpenApiSpec, useServerInfo, useService, useServices } from '@/lib/api/queries'
 import { DATASTORE_KIND_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
 import { isMac } from '@/lib/platform'
 import { cn } from '@/lib/utils'
@@ -44,7 +46,7 @@ import { useAuth } from '@/stores/auth'
 import { useUi, type ThemePreference } from '@/stores/ui'
 
 import { ConnectPopover } from './ConnectPopover'
-import { DOCS_URL } from './nav'
+import { API_DOCS_URL, DOCS_URL } from './nav'
 import { ResourceSwitcher } from './ResourceSwitcher'
 import { useRouteResource } from './useRouteResource'
 
@@ -70,7 +72,7 @@ function ServerSegment() {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="Server"
+          aria-label={`Server ${info?.base_domain || 'Ferry'}${info ? ` v${info.version}` : ''}, open server menu`}
           className="group inline-flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 text-sm text-foreground outline-none transition-colors hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-surface-200"
         >
           <Server className="size-4 shrink-0 text-foreground-lighter" aria-hidden="true" />
@@ -116,11 +118,13 @@ const SERVICE_SECTIONS = new Set(['deploys', 'logs', 'jobs', 'environment', 'set
 
 function ServiceSegment({ name }: { name: string }) {
   const { data: services, isLoading } = useServices()
-  const { data: service } = useService(name)
+  const { data: service, error } = useService(name)
   // Switching service keeps the current section (…/logs → other/logs).
   const { pathname } = useLocation()
   const section = pathname.split('/')[3] ?? ''
   const suffix = SERVICE_SECTIONS.has(section) ? `/${section}` : ''
+  // No switcher segment for a service that doesn't exist (the page shows "not found").
+  if (error instanceof ApiError && error.isNotFound && !service) return null
   return (
     <>
       <Slash />
@@ -161,6 +165,7 @@ function ServiceSegment({ name }: { name: string }) {
 function DatastoreSegment({ name }: { name: string }) {
   const { data: datastores, isLoading } = useDatastores()
   const ds = datastores?.find((d) => d.name === name || d.id === name)
+  if (datastores && !ds) return null
   return (
     <>
       <Slash />
@@ -195,6 +200,7 @@ function DatastoreSegment({ name }: { name: string }) {
 
 function EnvGroupSegment({ name }: { name: string }) {
   const { data: groups, isLoading } = useEnvGroups()
+  if (groups && !groups.some((g) => g.name === name || g.id === name)) return null
   return (
     <>
       <Slash />
@@ -260,8 +266,11 @@ function AccountMenu() {
   const token = useAuth((s) => s.token) ?? ''
   const signOut = useAuth((s) => s.signOut)
   const navigate = useNavigate()
+  const [open, setOpen] = React.useState(false)
+  // Checked once, the first time the menu opens (cached for the session).
+  const docs = useOpenApiSpec({ enabled: open })
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -288,6 +297,18 @@ function AccountMenu() {
             <BookOpen /> Documentation
           </a>
         </DropdownMenuItem>
+        {docs.available ? (
+          <DropdownMenuItem asChild>
+            <a href={API_DOCS_URL} target="_blank" rel="noreferrer">
+              <FileCode2 /> API docs
+            </a>
+          </DropdownMenuItem>
+        ) : (
+          // Unknown yet or not published by this server: the in-app API page explains either way.
+          <DropdownMenuItem onSelect={() => void navigate('/server?section=api')}>
+            <FileCode2 /> API
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={signOut}>
           <LogOut /> Sign out

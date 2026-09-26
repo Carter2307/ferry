@@ -23,6 +23,8 @@ export interface ConfirmDialogProps {
   description?: React.ReactNode
   /** Label of the confirm button. */
   confirmLabel?: string
+  /** Label of the safe button (default "Cancel"; use e.g. "Keep running" when the action itself is a cancel). */
+  cancelLabel?: string
   /** `danger` = solid red confirm (default), `primary` = green, `warning` = amber. */
   variant?: 'danger' | 'primary' | 'warning'
   /**
@@ -46,6 +48,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
   variant = 'danger',
   confirmText,
   onConfirm,
@@ -129,7 +132,7 @@ export function ConfirmDialog({
             )}
           </AlertDialogBody>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={pending}>{cancelLabel}</AlertDialogCancel>
             <Button
               type="submit"
               variant={variant === 'danger' ? 'danger-solid' : variant === 'warning' ? 'warning' : 'primary'}

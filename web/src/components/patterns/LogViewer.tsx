@@ -18,6 +18,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { Hint } from '@/components/ui/tooltip'
 import type { LogEntry, LogStreamStatus } from '@/lib/api/useLogStream'
 import { logTime } from '@/lib/format'
+import { logSeverity } from '@/lib/logs'
 import { cn } from '@/lib/utils'
 import { useUi } from '@/stores/ui'
 
@@ -57,9 +58,19 @@ const STATUS_PILL: Record<LogStreamStatus, { tone: StatusTone; label: string; pu
 
 const ROW_HEIGHT = 20
 
+const STATUS_ANNOUNCEMENT: Record<LogStreamStatus, string> = {
+  idle: '',
+  connecting: 'Connecting to the log stream',
+  live: 'Log stream live',
+  ended: 'Log stream ended',
+  error: 'Log stream error',
+}
+
 /**
  * Supabase-style log viewer: mono 12.5px, faint surface, timestamp and
- * instance columns, stderr in red and `==>` system lines in green,
+ * instance columns, lines coloured by severity (error / warning words, failed
+ * `==>` system lines; plain stderr only gets a gutter mark), `==>` system lines
+ * in green,
  * windowed rendering (thousands of lines), search filter with highlight,
  * follow (auto-scroll) that pauses when you scroll up, wrap / timestamps
  * toggles, clear and download.
@@ -84,6 +95,7 @@ export function LogViewer({
   const [follow, setFollow] = React.useState(true)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const searchId = React.useId()
+  const [searchAnnouncement, setSearchAnnouncement] = React.useState('')
 
   const needle = query.trim().toLowerCase()
   const filtered = React.useMemo(
@@ -95,6 +107,17 @@ export function LogViewer({
     [lines, showInstance],
   )
   const instanceCol = hasInstance && prefs.instance
+
+  // Screen readers: announce the match count once typing settles (not every streamed line).
+  const matchCount = React.useRef(0)
+  matchCount.current = filtered.length
+  React.useEffect(() => {
+    const t = window.setTimeout(
+      () => setSearchAnnouncement(needle ? `${matchCount.current} matching line${matchCount.current === 1 ? '' : 's'}` : ''),
+      needle ? 700 : 0,
+    )
+    return () => window.clearTimeout(t)
+  }, [needle])
 
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual returns non-memoizable functions by design
   const virtualizer = useVirtualizer({
@@ -196,6 +219,7 @@ export function LogViewer({
             <Hint label="Show instance">
               <Toggle
                 size="default"
+                className="hidden sm:inline-flex"
                 aria-label="Show instance column"
                 pressed={prefs.instance}
                 onPressedChange={(instance) => setPrefs({ instance })}
@@ -207,8 +231,15 @@ export function LogViewer({
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           <StatePill tone={pill.tone} pulse={pill.pulse} label={pill.label} />
-          <span className="hidden font-mono text-[11px] text-foreground-lighter tabular sm:inline" aria-live="polite">
+          <span className="hidden font-mono text-[11px] text-foreground-lighter tabular sm:inline">
             {needle ? `${filtered.length}/${lines.length}` : lines.length} lines
+          </span>
+          {/* Announce stream state changes and settled search results only, never the raw line count. */}
+          <span role="status" className="sr-only">
+            {STATUS_ANNOUNCEMENT[status]}
+          </span>
+          <span role="status" className="sr-only">
+            {searchAnnouncement}
           </span>
           <Hint label={follow ? 'Following (scroll up to pause)' : 'Follow new lines'}>
             <Toggle
@@ -267,27 +298,43 @@ export function LogViewer({
               {items.map((item) => {
                 const l = filtered[item.index]
                 if (!l) return null
+                const severity = logSeverity(l.stream, l.text)
                 return (
                   <div
                     key={item.key}
                     data-index={item.index}
+                    data-stream={l.stream}
                     ref={virtualizer.measureElement}
-                    className="absolute left-0 flex w-full gap-3 px-3 hover:bg-surface-200"
+                    className={cn(
+                      'absolute left-0 flex w-full gap-3 px-3 hover:bg-surface-200',
+                      // stderr is often plain progress (BuildKit, nginx): mark the stream in the gutter only
+                      l.stream === 'stderr' && 'shadow-[inset_2px_0_0_var(--border-stronger)]',
+                      severity === 'error' && 'bg-destructive/[0.06] shadow-[inset_2px_0_0_var(--destructive)]',
+                      severity === 'warning' && 'shadow-[inset_2px_0_0_var(--warning)]',
+                    )}
                     style={{ transform: `translateY(${item.start + 6}px)` }}
                   >
                     {prefs.timestamps && (
-                      <time dateTime={l.ts} className="shrink-0 text-foreground-muted select-none tabular" title={l.ts}>
-                        {logTime(l.ts)}
+                      <time dateTime={l.ts} className="shrink-0 text-foreground-lighter select-none tabular" title={l.ts}>
+                        <span className="sm:hidden">{logTime(l.ts, false)}</span>
+                        <span className="hidden sm:inline">{logTime(l.ts)}</span>
                       </time>
                     )}
-                    {instanceCol && <span className="w-[6ch] shrink-0 text-foreground-lighter select-none">{l.instance ?? ''}</span>}
+                    {instanceCol && (
+                      <span className="hidden w-[6ch] shrink-0 text-foreground-lighter select-none sm:block">{l.instance ?? ''}</span>
+                    )}
+                    {l.stream === 'stderr' && <span className="sr-only">stderr: </span>}
                     <span
                       className={cn(
                         'min-w-0',
                         prefs.wrap ? 'break-all whitespace-pre-wrap' : 'whitespace-pre',
-                        l.stream === 'stderr' && 'text-destructive',
-                        l.stream === 'system' && 'text-primary',
-                        l.stream === 'stdout' && 'text-foreground',
+                        severity === 'error'
+                          ? 'text-destructive'
+                          : severity === 'warning'
+                            ? 'text-warning'
+                            : l.stream === 'system'
+                              ? 'text-primary'
+                              : 'text-foreground',
                       )}
                     >
                       {needle ? <Highlight text={l.text} needle={needle} /> : l.text || ' '}

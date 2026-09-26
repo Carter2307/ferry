@@ -1,6 +1,7 @@
 import * as React from 'react'
-import { Eye, EyeOff, FileUp, Plus, Trash2 } from 'lucide-react'
+import { Eye, EyeOff, FileUp, Link2, Plus, Trash2 } from 'lucide-react'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -18,7 +19,7 @@ import type { EnvVar } from '@/lib/api/types'
 import { parseDotenv } from '@/lib/dotenv'
 import { cn } from '@/lib/utils'
 
-import { mergeRows, newRowId, validateRows, type KvRow } from './kv-rows'
+import { isReferenceOnly, mergeRows, newRowId, validateRows, VALUE_MASK, type KvRow } from './kv-rows'
 import { MonoLabel } from './MonoLabel'
 
 interface KeyValueEditorProps {
@@ -27,7 +28,11 @@ interface KeyValueEditorProps {
   /** Validation messages from `validateRows` (computed if omitted). */
   errors?: Map<string, string>
   readOnly?: boolean
-  /** Mask values (password inputs) with a per-row reveal toggle. */
+  /**
+   * Mask values with a fixed-length mask and a per-row reveal toggle. A value
+   * shows in clear while its field has focus (to edit it), when empty, and
+   * when it only holds `${{…}}` references (not secret).
+   */
   maskValues?: boolean
   keyPlaceholder?: string
   valuePlaceholder?: string
@@ -56,6 +61,7 @@ export function KeyValueEditor({
   const errors = React.useMemo(() => errorsProp ?? validateRows(rows), [errorsProp, rows])
   const [revealed, setRevealed] = React.useState<Set<string>>(() => new Set())
   const [importOpen, setImportOpen] = React.useState(false)
+  const [editingId, setEditingId] = React.useState<string | null>(null)
   // id of a just-added row whose key input should take focus once mounted
   const focusIdRef = React.useRef<string | null>(null)
 
@@ -96,7 +102,10 @@ export function KeyValueEditor({
       <ul className="flex flex-col gap-2" aria-label="Environment variables">
         {rows.map((row, i) => {
           const err = errors.get(row.id)
-          const shown = !maskValues || revealed.has(row.id)
+          const isRef = isReferenceOnly(row.value)
+          const toggled = revealed.has(row.id)
+          const shown = !maskValues || toggled || isRef || row.value === '' || (!readOnly && editingId === row.id)
+          const name = row.key || `variable ${i + 1}`
           const errId = `${row.id}-err`
           return (
             <li key={row.id} className="flex flex-col gap-1">
@@ -121,27 +130,44 @@ export function KeyValueEditor({
                   onPaste={(e) => onKeyPaste(e, row)}
                 />
                 <div className="flex gap-2">
-                  <Input
-                    mono
-                    type={shown ? 'text' : 'password'}
-                    value={row.value}
-                    placeholder={valuePlaceholder}
-                    readOnly={readOnly}
-                    aria-label={`Value of ${row.key || `variable ${i + 1}`}`}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(e) => update(row.id, { value: e.target.value })}
-                  />
+                  <div className="relative min-w-0 flex-1">
+                    <Input
+                      mono
+                      value={shown ? row.value : VALUE_MASK}
+                      placeholder={valuePlaceholder}
+                      // masked: the field shows the mask until it gets focus
+                      readOnly={readOnly || !shown}
+                      aria-label={shown ? `Value of ${name}` : `Value of ${name} (hidden, focus to edit)`}
+                      autoComplete="off"
+                      spellCheck={false}
+                      data-1p-ignore
+                      className={cn(!shown && 'tracking-wider text-foreground-lighter', isRef && 'pr-14')}
+                      onFocus={() => setEditingId(row.id)}
+                      onBlur={() => setEditingId((cur) => (cur === row.id ? null : cur))}
+                      onChange={(e) => update(row.id, { value: e.target.value })}
+                    />
+                    {isRef && (
+                      <Hint label="Reference: resolved when a container starts, not a secret">
+                        <span className="absolute top-1/2 right-2 inline-flex -translate-y-1/2">
+                          <Badge variant="outline" className="gap-1" tabIndex={0}>
+                            <Link2 aria-hidden="true" />
+                            Ref
+                          </Badge>
+                        </span>
+                      </Hint>
+                    )}
+                  </div>
                   {!readOnly && (
                     <div className="flex shrink-0 items-center gap-1">
                       {maskValues && (
-                        <Hint label={shown ? 'Hide value' : 'Reveal value'}>
+                        <Hint label={toggled ? 'Hide value' : 'Reveal value'}>
                           <Button
                             size="icon-md"
                             variant="ghost"
-                            icon={shown ? <EyeOff /> : <Eye />}
-                            aria-label={shown ? `Hide value of ${row.key || `variable ${i + 1}`}` : `Reveal value of ${row.key || `variable ${i + 1}`}`}
-                            aria-pressed={shown}
+                            icon={toggled ? <EyeOff /> : <Eye />}
+                            aria-label={toggled ? `Hide value of ${name}` : `Reveal value of ${name}`}
+                            aria-pressed={toggled}
+                            disabled={isRef}
                             onClick={() => toggleReveal(row.id)}
                           />
                         </Hint>
@@ -161,9 +187,10 @@ export function KeyValueEditor({
                     <Button
                       size="icon-md"
                       variant="ghost"
-                      icon={shown ? <EyeOff /> : <Eye />}
-                      aria-label={shown ? 'Hide value' : 'Reveal value'}
-                      aria-pressed={shown}
+                      icon={toggled ? <EyeOff /> : <Eye />}
+                      aria-label={toggled ? `Hide value of ${name}` : `Reveal value of ${name}`}
+                      aria-pressed={toggled}
+                      disabled={isRef}
                       onClick={() => toggleReveal(row.id)}
                     />
                   )}

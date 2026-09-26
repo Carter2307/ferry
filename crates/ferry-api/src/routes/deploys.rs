@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use axum::Json;
 use axum::extract::{Request, State};
 use axum::response::Response;
-use ferry_core::dto::TriggerDeploy;
+use ferry_core::dto::{ApiErrorBody, TriggerDeploy};
 use ferry_core::{Deploy, DeployRequest, DeploySource, DeployTrigger, Error, git, ids, validate};
 use futures::StreamExt;
 use http::{StatusCode, header};
@@ -17,6 +17,19 @@ use crate::extract::{ApiJson, ApiPath, ApiQuery, FollowQuery, LimitQuery, de_fla
 use crate::{AppState, UPLOAD_LIMIT, sse};
 
 /// `GET /api/v1/services/{id}/deploys?limit=20` (newest first)
+#[utoipa::path(
+    get,
+    path = "/api/v1/services/{id}/deploys",
+    tag = "deploys",
+    operation_id = "listDeploys",
+    summary = "List a service's deploys",
+    description = "Newest first.",
+    params(("id" = String, Path, description = "Service id or name."), LimitQuery),
+    responses(
+        (status = 200, description = "The deploys, newest first.", body = [Deploy]),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+    ),
+)]
 pub async fn list(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -27,6 +40,22 @@ pub async fn list(
 }
 
 /// `POST /api/v1/services/{id}/deploys`
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/deploys",
+    tag = "deploys",
+    operation_id = "triggerDeploy",
+    summary = "Deploy a service",
+    description = "Queues a manual deploy of the configured source: the branch head (or `commit`) of the repository, or the image. An empty body deploys with the defaults.",
+    params(("id" = String, Path, description = "Service id or name.")),
+    request_body = TriggerDeploy,
+    responses(
+        (status = 202, description = "The deploy, queued.", body = Deploy),
+        (status = 400, description = "Invalid commit, a commit for a service that doesn't deploy from git, or no source to deploy.", body = ApiErrorBody),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+        (status = 409, description = "The service is suspended or being deleted, or the server is shutting down.", body = ApiErrorBody),
+    ),
+)]
 pub async fn trigger(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -54,8 +83,10 @@ pub async fn trigger(
     Ok((StatusCode::ACCEPTED, Json(d)))
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct UploadQuery {
+    /// Build without the build cache.
     #[serde(default, deserialize_with = "de_flag")]
     pub clear_cache: bool,
 }
@@ -130,6 +161,27 @@ fn not_gzip() -> ApiError {
 }
 
 /// `POST /api/v1/services/{id}/deploys/upload?clear_cache=` — raw `.tar.gz` body.
+#[utoipa::path(
+    post,
+    path = "/api/v1/services/{id}/deploys/upload",
+    tag = "deploys",
+    operation_id = "uploadDeploy",
+    summary = "Deploy uploaded source code",
+    description = "Deploys a `.tar.gz` of the source tree (what `ferry up` sends) to a service without a repository or image; the deploy has trigger `upload` and an `archive` source.",
+    params(("id" = String, Path, description = "Service id or name."), UploadQuery),
+    request_body(
+        content = inline(crate::openapi::SourceArchive),
+        content_type = "application/gzip",
+        description = "The raw gzip-compressed tar archive (at most 512 MiB).",
+    ),
+    responses(
+        (status = 202, description = "The deploy, queued.", body = Deploy),
+        (status = 400, description = "The body isn't a gzip archive.", body = ApiErrorBody),
+        (status = 404, description = "No such service.", body = ApiErrorBody),
+        (status = 409, description = "The service deploys from a repository or an image: clear its source first.", body = ApiErrorBody),
+        (status = 413, description = "The archive exceeds 512 MiB.", body = ApiErrorBody),
+    ),
+)]
 pub async fn upload(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,
@@ -176,17 +228,55 @@ pub async fn upload(
 }
 
 /// `GET /api/v1/deploys/{deploy_id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/deploys/{deploy_id}",
+    tag = "deploys",
+    operation_id = "getDeploy",
+    summary = "Get a deploy",
+    params(("deploy_id" = String, Path, description = "Deploy id.")),
+    responses(
+        (status = 200, description = "The deploy.", body = Deploy),
+        (status = 404, description = "No such deploy.", body = ApiErrorBody),
+    ),
+)]
 pub async fn get(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<Deploy>> {
     Ok(Json(st.store.require_deploy(&id).await?))
 }
 
 /// `POST /api/v1/deploys/{deploy_id}/cancel`
+#[utoipa::path(
+    post,
+    path = "/api/v1/deploys/{deploy_id}/cancel",
+    tag = "deploys",
+    operation_id = "cancelDeploy",
+    summary = "Cancel a deploy",
+    description = "Stops a queued or running deploy (status `canceled`); the live deploy keeps serving.",
+    params(("deploy_id" = String, Path, description = "Deploy id.")),
+    responses(
+        (status = 200, description = "The canceled deploy.", body = Deploy),
+        (status = 404, description = "No such deploy.", body = ApiErrorBody),
+        (status = 409, description = "The deploy already finished.", body = ApiErrorBody),
+    ),
+)]
 pub async fn cancel(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<Deploy>> {
     let d = st.store.require_deploy(&id).await?;
     Ok(Json(st.engine.cancel_deploy(&d.id).await?))
 }
 
 /// `GET /api/v1/deploys/{deploy_id}/logs?follow=` (SSE, always finite)
+#[utoipa::path(
+    get,
+    path = "/api/v1/deploys/{deploy_id}/logs",
+    tag = "deploys",
+    operation_id = "streamDeployLogs",
+    summary = "Build and deploy logs (SSE)",
+    params(("deploy_id" = String, Path, description = "Deploy id."), FollowQuery),
+    responses(
+        (status = 200, description = crate::openapi::SSE_FINITE_LOGS, content_type = "text/event-stream", body = String, example = "event: log\ndata: {\"ts\":\"2026-01-01T12:00:00Z\",\"stream\":\"system\",\"line\":\"==> Build succeeded\"}\n\nevent: end\ndata: \n\n"),
+        (status = 404, description = "No such deploy.", body = ApiErrorBody),
+    ),
+)]
 pub async fn logs(
     State(st): State<AppState>,
     ApiPath(id): ApiPath<String>,

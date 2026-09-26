@@ -61,12 +61,15 @@ export function ConnectPopover({ compact = false }: { compact?: boolean }) {
         </div>
         <div className="flex flex-col gap-4 px-4 py-4">
           <Section label="CLI login" hint="Saves the server and token to ~/.config/ferry/config.json.">
-            <div className="relative rounded-md border bg-surface-200">
-              <pre className="overflow-x-auto px-3 py-2.5 pr-12 font-mono text-[12px] leading-relaxed text-foreground">
+            {/* Copy sits beside the scroll area, so the command never scrolls under it. */}
+            <div className="flex items-start rounded-md border bg-surface-200">
+              <pre className="min-w-0 flex-1 overflow-x-auto py-2.5 pl-3 font-mono text-[12px] leading-relaxed text-foreground">
                 <span className="text-foreground-muted select-none">$ </span>
                 ferry login --server {origin} --token {masked}
               </pre>
-              <CopyButton value={loginCmd} what="login command (includes your token)" className="absolute top-1.5 right-1.5" />
+              <div className="shrink-0 p-1.5">
+                <CopyButton value={loginCmd} what="login command (includes your token)" />
+              </div>
             </div>
           </Section>
           <Section label="API URL" hint={<>Send <code className="font-mono">Authorization: Bearer &lt;token&gt;</code>.</>}>

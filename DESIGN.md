@@ -69,7 +69,7 @@ auth, secret files, IP allow lists, teams/RBAC.
 | `ferry-proxy` | lib | core | `RouteTable`, HTTP/HTTPS reverse proxy, websockets, error pages |
 | `ferry-tls` | lib | core | ACME certificates, SNI resolver, `TlsHooks` impl |
 | `ferry-engine` | lib | core, docker, build, proxy | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs |
-| `ferry-api` | lib | core | axum router: REST, SSE, webhooks, blueprints, dashboard (`assets/index.html`) |
+| `ferry-api` | lib | core | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, serves the embedded web client (`web/dist`) |
 | `ferry-cli` | bin `ferry` | core | CLI client |
 | `ferryd` | bin | all | wiring (already written) |
 
@@ -239,16 +239,31 @@ demand after scale/suspend/resume:
 
 ## 10. HTTP API (`ferry-api`)
 
-Auth: `Authorization: Bearer <token>` on `/api/*`; GET requests may use
-`?access_token=<token>` instead (EventSource can't set headers). Constant-time
-compare. Errors: `ApiErrorBody` with `Error::status()`. `{id}` = id or name.
-JSON bodies; 404 JSON for unknown `/api` routes.
+Auth: `Authorization: Bearer <token>` on `/api/*` (except the OpenAPI
+document and Swagger UI below); GET requests may use `?access_token=<token>`
+instead (EventSource can't set headers). Constant-time compare. Errors:
+`ApiErrorBody` with `Error::status()`. `{id}` = id or name. JSON bodies; 404
+JSON for unknown `/api` routes (behind the token, like every `/api` path).
+
+**OpenAPI.** Every handler carries a `#[utoipa::path]` (method, path, tag,
+params, bodies, responses with `ApiErrorBody` errors); `openapi::ApiDoc`
+(`#[derive(OpenApi)]`, OpenAPI **3.1**) gathers them with every DTO schema,
+a `bearer` HTTP security scheme (required by every `/api/v1` operation, none
+for `/healthz`, the webhooks and the document) and one tag per resource. It is
+served at `GET /api/openapi.json`, and Swagger UI (`utoipa-swagger-ui`, assets
+vendored into the binary: works offline, no validator call) at `/api/docs`;
+both without auth, and outside the token-checking API router so neither
+fallback can shadow them. `tests/openapi.rs` keeps one authoritative list of
+routes and checks that the document, the router and `lib.rs` agree.
 
 | Method & path | Body → Response |
 |---|---|
 | `GET /healthz` | `ok` (no auth) |
-| `GET /` | dashboard HTML (no auth) |
+| `GET /` (and any other non-API path) | the web client (§13; SPA fallback, no auth) |
+| `GET /api/openapi.json` | the OpenAPI 3.1 document (no auth) |
+| `GET /api/docs` | Swagger UI (no auth; redirects to `/api/docs/`, its **Authorize** takes the API token) |
 | `GET /api/v1/info` | `ServerInfo` |
+| `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
 | `GET /api/v1/services` | `[ServiceView]` |
 | `POST /api/v1/services` | `CreateService` → 201 `ServiceView` (queues a `create` deploy when it has a repo/image, unless `deploy:false`) |
 | `GET /api/v1/services/{id}` | `ServiceView` |
@@ -278,6 +293,7 @@ JSON bodies; 404 JSON for unknown `/api` routes.
 | `GET /api/v1/services/{id}/jobs?limit=20` | `[JobRun]` |
 | `POST /api/v1/services/{id}/jobs` | `RunJobRequest` → 202 `JobRun` |
 | `GET /api/v1/jobs/{job_id}` | `JobRun` |
+| `POST /api/v1/jobs/{job_id}/cancel` | `JobRun` (`canceled`); 409 when it already finished |
 | `GET /api/v1/jobs/{job_id}/logs?follow=` | SSE |
 | `GET /api/v1/datastores` | `[DatastoreView]` |
 | `POST /api/v1/datastores` | `CreateDatastore` → 201 `DatastoreView` (row `creating`, then `engine.provision_datastore`) |
@@ -398,20 +414,47 @@ ferry open NAME                                # print (and try to open) the ser
 
 Log output: `HH:MM:SS [instance] line`; system lines highlighted.
 
-## 13. Dashboard (`crates/ferry-api/assets/index.html`)
+## 13. Web client (`web/`)
 
-One self-contained HTML file (inline CSS + vanilla JS, no CDN, works offline),
-served at `/`. Token login stored in `localStorage` (validated via `/api/v1/info`).
-Views: services list (state badges, URLs, type, last deploy) · new service form
-· service detail tabs **Overview** (URL, state, instances with cpu/mem, actions:
-deploy, restart, suspend/resume, scale, delete) · **Deploys** (history, live
-build logs via `EventSource(…?access_token=)`, rollback, cancel) · **Logs**
-(live runtime logs) · **Environment** (edit vars, link env groups, "save &
-restart") · **Settings** (build & deploy settings, custom domains, deploy hook
-URL, auto-deploy) · **Jobs** (cron: run now + history + logs) ; datastores
-(create, list, connection strings with copy + reveal) ; env groups ;
-blueprint (paste YAML → dry run → apply). Light/dark via `prefers-color-scheme`.
-Polls status every 5s on detail pages.
+A single-page app with its own toolchain in `web/` (see `web/README.md`); the
+Rust build never runs Node.
+
+* **Stack:** React 19 + TypeScript (strict), Vite, Tailwind CSS v4, shadcn/ui
+  (Radix primitives, customized in `src/components/ui`), lucide icons;
+  server state in TanStack Query v5 (`src/lib/api/queries/*`), client state
+  in Zustand (`src/stores/auth.ts`, `ui.ts`), routing with react-router v7
+  (`createBrowserRouter`, history URLs, code-split pages); Vitest for the pure
+  helpers (SSE parser, formatting, `.env` parsing). Light and dark themes.
+* **Views:** login (token, validated with `GET /api/v1/info`) · services
+  (list, new) · service detail: Overview, Deploys (+ deploy detail with live
+  build logs, rollback, cancel), Logs, Jobs (+ job detail), Environment
+  (variables, env group links, "save & restart"), Settings (build & deploy,
+  custom domains, deploy hook) · datastores (+ detail, connection strings) ·
+  env groups (+ detail) · blueprints (paste YAML → dry run → apply) · server.
+* **Transport: REST + SSE** (no gRPC, no WebSocket). Queries and mutations
+  are the JSON REST API of §10 on the same origin (no CORS), with
+  `Authorization: Bearer`. Push uses Server-Sent Events read with `fetch()`
+  and a streaming parser, so the token stays in a header: log streams
+  (`event: log` … `event: end`) and the change feed `GET /api/v1/events`,
+  whose `change` events become TanStack Query invalidations; it reconnects
+  with exponential backoff (1 s → 15 s) and, while the feed is down (or 404
+  on an older server), falls back to polling.
+* **Storage:** the token in `localStorage` under `ferry.token`, UI
+  preferences under `ferry.ui` (theme applied before first paint by
+  `public/theme-init.js`, so a strict `script-src 'self'` CSP works).
+* **Embedding:** `npm run build` writes `web/dist`; `ferry-api`'s `build.rs`
+  embeds every file of it at compile time (`FERRY_WEB_DIST` overrides the
+  directory; without a built client it embeds a placeholder page explaining
+  how to build it). `ferryd` serves it at `/` (`ferry_api::web`): hashed
+  `/assets/*` with `Cache-Control: public, max-age=31536000, immutable`,
+  everything else (`index.html` first) `no-cache` + ETag; any other `GET`
+  outside `/api`, `/hooks` and `/healthz` that isn't a file gets
+  `index.html` (SPA fallback), a missing `/assets/` file stays a 404.
+* **Development:** `FERRY_UI_DIR=<dir>` makes `ferryd` serve a built client
+  from disk instead of the embedded one (rebuild the client without
+  recompiling the server); or `npm run dev` in `web/` (Vite with HMR) proxies
+  `/api`, `/hooks` and `/healthz` to `FERRY_API_URL` (default
+  `http://127.0.0.1:7878`), SSE unbuffered.
 
 ## 14. Operational safety
 

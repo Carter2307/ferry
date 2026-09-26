@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { endpoints } from '../endpoints'
 import { usePollInterval } from '../events'
@@ -40,13 +40,29 @@ export function useRunJob(ref: string) {
 }
 
 /** `POST /api/v1/jobs/{id}/cancel` — `mutate(jobId)`. Older servers answer 404. */
+const CANCEL_JOB_KEY = ['jobs', 'cancel'] as const
+
 export function useCancelJob() {
   const qc = useQueryClient()
   return useMutation({
+    mutationKey: CANCEL_JOB_KEY,
     mutationFn: (jobId: string) => endpoints.cancelJob(jobId),
     onSuccess: (job) => {
       qc.setQueryData(keys.job(job.id), job)
       void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'services' && q.queryKey[3] === 'jobs' })
     },
   })
+}
+
+/**
+ * True while a cancel request for this job is in flight (from any component):
+ * the server answers once Docker has stopped the container, which can take
+ * ~10s (SIGTERM, then SIGKILL).
+ */
+export function useJobCanceling(jobId: string | undefined): boolean {
+  const pending = useMutationState({
+    filters: { mutationKey: CANCEL_JOB_KEY, status: 'pending' },
+    select: (m) => m.state.variables,
+  })
+  return jobId !== undefined && pending.includes(jobId)
 }

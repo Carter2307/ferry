@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Link, Outlet, useLocation, useParams } from 'react-router'
+import { Link, Outlet, useLocation, useMatch, useParams } from 'react-router'
 import { Boxes, History, LayoutDashboard, ListChecks, ScrollText, Settings2, SlidersHorizontal } from 'lucide-react'
 
 import { CopyButton } from '@/components/patterns/Copy'
@@ -15,6 +15,7 @@ import { ApiError } from '@/lib/api/client'
 import { useService } from '@/lib/api/queries'
 import { isDeployActive, type ServiceView } from '@/lib/api/types'
 import { DEPLOY_STATUS_LABELS, displayUrl, SERVICE_TYPE_LABELS } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 import { servicePath, type ServiceOutletContext } from './context'
 import { ServiceActions } from './ServiceActions'
@@ -53,14 +54,31 @@ function menuGroups(name: string, service: ServiceView | undefined): InnerMenuGr
   return groups
 }
 
-/** Title block shown above every service page: name + pills, URL + Copy, actions. */
-function ServiceHeader({ service }: { service: ServiceView }) {
+/**
+ * Title block shown above every service page: name + pills, URL + Copy,
+ * actions. On Overview (the service's home) the title is the 32px entity
+ * title; on the other sections it is a 28px page title, and on phones those
+ * sections get a compact one-line header so the content starts higher.
+ */
+function ServiceHeader({ service, home }: { service: ServiceView; home: boolean }) {
   return (
-    <header className="mb-8 flex flex-col gap-4 border-b pb-6 lg:flex-row lg:items-start lg:justify-between">
+    <header
+      className={cn(
+        'flex flex-col gap-4 border-b lg:flex-row lg:items-start lg:justify-between',
+        home ? 'mb-8 pb-6' : 'mb-5 pb-4 md:mb-8 md:pb-6',
+      )}
+    >
       <div className="flex min-w-0 flex-col gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <ServiceTypeIcon type={service.type} className="size-5 shrink-0 text-foreground-lighter" />
-          <h1 className="min-w-0 truncate text-2xl leading-tight font-medium tracking-[-0.01em] text-foreground md:text-[28px]">
+          <h1
+            className={cn(
+              'min-w-0 truncate leading-tight font-medium text-foreground',
+              home
+                ? 'text-[26px] tracking-[-0.015em] md:text-[32px]'
+                : 'text-xl tracking-[-0.01em] md:text-[28px]',
+            )}
+          >
             {service.name}
           </h1>
           <ServiceStatePill state={service.state} />
@@ -68,7 +86,12 @@ function ServiceHeader({ service }: { service: ServiceView }) {
             {SERVICE_TYPE_LABELS[service.type]}
           </Badge>
         </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-2 text-[15px] text-foreground-light">
+        <div
+          className={cn(
+            'min-w-0 flex-wrap items-center gap-2 text-[15px] text-foreground-light',
+            home ? 'flex' : 'hidden md:flex',
+          )}
+        >
           {service.url ? (
             <>
               <a
@@ -105,7 +128,9 @@ function ServiceHeader({ service }: { service: ServiceView }) {
           )}
         </div>
       </div>
-      <ServiceActions service={service} />
+      <div className={cn(!home && 'hidden md:block')}>
+        <ServiceActions service={service} />
+      </div>
     </header>
   )
 }
@@ -134,12 +159,14 @@ export function ServiceLayout() {
     scrollRef.current?.scrollTo({ top: 0 })
   }, [pathname])
 
+  const home = useMatch({ path: '/services/:name', end: true }) !== null
   const notFound = error instanceof ApiError && error.isNotFound && !service
   const context: ServiceOutletContext | null = service ? { service, name } : null
 
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-      <InnerMenu title={name} label={`Service ${name}`} groups={menuGroups(name, service)} />
+      {/* No section menu for a service that doesn't exist. */}
+      {!notFound && <InnerMenu title={name} label={`Service ${name}`} groups={menuGroups(name, service)} />}
       <div ref={scrollRef} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto">
         <PageContainer>
           {notFound ? (
@@ -158,7 +185,7 @@ export function ServiceLayout() {
             <ErrorState error={error} title="Could not load the service" onRetry={() => void refetch()} retrying={isRefetching} />
           ) : (
             <>
-              {service ? <ServiceHeader service={service} /> : <HeaderSkeleton />}
+              {service ? <ServiceHeader service={service} home={home} /> : <HeaderSkeleton />}
               {context ? (
                 <Outlet context={context} />
               ) : (

@@ -99,15 +99,20 @@ pub fn de_flag<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
 }
 
 /// Common `?follow=` query.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct FollowQuery {
+    /// Keep streaming new lines until the deploy or job finishes (instead of only the stored log).
     #[serde(default, deserialize_with = "de_flag")]
     pub follow: bool,
 }
 
 /// `?restart=` for env var changes.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct RestartQuery {
+    /// Then restart the affected live services whose effective environment changed (the variables are saved
+    /// either way; a failed restart is reported as the error).
     #[serde(default, deserialize_with = "de_flag")]
     pub restart: bool,
 }
@@ -124,8 +129,10 @@ pub struct DeleteQuery {
 }
 
 /// `?limit=` for listings.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct LimitQuery {
+    /// Maximum number of entries (default 20, clamped to 1..=500).
     pub limit: Option<u32>,
 }
 

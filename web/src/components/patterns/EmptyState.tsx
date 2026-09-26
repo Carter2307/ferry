@@ -127,3 +127,34 @@ export function Callout({
     </div>
   )
 }
+
+/**
+ * A background refresh failed but cached data is still on screen: keep the
+ * stale data and say so, with the API's message and a Retry.
+ */
+export function StaleDataCallout({
+  error,
+  onRetry,
+  retrying,
+  className,
+}: {
+  error: unknown
+  onRetry: () => void
+  retrying?: boolean
+  className?: string
+}) {
+  return (
+    <Callout
+      tone="warning"
+      icon={<AlertTriangle />}
+      className={className}
+      actions={
+        <Button size="tiny" icon={<RefreshCw />} loading={retrying} onClick={onRetry}>
+          Retry
+        </Button>
+      }
+    >
+      Showing the last known state. Refreshing failed: {errorMessage(error)}
+    </Callout>
+  )
+}

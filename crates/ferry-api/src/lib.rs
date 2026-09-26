@@ -4,6 +4,8 @@
 //! * `/api/v1/...` — REST API (bearer token), see DESIGN.md §API;
 //! * `/hooks/github` and `/hooks/deploy/{service_id}` — webhooks;
 //! * `/api/v1/events` — SSE change feed for the web client;
+//! * `/api/openapi.json` and `/api/docs` — the OpenAPI document and Swagger
+//!   UI (no auth, see [`openapi`]);
 //! * `/healthz` — liveness (no auth);
 //! * `/` — the web client (a single-page app built from `web/` and embedded
 //!   at compile time, see [`web`]), with a SPA fallback for its routes.
@@ -27,6 +29,7 @@ mod error;
 pub mod events;
 mod extract;
 mod locks;
+pub mod openapi;
 mod ops;
 mod routes;
 mod runtime;
@@ -106,12 +109,14 @@ pub fn router(state: AppState) -> axum::Router {
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::require_token));
 
     let hooks = Router::new()
-        .route("/hooks/deploy/{service_id}", get(hooks::deploy_hook).post(hooks::deploy_hook))
+        .route("/hooks/deploy/{service_id}", get(hooks::deploy_hook_get).post(hooks::deploy_hook))
         .route("/hooks/github", post(hooks::github).layer(DefaultBodyLimit::max(WEBHOOK_LIMIT)))
         .method_not_allowed_fallback(info::method_not_allowed);
 
     // Everything else is the web client (files + SPA fallback); unknown
-    // `/hooks` and `/healthz` paths stay JSON 404s.
+    // `/api`, `/hooks` and `/healthz` paths stay JSON 404s. The document and
+    // Swagger UI are routes of their own (outside the token-checking API
+    // router), so neither fallback ever sees them.
     let ui = Arc::new(web::Ui::from_env());
     let ui_fallback = move |method: http::Method, uri: http::Uri, headers: http::HeaderMap| async move {
         ui.serve(&method, &uri, &headers).await
@@ -121,6 +126,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/healthz", get(info::healthz))
         .merge(hooks)
         .nest("/api", api)
+        .merge(openapi::router())
         .method_not_allowed_fallback(info::method_not_allowed)
         .fallback(ui_fallback)
         // API and webhook writes are reported by the change feed at once.

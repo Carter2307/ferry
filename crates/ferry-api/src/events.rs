@@ -59,12 +59,20 @@ const WINDOW: i64 = 100;
 /// The `ready` frame (with a data field, so `EventSource` dispatches it).
 const READY_FRAME: &[u8] = b"event: ready\ndata: {}\n\n";
 
-/// One change.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// One change: the `data` of an `event: change` frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[schema(
+    as = ChangeEvent,
+    example = json!({"kind": "deploy", "id": "dep-01j9", "service_id": "srv-01j8", "action": "updated"})
+)]
 pub struct Change {
+    #[schema(value_type = crate::openapi::ChangeKind)]
     pub kind: &'static str,
+    /// Id of the changed resource (`*` with `resync`).
     pub id: String,
+    /// Set for services (their own id), deploys and jobs (their service); `null` otherwise.
     pub service_id: Option<String>,
+    #[schema(value_type = crate::openapi::ChangeAction)]
     pub action: &'static str,
 }
 
@@ -182,6 +190,18 @@ pub async fn nudge_after_writes(State(hub): State<Arc<Hub>>, req: Request, next:
 }
 
 /// `GET /api/v1/events`
+#[utoipa::path(
+    get,
+    path = "/api/v1/events",
+    tag = "events",
+    operation_id = "streamEvents",
+    summary = "Change feed (SSE)",
+    description = "Tells a client what changed so it refetches only that: API writes are reported at once, the engine's own changes (deploy progress, datastore provisioning, cron runs) within about a second.",
+    responses(
+        (status = 200, description = crate::openapi::SSE_EVENTS, content_type = "text/event-stream", body = String,
+            example = "event: ready\ndata: {}\n\nevent: change\ndata: {\"kind\":\"deploy\",\"id\":\"dep-01j9\",\"service_id\":\"srv-01j8\",\"action\":\"updated\"}\n\n"),
+    ),
+)]
 pub async fn stream(State(st): State<AppState>, Extension(hub): Extension<Arc<Hub>>) -> Response {
     let (changes, ready) = hub.subscribe();
     sse::stream_response(frames(changes, ready, st.shutdown.clone()))

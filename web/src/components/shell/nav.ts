@@ -22,3 +22,4 @@ export const NAV_ITEMS: NavItem[][] = [
 export const REPO_URL = 'https://github.com/Carter2307/ferry'
 export const DOCS_URL = `${REPO_URL}#readme`
 export const DESIGN_DOC_URL = `${REPO_URL}/blob/main/DESIGN.md`
+export { API_DOCS_URL, OPENAPI_URL } from '@/lib/api/queries/info'
