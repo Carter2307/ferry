@@ -1,15 +1,16 @@
-//! `ferry up`: pack a local directory, create the service if needed, upload
-//! the archive and deploy it.
+//! `ferry up`: pack a local directory, create the service if needed (or
+//! apply the given settings to the existing one), upload the archive and
+//! deploy it.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use ferry_core::dto::ServiceView;
-use ferry_core::{Deploy, ServiceType, SourceKind, validate};
+use ferry_core::dto::{LinkEnvGroup, PatchEnv, ServiceView};
+use ferry_core::{Deploy, EnvVar, ServiceType, SourceKind, validate};
 
-use super::services::create_body;
+use super::services::{create_body, settings_labels, settings_update};
 use super::{Ctx, queued_deploy};
-use crate::archive;
+use crate::archive::{self, SkippedLink};
 use crate::cli::UpArgs;
 use crate::client::is_not_found;
 use crate::output::{self, errln, outln};
@@ -45,9 +46,10 @@ pub fn default_service_name(dir: &Path) -> Result<String> {
     if name.is_empty() {
         bail!("cannot derive a service name from directory '{}': pass one, e.g. 'ferry up my-app'", dir.display());
     }
-    if validate::resource_name(&name).is_err() {
+    if let Err(e) = validate::resource_name(&name) {
+        // Reserved (`ferry`) or id-shaped (`srv-<hex>`) names.
         bail!(
-            "directory name '{raw}' gives the service name '{name}', which is reserved: \
+            "directory name '{raw}' gives the service name '{name}', which can't be used ({e}): \
              pass another name, e.g. 'ferry up {name}-app'"
         );
     }
@@ -64,8 +66,67 @@ async fn resolve_dir(dir: &Path) -> Result<PathBuf> {
     Ok(abs)
 }
 
-fn has_creation_flags(a: &UpArgs) -> bool {
-    a.service_type.is_some() || !a.settings.is_empty() || !a.env.is_empty() || !a.env_groups.is_empty()
+/// `--type` can only pick the type of a new service.
+fn check_type(a: &UpArgs, existing: &ServiceView) -> Result<()> {
+    let current = existing.service.service_type;
+    match a.service_type {
+        Some(wanted) if wanted != current => bail!(
+            "service '{}' is a {}; the type of an existing service can't change (--type {} only applies when \
+             creating a service): delete it first, or deploy under another name",
+            existing.service.name,
+            output::type_long(current),
+            output::type_short(wanted)
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Apply `ferry up`'s settings, variables and env groups to an existing
+/// service before deploying, so re-running `ferry up --start-cmd …` fixes it.
+async fn update_existing(ctx: &Ctx, mut svc: ServiceView, a: &UpArgs) -> Result<ServiceView> {
+    let id = svc.service.id.clone();
+    let mut applied: Vec<String> = Vec::new();
+    if !a.settings.is_empty() {
+        let body = settings_update(&a.settings);
+        svc = ctx.client.patch::<_, ServiceView>(&["services", &id], &[], &body).await?.data;
+        applied.extend(settings_labels(&a.settings).into_iter().map(str::to_string));
+    }
+    if !a.env.is_empty() {
+        // No restart: the deploy below starts with the new environment.
+        let body = PatchEnv { set: a.env.clone(), unset: Vec::new() };
+        let query = [("restart", "false".to_string())];
+        ctx.client.patch::<_, Vec<EnvVar>>(&["services", &id, "env"], &query, &body).await?;
+        let keys: Vec<&str> = a.env.iter().map(|v| v.key.as_str()).collect();
+        applied.push(format!("env {}", keys.join(", ")));
+    }
+    for group in &a.env_groups {
+        if svc.env_groups.iter().any(|g| g == group) {
+            continue;
+        }
+        let body = LinkEnvGroup { group: group.clone() };
+        svc = ctx.client.post::<_, ServiceView>(&["services", &id, "env-groups"], &[], &body).await?.data;
+        applied.push(format!("env group {group}"));
+    }
+    if !applied.is_empty() {
+        errln!("Updated '{}': {}", svc.service.name, applied.join("; "));
+    }
+    Ok(svc)
+}
+
+/// One line about symlinks left out of the archive.
+fn skipped_links_warning(dir: &Path, skipped: &[SkippedLink]) -> Option<String> {
+    const SHOWN: usize = 3;
+    if skipped.is_empty() {
+        return None;
+    }
+    let list: Vec<String> = skipped.iter().take(SHOWN).map(|l| format!("{} -> {}", l.rel, l.target)).collect();
+    let more = if skipped.len() > SHOWN { format!(", and {} more", skipped.len() - SHOWN) } else { String::new() };
+    Some(format!(
+        "warning: not uploading {} symlink(s) pointing outside {} (the server can't accept them): {}{more}",
+        skipped.len(),
+        dir.display(),
+        list.join(", ")
+    ))
 }
 
 pub async fn up(ctx: &Ctx, a: UpArgs) -> Result<()> {
@@ -81,9 +142,10 @@ pub async fn up(ctx: &Ctx, a: UpArgs) -> Result<()> {
         Err(e) if is_not_found(&e) => None,
         Err(e) => return Err(e),
     };
-    if existing.is_none() {
+    match &existing {
+        Some(svc) => check_type(&a, svc)?,
         // Validate locally: the name will be used to create the service.
-        validate::resource_name(&name).map_err(|e| anyhow!("{e}"))?;
+        None => validate::resource_name(&name).map_err(|e| anyhow!("{e}"))?,
     }
 
     errln!("Packing {} …", dir.display());
@@ -98,6 +160,9 @@ pub async fn up(ctx: &Ctx, a: UpArgs) -> Result<()> {
         bail!("nothing to upload: {} has no files (after .gitignore/.ferryignore rules)", dir.display());
     }
     errln!("Packed {} file(s), {}", packed.files, output::human_bytes(packed.size));
+    if let Some(warning) = skipped_links_warning(&dir, &packed.skipped) {
+        errln!("{warning}");
+    }
     if packed.size > MAX_UPLOAD_BYTES {
         bail!(
             "the archive is {}, over the server's {} upload limit: exclude large files with a .ferryignore",
@@ -108,12 +173,7 @@ pub async fn up(ctx: &Ctx, a: UpArgs) -> Result<()> {
 
     let service = match existing {
         Some(svc) => {
-            if has_creation_flags(&a) {
-                errln!(
-                    "note: service '{}' already exists; creation flags are ignored (use 'ferry update' / 'ferry env set')",
-                    svc.service.name
-                );
-            }
+            let svc = update_existing(ctx, svc, &a).await?;
             match svc.service.source_kind() {
                 SourceKind::Git => errln!(
                     "note: '{}' normally builds from {}; this deploy uses your local files instead",
@@ -191,9 +251,26 @@ mod tests {
     #[test]
     fn default_names_from_directories() {
         assert_eq!(default_service_name(Path::new("/home/me/My_Site")).unwrap(), "my-site");
-        let err = default_service_name(Path::new("/srv/api")).unwrap_err().to_string();
-        assert!(err.contains("reserved") && err.contains("api-app"), "{err}");
+        // "api" is an ordinary name now; only "ferry" and "localhost" are reserved.
+        assert_eq!(default_service_name(Path::new("/srv/api")).unwrap(), "api");
+        let err = default_service_name(Path::new("/srv/ferry")).unwrap_err().to_string();
+        assert!(err.contains("reserved") && err.contains("ferry-app"), "{err}");
         assert!(default_service_name(Path::new("/tmp/123")).is_err());
         assert!(default_service_name(Path::new("/")).is_err());
+    }
+
+    #[test]
+    fn skipped_links_are_summarized() {
+        let dir = Path::new("/w/site");
+        assert_eq!(skipped_links_warning(dir, &[]), None);
+        let link = |i: usize| SkippedLink { rel: format!("venv/bin/l{i}"), target: format!("/usr/bin/t{i}") };
+        let one = skipped_links_warning(dir, &[link(1)]).unwrap();
+        assert_eq!(
+            one,
+            "warning: not uploading 1 symlink(s) pointing outside /w/site (the server can't accept them): \
+             venv/bin/l1 -> /usr/bin/t1"
+        );
+        let many = skipped_links_warning(dir, &(1..=5).map(link).collect::<Vec<_>>()).unwrap();
+        assert!(many.contains("5 symlink(s)") && many.ends_with("venv/bin/l3 -> /usr/bin/t3, and 2 more"), "{many}");
     }
 }

@@ -2,8 +2,9 @@
 //!
 //! Layout: [`cli`] (clap syntax), [`config`] (saved login + env/flag
 //! overrides), [`client`] (HTTP + SSE), [`sse`] (event-stream parser),
-//! [`archive`] (`ferry up` tarballs), [`output`] (tables, colors, times) and
-//! [`commands`] (one module per command family).
+//! [`archive`] (`ferry up` tarballs), [`repo`] (local repository paths),
+//! [`envref`] (env var reference checks), [`output`] (tables, colors, times)
+//! and [`commands`] (one module per command family).
 //!
 //! Exit codes: 0 success, 1 failure (API error, failed deploy/job, refused
 //! confirmation), 2 usage error (clap), 130 interrupted with Ctrl-C.
@@ -13,7 +14,9 @@ mod cli;
 mod client;
 mod commands;
 mod config;
+mod envref;
 mod output;
+mod repo;
 mod sse;
 
 use std::process::ExitCode;

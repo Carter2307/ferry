@@ -2,11 +2,15 @@
 //! `.gitignore` (even outside a git repository), `.ignore` and a custom
 //! `.ferryignore` (highest precedence, so `!pattern` there can re-include a
 //! git-ignored path). Hidden files are included (`.env.example`, `.npmrc`, …);
-//! `.git`, `node_modules`, `target`, `.venv` and `__pycache__` are always
-//! skipped. Blocking: call from `spawn_blocking`.
+//! `.git`, `node_modules`, `target`, `.venv`, `venv` and `__pycache__` are
+//! always skipped, as is any Python virtualenv (a directory holding a
+//! `pyvenv.cfg`). Symlinks are stored as links, except those that are absolute
+//! or resolve outside the directory: the server refuses to extract such links,
+//! so they are left out and reported (see [`Listing::skipped`]).
+//! Blocking: call from `spawn_blocking`.
 
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -17,7 +21,11 @@ use ignore::{DirEntry, WalkBuilder};
 use tempfile::NamedTempFile;
 
 /// Directories never uploaded, at any depth.
-pub const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".venv", "__pycache__"];
+pub const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".venv", "venv", "__pycache__"];
+
+/// A directory containing this file is a Python virtualenv (whatever its
+/// name): machine-specific, full of absolute symlinks, never uploaded.
+const VENV_MARKER: &str = "pyvenv.cfg";
 
 /// Per-directory ignore file specific to Ferry.
 pub const IGNORE_FILE: &str = ".ferryignore";
@@ -55,6 +63,8 @@ pub struct Packed {
     pub files: usize,
     /// Compressed archive size in bytes.
     pub size: u64,
+    /// Symlinks left out because they point outside the directory.
+    pub skipped: Vec<SkippedLink>,
 }
 
 impl Packed {
@@ -79,22 +89,77 @@ pub struct Entry {
     pub kind: EntryKind,
 }
 
+/// A symlink that is not uploaded because it points outside the directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedLink {
+    /// Relative path of the link (with `/` separators).
+    pub rel: String,
+    /// The link's target, as stored in the link.
+    pub target: String,
+}
+
+/// What [`collect`] found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Listing {
+    /// Everything to upload, sorted by path within each directory.
+    pub entries: Vec<Entry>,
+    /// Symlinks left out: absolute, or resolving outside the directory.
+    /// The server rejects uploads containing such links.
+    pub skipped: Vec<SkippedLink>,
+}
+
 fn skipped(entry: &DirEntry) -> bool {
     let name = entry.file_name();
     if name == ".git" {
         return true; // directory, or a file in worktrees/submodules
     }
     let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-    is_dir && name.to_str().is_some_and(|n| SKIP_DIRS.contains(&n))
+    is_dir && (name.to_str().is_some_and(|n| SKIP_DIRS.contains(&n)) || entry.path().join(VENV_MARKER).is_file())
+}
+
+/// Would `target`, resolved relative to directory `base` (relative to the
+/// upload root, symlinks not followed), stay inside the root? Same rule as
+/// the server's extraction (absolute targets never do).
+fn lexically_inside(base: &Path, target: &Path) -> bool {
+    let mut depth = 0usize;
+    for c in base.components().chain(target.components()) {
+        match c {
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}
+            Component::ParentDir => match depth.checked_sub(1) {
+                Some(d) => depth = d,
+                None => return false,
+            },
+            Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    true
+}
+
+/// Does the symlink at `abs` (relative path `rel`, inside the canonical
+/// `root`) stay inside `root`? Its target must be relative and stay inside
+/// lexically, and, when it exists, really resolve inside (chains of links
+/// are followed), as the server checks after extracting.
+fn link_stays_inside(root: &Path, abs: &Path, rel: &Path, target: &Path) -> bool {
+    let parent = rel.parent().unwrap_or(Path::new(""));
+    if !lexically_inside(parent, target) {
+        return false;
+    }
+    match std::fs::canonicalize(abs) {
+        Ok(resolved) => resolved.starts_with(root),
+        Err(_) => true, // dangling: the lexical check decides
+    }
 }
 
 /// List everything that would be uploaded, sorted by path within each
-/// directory. Sockets, FIFOs and devices are skipped.
-pub fn collect(dir: &Path, cancel: &Cancel) -> Result<Vec<Entry>> {
+/// directory. Sockets, FIFOs and devices are skipped; so are symlinks that
+/// point outside `dir` (reported in [`Listing::skipped`]).
+pub fn collect(dir: &Path, cancel: &Cancel) -> Result<Listing> {
     let meta = std::fs::metadata(dir).with_context(|| format!("reading {}", dir.display()))?;
     if !meta.is_dir() {
         bail!("{} is not a directory", dir.display());
     }
+    let root = std::fs::canonicalize(dir).with_context(|| format!("reading {}", dir.display()))?;
     let mut builder = WalkBuilder::new(dir);
     builder
         .hidden(false)
@@ -109,7 +174,7 @@ pub fn collect(dir: &Path, cancel: &Cancel) -> Result<Vec<Entry>> {
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(|e| e.depth() == 0 || !skipped(e));
 
-    let mut out = Vec::new();
+    let mut out = Listing::default();
     for result in builder.build() {
         cancel.check()?;
         let entry = result.map_err(|e| anyhow!("walking {}: {e}", dir.display()))?;
@@ -136,14 +201,23 @@ pub fn collect(dir: &Path, cancel: &Cancel) -> Result<Vec<Entry>> {
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| anyhow!("cannot upload {}: file name is not valid UTF-8", entry.path().display()))?
             .join("/");
-        out.push(Entry { rel, abs: entry.path().to_path_buf(), kind });
+        if kind == EntryKind::Symlink {
+            let target = std::fs::read_link(entry.path())
+                .with_context(|| format!("reading the symlink {}", entry.path().display()))?;
+            let abs = root.join(rel_path);
+            if !link_stays_inside(&root, &abs, rel_path, &target) {
+                out.skipped.push(SkippedLink { rel, target: target.to_string_lossy().into_owned() });
+                continue;
+            }
+        }
+        out.entries.push(Entry { rel, abs: entry.path().to_path_buf(), kind });
     }
     Ok(out)
 }
 
 /// Pack `dir` into a gzip-compressed tarball in a temporary file.
 pub fn pack_dir(dir: &Path, cancel: &Cancel) -> Result<Packed> {
-    let entries = collect(dir, cancel)?;
+    let Listing { entries, skipped } = collect(dir, cancel)?;
     let tmp = tempfile::Builder::new()
         .prefix("ferry-up-")
         .suffix(".tar.gz")
@@ -172,7 +246,7 @@ pub fn pack_dir(dir: &Path, cancel: &Cancel) -> Result<Packed> {
     let file = writer.into_inner().map_err(|e| anyhow!("writing the archive: {}", e.error()))?;
     file.sync_all().context("writing the archive")?;
     let size = tmp.as_file().metadata().context("reading the archive size")?.len();
-    Ok(Packed { file: tmp, files, size })
+    Ok(Packed { file: tmp, files, size, skipped })
 }
 
 #[cfg(test)]
@@ -206,6 +280,9 @@ mod tests {
         write(r, ".git/config", "[core]");
         write(r, "target/debug/app", "bin");
         write(r, ".venv/bin/python", "py");
+        write(r, "venv/bin/python", "py");
+        write(r, "py-env/pyvenv.cfg", "home = /usr/bin");
+        write(r, "py-env/lib/site.py", "x");
         write(r, "__pycache__/a.pyc", "c");
         write(r, "pkg/__pycache__/b.pyc", "c");
         write(r, "pkg/mod.py", "x = 1");
@@ -229,7 +306,7 @@ mod tests {
     #[test]
     fn collect_respects_ignore_rules_and_skip_dirs() {
         let dir = fixture();
-        let entries = collect(dir.path(), &Cancel::default()).unwrap();
+        let entries = collect(dir.path(), &Cancel::default()).unwrap().entries;
         let files: BTreeSet<&str> =
             entries.iter().filter(|e| e.kind == EntryKind::File).map(|e| e.rel.as_str()).collect();
         let expected: BTreeSet<&str> = [
@@ -249,7 +326,9 @@ mod tests {
         let dirs: BTreeSet<&str> =
             entries.iter().filter(|e| e.kind == EntryKind::Dir).map(|e| e.rel.as_str()).collect();
         assert!(dirs.contains("static/empty"), "{dirs:?}");
-        for skipped in ["build", "node_modules", "web/node_modules", ".git", "target", ".venv", "__pycache__"] {
+        for skipped in
+            ["build", "node_modules", "web/node_modules", ".git", "target", ".venv", "venv", "py-env", "__pycache__"]
+        {
             assert!(!dirs.contains(skipped), "{skipped} should be skipped: {dirs:?}");
         }
     }
@@ -308,6 +387,67 @@ mod tests {
             .unwrap();
         assert!(link.header().entry_type().is_symlink());
         assert_eq!(link.link_name().unwrap().unwrap().to_string_lossy(), "real.txt");
+        assert!(packed.skipped.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_leaving_the_directory_are_skipped_and_reported() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "secret.txt", "s");
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        write(r, "index.html", "<h1>hi</h1>");
+        write(r, "sub/real.txt", "x");
+        // Kept: relative links that stay inside (also dangling ones and links to links).
+        symlink("real.txt", r.join("sub/ok")).unwrap();
+        symlink("../index.html", r.join("sub/up-ok")).unwrap();
+        symlink("sub/ok", r.join("chain-ok")).unwrap();
+        symlink("not-there-yet", r.join("dangling-ok")).unwrap();
+        // Skipped: absolute targets (even pointing inside), escapes, and
+        // links that only escape through another link.
+        symlink("/usr/bin/python3", r.join("bin-python")).unwrap();
+        symlink(r.join("index.html"), r.join("abs-inside")).unwrap();
+        symlink("../../etc/passwd", r.join("sub/escape")).unwrap();
+        symlink(outside.path(), r.join("out-dir")).unwrap();
+        symlink("out-dir/secret.txt", r.join("via-link")).unwrap();
+
+        let listing = collect(r, &Cancel::default()).unwrap();
+        let kept: BTreeSet<&str> =
+            listing.entries.iter().filter(|e| e.kind == EntryKind::Symlink).map(|e| e.rel.as_str()).collect();
+        assert_eq!(kept, BTreeSet::from(["chain-ok", "dangling-ok", "sub/ok", "sub/up-ok"]));
+        let skipped: BTreeSet<&str> = listing.skipped.iter().map(|s| s.rel.as_str()).collect();
+        assert_eq!(skipped, BTreeSet::from(["abs-inside", "bin-python", "out-dir", "sub/escape", "via-link"]));
+        let python = listing.skipped.iter().find(|s| s.rel == "bin-python").unwrap();
+        assert_eq!(python.target, "/usr/bin/python3");
+
+        let packed = pack_dir(r, &Cancel::default()).unwrap();
+        assert_eq!(packed.skipped.len(), 5);
+        let names = tar_names(packed.path());
+        assert!(names.contains("sub/ok") && names.contains("index.html"), "{names:?}");
+        assert!(!names.contains("bin-python") && !names.contains("via-link"), "{names:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn virtualenvs_are_never_uploaded() {
+        // The layout that made uploads fail: venv/bin/python -> /usr/bin/python3.
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        write(r, "index.html", "x");
+        write(r, "venv/pyvenv.cfg", "home = /usr/bin");
+        std::os::unix::fs::symlink("/usr/bin/python3", {
+            fs::create_dir_all(r.join("venv/bin")).unwrap();
+            r.join("venv/bin/python")
+        })
+        .unwrap();
+        write(r, "env3/pyvenv.cfg", "home = /usr/bin");
+        write(r, "env3/lib/python3.12/site-packages/x.py", "x");
+        let listing = collect(r, &Cancel::default()).unwrap();
+        let rels: Vec<&str> = listing.entries.iter().map(|e| e.rel.as_str()).collect();
+        assert_eq!(rels, vec!["index.html"]);
+        assert!(listing.skipped.is_empty(), "the whole venv is skipped, not just its links");
     }
 
     #[test]
@@ -319,7 +459,7 @@ mod tests {
         write(repo.path(), "dist/assets/app.js", "x");
         write(repo.path(), "dist/debug.log", "noise");
         write(repo.path(), "dist/build/out.txt", "ignored by the parent rule 'build'");
-        let entries = collect(&repo.path().join("dist"), &Cancel::default()).unwrap();
+        let entries = collect(&repo.path().join("dist"), &Cancel::default()).unwrap().entries;
         let files: BTreeSet<&str> =
             entries.iter().filter(|e| e.kind == EntryKind::File).map(|e| e.rel.as_str()).collect();
         assert_eq!(files, BTreeSet::from(["assets/app.js", "index.html"]));

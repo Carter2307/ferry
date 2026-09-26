@@ -18,6 +18,8 @@
 mod connect;
 mod convert;
 mod errors;
+#[cfg(test)]
+mod fake_daemon;
 mod image_ref;
 mod logs;
 mod stats;
@@ -335,7 +337,8 @@ impl Docker {
         self.inner
             .tag_image(source, Some(opts))
             .await
-            .map_err(|e| errors::map_docker(e, &format!("tagging image {source} as {target}")))?;
+            // The only 404 here is a missing source image.
+            .map_err(|e| errors::map(e, &format!("tagging image {source} as {target}"), "image", source))?;
         debug!(source, target, "tagged image");
         Ok(())
     }
@@ -620,18 +623,35 @@ impl Docker {
     /// `tokio::time::timeout` for probes). A missing container is
     /// `Error::NotFound`, a stopped one `Error::Conflict`. Output beyond 8 MiB
     /// is dropped.
+    ///
+    /// Error messages name only the program (`cmd[0]`), never its arguments.
+    /// Still, do not put secrets in `cmd` — anyone who can inspect the exec
+    /// or list the container's processes sees them: pass them with
+    /// [`Docker::exec_with_env`] instead (e.g. `REDISCLI_AUTH` for `redis-cli`).
     pub async fn exec(&self, id: &str, cmd: &[&str]) -> Result<ExecOutput> {
+        self.exec_with_env(id, cmd, &[]).await
+    }
+
+    /// [`Docker::exec`] with extra environment variables for the command (on
+    /// top of the container's own). This is how to hand a command a
+    /// credential: values never appear in error messages or logs.
+    ///
+    /// Names must be non-empty and contain neither `=` nor NUL; values must
+    /// not contain NUL (`Error::Invalid`, naming the variable, not its value).
+    pub async fn exec_with_env(&self, id: &str, cmd: &[&str], env: &[(&str, &str)]) -> Result<ExecOutput> {
         errors::check_object_ref("container", id)?;
-        if cmd.is_empty() {
+        let Some(program) = cmd.first().filter(|p| !p.trim().is_empty()) else {
             return Err(Error::invalid("exec: command must not be empty"));
-        }
-        let context = || format!("running {:?} in container {id}", cmd.join(" "));
+        };
+        let env = exec_env(env)?;
+        let context = || exec_context(id, program);
         let config = ExecConfig {
             attach_stdin: Some(false),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: Some(false),
             cmd: Some(cmd.iter().map(|s| (*s).to_string()).collect()),
+            env,
             ..Default::default()
         };
         let created =
@@ -673,6 +693,35 @@ impl Docker {
         }
         Err(Error::Docker(format!("{}: the daemon did not report an exit code", context())))
     }
+}
+
+/// Error context of an exec. It names the program only: arguments often
+/// carry credentials (`redis-cli -a <password>`), and error messages end up
+/// in logs, the store and API responses.
+fn exec_context(id: &str, program: &str) -> String {
+    format!("running {program:?} in container {id}")
+}
+
+/// `KEY=value` entries for an exec (`None` when there are none). Errors name
+/// the variable, never its value.
+fn exec_env(env: &[(&str, &str)]) -> Result<Option<Vec<String>>> {
+    if env.is_empty() {
+        return Ok(None);
+    }
+    env.iter()
+        .map(|(key, value)| {
+            if key.is_empty() || key.contains(['=', '\0']) {
+                return Err(Error::invalid(format!("exec: invalid environment variable name {key:?}")));
+            }
+            if value.contains('\0') {
+                return Err(Error::invalid(format!(
+                    "exec: the value of environment variable {key} contains a NUL byte"
+                )));
+            }
+            Ok(format!("{key}={value}"))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
 }
 
 /// Map a container-create error. A 404 is about the image or the network.
@@ -790,5 +839,179 @@ mod tests {
     fn short_ids() {
         assert_eq!(short_id("0123456789abcdef"), "0123456789ab");
         assert_eq!(short_id("abc"), "abc");
+    }
+
+    use crate::fake_daemon::{FakeDaemon, Request};
+
+    fn api_error(status: u16, message: &str) -> (u16, String) {
+        (status, serde_json::json!({ "message": message }).to_string())
+    }
+
+    fn error_text(err: &Error) -> String {
+        match err {
+            Error::Docker(m) | Error::Conflict(m) | Error::NotFound(m) | Error::Invalid(m) => m.clone(),
+            other => other.to_string(),
+        }
+    }
+
+    #[test]
+    fn exec_context_names_the_program_only() {
+        assert_eq!(exec_context("c1", "redis-cli"), r#"running "redis-cli" in container c1"#);
+    }
+
+    #[test]
+    fn exec_env_entries() {
+        assert_eq!(exec_env(&[]).unwrap(), None);
+        assert_eq!(
+            exec_env(&[("REDISCLI_AUTH", "p=w"), ("EMPTY", "")]).unwrap(),
+            Some(vec!["REDISCLI_AUTH=p=w".to_string(), "EMPTY=".to_string()])
+        );
+        for key in ["", "A=B", "A\0B"] {
+            assert!(matches!(exec_env(&[(key, "v")]), Err(Error::Invalid(_))), "{key:?}");
+        }
+        let err = exec_env(&[("TOKEN", "s3cret\0x")]).unwrap_err();
+        assert!(matches!(&err, Error::Invalid(m) if m.contains("TOKEN") && !m.contains("s3cret")), "{err:?}");
+    }
+
+    /// Regression: exec errors used to embed the whole argv ("running
+    /// \"redis-cli -a <password> ping\" …"), leaking credentials into logs,
+    /// datastore errors and API responses.
+    #[tokio::test]
+    async fn exec_errors_do_not_reveal_arguments() {
+        let daemon = FakeDaemon::start(|req: &Request| match req.target.as_str() {
+            "/containers/broken/exec" => api_error(500, "boom"),
+            "/containers/stopped/exec" => api_error(409, "container stopped is not running"),
+            _ => api_error(404, "No such container: gone"),
+        })
+        .await;
+        let argv = ["redis-cli", "--no-auth-warning", "-a", "s3cret-password", "ping"];
+
+        let err = daemon.docker.exec("broken", &argv).await.unwrap_err();
+        assert!(matches!(&err, Error::Docker(m) if m == r#"running "redis-cli" in container broken: boom"#), "{err:?}");
+        let err = daemon.docker.exec("stopped", &argv).await.unwrap_err();
+        assert!(
+            matches!(&err, Error::Conflict(m)
+                if m == r#"running "redis-cli" in container stopped: container stopped is not running"#),
+            "{err:?}"
+        );
+        let err = daemon.docker.exec("gone", &argv).await.unwrap_err();
+        assert!(matches!(&err, Error::NotFound(m) if m == "container 'gone'"), "{err:?}");
+
+        let requests = daemon.requests();
+        assert_eq!(requests.len(), 3);
+        let body = requests[0].json();
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(body["Cmd"], serde_json::json!(argv), "the command itself is passed unchanged");
+        assert!(body.get("Env").is_none(), "no env unless asked: {body}");
+    }
+
+    #[tokio::test]
+    async fn exec_with_env_passes_secrets_outside_the_command() {
+        let daemon = FakeDaemon::start(|_: &Request| api_error(500, "boom")).await;
+        let err = daemon
+            .docker
+            .exec_with_env("c1", &["redis-cli", "ping"], &[("REDISCLI_AUTH", "s3cret-password")])
+            .await
+            .unwrap_err();
+        let text = error_text(&err);
+        assert_eq!(text, r#"running "redis-cli" in container c1: boom"#);
+        assert!(!err.to_string().contains("s3cret"), "{err}");
+
+        let requests = daemon.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].target, "/containers/c1/exec");
+        let body = requests[0].json();
+        assert_eq!(body["Cmd"], serde_json::json!(["redis-cli", "ping"]));
+        assert_eq!(body["Env"], serde_json::json!(["REDISCLI_AUTH=s3cret-password"]));
+
+        // Invalid input never reaches the daemon, and errors don't echo values.
+        let err = daemon.docker.exec_with_env("c1", &["true"], &[("BAD=KEY", "s3cret")]).await.unwrap_err();
+        assert!(matches!(&err, Error::Invalid(m) if !m.contains("s3cret")), "{err:?}");
+        assert!(matches!(daemon.docker.exec("c1", &[]).await, Err(Error::Invalid(_))));
+        assert!(matches!(daemon.docker.exec("c1", &[" "]).await, Err(Error::Invalid(_))));
+        assert!(matches!(daemon.docker.exec("../c1", &["true"]).await, Err(Error::Invalid(_))));
+        assert_eq!(daemon.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn volume_exists_maps_daemon_answers() {
+        let daemon = FakeDaemon::start(|req: &Request| match req.target.as_str() {
+            "/volumes/present" => (
+                200,
+                serde_json::json!({
+                    "Name": "present", "Driver": "local", "Mountpoint": "/var/lib/docker/volumes/present/_data",
+                    "Labels": {}, "Scope": "local", "Options": {}
+                })
+                .to_string(),
+            ),
+            "/volumes/broken" => api_error(500, "boom"),
+            _ => api_error(404, "get missing: no such volume"),
+        })
+        .await;
+        assert!(daemon.docker.volume_exists("present").await.unwrap());
+        assert!(!daemon.docker.volume_exists("missing").await.unwrap());
+        let err = daemon.docker.volume_exists("broken").await.unwrap_err();
+        assert!(matches!(&err, Error::Docker(m) if m == "inspecting volume broken: boom"), "{err:?}");
+        assert!(matches!(daemon.docker.volume_exists("../etc").await, Err(Error::Invalid(_))));
+        assert!(matches!(daemon.docker.volume_exists("").await, Err(Error::Invalid(_))));
+
+        let requests = daemon.requests();
+        assert_eq!(requests.iter().map(|r| r.method.as_str()).collect::<Vec<_>>(), ["GET", "GET", "GET"]);
+        assert_eq!(requests.len(), 3, "invalid names never reach the daemon");
+    }
+
+    #[tokio::test]
+    async fn volume_exists_reports_an_unreachable_daemon() {
+        // Nothing listens on a port we just released: an error, not "absent".
+        let port = free_host_port().unwrap();
+        let inner =
+            bollard::Docker::connect_with_http(&format!("http://127.0.0.1:{port}"), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap();
+        let err = Docker::from_bollard(inner).volume_exists("data").await.unwrap_err();
+        assert!(matches!(&err, Error::Docker(m) if m.starts_with("inspecting volume data: ")), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn tag_image_requests_and_errors() {
+        let daemon = FakeDaemon::start(|req: &Request| {
+            if req.target.starts_with("/images/nope:1/tag") {
+                api_error(404, "No such image: nope:1")
+            } else if req.target.starts_with("/images/busybox:stable/tag") {
+                (201, String::new())
+            } else {
+                api_error(500, "unexpected request")
+            }
+        })
+        .await;
+        let docker = &daemon.docker;
+        docker.tag_image("busybox:stable", "ferryfix-docker/x:1").await.unwrap();
+        docker.tag_image("busybox:stable", "localhost:5000/app").await.unwrap();
+        let err = docker.tag_image("nope:1", "ferryfix-docker/x:1").await.unwrap_err();
+        assert!(matches!(&err, Error::NotFound(m) if m == "image 'nope:1'"), "{err:?}");
+
+        let requests = daemon.requests();
+        assert_eq!(requests.len(), 3);
+        assert!(requests.iter().all(|r| r.method == "POST"));
+        let query = |r: &Request| {
+            let mut pairs: Vec<String> =
+                r.target.split_once('?').map(|(_, q)| q).unwrap_or("").split('&').map(String::from).collect();
+            pairs.sort();
+            pairs
+        };
+        assert_eq!(query(&requests[0]), ["repo=ferryfix-docker%2Fx", "tag=1"]);
+        assert_eq!(query(&requests[1]), ["repo=localhost%3A5000%2Fapp", "tag=latest"], "registry port is not a tag");
+
+        // Rejected before any request.
+        let digest = "sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+        for (source, target) in [
+            ("busybox:stable", format!("ferryfix-docker/x@{digest}")),
+            ("busybox:stable", "../x".to_string()),
+            ("busybox:stable", "x:".to_string()),
+            ("../busybox", "ferryfix-docker/x:1".to_string()),
+            ("", "ferryfix-docker/x:1".to_string()),
+        ] {
+            assert!(matches!(docker.tag_image(source, &target).await, Err(Error::Invalid(_))), "{source} → {target}");
+        }
+        assert_eq!(daemon.requests().len(), 3);
     }
 }

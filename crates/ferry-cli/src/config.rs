@@ -48,16 +48,25 @@ pub struct Settings {
     pub server_source: Source,
     pub token: Option<String>,
     pub token_source: Option<Source>,
+    /// Server of the saved login when its token was *not* used because the
+    /// effective server is a different one (the token belongs to that server).
+    pub saved_login_server: Option<String>,
 }
 
 impl Settings {
     /// The API token, or the "log in first" error.
     pub fn require_token(&self) -> Result<&str> {
-        self.token.as_deref().ok_or_else(|| {
-            anyhow!(
+        self.token.as_deref().ok_or_else(|| match &self.saved_login_server {
+            Some(saved) => anyhow!(
+                "no token for {}: the saved login is for {saved}, and its token is only sent there; \
+                 pass --token or set {ENV_TOKEN} (or run 'ferry login --server {} --token <TOKEN>')",
+                self.server,
+                self.server
+            ),
+            None => anyhow!(
                 "not logged in: run 'ferry login --server <URL> --token <TOKEN>' first \
                  (or set {ENV_SERVER} and {ENV_TOKEN})"
-            )
+            ),
         })
     }
 }
@@ -153,6 +162,10 @@ fn non_empty(v: Option<String>) -> Option<String> {
 
 /// Combine flags > environment > config file > default.
 /// `env` looks up an environment variable (injectable for tests).
+///
+/// The saved token is only used for the server it was saved with: when
+/// `--server` / `FERRY_SERVER` points somewhere else, a token must come from
+/// `--token` / `FERRY_TOKEN`, so a credential never leaks to another host.
 pub fn resolve(flags: &Overrides, env: impl Fn(&str) -> Option<String>, file: Option<&FileConfig>) -> Result<Settings> {
     let pick = |flag: &Option<String>, key: &str, file_val: Option<&String>| -> Option<(String, Source)> {
         non_empty(flag.clone())
@@ -168,8 +181,27 @@ pub fn resolve(flags: &Overrides, env: impl Fn(&str) -> Option<String>, file: Op
         Source::File => "invalid server in config file".to_string(),
         Source::Default => "invalid default server".to_string(),
     })?;
-    let token = pick(&flags.token, ENV_TOKEN, file.and_then(|f| f.token.as_ref()));
-    Ok(Settings { server, server_source, token_source: token.as_ref().map(|(_, s)| *s), token: token.map(|(t, _)| t) })
+
+    // The server the saved token belongs to (a file without a server was
+    // written for the default one).
+    let saved_server = file.map(|f| {
+        let raw = non_empty(f.server.clone()).unwrap_or_else(|| DEFAULT_SERVER.to_string());
+        normalize_server(&raw).unwrap_or(raw)
+    });
+    let file_token_usable = saved_server.as_deref() == Some(server.as_str());
+    let file_token = file.and_then(|f| f.token.as_ref()).filter(|_| file_token_usable);
+    let token = pick(&flags.token, ENV_TOKEN, file_token);
+    let saved_login_server = match (&token, file) {
+        (None, Some(f)) if non_empty(f.token.clone()).is_some() && !file_token_usable => saved_server,
+        _ => None,
+    };
+    Ok(Settings {
+        server,
+        server_source,
+        token_source: token.as_ref().map(|(_, s)| *s),
+        token: token.map(|(t, _)| t),
+        saved_login_server,
+    })
 }
 
 /// Normalize a server URL: add `http://` when no scheme is given, require
@@ -281,6 +313,57 @@ mod tests {
         let flags = Overrides { server: Some(String::new()), token: None };
         let s = resolve(&flags, &env, Some(&file)).unwrap();
         assert_eq!((s.server.as_str(), s.token.as_deref()), ("http://file:1", Some("env-token")));
+    }
+
+    #[test]
+    fn saved_token_is_only_used_for_its_own_server() {
+        let file = FileConfig { server: Some("http://127.0.0.1:7878".into()), token: Some("fy_A".into()) };
+
+        // Another server via --server or FERRY_SERVER: the saved token stays home.
+        for (flags, env) in [
+            (Overrides { server: Some("http://127.0.0.1:9999".into()), token: None }, env_of(&[])),
+            (Overrides::default(), env_of(&[(ENV_SERVER, "http://evil.example.com")])),
+        ] {
+            let s = resolve(&flags, &env, Some(&file)).unwrap();
+            assert_eq!(s.token, None, "{s:?}");
+            assert_eq!(s.token_source, None);
+            assert_eq!(s.saved_login_server.as_deref(), Some("http://127.0.0.1:7878"));
+            let err = s.require_token().unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("no token for {}", s.server))
+                    && err.contains("saved login is for http://127.0.0.1:7878"),
+                "{err}"
+            );
+            assert!(err.contains("--token") && err.contains(ENV_TOKEN), "{err}");
+        }
+
+        // An explicit token for the other server is used.
+        let flags = Overrides { server: Some("http://127.0.0.1:9999".into()), token: None };
+        let s = resolve(&flags, env_of(&[(ENV_TOKEN, "fy_B")]), Some(&file)).unwrap();
+        assert_eq!((s.token.as_deref(), s.token_source), (Some("fy_B"), Some(Source::Env)));
+        assert_eq!(s.saved_login_server, None);
+
+        // The same server, spelled differently but equal once normalized.
+        for same in ["http://127.0.0.1:7878/", "127.0.0.1:7878", " http://127.0.0.1:7878/?x=1 "] {
+            let flags = Overrides { server: Some(same.into()), token: None };
+            let s = resolve(&flags, env_of(&[]), Some(&file)).unwrap();
+            assert_eq!((s.token.as_deref(), s.token_source), (Some("fy_A"), Some(Source::File)), "{same}");
+        }
+
+        // A config file without a server was saved for the default server.
+        let token_only = FileConfig { server: None, token: Some("fy_D".into()) };
+        let s = resolve(&Overrides::default(), env_of(&[]), Some(&token_only)).unwrap();
+        assert_eq!((s.server.as_str(), s.token.as_deref()), (DEFAULT_SERVER, Some("fy_D")));
+        let flags = Overrides { server: Some("http://other:1".into()), token: None };
+        let s = resolve(&flags, env_of(&[]), Some(&token_only)).unwrap();
+        assert_eq!(s.token, None);
+        assert_eq!(s.saved_login_server.as_deref(), Some(DEFAULT_SERVER));
+
+        // No saved token at all: the plain "not logged in" message.
+        let server_only = FileConfig { server: Some("http://127.0.0.1:7878".into()), token: None };
+        let s = resolve(&flags, env_of(&[]), Some(&server_only)).unwrap();
+        assert_eq!(s.saved_login_server, None);
+        assert!(s.require_token().unwrap_err().to_string().contains("not logged in"));
     }
 
     #[test]

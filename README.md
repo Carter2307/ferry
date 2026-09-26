@@ -91,27 +91,42 @@ ferry domains add api api.example.com
    Restart=always
    ```
 
-3. Keep the API on localhost and reach it over SSH, or expose the dashboard
-   through the proxy at `ferry.apps.example.com`.
+3. Keep the API on localhost and reach it over SSH (`ssh -L 7878:127.0.0.1:7878 host`).
+   You can also expose the dashboard through the proxy with
+   `--dashboard-host ferry.apps.example.com`, but only with HTTPS enabled,
+   because it serves the full admin API.
 4. For GitHub auto-deploys, add a webhook to your repo:
    `https://ferry.apps.example.com/hooks/github`, content type JSON, with the
    same secret.
 
 ### Server configuration
 
+Every flag also has an environment variable. `ferryd --help` shows the full list.
+
 | Flag / env | Default | Meaning |
 |---|---|---|
-| `--data-dir` `FERRY_DATA_DIR` | `./ferry-data` | database, logs, build scratch, certs |
+| `--data-dir` `FERRY_DATA_DIR` | `./ferry-data` | database, logs, build scratch, certs (created `0700`, since it holds secrets) |
 | `--api-addr` `FERRY_API_ADDR` | `127.0.0.1:7878` | API + dashboard |
 | `--proxy-addr` `FERRY_PROXY_ADDR` | `0.0.0.0:8080` | public HTTP |
-| `--https-addr` `FERRY_HTTPS_ADDR` | – | public HTTPS (with `--acme-email`) |
+| `--https-addr` `FERRY_HTTPS_ADDR` | – | public HTTPS (together with `--acme-email`) |
 | `--base-domain` `FERRY_BASE_DOMAIN` | `localhost` | apps live at `<name>.<base-domain>` |
+| `--public-port` `FERRY_PUBLIC_PORT` | proxy port | port shown in app URLs (e.g. behind port forwarding) |
+| `--dashboard-host` `FERRY_DASHBOARD_HOST` | `ferry.<base-domain>` for local domains, otherwise off | serve the dashboard + API through the public proxy (`none` disables it). On a public domain, only enable it together with HTTPS. |
 | `--acme-email` `FERRY_ACME_EMAIL` | – | enables Let's Encrypt |
+| `--acme-staging` / `--acme-directory` | – | Let's Encrypt staging, or a custom ACME CA |
 | `--github-webhook-secret` | – | enables `/hooks/github` |
-| `--api-token` `FERRY_API_TOKEN` | generated | stored in `<data-dir>/api_token` |
-| `--name-prefix` `FERRY_NAME_PREFIX` | `ferry` | Docker resource prefix (run several Ferrys on one daemon) |
-| `--build-concurrency` | `2` | parallel builds |
-| `--health-timeout` | `120` | seconds for a deploy to become healthy |
+| `--api-token` `FERRY_API_TOKEN` | generated | stored in `<data-dir>/api_token` (`0600`) |
+| `--name-prefix` `FERRY_NAME_PREFIX` | `ferry` | Docker resource prefix. Each Ferry server needs its own; a server refuses to start on a prefix owned by another data dir |
+| `--take-over` | – | adopt the Docker resources of a prefix owned by another data dir (e.g. after moving it) |
+| `--build-concurrency` `FERRY_BUILD_CONCURRENCY` | `2` | parallel builds |
+| `--health-check-timeout` `FERRY_HEALTH_TIMEOUT` | `120` | seconds a deploy has to become healthy |
+| `--default-port` `FERRY_DEFAULT_PORT` | `10000` | container port when nothing else specifies one (`PORT` is injected) |
+| `--keep-images` `FERRY_KEEP_IMAGES` | `5` | built images kept per service for rollbacks |
+| `--advertise-host` `FERRY_ADVERTISE_HOST` | `127.0.0.1` | host used in external datastore connection strings |
+
+Two safety rules:
+- Only one `ferryd` can use a data directory at a time (it holds a lock file).
+- Each Docker name prefix belongs to one data directory. Without this, a second server would treat the first one's containers as orphans and remove them.
 
 ## How it works
 

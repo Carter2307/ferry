@@ -54,6 +54,7 @@ pub enum Command {
     /// Trigger a deploy
     Deploy(DeployArgs),
     /// Upload a local directory and deploy it (creates the service if needed)
+    #[command(after_help = UP_AFTER_HELP)]
     Up(UpArgs),
     /// List a service's deploys, newest first
     Deploys(ListArgs),
@@ -93,6 +94,12 @@ pub enum Command {
     /// Print (and try to open) a service's URL
     Open(NameArg),
 }
+
+const UP_AFTER_HELP: &str = "\
+If the service doesn't exist, it is created with these flags. If it exists, the build & deploy \
+settings (--runtime, --start-cmd, --port, ...) are applied to it first, like 'ferry update'; -e sets \
+variables like 'ferry env set --no-restart'; --env-group links groups. Only --type is used solely \
+when creating the service (an existing service keeps its type).";
 
 #[derive(Debug, Clone, Args)]
 pub struct NameArg {
@@ -174,7 +181,8 @@ pub struct CreateArgs {
     /// Service type: web, pserv, worker, cron, static
     #[arg(short = 't', long = "type", value_name = "TYPE", value_parser = parse_service_type)]
     pub service_type: Option<ServiceType>,
-    /// Git repository URL (or a local path on the server)
+    /// Git repository URL, or the path of a git repository on the server
+    /// (a relative path that exists here is sent as an absolute path)
     #[arg(long, value_name = "URL", conflicts_with = "image")]
     pub repo: Option<String>,
     /// Git branch (default: main)
@@ -206,7 +214,8 @@ pub struct CreateArgs {
 pub struct UpdateArgs {
     /// Service name or id
     pub name: String,
-    /// Git repository URL ("" clears)
+    /// Git repository URL or server-side path ("" clears; a relative path
+    /// that exists here is sent as an absolute path)
     #[arg(long, value_name = "URL")]
     pub repo: Option<String>,
     /// Git branch
@@ -256,16 +265,17 @@ pub struct UpArgs {
     /// Directory to upload
     #[arg(short, long, value_name = "DIR", default_value = ".")]
     pub dir: PathBuf,
-    /// Service type when creating it: web, pserv, worker, cron, static [default: web]
+    /// Service type, only used when creating the service: web, pserv, worker, cron, static [default: web]
     #[arg(short = 't', long = "type", value_name = "TYPE", value_parser = parse_service_type)]
     pub service_type: Option<ServiceType>,
-    /// Settings used only when the service is created
+    /// Build & deploy settings: used to create the service, or applied to
+    /// the existing one before deploying
     #[command(flatten)]
     pub settings: SettingsArgs,
-    /// Environment variable, used only when the service is created (repeatable)
+    /// Environment variable, set before deploying (repeatable)
     #[arg(short = 'e', long = "env", value_name = "KEY=VALUE", value_parser = parse_env_pair)]
     pub env: Vec<EnvVar>,
-    /// Link an environment group when the service is created (repeatable)
+    /// Link an environment group before deploying (repeatable)
     #[arg(long = "env-group", value_name = "GROUP")]
     pub env_groups: Vec<String>,
     /// Build without the Docker layer cache
@@ -337,13 +347,17 @@ pub struct EnvArgs {
     /// Service name or id (lists its variables)
     #[arg(required = true)]
     pub name: Option<String>,
+    /// List the merged environment: linked env groups, then the service's own variables
+    #[arg(long)]
+    pub effective: bool,
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum EnvCommand {
-    /// List variables as KEY=VALUE
+    /// List variables as KEY=VALUE (values with newlines or quotes are
+    /// printed double-quoted with backslash escapes)
     #[command(visible_alias = "list")]
-    Ls(NameArg),
+    Ls(EnvLsArgs),
     /// Set variables (restarts the service unless --no-restart)
     Set(EnvSetArgs),
     /// Remove variables (restarts the service unless --no-restart)
@@ -351,15 +365,28 @@ pub enum EnvCommand {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct EnvLsArgs {
+    /// Service name or id
+    pub name: String,
+    /// List the merged environment: linked env groups, then the service's own variables
+    #[arg(long)]
+    pub effective: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct EnvSetArgs {
     /// Service name or id
     pub name: String,
-    /// KEY=VALUE pairs
+    /// KEY=VALUE pairs. Values may reference ${{datastore.NAME.connectionString}},
+    /// ${{service.NAME.hostport}}, … (resolved when the service starts)
     #[arg(required = true, value_name = "KEY=VALUE", value_parser = parse_env_pair)]
     pub vars: Vec<EnvVar>,
     /// Save without restarting
     #[arg(long = "no-restart")]
     pub no_restart: bool,
+    /// Stream the restart's logs until it finishes (exit 1 if it fails)
+    #[arg(short, long, conflicts_with = "no_restart")]
+    pub follow: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -372,6 +399,9 @@ pub struct EnvUnsetArgs {
     /// Save without restarting
     #[arg(long = "no-restart")]
     pub no_restart: bool,
+    /// Stream the restart's logs until it finishes (exit 1 if it fails)
+    #[arg(short, long, conflicts_with = "no_restart")]
+    pub follow: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -575,9 +605,12 @@ pub fn parse_datastore_kind(s: &str) -> Result<DatastoreKind, String> {
 }
 
 /// `KEY=VALUE`, split on the first `=`; the value may be empty or contain `=`.
+/// `${{…}}` references in the value must be well-formed (they are resolved
+/// when the service starts; a malformed one could never resolve).
 pub fn parse_env_pair(s: &str) -> Result<EnvVar, String> {
     let (key, value) = s.split_once('=').ok_or_else(|| format!("expected KEY=VALUE, got '{s}'"))?;
-    validate::env_key(key).map_err(|e| e.to_string())?;
+    validate::env_var(key, value).map_err(|e| e.to_string())?;
+    crate::envref::check_syntax(value).map_err(|e| format!("{key}: {e}"))?;
     Ok(EnvVar::new(key, value))
 }
 
@@ -811,7 +844,24 @@ mod tests {
         assert_eq!(u.keys, vec!["A", "B"]);
         assert!(u.no_restart);
         let Command::Env(a) = parse(&["env", "ls", "web"]).command else { panic!() };
-        assert!(matches!(a.command, Some(EnvCommand::Ls(_))));
+        assert!(matches!(a.command, Some(EnvCommand::Ls(EnvLsArgs { effective: false, .. }))));
+        let Command::Env(a) = parse(&["env", "ls", "web", "--effective"]).command else { panic!() };
+        assert!(matches!(a.command, Some(EnvCommand::Ls(EnvLsArgs { effective: true, .. }))));
+        let Command::Env(a) = parse(&["env", "web", "--effective"]).command else { panic!() };
+        assert!(a.effective && a.command.is_none());
+        let Command::Env(a) = parse(&["env", "set", "web", "A=1", "-f"]).command else { panic!() };
+        let Some(EnvCommand::Set(s)) = a.command else { panic!() };
+        assert!(s.follow);
+        fails(&["env", "set", "web", "A=1", "--no-restart", "--follow"]);
+        fails(&["env", "unset", "web", "A", "--no-restart", "-f"]);
+        // References that could never resolve are refused before anything is sent.
+        let err = fails(&["env", "set", "web", "TPL=Hello ${{ name }}"]).to_string();
+        assert!(err.contains("TPL: invalid reference") && err.contains("kind.name.property"), "{err}");
+        fails(&["env", "set", "web", "X=${{bucket.b.url}}"]);
+        let Command::Env(a) = parse(&["env", "set", "web", "DB=${{datastore.pgx.connectionString}}"]).command else {
+            panic!()
+        };
+        assert!(matches!(a.command, Some(EnvCommand::Set(_))), "unknown targets are checked by the server");
         fails(&["env"]);
         fails(&["env", "set", "web"]);
         fails(&["env", "set", "web", "NOPE"]);
@@ -929,5 +979,11 @@ mod tests {
         assert!(parse_env_pair("A").is_err());
         assert!(parse_env_pair("=x").is_err());
         assert!(parse_env_pair("A B=x").is_err());
+        assert_eq!(
+            parse_env_pair("DB=${{ datastore.main.connectionString }}").unwrap().value,
+            "${{ datastore.main.connectionString }}"
+        );
+        assert!(parse_env_pair("DB=${{datastore.main}}").unwrap_err().contains("DB: invalid reference"));
+        assert!(parse_env_pair(&format!("BIG={}", "x".repeat(validate::MAX_ENV_VALUE_BYTES + 1))).is_err());
     }
 }

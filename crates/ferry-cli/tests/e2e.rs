@@ -225,8 +225,21 @@ async fn e2e_up_deploy_env_and_delete_a_static_site() {
     let list: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
     assert!(list.as_array().unwrap().iter().any(|s| s["name"] == "e2e-site"));
 
-    let out = run(args(&["delete", "e2e-site", "--yes"])).await;
+    // Re-running `up` on the existing service applies the given settings
+    // (they used to be ignored) before deploying.
+    let out = run(args(&["up", "e2e-site", "--dir", site.to_str().unwrap(), "--health", "/", "--follow"])).await;
+    assert_ok("up again with --health", &out, &log);
+    assert!(out.stderr.contains("Updated 'e2e-site': health check"), "{}", out.stderr);
+    let out = run(args(&["show", "e2e-site", "--json"])).await;
+    assert_ok("show --json", &out, &log);
+    let shown: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(shown["health_check_path"], "/", "{shown}");
+
+    // Deleting by id reports the service's real name.
+    let id = shown["id"].as_str().unwrap().to_string();
+    let out = run(args(&["delete", &id, "--yes"])).await;
     assert_ok("delete", &out, &log);
+    assert_eq!(out.stdout, "Deleted service 'e2e-site'\n");
     let out = run(args(&["show", "e2e-site"])).await;
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("not_found"), "{}", out.stderr);

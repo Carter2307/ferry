@@ -1,14 +1,15 @@
 //! Service commands: list, create, show, update, delete, suspend/resume,
 //! scale, status, open, domains.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use ferry_core::dto::{CreateService, DomainRequest, RuntimeStatus, ScaleRequest, ServiceView, UpdateService};
-use ferry_core::{Deploy, ServiceType, SourceKind};
+use ferry_core::{Deploy, Service, ServiceType, SourceKind, validate};
 
 use super::{Ctx, confirm, follow_deploy, or_dash, print_json};
 use crate::cli::{CreateArgs, SettingsArgs, UpdateArgs};
 use crate::output::{self, Cell, Color, Table, errln, outln};
+use crate::repo;
 
 fn opt_vec<T>(v: Vec<T>) -> Option<Vec<T>> {
     if v.is_empty() { None } else { Some(v) }
@@ -49,13 +50,9 @@ pub fn create_request(a: &CreateArgs) -> CreateService {
     }
 }
 
-/// Map `ferry update` flags to the request body.
-pub fn update_request(a: &UpdateArgs) -> UpdateService {
-    let s = &a.settings;
+/// An `UpdateService` changing exactly the given settings.
+pub(super) fn settings_update(s: &SettingsArgs) -> UpdateService {
     UpdateService {
-        repo_url: a.repo.clone(),
-        branch: a.branch.clone(),
-        image: a.image.clone(),
         runtime: s.runtime,
         root_dir: s.root_dir.clone(),
         dockerfile_path: s.dockerfile.clone(),
@@ -66,6 +63,39 @@ pub fn update_request(a: &UpdateArgs) -> UpdateService {
         health_check_path: s.health.clone(),
         schedule: s.schedule.clone(),
         instances: s.instances,
+        disk_mount_path: s.disk.clone(),
+        custom_domains: opt_vec(s.domains.clone()),
+        ..UpdateService::default()
+    }
+}
+
+/// Human names of the given settings, e.g. `["start command", "port"]`.
+pub(super) fn settings_labels(s: &SettingsArgs) -> Vec<&'static str> {
+    [
+        (s.runtime.is_some(), "runtime"),
+        (s.root_dir.is_some(), "root dir"),
+        (s.dockerfile.is_some(), "Dockerfile"),
+        (s.build_cmd.is_some(), "build command"),
+        (s.start_cmd.is_some(), "start command"),
+        (s.publish_dir.is_some(), "publish dir"),
+        (s.port.is_some(), "port"),
+        (s.health.is_some(), "health check"),
+        (s.instances.is_some(), "instances"),
+        (s.schedule.is_some(), "schedule"),
+        (s.disk.is_some(), "disk"),
+        (!s.domains.is_empty(), "custom domains"),
+    ]
+    .into_iter()
+    .filter_map(|(given, label)| given.then_some(label))
+    .collect()
+}
+
+/// Map `ferry update` flags to the request body.
+pub fn update_request(a: &UpdateArgs) -> UpdateService {
+    UpdateService {
+        repo_url: a.repo.clone(),
+        branch: a.branch.clone(),
+        image: a.image.clone(),
         auto_deploy: if a.auto_deploy {
             Some(true)
         } else if a.no_auto_deploy {
@@ -73,10 +103,29 @@ pub fn update_request(a: &UpdateArgs) -> UpdateService {
         } else {
             None
         },
-        suspended: None,
-        disk_mount_path: s.disk.clone(),
-        custom_domains: opt_vec(s.domains.clone()),
+        ..settings_update(&a.settings)
     }
+}
+
+/// `--repo` as sent to the server: a relative path of a local directory
+/// becomes absolute (the server would resolve it against its own working
+/// directory); other relative paths are refused.
+pub(super) fn repo_arg(repo: Option<String>) -> Result<Option<String>> {
+    let Some(raw) = repo else { return Ok(None) };
+    let cwd = std::env::current_dir().context("reading the current directory")?;
+    if let Some(abs) = repo::absolutize(&raw, &cwd) {
+        if abs != raw {
+            errln!("note: using the local repository {abs}");
+        }
+        return Ok(Some(abs));
+    }
+    if repo::is_relative_path(&raw) {
+        bail!(
+            "--repo '{}': no such directory here; give a git URL or the absolute path of a repository on the server",
+            raw.trim()
+        );
+    }
+    Ok(Some(raw))
 }
 
 /// Address shown for a service: public URL, private `host:port`, or `-`.
@@ -130,7 +179,8 @@ pub async fn list(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-pub async fn create(ctx: &Ctx, a: CreateArgs) -> Result<()> {
+pub async fn create(ctx: &Ctx, mut a: CreateArgs) -> Result<()> {
+    a.repo = repo_arg(a.repo.take())?;
     let body = create_request(&a);
     let resp = ctx.client.post::<_, ServiceView>(&["services"], &[], &body).await?;
     let v = &resp.data;
@@ -260,8 +310,9 @@ fn fmt_time(t: DateTime<Utc>) -> String {
     )
 }
 
-/// Settings that only take effect with the next deploy.
-fn needs_redeploy(a: &UpdateArgs) -> bool {
+/// Settings that only take effect with the next deploy (except the start
+/// command of a cron job, which is read at each run).
+fn needs_redeploy(a: &UpdateArgs, service_type: ServiceType) -> bool {
     let s = &a.settings;
     a.repo.is_some()
         || a.branch.is_some()
@@ -270,14 +321,29 @@ fn needs_redeploy(a: &UpdateArgs) -> bool {
         || s.root_dir.is_some()
         || s.dockerfile.is_some()
         || s.build_cmd.is_some()
-        || s.start_cmd.is_some()
+        || (s.start_cmd.is_some() && service_type != ServiceType::CronJob)
         || s.publish_dir.is_some()
         || s.port.is_some()
         || s.health.is_some()
         || s.disk.is_some()
 }
 
-pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<()> {
+/// What to tell the user after `ferry update`: when the changes apply.
+fn update_hints(a: &UpdateArgs, svc: &Service) -> Vec<String> {
+    let mut hints = Vec::new();
+    if svc.service_type == ServiceType::CronJob && a.settings.start_cmd.is_some() {
+        hints.push(format!(
+            "The new command is used from the next run (scheduled, or now with: ferry run {})",
+            svc.name
+        ));
+    }
+    if needs_redeploy(a, svc.service_type) {
+        hints.push(format!("Build/deploy settings apply to the next deploy: ferry deploy {}", svc.name));
+    }
+    hints
+}
+
+pub async fn update(ctx: &Ctx, mut a: UpdateArgs) -> Result<()> {
     if a.repo.is_none()
         && a.branch.is_none()
         && a.image.is_none()
@@ -287,25 +353,31 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<()> {
     {
         bail!("nothing to update: pass at least one setting (see 'ferry update --help')");
     }
+    // "" clears the repo; anything else may be a local path to absolutize.
+    if a.repo.as_deref().is_some_and(|r| !r.trim().is_empty()) {
+        a.repo = repo_arg(a.repo.take())?;
+    }
     let body = update_request(&a);
     let resp = ctx.client.patch::<_, ServiceView>(&["services", &a.name], &[], &body).await?;
     if ctx.json {
         return print_json(&resp.raw);
     }
     outln!("Updated '{}'", resp.data.service.name)?;
-    if needs_redeploy(&a) {
-        outln!("Build/deploy settings apply to the next deploy: ferry deploy {}", resp.data.service.name)?;
+    for hint in update_hints(&a, &resp.data.service) {
+        outln!("{hint}")?;
     }
     Ok(())
 }
 
 pub async fn delete(ctx: &Ctx, name: &str, yes: bool) -> Result<()> {
-    confirm(&format!("delete service '{name}' with all its deploys"), yes).await?;
-    ctx.client.delete_no_content(&["services", name]).await?;
+    // Resolve an id to the service's real name for the prompt and messages.
+    let service = ctx.client.get::<ServiceView>(&["services", name], &[]).await?.data.service;
+    confirm(&format!("delete service '{}' with all its deploys", service.name), yes).await?;
+    ctx.client.delete_no_content(&["services", &service.id]).await?;
     if ctx.json {
-        return print_json(&serde_json::json!({ "deleted": name }));
+        return print_json(&serde_json::json!({ "deleted": service.name, "id": service.id }));
     }
-    outln!("Deleted service '{name}'")?;
+    outln!("Deleted service '{}'", service.name)?;
     Ok(())
 }
 
@@ -458,8 +530,14 @@ pub async fn domains_list(ctx: &Ctx, name: &str) -> Result<()> {
     print_domains(ctx, name, &resp)
 }
 
+/// A domain as the server stores it: trimmed, lowercase, no trailing dot.
+fn normalize_domain(domain: &str) -> String {
+    validate::domain(domain).unwrap_or_else(|_| domain.trim().trim_end_matches('.').to_ascii_lowercase())
+}
+
 pub async fn domains_add(ctx: &Ctx, name: &str, domain: &str) -> Result<()> {
-    let body = DomainRequest { domain: domain.to_string() };
+    let domain = normalize_domain(domain);
+    let body = DomainRequest { domain: domain.clone() };
     let resp = ctx.client.post::<_, Vec<String>>(&["services", name, "domains"], &[], &body).await?;
     if !ctx.json {
         errln!("Added {domain}. Point its DNS (A/AAAA or CNAME) at this server.");
@@ -468,7 +546,8 @@ pub async fn domains_add(ctx: &Ctx, name: &str, domain: &str) -> Result<()> {
 }
 
 pub async fn domains_rm(ctx: &Ctx, name: &str, domain: &str) -> Result<()> {
-    let resp = ctx.client.delete::<Vec<String>>(&["services", name, "domains", domain]).await?;
+    let domain = normalize_domain(domain);
+    let resp = ctx.client.delete::<Vec<String>>(&["services", name, "domains", &domain]).await?;
     if !ctx.json {
         errln!("Removed {domain}.");
     }
@@ -542,10 +621,54 @@ mod tests {
         assert_eq!(body.auto_deploy, Some(true));
         assert_eq!(body.custom_domains, Some(vec!["a.com".to_string()]));
         assert_eq!(body.instances, None);
-        assert!(needs_redeploy(&a));
+        assert!(needs_redeploy(&a, ServiceType::WebService));
         let Command::Update(a) = parse(&["update", "web", "--instances", "3"]) else { panic!() };
-        assert!(!needs_redeploy(&a));
+        assert!(!needs_redeploy(&a, ServiceType::WebService));
         assert_eq!(update_request(&a).instances, Some(3));
+    }
+
+    #[test]
+    fn settings_map_to_an_update_and_labels() {
+        let Command::Up(a) = parse(&["up", "--start-cmd", "python -m http.server $PORT", "--port", "8000"]) else {
+            panic!()
+        };
+        let body = settings_update(&a.settings);
+        assert_eq!(body.start_command.as_deref(), Some("python -m http.server $PORT"));
+        assert_eq!(body.port, Some(8000));
+        assert_eq!((body.repo_url, body.image, body.auto_deploy, body.suspended), (None, None, None, None));
+        assert_eq!(settings_labels(&a.settings), vec!["start command", "port"]);
+        assert!(settings_labels(&SettingsArgs::default()).is_empty());
+    }
+
+    #[test]
+    fn cron_start_command_applies_at_the_next_run() {
+        let cron = Service::new("nightly", ServiceType::CronJob);
+        let Command::Update(a) = parse(&["update", "nightly", "--start-cmd", "echo updated"]) else { panic!() };
+        let hints = update_hints(&a, &cron);
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert!(hints[0].contains("next run") && hints[0].contains("ferry run nightly"), "{hints:?}");
+        // Build settings of a cron job still need a deploy (they make the image).
+        let Command::Update(a) = parse(&["update", "nightly", "--start-cmd", "x", "--build-cmd", "make"]) else {
+            panic!()
+        };
+        let hints = update_hints(&a, &cron);
+        assert_eq!(hints.len(), 2, "{hints:?}");
+        assert!(hints[1].contains("ferry deploy nightly"));
+        // Other services: the start command is baked into the deploy.
+        let web = Service::new("web", ServiceType::WebService);
+        let Command::Update(a) = parse(&["update", "web", "--start-cmd", "x"]) else { panic!() };
+        assert_eq!(update_hints(&a, &web), vec!["Build/deploy settings apply to the next deploy: ferry deploy web"]);
+        let Command::Update(a) = parse(&["update", "nightly", "--schedule", "@daily"]) else { panic!() };
+        assert!(update_hints(&a, &cron).is_empty());
+    }
+
+    #[test]
+    fn domains_are_normalized_like_the_server() {
+        assert_eq!(normalize_domain(" spaced.com "), "spaced.com");
+        assert_eq!(normalize_domain("newsvc2.LOCALHOST"), "newsvc2.localhost");
+        assert_eq!(normalize_domain("NEWSVC.localhost."), "newsvc.localhost");
+        // Invalid ones are still normalized (the server explains what's wrong).
+        assert_eq!(normalize_domain(" 1.2.3.4. "), "1.2.3.4");
     }
 
     #[test]
