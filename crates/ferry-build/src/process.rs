@@ -4,6 +4,12 @@
 //! Every child is started in its own process group (Unix) so that a cancel
 //! can signal the whole tree (`docker` → `docker-buildx`, `git` → `ssh` /
 //! `git-remote-https`), not just the direct child.
+//!
+//! Children never outlive the server: dropping their owner (e.g. the runtime
+//! shutting down with builds in flight) kills their group, groups still
+//! running when the process calls `exit` (which skips destructors, e.g. a
+//! forced shutdown) are killed by an `atexit` hook, and on Linux the direct
+//! child also gets `SIGKILL` if the server dies abruptly (`kill -9`).
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -46,11 +52,78 @@ impl std::fmt::Display for RunError {
 }
 
 /// Prepare a command for supervised execution: no stdin, own process group,
-/// killed if the owning future is dropped.
+/// killed if the owning future is dropped (or the server dies, see the
+/// module docs).
 pub(crate) fn supervise(cmd: &mut Command) {
     cmd.stdin(Stdio::null()).kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(target_os = "linux")]
+    {
+        let parent = std::process::id();
+        // SAFETY: runs in the forked child before exec and only calls
+        // async-signal-safe functions (prctl, getppid). The death signal is
+        // tied to the spawning *thread*: children are spawned from async
+        // code, i.e. runtime worker threads, which live as long as the
+        // runtime (whose shutdown kills the children anyway).
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                // The parent may have died before prctl took effect.
+                if u32::try_from(libc::getppid()).ok() != Some(parent) {
+                    return Err(io::Error::other("the parent process exited"));
+                }
+                Ok(())
+            });
+        }
+    }
+}
+
+/// Process groups of running children, killed by an `atexit` hook if the
+/// process exits without dropping their owners (`std::process::exit`).
+#[cfg(unix)]
+mod live_groups {
+    use std::sync::{Mutex, Once, TryLockError};
+
+    static GROUPS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+    static HOOK: Once = Once::new();
+
+    extern "C" fn kill_all_at_exit() {
+        // Never block process exit on a lock held by another thread.
+        let groups = match GROUPS.try_lock() {
+            Ok(g) => g,
+            Err(TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(TryLockError::WouldBlock) => return,
+        };
+        for pgid in groups.iter() {
+            // SAFETY: kill(2) has no memory-safety preconditions; a negative
+            // pid targets a process group we created.
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
+    }
+
+    pub(super) fn add(pgid: i32) {
+        HOOK.call_once(|| {
+            // SAFETY: registers a function without preconditions; it only
+            // uses a static and async-signal-safe calls.
+            let rc = unsafe { libc::atexit(kill_all_at_exit) };
+            if rc != 0 {
+                tracing::warn!("cannot register the child cleanup exit hook");
+            }
+        });
+        GROUPS.lock().unwrap_or_else(|p| p.into_inner()).push(pgid);
+    }
+
+    pub(super) fn remove(pgid: i32) {
+        let mut groups = GROUPS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(i) = groups.iter().position(|p| *p == pgid) {
+            groups.swap_remove(i);
+        }
+    }
 }
 
 /// Cap on captured stdout/stderr of [`run_capture`] (git output is small).
@@ -305,6 +378,10 @@ struct GroupGuard {
 
 impl GroupGuard {
     fn new(pid: Option<u32>) -> Self {
+        #[cfg(unix)]
+        if let Some(pgid) = pid.and_then(|p| i32::try_from(p).ok()) {
+            live_groups::add(pgid);
+        }
         GroupGuard { pid, armed: true }
     }
 
@@ -322,6 +399,10 @@ impl Drop for GroupGuard {
     fn drop(&mut self) {
         if self.armed {
             signal_group(self.pid, Signal::Kill);
+        }
+        #[cfg(unix)]
+        if let Some(pgid) = self.pid.and_then(|p| i32::try_from(p).ok()) {
+            live_groups::remove(pgid);
         }
     }
 }
@@ -557,6 +638,99 @@ mod tests {
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "done");
         assert!(started.elapsed() < PIPE_GRACE + Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
+    /// Wait until `pid` (a direct child of this process) has exited.
+    #[cfg(unix)]
+    fn child_exits_within(pid: i32, limit: Duration) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < limit {
+            let mut status = 0;
+            // SAFETY: plain syscall on a pid we spawned.
+            let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if r == pid || r == -1 {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    fn wait_for_pid_file(path: &std::path::Path) -> i32 {
+        let start = std::time::Instant::now();
+        loop {
+            if let Some(pid) = std::fs::read_to_string(path).ok().and_then(|s| s.trim().parse().ok()) {
+                return pid;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "child never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// ferryd's graceful shutdown drops the runtime with builds in flight:
+    /// their `docker build` must not survive as orphans.
+    #[cfg(unix)]
+    #[test]
+    fn runtime_shutdown_kills_running_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        let script = format!("echo $$ > '{}.tmp' && mv '{0}.tmp' '{0}' && exec sleep 30", pid_file.display());
+        rt.spawn(async move {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", &script]);
+            let _ = run_streaming(cmd, &CancellationToken::new(), 0, |_| {}, |_| {}).await;
+        });
+        let pid = wait_for_pid_file(&pid_file);
+        drop(rt);
+        assert!(child_exits_within(pid, Duration::from_secs(5)), "child {pid} survived the runtime");
+    }
+
+    /// Runs only inside [`process_exit_kills_running_children`]'s child
+    /// process: start a supervised child, then leave with
+    /// `std::process::exit` (what ferryd does on a second signal), which
+    /// skips every destructor.
+    #[cfg(unix)]
+    #[test]
+    fn exit_helper() {
+        let Some(pid_file) = std::env::var_os("FERRY_BUILD_EXIT_HELPER") else { return };
+        let pid_file = std::path::PathBuf::from(pid_file);
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        rt.block_on(async move {
+            let script = format!("echo $$ > '{}.tmp' && mv '{0}.tmp' '{0}' && exec sleep 30", pid_file.display());
+            tokio::spawn(async move {
+                let mut cmd = Command::new("sh");
+                cmd.args(["-c", &script]);
+                let _ = run_streaming(cmd, &CancellationToken::new(), 0, |_| {}, |_| {}).await;
+            });
+            while !pid_file.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            std::process::exit(0);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_exit_kills_running_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "process::tests::exit_helper", "--nocapture", "--test-threads=1"])
+            .env("FERRY_BUILD_EXIT_HELPER", &pid_file)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "{status}");
+        let pid = wait_for_pid_file(&pid_file);
+        // The child was re-parented to init: wait until it is gone.
+        let start = std::time::Instant::now();
+        // SAFETY: signal 0 only checks that the pid exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(start.elapsed() < Duration::from_secs(5), "child {pid} outlived its parent");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[tokio::test]

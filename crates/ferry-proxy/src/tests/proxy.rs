@@ -186,7 +186,13 @@ async fn forwarded_headers_and_hop_by_hop_stripping() {
         .header("host", &host)
         .header("x-forwarded-for", "10.9.8.7")
         .header("x-forwarded-proto", "https")
+        .header("x-forwarded-host", "evil.example")
         .header("x-real-ip", "6.6.6.6")
+        // Spoofed forwarding headers some frameworks read first.
+        .header("forwarded", "for=6.6.6.6;proto=https;host=evil.example")
+        .header("x-forwarded-ssl", "on")
+        .header("x-forwarded-scheme", "https")
+        .header("x-client-ip", "6.6.6.6")
         .header("connection", "x-drop-me")
         .header("x-drop-me", "1")
         .header("keep-alive", "timeout=1")
@@ -204,14 +210,25 @@ async fn forwarded_headers_and_hop_by_hop_stripping() {
     assert_eq!(echo.path, "/hop?q=1");
     assert_eq!(echo.body_bytes, 5);
     assert_eq!(echo.header("host"), Some(host.as_str()));
-    assert_eq!(echo.header("x-forwarded-for"), Some("10.9.8.7, 127.0.0.1"));
+    // The edge only vouches for the address it saw.
+    assert_eq!(echo.headers["x-forwarded-for"], ["127.0.0.1"]);
     assert_eq!(echo.header("x-forwarded-proto"), Some("http"));
-    assert_eq!(echo.header("x-forwarded-host"), Some(host.as_str()));
+    assert_eq!(echo.headers["x-forwarded-host"], [host.as_str()]);
     assert_eq!(echo.header("x-forwarded-port"), Some(proxy.http.port().to_string().as_str()));
     assert_eq!(echo.header("x-real-ip"), Some("127.0.0.1"));
+    assert_eq!(echo.headers["forwarded"], [format!("for=127.0.0.1;host=\"{host}\";proto=http")]);
     assert_eq!(echo.header("x-request-id"), Some("req-123"));
     assert_eq!(echo.header("x-custom"), Some("kept"));
-    for gone in ["x-drop-me", "keep-alive", "proxy-authorization", "proxy-connection", "te"] {
+    for gone in [
+        "x-drop-me",
+        "keep-alive",
+        "proxy-authorization",
+        "proxy-connection",
+        "te",
+        "x-forwarded-ssl",
+        "x-forwarded-scheme",
+        "x-client-ip",
+    ] {
         assert_eq!(echo.header(gone), None, "{gone} reached the upstream");
     }
     // Response hop-by-hop headers don't reach the client.
@@ -302,6 +319,25 @@ async fn upgrade_headers_are_forwarded_when_upstream_declines() {
     assert_eq!(echo.header("sec-websocket-key"), Some("dGhlIHNhbXBsZSBub25jZQ=="));
 }
 
+/// HTTP/1.0 has no protocol upgrades: the headers are dropped and the
+/// request proxied as usual (instead of a `101` followed by a dead tunnel).
+#[tokio::test]
+async fn http10_upgrade_requests_are_proxied_as_plain_http() {
+    let up = echo_upstream("a").await;
+    let proxy = TestProxy::start().await;
+    proxy.route("srv", &["app.test"], &[up.addr]);
+    let out = raw_exchange(
+        proxy.http,
+        "GET /ws HTTP/1.0\r\nHost: app.test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+    )
+    .await;
+    assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+    assert!(out.contains("method=GET\npath=/ws\n"), "{out}");
+    assert!(!out.contains("header:upgrade="), "{out}");
+    assert!(!out.contains("header:connection="), "{out}");
+}
+
 #[tokio::test]
 async fn h2c_upgrade_requests_are_proxied_as_plain_http() {
     let up = echo_upstream("a").await;
@@ -380,4 +416,90 @@ async fn keep_alive_connections_serve_many_requests() {
         let echo = Echo::parse(&h.await.unwrap());
         assert_eq!(echo.path, format!("/n/{i}"));
     }
+}
+
+/// GET bodies without a length (HTTP/1 chunked, HTTP/2 without
+/// content-length) are forwarded chunked, not silently dropped.
+#[tokio::test]
+async fn get_bodies_of_unknown_length_reach_the_upstream() {
+    let up = echo_upstream("a").await;
+    let proxy = TestProxy::start().await;
+    proxy.route("srv", &["app.test"], &[up.addr]);
+
+    for method in ["GET", "DELETE"] {
+        let out = raw_exchange(
+            proxy.http,
+            &format!(
+                "{method} /getbody HTTP/1.1\r\nHost: app.test\r\nTransfer-Encoding: chunked\r\n\
+                 Connection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+            ),
+        )
+        .await;
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        assert!(out.contains(&format!("method={method}\n")), "{out}");
+        assert!(out.contains("header:transfer-encoding=chunked\n"), "{out}");
+        assert!(out.contains("body-bytes=5\n"), "{method}: {out}");
+    }
+
+    // HTTP/2 GET with a streamed body and no content-length.
+    let stream = tokio::net::TcpStream::connect(proxy.http).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http2::handshake(
+        hyper_util::rt::TokioExecutor::new(),
+        hyper_util::rt::TokioIo::new(stream),
+    )
+    .await
+    .unwrap();
+    tokio::spawn(conn);
+    let chunks = futures::stream::iter(
+        [&b"hello-"[..], &b"body"[..]]
+            .map(|c| Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(Bytes::from_static(c)))),
+    );
+    let req = Request::get(format!("http://app.test:{}/g", proxy.http.port()))
+        .body(http_body_util::StreamBody::new(chunks))
+        .unwrap();
+    let resp = collect(within("h2 request", sender.send_request(req)).await.unwrap()).await;
+    let echo = Echo::parse(&resp.body);
+    assert_eq!(echo.method, "GET");
+    assert_eq!(echo.body_bytes, 10);
+
+    // Bodyless GETs stay bodyless (and replayable).
+    let resp = h1_send(proxy.http, get("/", "app.test")).await;
+    let echo = Echo::parse(&resp.body);
+    assert_eq!(echo.body_bytes, 0);
+    assert_eq!(echo.header("transfer-encoding"), None);
+    assert_eq!(echo.header("content-length"), None);
+}
+
+/// An upstream response framed by `Transfer-Encoding` keeps its whole body:
+/// a `Content-Length` sent along with it is stale and dropped.
+#[tokio::test]
+async fn stale_upstream_content_length_is_dropped() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => head.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let resp = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n\
+                            5\r\nhello\r\n0\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+    let proxy = TestProxy::start().await;
+    proxy.route("raw", &["raw.test"], &[addr]);
+
+    let resp = h1_send(proxy.http, get("/tecl", "raw.test")).await;
+    assert_eq!(resp.status, 200);
+    assert_eq!(resp.body, "hello");
+    assert!(resp.headers.get("content-length").is_none(), "{:?}", resp.headers);
+    upstream.abort();
 }

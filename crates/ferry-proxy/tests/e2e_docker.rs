@@ -197,7 +197,10 @@ async fn streams_from_a_container_and_forwards_headers() {
     let headers = client.get(format!("{base}/headers")).header("X-Forwarded-For", "203.0.113.9").send().await.unwrap();
     let headers = headers.text().await.unwrap();
     assert!(headers.contains(&format!("host=stream.localhost:{}\n", proxy.addr.port())), "{headers}");
-    assert!(headers.contains("x-forwarded-for=203.0.113.9, 127.0.0.1\n"), "{headers}");
+    // The edge replaces a client-supplied chain with the address it saw.
+    assert!(headers.contains("x-forwarded-for=127.0.0.1\n"), "{headers}");
+    let forwarded = format!("forwarded=for=127.0.0.1;host=\"stream.localhost:{}\";proto=http\n", proxy.addr.port());
+    assert!(headers.contains(&forwarded), "{headers}");
     assert!(headers.contains("x-forwarded-proto=http\n"), "{headers}");
     assert!(headers.contains("x-request-id="), "{headers}");
 

@@ -21,6 +21,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::body::{self, ProxyBody};
 use crate::headers::{self, Forwarded};
+use crate::limits::ConnSlot;
 use crate::pages::{self, ErrorKind};
 use crate::routes::{Resolution, RouteTable, normalize_host};
 
@@ -35,10 +36,13 @@ const UPSTREAM_POOL_IDLE: Duration = Duration::from_secs(1);
 const UPSTREAM_POOL_MAX_IDLE_PER_HOST: usize = 64;
 
 /// The client side of a connection.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ConnInfo {
     pub remote: SocketAddr,
     pub tls: bool,
+    /// The connection's slot in the connection limits; websocket tunnels
+    /// hold it until they close.
+    pub slot: Arc<ConnSlot>,
 }
 
 /// State shared by every connection of one `serve` call.
@@ -87,7 +91,7 @@ impl Proxy {
         let method = req.method().clone();
         let path = req.uri().path().to_string();
         let mut log = RequestLog::default();
-        let resp = self.dispatch(conn, req, &mut log).await;
+        let resp = self.dispatch(&conn, req, &mut log).await;
         tracing::debug!(
             method = %method,
             host = log.host.as_deref().unwrap_or("-"),
@@ -101,7 +105,7 @@ impl Proxy {
         Ok(resp)
     }
 
-    async fn dispatch(&self, conn: ConnInfo, req: Request<Incoming>, log: &mut RequestLog) -> Response<ProxyBody> {
+    async fn dispatch(&self, conn: &ConnInfo, req: Request<Incoming>, log: &mut RequestLog) -> Response<ProxyBody> {
         let head = req.method() == Method::HEAD;
 
         // 1. ACME HTTP-01 challenges (plain HTTP only).
@@ -163,7 +167,7 @@ impl Proxy {
 
     async fn forward(
         &self,
-        conn: ConnInfo,
+        conn: &ConnInfo,
         mut req: Request<Incoming>,
         (raw_host, host_from_uri): (&str, bool),
         upstream: SocketAddr,
@@ -181,7 +185,7 @@ impl Proxy {
             Some(pq) => pq.clone(),
             None => PathAndQuery::from_static("/"),
         };
-        let upstream_headers = headers::upstream_request_headers(
+        let mut upstream_headers = headers::upstream_request_headers(
             parts.headers,
             Forwarded {
                 client_ip: conn.remote.ip(),
@@ -192,6 +196,13 @@ impl Proxy {
                 upgrade,
             },
         );
+
+        if !incoming.is_end_stream() && incoming.size_hint().exact().is_none() {
+            // A body of unknown length (HTTP/1 chunked, HTTP/2 without
+            // content-length) must be sent chunked: left to itself, hyper's
+            // client sends GET/HEAD bodies of unknown length as empty.
+            headers::set_chunked(&mut upstream_headers);
+        }
 
         // Only requests without a body can be replayed on another upstream.
         let replayable = (parts.method == Method::GET || parts.method == Method::HEAD)
@@ -235,7 +246,7 @@ impl Proxy {
 
         if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
             return match client_upgrade {
-                Some(client_upgrade) => self.tunnel(resp, client_upgrade, raw_host),
+                Some(client_upgrade) => self.tunnel(resp, client_upgrade, raw_host, conn.slot.clone()),
                 None => {
                     tracing::warn!(host = raw_host, upstream = %upstream, "proxy: upstream switched protocols unasked");
                     pages::error_page(ErrorKind::BadGateway, "Bad gateway: the service sent an invalid response", head)
@@ -266,8 +277,15 @@ impl Proxy {
         self.client.request(req).await.map_err(UpstreamError::Client)
     }
 
-    /// Answer `101` to the client and splice both upgraded connections.
-    fn tunnel(&self, mut resp: Response<Incoming>, client_upgrade: OnUpgrade, host: &str) -> Response<ProxyBody> {
+    /// Answer `101` to the client and splice both upgraded connections. The
+    /// tunnel keeps the client connection's `slot` while it is open.
+    fn tunnel(
+        &self,
+        mut resp: Response<Incoming>,
+        client_upgrade: OnUpgrade,
+        host: &str,
+        slot: Arc<ConnSlot>,
+    ) -> Response<ProxyBody> {
         let upstream_upgrade = hyper::upgrade::on(&mut resp);
         let (mut parts, _) = resp.into_parts();
         headers::client_response_headers(&mut parts.headers, true);
@@ -275,6 +293,7 @@ impl Proxy {
         let shutdown = self.shutdown.clone();
         let host = host.to_string();
         self.tasks.spawn(async move {
+            let _slot = slot;
             // The client side completes once hyper has written the 101 below.
             let upgraded = tokio::select! {
                 res = async { tokio::try_join!(client_upgrade, upstream_upgrade) } => res,

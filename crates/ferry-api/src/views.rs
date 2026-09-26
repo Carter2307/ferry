@@ -1,17 +1,22 @@
 //! Assembling API views (stored rows + computed fields).
 
 use ferry_core::dto::{DatastoreView, EnvGroupView, ServiceView};
-use ferry_core::{Config, Datastore, EnvGroup, Result, Service, Store, compute_service_state};
+use ferry_core::{
+    Config, Datastore, Deploy, DeploySource, EnvGroup, Result, Service, Store, compute_service_state, git,
+};
+
+use crate::runtime;
 
 /// Path (with secret key) that triggers a deploy without the API token.
 pub fn deploy_hook_path(service: &Service) -> String {
     format!("/hooks/deploy/{}?key={}", service.id, service.deploy_hook_key)
 }
 
-/// Build the [`ServiceView`] of a service.
+/// Build the [`ServiceView`] of a service. Its state uses the running
+/// instances observed recently ([`runtime`]), if any.
 pub async fn service_view(store: &Store, config: &Config, service: Service) -> Result<ServiceView> {
     let latest = store.latest_deploy(&service.id).await?;
-    let state = compute_service_state(&service, latest.as_ref(), None);
+    let state = compute_service_state(&service, latest.as_ref(), runtime::running(&service));
     let mut internal_port = service.port;
     if internal_port.is_none()
         && let Some(live_id) = &service.live_deploy_id
@@ -35,6 +40,21 @@ pub async fn service_view(store: &Store, config: &Config, service: Service) -> R
     })
 }
 
+/// A deploy as returned to unauthenticated callers (webhooks): credentials
+/// embedded in the repository URL are redacted and the server-side path of
+/// an uploaded archive is reduced to its file name.
+pub fn public_deploy(mut deploy: Deploy) -> Deploy {
+    match &mut deploy.source {
+        DeploySource::Git { repo_url, .. } => *repo_url = git::redact_url(repo_url),
+        DeploySource::Archive { path } => {
+            let name = std::path::Path::new(path.as_str()).file_name().map(|n| n.to_string_lossy().into_owned());
+            *path = name.unwrap_or_default();
+        }
+        DeploySource::Image { .. } | DeploySource::Reuse { .. } => {}
+    }
+    deploy
+}
+
 /// Build the [`DatastoreView`] of a datastore.
 pub fn datastore_view(config: &Config, datastore: Datastore) -> DatastoreView {
     DatastoreView {
@@ -51,4 +71,26 @@ pub async fn env_group_view(store: &Store, group: EnvGroup) -> Result<EnvGroupVi
     let vars = store.list_env(&group.id).await?;
     let services = store.env_group_services(&group.id).await?.into_iter().map(|s| s.name).collect();
     Ok(EnvGroupView { group, vars, services })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferry_core::DeployTrigger;
+
+    #[test]
+    fn public_deploys_hide_credentials_and_paths() {
+        let git = DeploySource::Git {
+            repo_url: "https://user:s3cret@github.com/a/b".into(),
+            branch: "main".into(),
+            commit: None,
+        };
+        let d = public_deploy(Deploy::new("srv-x", DeployTrigger::DeployHook, git));
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(!json.contains("s3cret"), "{json}");
+        assert!(json.contains("https://***@github.com/a/b"), "{json}");
+        let archive = DeploySource::Archive { path: "/var/lib/ferry/uploads/upl-1.tar.gz".into() };
+        let d = public_deploy(Deploy::new("srv-x", DeployTrigger::DeployHook, archive));
+        assert_eq!(d.source, DeploySource::Archive { path: "upl-1.tar.gz".into() });
+    }
 }

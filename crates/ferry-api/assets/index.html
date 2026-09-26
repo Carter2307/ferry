@@ -227,7 +227,8 @@ p { margin: 0; }
 .section-head p { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 72ch; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .panel-pad { padding: 18px 20px; }
-.table-wrap { overflow-x: auto; }
+/* positioned: keeps .sr-only headers inside the scroller */
+.table-wrap { overflow-x: auto; position: relative; }
 table.t { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .t th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--surface-2); }
 .t th:first-child { border-top-left-radius: var(--radius-lg); }
@@ -291,6 +292,7 @@ table.t { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .callout .grow > * + * { margin-top: 6px; }
 .callout strong { color: var(--c, var(--ink)); }
 .callout pre { margin: 0; }
+.callout.offline { position: sticky; top: 8px; z-index: 20; box-shadow: var(--shadow-pop); }
 
 .code {
   position: relative; background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius);
@@ -466,7 +468,7 @@ dialog.dlg::backdrop { background: rgba(10, 15, 22, .45); }
   .svc-row .c-type { display: none; }
 }
 @media (max-width: 860px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   .side { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 16px 0; }
   .brand { padding: 4px 0 8px; }
   .nav { display: flex; gap: 2px; overflow-x: auto; margin: 0 -16px; padding: 0 12px 8px; scrollbar-width: none; }
@@ -593,7 +595,7 @@ const BLUEPRINT_ACTIONS = {
   unchanged: { label: 'Unchanged', tone: 'none' },
 };
 const BLUEPRINT_RESOURCES = { service: 'Service', datastore: 'Datastore', env_group: 'Env group' };
-const RESERVED_NAMES = ['ferry', 'localhost', 'api', 'proxy'];
+const RESERVED_NAMES = ['ferry', 'localhost']; // ferry-core validate::RESERVED_NAMES
 const LISTENING_TYPES = ['web_service', 'private_service', 'static_site'];
 const PUBLIC_TYPES = ['web_service', 'static_site'];
 const DISK_TYPES = ['web_service', 'private_service', 'background_worker'];
@@ -611,11 +613,14 @@ const sourceOf = (svc) => (svc && svc.image ? 'image' : svc && svc.repo_url ? 'g
 const canRollback = (d) => !!(d && d.image && d.status !== 'live' && !isDeployActive(d));
 
 // ---------- safe storage ----------
-const storage = {
-  get(k) { try { return window.localStorage.getItem(k); } catch { return null; } },
-  set(k, v) { try { window.localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
-  del(k) { try { window.localStorage.removeItem(k); } catch { /* storage unavailable */ } },
-};
+const mkStore = (area) => ({
+  get(k) { try { return window[area].getItem(k); } catch { return null; } },
+  set(k, v) { try { window[area].setItem(k, v); } catch { /* storage unavailable */ } },
+  del(k) { try { window[area].removeItem(k); } catch { /* storage unavailable */ } },
+});
+// Drafts (may hold secrets) use the tab's session storage.
+const storage = mkStore('localStorage');
+const session = mkStore('sessionStorage');
 
 // ---------- DOM builder ----------
 const PROP_ATTRS = new Set(['value', 'checked', 'disabled', 'selected', 'hidden', 'multiple', 'readOnly', 'required', 'indeterminate']);
@@ -655,15 +660,21 @@ function safeHref(v) {
 const enc = encodeURIComponent;
 function linkTo(...parts) { return '#/' + parts.filter((p) => p != null && p !== '').map((p) => enc(String(p))).join('/'); }
 
-// Replace a container's children while keeping keyboard focus on an equivalent element.
+// Focuses the first usable candidate (headings get tabindex=-1).
+function focusFirst(...els) {
+  const t = els.find((x) => x && x !== document.body && x.isConnected && !x.disabled && !x.closest('[hidden]'));
+  if (!t) return false;
+  if (t.tabIndex < 0 && !t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1');
+  t.focus({ preventScroll: true });
+  return true;
+}
+const byFk = (fk, within = document) => (fk ? within.querySelector(`[data-fk="${CSS.escape(fk)}"]`) : null);
+// Replace a container's children; focus moves to the same data-fk element, else the heading, never <body>.
 function swap(container, ...nodes) {
   const active = document.activeElement;
-  const fk = active && container.contains(active) && active.dataset ? active.dataset.fk : null;
+  const had = !!active && active !== document.body && container.contains(active);
   container.replaceChildren(...nodes.flat().filter(Boolean));
-  if (fk) {
-    const again = container.querySelector(`[data-fk="${CSS.escape(fk)}"]`);
-    if (again) again.focus({ preventScroll: true });
-  }
+  if (had && document.activeElement !== active) focusFirst(byFk(active.dataset && active.dataset.fk, container), container.querySelector('h2'));
 }
 
 // Wraps a draw function so it only runs when `key` changed since the last call.
@@ -784,7 +795,8 @@ function pill(meta, value, extraLabel) {
   const m = meta[value] || { label: String(value || 'Unknown'), tone: 'none' };
   return h('span', { class: `pill tone-${m.tone}` }, h('span', { class: 'dot' }), extraLabel || m.label);
 }
-const statePill = (s) => pill(SERVICE_STATES, s);
+// While the server is unreachable the last known state may be wrong: show "Unknown".
+const statePill = (s) => pill(SERVICE_STATES, offline ? null : s);
 const deployPill = (s) => pill(DEPLOY_STATUSES, s);
 const jobPill = (s) => pill(JOB_STATUSES, s);
 const dsPill = (s) => pill(DATASTORE_STATUSES, s);
@@ -818,6 +830,36 @@ class ApiError extends Error {
 let token = storage.get(TOKEN_KEY) || '';
 let serverInfo = null;
 
+// While ferryd is unreachable a banner stays up and state badges read "Unknown".
+let offline = false;
+const netListeners = new Set();
+function setOffline(v) {
+  if (offline === v) return;
+  offline = v;
+  if (shell) shell.banner.hidden = !v;
+  for (const fn of [...netListeners]) { try { fn(v); } catch (e) { console.error(e); } }
+  if (!v) for (const p of pollers) p.now();
+}
+
+// Mirrors ferry-core Config::url_for_host (public port from dashboard_url, else proxy_url).
+function appUrl(host) {
+  const i = serverInfo || {};
+  const local = /(^|\.)(localhost|local|internal|test)$/.test(host) || /^[\d.]+$/.test(host);
+  if (i.tls_enabled && !local) return `https://${host}`;
+  let port = '';
+  try { port = new URL((!i.tls_enabled && i.dashboard_url) || i.proxy_url).port; } catch { port = ''; }
+  return `http://${host}${port ? ':' + port : ''}`;
+}
+const isLoopback = (u) => {
+  try { const x = new URL(u).hostname; return /^(localhost|127\.[\d.]+|\[::1\]|0\.0\.0\.0)$/.test(x) || x.endsWith('.localhost'); } catch { return false; }
+};
+// Base URL for hooks called from elsewhere: the dashboard host, unless only this page's address is non-local.
+function publicOrigin() {
+  let d = null;
+  try { d = serverInfo && serverInfo.dashboard_url ? new URL(serverInfo.dashboard_url).origin : null; } catch { d = null; }
+  return d && (!isLoopback(d) || isLoopback(location.origin)) ? d : location.origin;
+}
+
 async function request(method, path, body, opts = {}) {
   const useToken = opts.token != null ? opts.token : token;
   const headers = { Accept: 'application/json', Authorization: 'Bearer ' + useToken };
@@ -831,8 +873,10 @@ async function request(method, path, body, opts = {}) {
     res = await fetch(API + path, { method, headers, body: payload, cache: 'no-store', signal: opts.signal });
   } catch (e) {
     if (e && e.name === 'AbortError') throw e;
+    setOffline(true);
     throw new ApiError("Can't reach the Ferry server. Check that ferryd is running and try again.", 0, 'network');
   }
+  setOffline(false);
   if (res.status === 204) return null;
   let raw = '';
   try { raw = await res.text(); } catch { raw = ''; }
@@ -883,6 +927,8 @@ class Scope {
     target.addEventListener(type, fn, opts);
     this.add(() => target.removeEventListener(type, fn, opts));
   }
+  // Calls fn(offline) whenever the server becomes unreachable or reachable again.
+  onNet(fn) { netListeners.add(fn); this.add(() => netListeners.delete(fn)); }
   timeout(fn, ms) {
     const id = setTimeout(() => { if (this.alive) fn(); }, ms);
     this.add(() => clearTimeout(id));
@@ -940,11 +986,14 @@ async function busy(btn, fn) {
   if (!btn) return fn();
   if (btn.getAttribute('aria-busy') === 'true') return undefined;
   const wasDisabled = btn.disabled;
+  const hadFocus = document.activeElement === btn;
   btn.setAttribute('aria-busy', 'true');
   btn.disabled = true;
   try { return await fn(); } finally {
     btn.removeAttribute('aria-busy');
     btn.disabled = wasDisabled;
+    // Disabling blurred it: refocus it (or its redrawn twin) unless focus moved on meanwhile.
+    if (hadFocus && (!document.activeElement || document.activeElement === document.body)) focusFirst(btn, byFk(btn.dataset.fk));
   }
 }
 
@@ -1004,6 +1053,9 @@ let dialogSeq = 0;
 function openDialog({ title, body, wide, onClose }) {
   const id = `dlg-${++dialogSeq}`;
   const opener = document.activeElement;
+  // Polls may replace the opener meanwhile: remember how to find its twin.
+  const fk = opener && opener.dataset ? opener.dataset.fk : null;
+  const section = opener && opener.closest ? opener.closest('.section') : null;
   const dlg = h('dialog', { class: 'dlg' + (wide ? ' wide' : ''), 'aria-labelledby': id });
   const foot = h('div', { class: 'dlg-foot' });
   const err = h('p', { class: 'dlg-err', role: 'alert', hidden: true });
@@ -1016,7 +1068,7 @@ function openDialog({ title, body, wide, onClose }) {
       closed = true;
       try { dlg.close(); } catch { /* already closed */ }
       dlg.remove();
-      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
+      focusFirst(opener, byFk(fk), section && section.querySelector('h2'), shell && shell.main.querySelector('h1'), shell && shell.main);
       if (onClose) onClose(result);
     },
     error(msg) { err.textContent = msg || ''; err.hidden = !msg; },
@@ -1701,10 +1753,10 @@ let firstRoute = true;
 
 const setTitle = (t) => { document.title = t ? `${t} · Ferry` : 'Ferry'; };
 const pageDirty = () => !!(current.ctrl && typeof current.ctrl.isDirty === 'function' && current.ctrl.isDirty());
-// Toast once per scope when background refreshes keep failing (the view keeps its last data).
+// Toast once per scope when background refreshes keep failing (network errors: see the banner).
 function refreshFailed(scope, e) {
   scope.failures = (scope.failures || 0) + 1;
-  if (scope.failures === 3) toast(`Couldn't refresh: ${errMsg(e)}`, 'error');
+  if (scope.failures === 3 && !(e && e.code === 'network')) toast(`Couldn't refresh: ${errMsg(e)}`, 'error');
 }
 const refreshOk = (scope) => { scope.failures = 0; };
 
@@ -1722,6 +1774,8 @@ function logout(message) {
   serverInfo = null;
   teardownPage();
   if (shell) { shell.scope.dispose(); shell = null; }
+  session.del(BLUEPRINT_DRAFT_KEY);
+  storage.del(BLUEPRINT_DRAFT_KEY);
   renderLogin(message);
 }
 
@@ -1782,8 +1836,12 @@ function mountShell() {
     NAV.map(([key, label, ic]) => (links[key] = h('a', { href: `#/${key}` }, icon(ic), label))));
   const foot = h('div', { class: 'side-foot' });
   const main = h('main', { class: 'main', id: 'main', tabindex: '-1' });
+  const banner = callout('bad', 'alert', h('strong', null, 'Can’t reach the Ferry server'),
+    h('p', null, 'Retrying automatically. What you see may be out of date.'));
+  banner.classList.add('offline');
+  banner.hidden = !offline;
   root.replaceChildren(h('div', { class: 'app' }, h('aside', { class: 'side' }, brand(), nav, foot), main));
-  shell = { scope, main, links, foot };
+  shell = { scope, main, links, foot, banner };
   const drawFoot = () => {
     const i = serverInfo || {};
     const proxy = safeHref(i.proxy_url || '');
@@ -1798,11 +1856,13 @@ function mountShell() {
       h('button', { class: 'btn btn-sm btn-ghost signout', type: 'button', onclick: () => logout() }, icon('logout'), 'Sign out'));
   };
   drawFoot();
+  let infoAt = 0;
   const refreshInfo = async () => {
-    try { serverInfo = await api.get('/info'); drawFoot(); } catch (e) { console.warn('info refresh failed', e); }
+    try { serverInfo = await api.get('/info'); infoAt = Date.now(); drawFoot(); } catch (e) { console.warn('info refresh failed', e); }
   };
-  if (!serverInfo) refreshInfo();
-  scope.poll(refreshInfo, 60000);
+  if (!serverInfo) refreshInfo(); else infoAt = Date.now();
+  // Every minute, or every 5s while offline.
+  scope.poll(() => (offline || Date.now() - infoAt > 60000 ? refreshInfo() : null));
 }
 function setNav(section) {
   for (const [key, a] of Object.entries(shell.links)) {
@@ -1847,7 +1907,7 @@ function route() {
   teardownPage();
   const scope = new Scope();
   const page = h('div', { class: 'page' });
-  shell.main.replaceChildren(page);
+  shell.main.replaceChildren(shell.banner, page);
   current = { key, scope, ctrl: null };
   window.scrollTo(0, 0);
   try {
@@ -1950,6 +2010,7 @@ function viewServices(scope, page) {
     swap(body, shown.length ? servicesList(shown) : h('div', { class: 'panel empty' }, h('p', null, `No services match “${needle}”.`)));
   };
   search.addEventListener('input', () => { needle = search.value.trim().toLowerCase(); draw(); });
+  scope.onNet(draw);
   const load = async () => {
     try {
       const list = await api.get('/services');
@@ -2058,7 +2119,7 @@ function viewNewService(scope, page) {
     autoDeploy.hidden = st.source !== 'git';
     deployNow.hidden = st.source === 'upload';
     const b = serverInfo && serverInfo.base_domain;
-    hostPreview.textContent = PUBLIC_TYPES.includes(st.type) && b ? `Public URL: ${n}.${b}` : '';
+    hostPreview.textContent = PUBLIC_TYPES.includes(st.type) && b ? `Public URL: ${appUrl(`${n}.${b}`.toLowerCase()).replace(/^https?:\/\//, '')}` : '';
     hostPreview.hidden = !hostPreview.textContent;
   };
   const typeTiles = tiles('svc-type', Object.entries(SERVICE_TYPES).map(([k, m]) => [k, m.label, m.desc]), st.type, (k) => { st.type = k; sync(); });
@@ -2204,9 +2265,10 @@ function viewService(scope, page, parts) {
   ctx.apply = (svc) => {
     if (!svc || typeof svc !== 'object') return;
     ctx.svc = svc;
-    drawHeader();
+    drawHeaderM([svc, offline]);
     for (const fn of [...ctx.listeners]) { try { fn(svc); } catch (e) { console.error(e); } }
   };
+  scope.onNet(() => { if (ctx.svc) ctx.apply(ctx.svc); });
   ctx.refresh = async () => {
     try {
       const svc = await api.get(`/services/${enc(name)}`);
@@ -2241,6 +2303,8 @@ function viewService(scope, page, parts) {
     swap(sub, bits);
     if (!actions.firstChild) actions.append(deployMenu);
   }
+  // Polls redraw the header only when it changes (keeps text selections).
+  const drawHeaderM = memo(drawHeader);
 
   function mountTab(tab, subId) {
     ctx.tab = tab;
@@ -2400,12 +2464,20 @@ function deleteServiceDialog(ctx) {
   });
 }
 function cancelDeployDialog(ctx, d, after) {
+  let res = null;
   confirmDialog({
     title: 'Cancel this deploy?',
     message: 'The build or rollout stops and whatever is live now keeps serving.',
     confirmLabel: 'Cancel deploy', cancelLabel: 'Keep deploying', danger: true,
-    action: () => api.post(`/deploys/${enc(d.id)}/cancel`),
-  }).then((ok) => { if (ok) { toast('Deploy canceled.', 'ok'); ctx.refresh().catch(() => {}); if (after) after(); } });
+    action: async () => { res = await api.post(`/deploys/${enc(d.id)}/cancel`); },
+  }).then((ok) => {
+    if (!ok) return;
+    const st = res && res.status;
+    if (st && st !== 'canceled') toast(`Too late to cancel: the deploy is already ${(DEPLOY_STATUSES[st] || { label: st }).label.toLowerCase()}.`, 'warn');
+    else toast('Deploy canceled.', 'ok');
+    ctx.refresh().catch(() => {});
+    if (after) after();
+  });
 }
 function rollbackDialog(ctx, d) {
   let dep = null;
@@ -2481,7 +2553,8 @@ function tabOverview(ctx, scope, body) {
     const internal = svc.internal_port ? `${svc.internal_host || svc.name}:${svc.internal_port}` : svc.internal_host || svc.name;
     const customs = Array.isArray(svc.custom_domains) ? svc.custom_domains : [];
     swap(factsBox, facts([
-      ['Status', h('div', { class: 'stack', style: { gap: '4px' } }, h('div', null, statePill(svc.state)), h('span', { class: 'muted' }, STATE_HELP[svc.state] || ''))],
+      ['Status', h('div', { class: 'stack', style: { gap: '4px' } }, h('div', null, statePill(svc.state)),
+        h('span', { class: 'muted' }, offline ? 'Can’t reach the Ferry server right now.' : STATE_HELP[svc.state] || ''))],
       isPublic(svc) ? ['Public URL', h('div', null, svc.url ? externalLink(svc.url) : h('span', { class: 'faint' }, '—'),
         customs.length ? h('div', { class: 'muted' }, `+ ${plural(customs.length, 'custom domain')}`) : null)] : null,
       isListening(svc) ? ['Private address', h('div', null, h('code', null, internal),
@@ -2511,9 +2584,10 @@ function tabOverview(ctx, scope, body) {
     const list = status && Array.isArray(status.instances) ? status.instances : [];
     const running = list.filter((i) => i.state === 'running').length;
     const desired = status && status.desired_instances != null ? status.desired_instances : svc.instances;
-    const summary = status ? `${running} of ${plural(desired, 'instance')} running` : statusErr ? `Status unavailable: ${statusErr}` : 'Loading…';
+    const summary = statusErr ? `Status unavailable: ${statusErr}${status ? ' Showing the last known state.' : ''}`
+      : status ? `${running} of ${plural(desired, 'instance')} running` : 'Loading…';
     let content;
-    if (!status && !statusErr) content = loadingState();
+    if (!status) content = statusErr ? h('div', { class: 'panel panel-pad muted' }, 'Instance status is unknown right now.') : loadingState();
     else if (!list.length) {
       content = h('div', { class: 'panel panel-pad muted' },
         svc.suspended ? 'Suspended: no instances are running.' : svc.live_deploy_id ? 'No instances are running right now.' : 'Instances appear here after the first successful deploy.');
@@ -2553,7 +2627,20 @@ function tabOverview(ctx, scope, body) {
         row('Delete service', 'Permanently remove the service, its deploys, images, variables and disk.',
           h('button', { class: 'btn btn-danger', type: 'button', 'data-fk': 'delete', onclick: () => deleteServiceDialog(ctx) }, icon('trash'), 'Delete'))));
   }
-  const draw = (svc) => { drawAlerts(svc); drawFacts(svc); drawInstances(svc); drawActions(svc); };
+  // Redraw a section only when what it shows changes, so polls keep selections and focus.
+  const drawAlertsM = memo(drawAlerts);
+  const drawFactsM = memo(drawFacts);
+  const drawInstancesM = memo(drawInstances);
+  const drawActionsM = memo(drawActions);
+  const agoOf = (d) => (d ? ago(d.created_at) : null);
+  const instKey = (svc) => [svc.instances, svc.suspended, svc.live_deploy_id, status, statusErr,
+    status && Array.isArray(status.instances) ? status.instances.map((i) => ago(i.started_at)) : null];
+  const draw = (svc) => {
+    drawAlertsM([svc, agoOf(svc.latest_deploy)], svc);
+    drawFactsM([svc, offline, ago(svc.created_at), agoOf(svc.latest_deploy)], svc);
+    drawInstancesM(instKey(svc), svc);
+    drawActionsM([!!svc.live_deploy_id, !!svc.suspended, isCron(svc)], svc);
+  };
   scope.add(ctx.onService(draw));
   draw(ctx.svc);
   if (!isCron(ctx.svc)) {
@@ -2567,7 +2654,7 @@ function tabOverview(ctx, scope, body) {
         if (!scope.alive) return;
         statusErr = errMsg(e);
       }
-      drawInstances(ctx.svc);
+      drawInstancesM(instKey(ctx.svc), ctx.svc);
     };
     scope.poll(loadStatus, POLL_MS, { immediate: true });
   }
@@ -2618,6 +2705,20 @@ function deployActions(ctx, d, { compact = false, after } = {}) {
     out.push(h('button', { class: 'btn' + (compact ? ' btn-sm' : ''), type: 'button', 'data-fk': `rollback-${d.id}`, title: 'Redeploy this deploy’s image', onclick: (ev) => { ev.stopPropagation(); rollbackDialog(ctx, d); } }, 'Rollback'));
   }
   return out;
+}
+// A deploy or job of another service is "not found" under this one (reopenUnderOwner redirects).
+function mine(ctx, x) {
+  if (x && x.service_id === ctx.svc.id) return x;
+  throw Object.assign(new ApiError('Not found', 404, 'not_found'), { owner: x && x.service_id });
+}
+async function reopenUnderOwner(scope, e, tab, id) {
+  const o = e && e.owner ? await api.get(`/services/${enc(e.owner)}`).catch(() => null) : null;
+  if (!scope.alive) return true;
+  if (!o || !o.name) return false;
+  history.replaceState(null, '', linkTo('services', o.name, tab, id));
+  lastHash = location.hash;
+  route();
+  return true;
 }
 function tabDeploys(ctx, scope, body) {
   if (ctx.sub) return deployDetail(ctx, scope, body, ctx.sub);
@@ -2692,7 +2793,7 @@ function deployDetail(ctx, scope, body, id) {
       d.image && !isDeployActive(d) ? h('p', { class: 'muted', style: { margin: '-6px 0 14px' } }, 'Image ', h('code', null, d.image)) : null);
   };
   async function load() {
-    const d = await api.get(`/deploys/${enc(id)}`);
+    const d = mine(ctx, await api.get(`/deploys/${enc(id)}`));
     if (!scope.alive) return d;
     dep = d;
     draw();
@@ -2700,7 +2801,7 @@ function deployDetail(ctx, scope, body, id) {
   }
   (async () => {
     try { await load(); } catch (e) {
-      if (!scope.alive) return;
+      if (!scope.alive || await reopenUnderOwner(scope, e, 'deploys', id)) return;
       swap(headBox, isNotFound(e)
         ? h('div', { class: 'panel empty' }, h('h2', null, 'Deploy not found'), h('p', null, 'It may belong to a deleted service.'))
         : errorState(e, () => route()));
@@ -2947,7 +3048,9 @@ function tabSettings(ctx, scope, body) {
     const saveDeployBtn = h('button', { class: 'btn', type: 'button' }, 'Save and deploy');
     const el = h('form', { class: 'form', novalidate: true },
       h('fieldset', { class: 'fieldset' }, h('legend', null, 'Source'), srcTiles, sf.sourceEls),
-      h('fieldset', { class: 'fieldset' }, h('legend', null, 'Build and deploy'), h('p', { class: 'desc' }, 'Changes take effect on the next deploy.'), sf.buildEls),
+      h('fieldset', { class: 'fieldset' }, h('legend', null, 'Build and deploy'), h('p', { class: 'desc' }, isCron(svc)
+        ? 'The schedule and start command apply from the next run. Other changes take effect on the next deploy.'
+        : 'Changes take effect on the next deploy.'), sf.buildEls),
       err, h('div', { class: 'form-actions' }, saveBtn, saveDeployBtn));
     el.addEventListener('input', () => { dirty = true; });
     sf.F.runtime.control.addEventListener('change', sync);
@@ -2989,7 +3092,12 @@ function tabSettings(ctx, scope, body) {
           const view = await api.patch(`/services/${enc(ctx.name)}`, patch);
           dirty = false;
           ctx.apply(view);
-          toast(andDeploy ? 'Settings saved.' : 'Settings saved. They apply on the next deploy.', 'ok');
+          // Cron runs read the schedule and start command at run time.
+          const keys = Object.keys(patch);
+          const atRun = isCron(svc) ? keys.filter((k) => k === 'schedule' || k === 'start_command').length : 0;
+          toast(andDeploy ? 'Settings saved.' : !atRun ? 'Settings saved. They apply on the next deploy.'
+            : atRun === keys.length ? 'Settings saved. They apply from the next run.'
+              : 'Settings saved. Schedule and command apply from the next run, the rest on the next deploy.', 'ok');
         } else if (!andDeploy) {
           toast('Nothing changed.', 'info');
         }
@@ -3074,23 +3182,28 @@ function tabSettings(ctx, scope, body) {
       } catch (e) { cb.checked = !checked; toastError(e, 'Couldn’t change auto-deploy'); } finally { cb.disabled = false; }
     });
     sw.input.dataset.fk = 'auto-deploy';
-    const hookUrl = `${location.origin}/hooks/github`;
+    const hookUrl = `${publicOrigin()}/hooks/github`;
     const gh = serverInfo && serverInfo.github_webhook_enabled
       ? h('div', { class: 'stack', style: { gap: '6px', marginTop: '12px' } },
         h('p', { class: 'muted' }, 'In the repository’s GitHub settings, add a webhook for push events with content type application/json, this payload URL, and the secret ferryd was started with:'),
-        h('div', { class: 'secret' }, h('code', { class: 'value' }, hookUrl), copyButton(hookUrl, 'Copy webhook URL', 'Copied webhook URL')))
+        h('div', { class: 'secret' }, h('code', { class: 'value' }, hookUrl), copyButton(hookUrl, 'Copy webhook URL', 'Copied webhook URL')),
+        localHint(hookUrl, 'GitHub'))
       : h('p', { class: 'muted', style: { marginTop: '12px' } }, 'GitHub webhooks are off on this server. Start ferryd with --github-webhook-secret to receive pushes.');
     swap(autoBox, sectionHead('Auto-deploy'), h('div', { class: 'panel panel-pad' }, sw, gh));
   }
   function drawHook(svc) {
     if (!svc.deploy_hook_path) { hookBox.hidden = true; return; }
     hookBox.hidden = false;
-    const url = location.origin + svc.deploy_hook_path;
+    const url = publicOrigin() + svc.deploy_hook_path;
     swap(hookBox,
       sectionHead('Deploy hook', 'Send a GET or POST to this secret URL to start a deploy, for example from CI. Anyone with the URL can deploy this service.'),
       h('div', { class: 'panel panel-pad stack' },
         secretField(url, { mask: (u) => u.replace(/([?&]key=)[^&]*/, (_m, p) => p + '•'.repeat(16)), label: 'deploy hook URL' }),
+        localHint(url, 'Other machines'),
         h('p', { class: 'muted' }, 'Example: ', h('code', null, 'curl -X POST "$FERRY_DEPLOY_HOOK"'))));
+  }
+  function localHint(url, who) {
+    return isLoopback(url) ? h('p', { class: 'hint', style: { color: 'var(--warn)' } }, `${who} can’t reach this local address: serve Ferry on a public host (ferryd --dashboard-host, with HTTPS).`) : null;
   }
   function drawDanger() {
     swap(dangerBox, sectionHead('Delete service'),
@@ -3106,8 +3219,8 @@ function tabSettings(ctx, scope, body) {
   const drawAll = (svc) => {
     if (!form || !form.isDirty()) drawFormM([svc.type, SETTINGS_KEYS.map((k) => svc[k])], svc);
     drawDomainsM(domainsKey(svc), svc);
-    drawAutoM([sourceOf(svc), svc.branch, svc.auto_deploy, serverInfo && serverInfo.github_webhook_enabled], svc);
-    drawHookM([svc.deploy_hook_path], svc);
+    drawAutoM([sourceOf(svc), svc.branch, svc.auto_deploy, serverInfo && serverInfo.github_webhook_enabled, publicOrigin()], svc);
+    drawHookM([svc.deploy_hook_path, publicOrigin()], svc);
   };
   drawAll(ctx.svc);
   drawDanger();
@@ -3209,7 +3322,7 @@ function jobDetail(ctx, scope, body, id) {
       j.error ? callout('bad', 'alert', h('strong', null, 'The job failed'), h('p', { class: 'mono' }, j.error)) : null);
   };
   async function load() {
-    const j = await api.get(`/jobs/${enc(id)}`);
+    const j = mine(ctx, await api.get(`/jobs/${enc(id)}`));
     if (!scope.alive) return j;
     job = j;
     draw();
@@ -3217,7 +3330,7 @@ function jobDetail(ctx, scope, body, id) {
   }
   (async () => {
     try { await load(); } catch (e) {
-      if (!scope.alive) return;
+      if (!scope.alive || await reopenUnderOwner(scope, e, 'jobs', id)) return;
       swap(headBox, isNotFound(e) ? h('div', { class: 'panel empty' }, h('h2', null, 'Job not found')) : errorState(e, () => route()));
       viewer.el.hidden = true;
       return;
@@ -3589,18 +3702,18 @@ function viewBlueprints(scope, page) {
   setTitle('Blueprints');
   page.append(pageHead({ title: 'Blueprints', sub: 'Describe services, datastores and env groups in YAML and apply them in one step. Existing resources are updated in place; nothing is ever deleted.' }));
   const ta = h('textarea', { class: 'input mono', rows: 20, spellcheck: 'false', placeholder: BLUEPRINT_EXAMPLE, 'aria-label': 'Blueprint YAML' });
-  ta.value = storage.get(BLUEPRINT_DRAFT_KEY) || '';
+  ta.value = session.get(BLUEPRINT_DRAFT_KEY) || '';
   let draftTimer = 0;
   ta.addEventListener('input', () => {
     clearTimeout(draftTimer);
-    draftTimer = setTimeout(() => storage.set(BLUEPRINT_DRAFT_KEY, ta.value), 400);
+    draftTimer = setTimeout(() => session.set(BLUEPRINT_DRAFT_KEY, ta.value), 400);
   });
-  scope.add(() => { clearTimeout(draftTimer); storage.set(BLUEPRINT_DRAFT_KEY, ta.value); });
+  scope.add(() => { clearTimeout(draftTimer); if (token) session.set(BLUEPRINT_DRAFT_KEY, ta.value); });
   const file = h('input', { type: 'file', accept: '.yaml,.yml,application/yaml,text/yaml', class: 'sr-only', id: 'bp-file' });
   const readFile = async (f) => {
     if (!f) return;
     if (f.size > 2 * 1024 * 1024) { toast('That file is larger than 2 MB.', 'error'); return; }
-    try { ta.value = await f.text(); storage.set(BLUEPRINT_DRAFT_KEY, ta.value); toast(`Loaded ${f.name}.`, 'ok', { timeout: 2000 }); } catch (e) { toastError(e, 'Reading the file failed'); }
+    try { ta.value = await f.text(); session.set(BLUEPRINT_DRAFT_KEY, ta.value); toast(`Loaded ${f.name}.`, 'ok', { timeout: 2000 }); } catch (e) { toastError(e, 'Reading the file failed'); }
   };
   file.addEventListener('change', () => { readFile(file.files && file.files[0]); file.value = ''; });
   ta.addEventListener('dragover', (ev) => { ev.preventDefault(); });
@@ -3697,6 +3810,7 @@ if (skipLink) {
     if (target) { if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1'); target.focus(); }
   });
 }
+storage.del(BLUEPRINT_DRAFT_KEY); // older versions kept drafts in localStorage
 if (!token) renderLogin();
 else route();
 })();

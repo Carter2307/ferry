@@ -45,6 +45,13 @@ impl ApiError {
         Self::new(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed", "method not allowed for this path")
     }
 
+    /// Prefix the message (keeps status and code), e.g. to say that part of a
+    /// request was already applied before a later step failed.
+    pub fn prefixed(mut self, prefix: impl std::fmt::Display) -> Self {
+        self.body.error.message = format!("{prefix}{}", self.body.error.message);
+        self
+    }
+
     /// Map a body-buffering rejection: 413 when the body limit was hit, else 400.
     pub fn from_bytes_rejection(r: BytesRejection) -> Self {
         if r.status() == StatusCode::PAYLOAD_TOO_LARGE {

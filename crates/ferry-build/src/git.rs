@@ -3,7 +3,11 @@
 //! resolution, and export of the tree (`git archive`) without `.git`.
 //!
 //! Git can never prompt (no terminal, no askpass, ssh in batch mode) and
-//! credentials embedded in URLs never reach logs or error messages.
+//! credentials embedded in URLs never reach logs or error messages. They do
+//! not reach git's command line or the cache's config either: the URL git is
+//! given has its userinfo removed, and a credential helper reads the username
+//! and password from the git process's environment (readable by the same
+//! user only, unlike `ps` output or the world-readable cache directory).
 
 use std::ffi::OsString;
 use std::io;
@@ -58,14 +62,95 @@ pub(crate) struct Checkout {
 }
 
 /// A repository location ready to hand to git.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct RepoUrl {
-    /// What git is given (local relative paths made absolute).
+    /// What git is given: local relative paths made absolute, and never any
+    /// credentials (see [`RepoUrl::credentials`]).
     pub git_url: String,
+    /// Username/password removed from an http(s) URL (percent-decoded).
+    pub credentials: Option<Credentials>,
+    /// The URL as configured, only used to redact anything echoing it.
+    pub original: String,
     /// Local filesystem path, for existence checks.
     pub local_path: Option<PathBuf>,
     /// For logs and errors.
     pub display: String,
+}
+
+impl std::fmt::Debug for RepoUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepoUrl")
+            .field("git_url", &self.git_url)
+            .field("credentials", &self.credentials)
+            .field("local_path", &self.local_path)
+            .field("display", &self.display)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Credentials of an http(s) remote, handed to git by a credential helper
+/// through its environment.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Credentials {
+    pub username: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Credentials(***)")
+    }
+}
+
+/// Environment variables the credential helper reads.
+const USERNAME_VAR: &str = "FERRY_GIT_USERNAME";
+const PASSWORD_VAR: &str = "FERRY_GIT_PASSWORD";
+/// Answers git's `get` requests from the environment. Only variable names
+/// appear on command lines, never values.
+const CREDENTIAL_HELPER: &str = "!f() { test \"$1\" = get || exit 0; cat >/dev/null; \
+     printf 'username=%s\\npassword=%s\\n' \"$FERRY_GIT_USERNAME\" \"$FERRY_GIT_PASSWORD\"; }; f";
+
+/// Split `https://user:pass@host/path` into the URL without userinfo and the
+/// credentials. Other schemes (ssh users are not secrets) are left alone.
+fn split_credentials(url: &str, display: &str) -> Result<(String, Option<Credentials>), GitError> {
+    let Some(idx) = url.find("://") else { return Ok((url.to_string(), None)) };
+    if !matches!(url[..idx].to_ascii_lowercase().as_str(), "http" | "https") {
+        return Ok((url.to_string(), None));
+    }
+    let rest = &url[idx + 3..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..authority_end].rfind('@') else { return Ok((url.to_string(), None)) };
+    let (user, pass) = match rest[..at].split_once(':') {
+        Some((u, p)) => (u, p),
+        None => (&rest[..at], ""),
+    };
+    let decode = |s: &str| percent_decode(s).filter(|d| !d.contains(['\n', '\r', '\0']));
+    let (Some(username), Some(password)) = (decode(user), decode(pass)) else {
+        return Err(GitError::Invalid(format!("invalid credentials in repository URL '{display}'")));
+    };
+    let stripped = format!("{}{}", &url[..idx + 3], &rest[at + 1..]);
+    if username.is_empty() && password.is_empty() {
+        return Ok((stripped, None));
+    }
+    Ok((stripped, Some(Credentials { username, password })))
+}
+
+/// `%XX` decoding (what git applies to URL userinfo); `None` when invalid.
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// Classify and sanitize a repository URL: https/http/ssh/git URLs,
@@ -83,11 +168,18 @@ pub(crate) fn prepare_repo_url(url: &str) -> Result<RepoUrl, GitError> {
         let scheme = u[..idx].to_ascii_lowercase();
         return match scheme.as_str() {
             "https" | "http" | "ssh" | "git" | "git+ssh" | "ssh+git" => {
-                Ok(RepoUrl { git_url: u.to_string(), local_path: None, display })
+                let (git_url, credentials) = split_credentials(u, &display)?;
+                Ok(RepoUrl { git_url, credentials, original: u.to_string(), local_path: None, display })
             }
             "file" => {
                 let path = PathBuf::from(&u[idx + 3..]);
-                Ok(RepoUrl { git_url: u.to_string(), local_path: Some(path), display })
+                Ok(RepoUrl {
+                    git_url: u.to_string(),
+                    credentials: None,
+                    original: u.to_string(),
+                    local_path: Some(path),
+                    display,
+                })
             }
             _ => Err(GitError::Invalid(format!(
                 "unsupported repository URL scheme '{scheme}' (use https, ssh, git, file or a local path)"
@@ -95,7 +187,13 @@ pub(crate) fn prepare_repo_url(url: &str) -> Result<RepoUrl, GitError> {
         };
     }
     if is_scp_like(u) {
-        return Ok(RepoUrl { git_url: u.to_string(), local_path: None, display });
+        return Ok(RepoUrl {
+            git_url: u.to_string(),
+            credentials: None,
+            original: u.to_string(),
+            local_path: None,
+            display,
+        });
     }
     let path = Path::new(u);
     let abs = if path.is_absolute() {
@@ -103,7 +201,13 @@ pub(crate) fn prepare_repo_url(url: &str) -> Result<RepoUrl, GitError> {
     } else {
         std::path::absolute(path).map_err(|e| GitError::Invalid(format!("invalid repository path '{u}': {e}")))?
     };
-    Ok(RepoUrl { git_url: abs.to_string_lossy().into_owned(), local_path: Some(abs), display })
+    Ok(RepoUrl {
+        git_url: abs.to_string_lossy().into_owned(),
+        credentials: None,
+        original: u.to_string(),
+        local_path: Some(abs),
+        display,
+    })
 }
 
 /// `host:path` / `user@host:path` (git's scp-like syntax): a colon before
@@ -188,6 +292,20 @@ fn git_cmd() -> Command {
     c
 }
 
+/// [`git_cmd`] for talking to `url`'s remote: its credentials (if any) are
+/// served by a helper reading them from the environment. Must be called
+/// before adding the subcommand (it adds global `-c` options).
+fn git_remote_cmd(url: &RepoUrl) -> Command {
+    let mut c = git_cmd();
+    if let Some(creds) = &url.credentials {
+        // The empty value resets helpers configured elsewhere (a keychain
+        // could otherwise answer first with other credentials).
+        c.args(["-c", "credential.helper=", "-c"]).arg(format!("credential.helper={CREDENTIAL_HELPER}"));
+        c.env(USERNAME_VAR, &creds.username).env(PASSWORD_VAR, &creds.password);
+    }
+    c
+}
+
 fn git_dir_arg(cache: &Path) -> OsString {
     let mut s = OsString::from("--git-dir=");
     s.push(cache.as_os_str());
@@ -207,7 +325,7 @@ async fn run_git(
         Err(RunError::Spawn(e)) if e.kind() == io::ErrorKind::NotFound => {
             Err(GitError::Failed("the git CLI was not found: install git on the Ferry server".into()))
         }
-        Err(e) => Err(GitError::Failed(redact_text(&format!("{what} ({}) failed: {e}", url.display), &url.git_url))),
+        Err(e) => Err(GitError::Failed(redact_text(&format!("{what} ({}) failed: {e}", url.display), &url.original))),
     }
 }
 
@@ -243,14 +361,14 @@ pub(crate) async fn ls_remote_branch(repo_url: &str, branch: &str) -> Result<Str
     validate_branch(branch)?;
     check_local_exists(&url).await?;
     let refname = format!("refs/heads/{branch}");
-    let mut cmd = git_cmd();
+    let mut cmd = git_remote_cmd(&url);
     cmd.args(["ls-remote", "--refs"]).arg(&url.git_url).arg(&refname);
     let out = run_git(cmd, "git ls-remote", &url, None, LS_REMOTE_TIMEOUT).await?;
     if !out.status.success() {
         return Err(GitError::Failed(format!(
             "cannot list branches of {}: {}",
             url.display,
-            git_failure_reason(&out, &url.git_url)
+            git_failure_reason(&out, &url.original)
         )));
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -307,7 +425,7 @@ async fn init_cache(cache: &Path, url: &RepoUrl, cancel: &CancellationToken) -> 
         return Err(GitError::Failed(format!(
             "cannot create git cache {}: {}",
             cache.display(),
-            git_failure_reason(&out, &url.git_url)
+            git_failure_reason(&out, &url.original)
         )));
     }
     let mut cmd = git_cmd();
@@ -317,7 +435,7 @@ async fn init_cache(cache: &Path, url: &RepoUrl, cancel: &CancellationToken) -> 
         let _ = remove_dir_async(cache.to_path_buf()).await;
         return Err(GitError::Failed(format!(
             "cannot configure git cache: {}",
-            git_failure_reason(&out, &url.git_url)
+            git_failure_reason(&out, &url.original)
         )));
     }
     Ok(())
@@ -325,14 +443,14 @@ async fn init_cache(cache: &Path, url: &RepoUrl, cancel: &CancellationToken) -> 
 
 /// `git fetch origin <refspecs>` into the cache.
 async fn fetch(cache: &Path, url: &RepoUrl, refspecs: &[String], cancel: &CancellationToken) -> Result<(), GitError> {
-    let mut cmd = git_cmd();
+    let mut cmd = git_remote_cmd(url);
     cmd.arg(git_dir_arg(cache)).args(["fetch", "--quiet", "--no-tags", "--force", "origin"]).args(refspecs);
     let out = run_git(cmd, "git fetch", url, Some(cancel), FETCH_TIMEOUT).await?;
     if out.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let reason = git_failure_reason(&out, &url.git_url);
+    let reason = git_failure_reason(&out, &url.original);
     if stderr.contains("couldn't find remote ref") || stderr.contains("not our ref") {
         Err(GitError::NotFound(reason))
     } else {
@@ -384,7 +502,7 @@ async fn commit_subject(
     cmd.arg(git_dir_arg(cache)).args(["show", "-s", "--format=%s"]).arg(sha);
     let out = run_git(cmd, "git show", url, Some(cancel), LOCAL_TIMEOUT).await?;
     if !out.status.success() {
-        return Err(GitError::Failed(format!("cannot read commit {sha}: {}", git_failure_reason(&out, &url.git_url))));
+        return Err(GitError::Failed(format!("cannot read commit {sha}: {}", git_failure_reason(&out, &url.original))));
     }
     Ok(String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim().to_string())
 }
@@ -554,7 +672,7 @@ async fn export(
                 Ok(report)
             } else {
                 let out = Output { status, stdout: Vec::new(), stderr };
-                Err(GitError::Failed(format!("git archive failed: {}", git_failure_reason(&out, &url.git_url))))
+                Err(GitError::Failed(format!("git archive failed: {}", git_failure_reason(&out, &url.original))))
             }
         }
     }
@@ -567,8 +685,11 @@ mod tests {
     #[test]
     fn classifies_urls() {
         let https = prepare_repo_url("https://u:tok@github.com/a/b.git").unwrap();
-        assert_eq!(https.git_url, "https://u:tok@github.com/a/b.git");
+        // Credentials never reach git's command line.
+        assert_eq!(https.git_url, "https://github.com/a/b.git");
+        assert_eq!(https.credentials, Some(Credentials { username: "u".into(), password: "tok".into() }));
         assert_eq!(https.display, "https://***@github.com/a/b.git");
+        assert!(!format!("{https:?}").contains("tok@") && !format!("{:?}", https.credentials).contains("tok"));
         assert!(https.local_path.is_none());
         assert!(prepare_repo_url("git@github.com:a/b.git").unwrap().local_path.is_none());
         assert!(prepare_repo_url("ssh://git@github.com:22/a/b").unwrap().local_path.is_none());
@@ -583,6 +704,156 @@ mod tests {
         assert!(prepare_repo_url("https://github.com/a b").is_err());
         assert!(matches!(prepare_repo_url("ext::sh -c x"), Err(GitError::Invalid(_))));
         assert!(prepare_repo_url("ftp://example.com/x").is_err());
+    }
+
+    #[test]
+    fn credentials_are_split_off_http_urls() {
+        let split = |u: &str| prepare_repo_url(u).map(|r| (r.git_url, r.credentials));
+        let creds = |u: &str, p: &str| Some(Credentials { username: u.into(), password: p.into() });
+        // Percent-encoded userinfo is decoded, like git does.
+        assert_eq!(
+            split("https://deploy:p%40ss%20word@git.example.com:8443/org/repo.git?x=1").unwrap(),
+            ("https://git.example.com:8443/org/repo.git?x=1".to_string(), creds("deploy", "p@ss word"))
+        );
+        // A lone token as username.
+        assert_eq!(
+            split("http://ghp_token@github.com/a/b").unwrap(),
+            ("http://github.com/a/b".to_string(), creds("ghp_token", ""))
+        );
+        // No userinfo, or an `@` in the path: untouched.
+        assert_eq!(split("https://github.com/a/b@c").unwrap(), ("https://github.com/a/b@c".to_string(), None));
+        // ssh users are not secrets: untouched.
+        assert_eq!(split("ssh://git@github.com/a/b").unwrap(), ("ssh://git@github.com/a/b".to_string(), None));
+        // Invalid escapes or control characters are refused, without leaking.
+        for bad in ["https://u:bad%zzsecret@h/r", "https://u:line%0Abreak-secret@h/r"] {
+            let err = split(bad).unwrap_err().message();
+            assert!(err.contains("invalid credentials") && !err.contains("secret"), "{err}");
+        }
+    }
+
+    #[test]
+    fn remote_commands_carry_credentials_in_the_environment_only() {
+        let url = prepare_repo_url("https://deploy:s3cr3t-pass@git.example.com/org/repo.git").unwrap();
+        let mut cmd = git_remote_cmd(&url);
+        cmd.args(["ls-remote", "--refs"]).arg(&url.git_url);
+        let std = cmd.as_std();
+        let argv: Vec<String> = std.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(!argv.iter().any(|a| a.contains("s3cr3t") || a.contains("deploy")), "{argv:?}");
+        assert!(argv.windows(2).any(|w| w == ["-c", "credential.helper="]), "{argv:?}");
+        assert!(argv.iter().any(|a| a.starts_with("credential.helper=!") && a.contains(PASSWORD_VAR)), "{argv:?}");
+        let env = |k: &str| std.get_envs().find(|(n, _)| *n == k).and_then(|(_, v)| v).map(|v| v.to_owned());
+        assert_eq!(env(USERNAME_VAR).as_deref(), Some(std::ffi::OsStr::new("deploy")));
+        assert_eq!(env(PASSWORD_VAR).as_deref(), Some(std::ffi::OsStr::new("s3cr3t-pass")));
+        assert!(CREDENTIAL_HELPER.contains(USERNAME_VAR));
+        // Without credentials nothing is added.
+        let plain = prepare_repo_url("https://github.com/a/b").unwrap();
+        assert!(
+            !git_remote_cmd(&plain).as_std().get_args().any(|a| a.to_string_lossy().contains("credential.helper=!"))
+        );
+    }
+
+    fn base64(input: &[u8]) -> String {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in input.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(T[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    /// A dumb-HTTP git server for `repo` that demands Basic credentials.
+    /// Returns its port and whether an authorized request was seen.
+    async fn auth_git_server(repo: PathBuf, expected: String) -> (u16, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let authorized = std::sync::Arc::new(AtomicBool::new(false));
+        let seen = authorized.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let (repo, expected, seen) = (repo.clone(), expected.clone(), seen.clone());
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf).into_owned();
+                    let path = req.split_whitespace().nth(1).unwrap_or("/").split('?').next().unwrap_or("/");
+                    let auth_ok = req.lines().any(|l| {
+                        l.split_once(':')
+                            .is_some_and(|(k, v)| k.eq_ignore_ascii_case("authorization") && v.trim() == expected)
+                    });
+                    let file = path.strip_prefix("/repo.git/").map(|rel| repo.join(rel));
+                    let response = match (auth_ok, file.and_then(|f| std::fs::read(f).ok())) {
+                        (false, _) => b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"t\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                        (true, Some(body)) => {
+                            seen.store(true, Ordering::SeqCst);
+                            let mut r = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            )
+                            .into_bytes();
+                            r.extend_from_slice(&body);
+                            r
+                        }
+                        (true, None) => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                    };
+                    let _ = sock.write_all(&response).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (port, authorized)
+    }
+
+    #[tokio::test]
+    async fn http_credentials_reach_the_server_but_not_argv_or_disk() {
+        let (src, _, head) = sample_repo();
+        // A bare copy served over dumb HTTP.
+        let served = tempfile::tempdir().unwrap();
+        let bare = served.path().join("repo.git");
+        git_in(served.path(), &["clone", "-q", "--bare", &src.path().to_string_lossy(), "repo.git"]);
+        git_in(&bare, &["update-server-info"]);
+        let expected = format!("Basic {}", base64(b"deploy:s3cr3t pass"));
+        let (port, authorized) = auth_git_server(bare, expected).await;
+        let url = format!("http://deploy:s3cr3t%20pass@127.0.0.1:{port}/repo.git");
+
+        assert_eq!(ls_remote_branch(&url, "main").await.unwrap(), head);
+        let work = tempfile::tempdir().unwrap();
+        let cache = work.path().join("cache");
+        let dest = work.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let (logs, mut rx) = LogSink::channel();
+        let co = checkout(&cache, &url, "main", None, &dest, &logs, &CancellationToken::new())
+            .await
+            .unwrap_or_else(|e| panic!("checkout failed: {}", e.message()));
+        assert_eq!(co.sha, head);
+        assert!(authorized.load(std::sync::atomic::Ordering::SeqCst));
+        // The cache's config holds the URL without credentials.
+        let config = std::fs::read_to_string(cache.join("config")).unwrap();
+        assert!(config.contains(&format!("http://127.0.0.1:{port}/repo.git")), "{config}");
+        assert!(!config.contains("s3cr3t") && !config.contains("deploy"), "{config}");
+        for l in lines(&mut rx) {
+            assert!(!l.contains("s3cr3t"), "{l}");
+        }
+
+        // Wrong credentials: a clean, redacted failure (no prompt, no hang).
+        let bad = format!("http://deploy:wrong-s3cr3t@127.0.0.1:{port}/repo.git");
+        let err = ls_remote_branch(&bad, "main").await.unwrap_err().message();
+        assert!(!err.contains("wrong-s3cr3t"), "{err}");
     }
 
     #[test]

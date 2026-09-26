@@ -90,8 +90,9 @@ async fn real_socket_roundtrip() {
         chunked.extend(b"\r\n");
     }
     chunked.extend(b"0\r\n\r\n");
+    app.create_service(json!({"name": "up"})).await;
     let head = format!(
-        "POST /api/v1/services/web/deploys/upload HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        "POST /api/v1/services/up/deploys/upload HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
     );
     let (status, _, body) = raw(addr, &head, &chunked).await;
     assert_eq!(status, 202, "{}", String::from_utf8_lossy(&body));

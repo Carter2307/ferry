@@ -1,5 +1,7 @@
-//! Listeners, accept loops, TLS termination and graceful shutdown.
+//! Listeners, accept loops, connection limits, TLS termination, idle
+//! connection closing and graceful shutdown.
 
+use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,19 +16,20 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::task::TaskTracker;
 
 use crate::ProxyConfig;
+use crate::body;
 use crate::handler::{ConnInfo, Proxy};
+use crate::limits::{Activity, ConnLimiter, ConnSlot, ConnectionLimits};
 use crate::routes::RouteTable;
 
 /// How long in-flight requests get to finish once shutdown starts.
 pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
-/// Slow or stalled TLS handshakes are dropped after this.
-const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Time a client has to send a complete HTTP/1 request head (this also bounds
-/// how long an idle keep-alive connection stays open).
-const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// HTTP/2 keep-alive pings detect dead client connections.
 const H2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Once a connection is being closed (idle, or shutdown), it is dropped if
+/// it has still not closed after this long without a request in flight — an
+/// HTTP/2 client that never acknowledges the GOAWAY, a half-sent HTTP/1 head.
+pub(crate) const CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 type ConnBuilder = auto::Builder<TokioExecutor>;
 
@@ -74,18 +77,29 @@ pub(crate) async fn serve_on(
         tasks.clone(),
         shutdown.clone(),
     ));
-    let builder = Arc::new(connection_builder());
-    let ctx = AcceptCtx { proxy, builder, tasks: tasks.clone(), shutdown: shutdown.clone(), force: force.clone() };
+    let limits = Arc::new(config.limits.clone());
+    let limiter = ConnLimiter::new(&limits);
+    let builder = Arc::new(connection_builder(&limits));
+    let ctx = AcceptCtx {
+        proxy,
+        builder,
+        limits,
+        limiter: limiter.clone(),
+        tasks: tasks.clone(),
+        shutdown: shutdown.clone(),
+        force: force.clone(),
+    };
 
     log_listening("http", &http);
-    let http_loop = accept_loop(http, None, ctx.clone());
-    let https_loop = async {
-        if let Some((listener, acceptor)) = https {
-            log_listening("https", &listener);
-            accept_loop(listener, Some(acceptor), ctx.clone()).await;
-        }
+    if let Some((listener, _)) = &https {
+        log_listening("https", listener);
+    }
+    let per_ip = match limiter.max_connections_per_ip() {
+        0 => "no per-address limit".to_string(),
+        n => format!("{n} per client address"),
     };
-    tokio::join!(http_loop, https_loop);
+    tracing::info!("proxy: accepting up to {} connections ({per_ip})", limiter.max_connections());
+    accept_loop(http, https, ctx).await;
     // Both listeners are dropped at this point: new connections are refused.
 
     tasks.close();
@@ -109,9 +123,12 @@ fn log_listening(scheme: &str, listener: &TcpListener) {
     }
 }
 
-fn connection_builder() -> ConnBuilder {
+fn connection_builder(limits: &ConnectionLimits) -> ConnBuilder {
     let mut builder = auto::Builder::new(TokioExecutor::new());
-    builder.http1().timer(TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT).keep_alive(true);
+    // Bounds each HTTP/1 request head, including the wait for the next one on
+    // an idle keep-alive connection. The time before the protocol is known
+    // (and HTTP/2 idleness) is covered by `Activity::idle_expired`.
+    builder.http1().timer(TokioTimer::new()).header_read_timeout(limits.header_read_timeout).keep_alive(true);
     builder
         .http2()
         .timer(TokioTimer::new())
@@ -124,24 +141,42 @@ fn connection_builder() -> ConnBuilder {
 struct AcceptCtx {
     proxy: Arc<Proxy>,
     builder: Arc<ConnBuilder>,
+    limits: Arc<ConnectionLimits>,
+    limiter: Arc<ConnLimiter>,
     tasks: TaskTracker,
     shutdown: CancellationToken,
     force: CancellationToken,
 }
 
-async fn accept_loop(listener: TcpListener, tls: Option<TlsAcceptor>, ctx: AcceptCtx) {
+/// Accept on both listeners (one loop, so that the slot it holds while
+/// waiting serves whichever listener gets the next client).
+async fn accept_loop(http: TcpListener, https: Option<(TcpListener, TlsAcceptor)>, ctx: AcceptCtx) {
     let mut backoff = Duration::from_millis(5);
     loop {
-        let accepted = tokio::select! {
+        // Take a connection slot first: at the limit, clients wait in the
+        // listen backlog instead of costing a descriptor each.
+        let slot = tokio::select! {
             _ = ctx.shutdown.cancelled() => return,
-            accepted = listener.accept() => accepted,
+            slot = ctx.limiter.reserve() => slot,
+        };
+        let (accepted, tls) = tokio::select! {
+            _ = ctx.shutdown.cancelled() => return,
+            accepted = http.accept() => (accepted, None),
+            accepted = accept_tls(https.as_ref()) => accepted,
         };
         match accepted {
             Ok((stream, remote)) => {
                 backoff = Duration::from_millis(5);
-                ctx.tasks.spawn(handle_connection(stream, remote, tls.clone(), ctx.clone()));
+                match ctx.limiter.admit(slot, remote.ip()) {
+                    Some(slot) => {
+                        ctx.tasks.spawn(handle_connection(stream, remote, tls, slot, ctx.clone()));
+                    }
+                    // Too many connections from that address: close it now.
+                    None => drop(stream),
+                }
             }
             Err(e) => {
+                drop(slot);
                 // Per-connection failures (ECONNABORTED…) and resource
                 // exhaustion (EMFILE…) are not fatal; back off and retry.
                 tracing::warn!("proxy: accept failed: {e}");
@@ -155,47 +190,157 @@ async fn accept_loop(listener: TcpListener, tls: Option<TlsAcceptor>, ctx: Accep
     }
 }
 
-async fn handle_connection(stream: TcpStream, remote: SocketAddr, tls: Option<TlsAcceptor>, ctx: AcceptCtx) {
-    if let Err(e) = stream.set_nodelay(true) {
-        tracing::debug!("proxy: set_nodelay for {remote}: {e}");
+/// Next client of the HTTPS listener, with the acceptor for its handshake
+/// (never resolves without an HTTPS listener).
+async fn accept_tls(
+    https: Option<&(TcpListener, TlsAcceptor)>,
+) -> (io::Result<(TcpStream, SocketAddr)>, Option<TlsAcceptor>) {
+    match https {
+        Some((listener, acceptor)) => (listener.accept().await, Some(acceptor.clone())),
+        None => std::future::pending().await,
     }
+}
+
+async fn handle_connection(
+    stream: TcpStream,
+    remote: SocketAddr,
+    tls: Option<TlsAcceptor>,
+    slot: ConnSlot,
+    ctx: AcceptCtx,
+) {
+    tune_client_socket(&stream, remote);
+    let slot = Arc::new(slot);
     let Some(acceptor) = tls else {
-        return serve_connection(TokioIo::new(stream), ConnInfo { remote, tls: false }, ctx).await;
+        let info = ConnInfo { remote, tls: false, slot };
+        return serve_connection(TokioIo::new(stream), info, ctx).await;
     };
     let handshake = tokio::select! {
         _ = ctx.shutdown.cancelled() => return,
-        res = tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)) => res,
+        res = tokio::time::timeout(ctx.limits.tls_handshake_timeout, acceptor.accept(stream)) => res,
     };
     match handshake {
-        Ok(Ok(stream)) => serve_connection(TokioIo::new(stream), ConnInfo { remote, tls: true }, ctx).await,
+        Ok(Ok(stream)) => serve_connection(TokioIo::new(stream), ConnInfo { remote, tls: true, slot }, ctx).await,
         Ok(Err(e)) => tracing::debug!("proxy: TLS handshake with {remote} failed: {e}"),
         Err(_) => tracing::debug!("proxy: TLS handshake with {remote} timed out"),
     }
+}
+
+/// `TCP_NODELAY` (hyper already coalesces its writes) and TCP keep-alive
+/// probing on an accepted client socket.
+fn tune_client_socket(stream: &TcpStream, remote: SocketAddr) {
+    if let Err(e) = stream.set_nodelay(true) {
+        tracing::debug!("proxy: set_nodelay for {remote}: {e}");
+    }
+    if let Err(e) = socket2::SockRef::from(stream).set_tcp_keepalive(&tcp_keepalive()) {
+        tracing::debug!("proxy: enabling TCP keep-alive for {remote}: {e}");
+    }
+}
+
+/// Keep-alive probing of client sockets: the first probe after a minute
+/// without traffic, then every 15 s; after 4 unanswered probes the kernel
+/// resets the socket. This detects peers that vanished (machine gone, NAT
+/// entry expired) on the connections the timeouts deliberately leave open —
+/// quiet websocket tunnels, long polls, SSE streams between events — so they
+/// don't hold a connection slot forever. Live peers answer the probes in
+/// their kernel, unnoticed by either application.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn tcp_keepalive() -> socket2::TcpKeepalive {
+    socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(15))
+        .with_retries(4)
+}
+
+/// Keep-alive probing with the system's timings.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
+fn tcp_keepalive() -> socket2::TcpKeepalive {
+    socket2::TcpKeepalive::new()
 }
 
 async fn serve_connection<I>(io: I, info: ConnInfo, ctx: AcceptCtx)
 where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
 {
-    let proxy = ctx.proxy.clone();
-    let service = service_fn(move |req| proxy.clone().handle(info, req));
-    let conn = ctx.builder.serve_connection_with_upgrades(io, service);
-    tokio::pin!(conn);
-    let result = tokio::select! {
-        res = conn.as_mut() => res,
-        _ = ctx.shutdown.cancelled() => {
-            // Finish in-flight requests, refuse new ones, then close.
-            conn.as_mut().graceful_shutdown();
-            tokio::select! {
-                res = conn.as_mut() => res,
-                _ = ctx.force.cancelled() => {
-                    tracing::debug!("proxy: dropping connection from {} after the drain timeout", info.remote);
-                    return;
-                }
+    let remote = info.remote;
+    let activity = Activity::new();
+    let service = service_fn({
+        let proxy = ctx.proxy.clone();
+        let activity = activity.clone();
+        move |req| {
+            // Counts as in flight until the response body is sent or dropped.
+            let active = activity.begin();
+            let handled = proxy.clone().handle(info.clone(), req);
+            async move {
+                let resp = match handled.await {
+                    Ok(resp) => resp,
+                    Err(never) => match never {},
+                };
+                Ok::<_, Infallible>(resp.map(|b| body::with_guard(b, active)))
             }
         }
+    });
+    let conn = ctx.builder.serve_connection_with_upgrades(io, service);
+    tokio::pin!(conn);
+
+    let closing = tokio::select! {
+        res = conn.as_mut() => return log_closed(remote, res),
+        _ = ctx.shutdown.cancelled() => "shutdown",
+        // Nothing sent (or not a full request head) since the connection
+        // opened, or no request for a while: a slot and a descriptor for nothing.
+        _ = activity.idle_expired(&ctx.limits, ctx.limiter.pressure()) => "idle",
     };
+    tracing::debug!("proxy: closing connection from {remote} ({closing})");
+    // Finish in-flight requests, refuse new ones, then close.
+    conn.as_mut().graceful_shutdown();
+    tokio::select! {
+        res = conn.as_mut() => log_closed(remote, res),
+        _ = activity.quiet_for(CLOSE_GRACE) => {
+            tracing::debug!("proxy: dropping connection from {remote}: it did not close");
+        }
+        _ = ctx.force.cancelled() => {
+            tracing::debug!("proxy: dropping connection from {remote} after the drain timeout");
+        }
+    }
+}
+
+fn log_closed(remote: SocketAddr, result: std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>) {
     if let Err(e) = result {
-        tracing::debug!("proxy: connection from {} closed with error: {e}", info.remote);
+        tracing::debug!("proxy: connection from {remote} closed with error: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn client_sockets_get_nodelay_and_tcp_keepalive() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (accepted, remote) = listener.accept().await.unwrap();
+        tune_client_socket(&accepted, remote);
+        assert!(accepted.nodelay().unwrap());
+        let sock = socket2::SockRef::from(&accepted);
+        assert!(sock.keepalive().unwrap());
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            assert_eq!(sock.tcp_keepalive_time().unwrap(), Duration::from_secs(60));
+            assert_eq!(sock.tcp_keepalive_interval().unwrap(), Duration::from_secs(15));
+            assert_eq!(sock.tcp_keepalive_retries().unwrap(), 4);
+        }
     }
 }

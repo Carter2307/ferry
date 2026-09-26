@@ -6,7 +6,7 @@ use axum::Json;
 use axum::extract::{Request, State};
 use axum::response::Response;
 use ferry_core::dto::TriggerDeploy;
-use ferry_core::{Deploy, DeployRequest, DeploySource, DeployTrigger, Error, ids};
+use ferry_core::{Deploy, DeployRequest, DeploySource, DeployTrigger, Error, git, ids, validate};
 use futures::StreamExt;
 use http::{StatusCode, header};
 use serde::Deserialize;
@@ -34,10 +34,15 @@ pub async fn trigger(
 ) -> ApiResult<(StatusCode, Json<Deploy>)> {
     let svc = st.store.require_service(&id).await?;
     let commit = req.commit.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
-    if let Some(c) = &commit
-        && (c.len() > 200 || c.starts_with('-') || c.chars().any(|ch| ch.is_whitespace() || ch.is_control()))
-    {
-        return Err(Error::invalid(format!("invalid commit '{c}'")).into());
+    if let Some(c) = &commit {
+        validate::commit(c)?;
+        if svc.repo_url.is_none() {
+            return Err(Error::invalid(format!(
+                "service '{}' doesn't deploy from git: a commit can't be chosen",
+                svc.name
+            ))
+            .into());
+        }
     }
     let d = st
         .engine
@@ -132,6 +137,20 @@ pub async fn upload(
     req: Request,
 ) -> ApiResult<(StatusCode, Json<Deploy>)> {
     let svc = st.store.require_service(&id).await?;
+    // The next plain deploy would silently switch back to the configured
+    // source, and the service would keep reporting it while running the upload.
+    let source = match (&svc.image, &svc.repo_url) {
+        (Some(image), _) => Some(format!("the image '{image}'")),
+        (None, Some(repo)) => Some(format!("the git repository {}", git::redact_url(repo))),
+        (None, None) => None,
+    };
+    if let Some(source) = source {
+        return Err(Error::conflict(format!(
+            "service '{0}' deploys from {source}; uploaded code can only be deployed to services without a repo or image. Clear its source first (ferry update {0} --repo \"\" --image \"\"), or deploy the configured source instead",
+            svc.name
+        ))
+        .into());
+    }
     if let Some(len) = req.headers().get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
         && len > UPLOAD_LIMIT as u64
     {
@@ -175,7 +194,7 @@ pub async fn logs(
 ) -> ApiResult<Response> {
     let d = st.store.require_deploy(&id).await?;
     let stream = st.engine.deploy_logs(&d.id, q.follow).await?;
-    Ok(sse::log_response(stream, true))
+    Ok(sse::log_response(stream, true, &st.shutdown))
 }
 
 /// Detect `http_body_util::LengthLimitError` behind axum's body error.

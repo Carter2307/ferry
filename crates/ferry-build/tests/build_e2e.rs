@@ -230,7 +230,9 @@ async fn docker_runtime_older_commit_and_failing_dockerfile() {
     let (res, logs) = env.build(&req).await;
     match res {
         Err(Error::Build(msg)) => {
-            assert!(msg.contains("exit code: 3"), "unexpected reason: {msg}");
+            // The failed step, its exit code and last output line — not
+            // BuildKit's raw `process "/bin/sh -c …"` message.
+            assert_eq!(msg, "RUN echo about to fail && exit 3 failed with exit code 3: about to fail");
             assert!(logs.iter().any(|l| l.contains("about to fail")), "docker output not streamed");
         }
         other => panic!("expected a build failure, got {other:?}"),

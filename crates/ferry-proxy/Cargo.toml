@@ -18,8 +18,14 @@ bytes.workspace = true
 tracing.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
+socket2 = "0.6"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+socket2 = { version = "0.6", features = ["all"] }
 reqwest.workspace = true
 rcgen.workspace = true
 tokio-tungstenite = "0.30"

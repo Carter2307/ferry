@@ -36,7 +36,8 @@ impl Fake {
         let out = rootp.join("out");
         fs::create_dir_all(&out).unwrap();
         let tail = match mode {
-            Mode::Succeed => "echo \"#9 exporting to image\"\necho \"token is $API_TOKEN\"\nexit 0\n",
+            // A step printing a secret it was given (as BuildKit would).
+            Mode::Succeed => "echo \"#9 exporting to image\"\necho \"token is $FERRY_BUILD_SECRET_0\"\nexit 0\n",
             Mode::Fail => {
                 "echo '#5 ERROR: process \"/bin/sh -c exit 3\" did not complete successfully' >&2\n\
                  echo 'ERROR: failed to build: failed to solve: boom happened' >&2\nexit 1\n"
@@ -46,7 +47,7 @@ impl Fake {
         let script = format!(
             "#!/bin/sh\nout='{}'\nprintf '%s\\n' \"$@\" > \"$out/argv\"\nenv > \"$out/env\"\n\
              dockerfile=''\nctx=''\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -f) dockerfile=\"$2\"; shift 2;;\n    \
-             -t|--label|--build-arg) shift 2;;\n    *) ctx=\"$1\"; shift;;\n  esac\ndone\n\
+             -t|--label|--build-arg|--secret) shift 2;;\n    *) ctx=\"$1\"; shift;;\n  esac\ndone\n\
              cp \"$dockerfile\" \"$out/Dockerfile\"\nls -A \"$ctx\" > \"$out/context\"\n\
              echo '#1 [internal] load build definition from Dockerfile' >&2\n{tail}",
             out.display()
@@ -98,22 +99,31 @@ async fn git_node_build_end_to_end() {
     assert_eq!(out.port_hint, None);
 
     let argv: Vec<String> = fake.read("argv").lines().map(str::to_string).collect();
-    assert_eq!(&argv[..2], &["build", "--progress=plain"]);
+    assert_eq!(&argv[..3], &["build", "--progress=plain", "--load"]);
     assert!(argv.windows(2).any(|w| w == ["-t", "ferrytest/web:dep-node1"]), "{argv:?}");
     assert!(argv.windows(2).any(|w| w == ["--label", "ferry.deploy=dep-node1"]), "{argv:?}");
-    assert!(argv.windows(2).any(|w| w == ["--build-arg", "API_TOKEN"]), "{argv:?}");
-    assert!(argv.windows(2).any(|w| w == ["--build-arg", "NODE_ENV"]), "{argv:?}");
-    assert!(!argv.iter().any(|a| a == "PATH"), "reserved build arg passed: {argv:?}");
+    // Generated Dockerfile: the env goes in as BuildKit secrets (values in
+    // the CLI's environment), never as build args.
+    assert!(argv.windows(2).any(|w| w == ["--secret", "id=API_TOKEN,env=FERRY_BUILD_SECRET_0"]), "{argv:?}");
+    assert!(argv.windows(2).any(|w| w == ["--secret", "id=NODE_ENV,env=FERRY_BUILD_SECRET_1"]), "{argv:?}");
+    assert!(!argv.iter().any(|a| a == "API_TOKEN" || a == "NODE_ENV"), "env passed as build args: {argv:?}");
+    let digest = argv.iter().find_map(|a| a.strip_prefix("FERRY_BUILD_ENV_DIGEST=")).expect("env digest build arg");
+    assert!(digest.len() == 32 && digest.chars().all(|c| c.is_ascii_hexdigit()), "{digest}");
+    assert!(!argv.iter().any(|a| a.contains("PATH")), "reserved build arg passed: {argv:?}");
     assert!(argv.contains(&"--no-cache".to_string()));
     assert!(!argv.iter().any(|a| a.contains("tok-very-secret")), "secret in argv: {argv:?}");
     let env = fake.read("env");
-    assert!(env.lines().any(|l| l == "API_TOKEN=tok-very-secret-123"), "{env}");
+    assert!(env.lines().any(|l| l == "FERRY_BUILD_SECRET_0=tok-very-secret-123"), "{env}");
+    assert!(!env.lines().any(|l| l.starts_with("API_TOKEN=")), "user var configures the docker CLI: {env}");
     assert!(env.lines().any(|l| l == "DOCKER_BUILDKIT=1"), "{env}");
     assert!(!env.lines().any(|l| l == "PATH=/evil"), "{env}");
+    assert!(fake.root.join("data/repos/.build-env-key").is_file(), "digest key not persisted");
 
     let dockerfile = fake.read("Dockerfile");
     assert!(dockerfile.contains("FROM node:22-alpine"), "{dockerfile}");
-    assert!(dockerfile.contains("ARG API_TOKEN"), "{dockerfile}");
+    assert!(!dockerfile.contains("ARG API_TOKEN") && !dockerfile.contains("ARG NODE_ENV"), "{dockerfile}");
+    assert!(dockerfile.contains("--mount=type=secret,id=API_TOKEN,env=API_TOKEN"), "{dockerfile}");
+    assert!(dockerfile.contains("ARG FERRY_BUILD_ENV_DIGEST"), "{dockerfile}");
     assert!(dockerfile.contains(r#"CMD ["npm","start"]"#), "{dockerfile}");
     let context = fake.read("context");
     for f in ["Dockerfile.ferry", ".dockerignore", "package.json", "server.js"] {
@@ -205,10 +215,18 @@ async fn docker_runtime_with_root_dir_and_dockerfile_path() {
     );
     req.root_dir = Some("services/echo".into());
     req.dockerfile_path = Some("deploy/Prod.Dockerfile".into());
+    req.build_args = vec![("GREETING".into(), "hello there".into())];
     let (logs, mut rx) = LogSink::channel();
     let out = fake.builder.build(&req, &logs, &CancellationToken::new()).await.unwrap();
     assert_eq!(out.runtime, Runtime::Docker);
     assert_eq!(out.port_hint, None);
+    // User Dockerfiles: their ARGs keep working (`--build-arg KEY`, value
+    // from the environment) and the env is also available as secrets.
+    let argv: Vec<String> = fake.read("argv").lines().map(str::to_string).collect();
+    assert!(argv.windows(2).any(|w| w == ["--build-arg", "GREETING"]), "{argv:?}");
+    assert!(argv.windows(2).any(|w| w == ["--secret", "id=GREETING,env=FERRY_BUILD_SECRET_0"]), "{argv:?}");
+    assert!(!argv.iter().any(|a| a.contains("FERRY_BUILD_ENV_DIGEST") || a.contains("hello there")), "{argv:?}");
+    assert!(fake.read("env").lines().any(|l| l == "GREETING=hello there"));
     assert!(fake.read("Dockerfile").contains("FROM python:3.12-alpine"));
     let context = fake.read("context");
     assert!(context.lines().any(|l| l == "echo.py"), "{context}");

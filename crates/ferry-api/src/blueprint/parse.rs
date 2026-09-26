@@ -3,18 +3,25 @@
 //! The YAML is read as a `serde_yaml::Value` tree and known keys are
 //! extracted by hand, so unknown keys can be reported as warnings instead of
 //! failing deserialization.
+//!
+//! Every non-null scalar is kept **exactly as written** (see [`load`]):
+//! `PYTHON_VERSION: 3.10` stays `3.10` (not the float `3.1`), `0x1F` stays
+//! `0x1F`, `True` stays `True`, and integers of any size are text. Fields
+//! that need a number or a boolean parse that text themselves.
 
+use std::fmt;
 use std::str::FromStr;
 
 use ferry_core::{DatastoreKind, Error, Result, Runtime, ServiceType};
+use serde::Deserialize;
+use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_yaml::{Mapping, Sequence, Value};
 
 use super::{Blueprint, DatastoreSpec, EnvGroupSpec, EnvVarSpec, RefTarget, ServiceSpec};
 
 /// Parse a `ferry.yaml` / `render.yaml` document.
 pub fn parse(yaml: &str) -> Result<Blueprint> {
-    let mut root: Value =
-        serde_yaml::from_str(yaml).map_err(|e| Error::invalid(format!("invalid blueprint YAML: {e}")))?;
+    let mut root = load(yaml).map_err(|e| Error::invalid(format!("invalid blueprint YAML: {e}")))?;
     root.apply_merge().map_err(|e| Error::invalid(format!("invalid blueprint YAML (merge keys): {e}")))?;
     let mut bp = Blueprint::default();
     let map = match &root {
@@ -84,6 +91,171 @@ pub fn parse(yaml: &str) -> Result<Blueprint> {
 }
 
 // ---------------------------------------------------------------------------
+// literal-preserving YAML loading
+
+/// Parse `yaml` into a [`Value`] whose non-null scalars are all
+/// [`Value::String`]s holding the scalar exactly as written.
+///
+/// `serde_yaml` resolves plain scalars while building a `Value` (`3.10` →
+/// `3.1`, `0x1F` → `31`, integers above `u64::MAX` → error), and the original
+/// text is gone after that. Its deserializer does hand out the raw text of a
+/// scalar to `deserialize_str`, but a caller has to know up front that a node
+/// is a scalar. Hence two passes over the document: the first records the
+/// shape of every node, the second, guided by that shape, reads scalars as
+/// strings. (Anchors and aliases are expanded identically by both passes.)
+pub(crate) fn load(yaml: &str) -> std::result::Result<Value, serde_yaml::Error> {
+    let shape = Shape::deserialize(serde_yaml::Deserializer::from_str(yaml))?;
+    if matches!(shape, Shape::Null) {
+        return Ok(Value::Null);
+    }
+    Guided(&shape).deserialize(serde_yaml::Deserializer::from_str(yaml))
+}
+
+/// The shape of a YAML node (first pass of [`load`]).
+enum Shape {
+    Null,
+    Scalar,
+    /// A node with a custom `!tag`: read as a plain `Value`.
+    Tagged,
+    Seq(Vec<Shape>),
+    Map(Vec<(Shape, Shape)>),
+}
+
+impl<'de> Deserialize<'de> for Shape {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        d.deserialize_any(ShapeVisitor)
+    }
+}
+
+struct ShapeVisitor;
+
+impl<'de> Visitor<'de> for ShapeVisitor {
+    type Value = Shape;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("any YAML value")
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> std::result::Result<Shape, E> {
+        Ok(Shape::Scalar)
+    }
+    fn visit_i64<E: de::Error>(self, _: i64) -> std::result::Result<Shape, E> {
+        Ok(Shape::Scalar)
+    }
+    fn visit_u64<E: de::Error>(self, _: u64) -> std::result::Result<Shape, E> {
+        Ok(Shape::Scalar)
+    }
+    fn visit_i128<E: de::Error>(self, _: i128) -> std::result::Result<Shape, E> {
+        Ok(Shape::Scalar)
+    }
+    fn visit_u128<E: de::Error>(self, _: u128) -> std::result::Result<Shape, E> {
+        Ok(Shape::Scalar)
+    }
+    fn visit_f64<E: de::Error>(self, _: f64) -> std::result::Result<Shape, E> {
+        Ok(Shape::Scalar)
+    }
+    fn visit_str<E: de::Error>(self, _: &str) -> std::result::Result<Shape, E> {
+        Ok(Shape::Scalar)
+    }
+    fn visit_unit<E: de::Error>(self) -> std::result::Result<Shape, E> {
+        Ok(Shape::Null)
+    }
+    fn visit_none<E: de::Error>(self) -> std::result::Result<Shape, E> {
+        Ok(Shape::Null)
+    }
+    fn visit_some<D: Deserializer<'de>>(self, d: D) -> std::result::Result<Shape, D::Error> {
+        Shape::deserialize(d)
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Shape, A::Error> {
+        let mut items = Vec::new();
+        while let Some(item) = seq.next_element::<Shape>()? {
+            items.push(item);
+        }
+        Ok(Shape::Seq(items))
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Shape, A::Error> {
+        let mut entries = Vec::new();
+        while let Some(entry) = map.next_entry::<Shape, Shape>()? {
+            entries.push(entry);
+        }
+        Ok(Shape::Map(entries))
+    }
+    fn visit_enum<A: de::EnumAccess<'de>>(self, data: A) -> std::result::Result<Shape, A::Error> {
+        use de::VariantAccess;
+        let (_tag, contents): (IgnoredAny, _) = data.variant()?;
+        contents.newtype_variant::<IgnoredAny>()?;
+        Ok(Shape::Tagged)
+    }
+}
+
+/// Second pass of [`load`]: read the node described by the shape.
+struct Guided<'s>(&'s Shape);
+
+impl<'de> DeserializeSeed<'de> for Guided<'_> {
+    type Value = Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> std::result::Result<Value, D::Error> {
+        match self.0 {
+            Shape::Null => {
+                IgnoredAny::deserialize(d)?;
+                Ok(Value::Null)
+            }
+            // `deserialize_str` hands out the scalar's source text.
+            Shape::Scalar => Ok(Value::String(String::deserialize(d)?)),
+            Shape::Tagged => Value::deserialize(d),
+            Shape::Seq(items) => d.deserialize_seq(GuidedSeq(items)),
+            Shape::Map(entries) => d.deserialize_map(GuidedMap(entries)),
+        }
+    }
+}
+
+struct GuidedSeq<'s>(&'s [Shape]);
+
+impl<'de> Visitor<'de> for GuidedSeq<'_> {
+    type Value = Value;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a sequence")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Value, A::Error> {
+        let mut out = Sequence::with_capacity(self.0.len());
+        for shape in self.0 {
+            let item = seq
+                .next_element_seed(Guided(shape))?
+                .ok_or_else(|| de::Error::custom("the sequence changed length"))?;
+            out.push(item);
+        }
+        Ok(Value::Sequence(out))
+    }
+}
+
+struct GuidedMap<'s>(&'s [(Shape, Shape)]);
+
+impl<'de> Visitor<'de> for GuidedMap<'_> {
+    type Value = Value;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a mapping")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Value, A::Error> {
+        let mut out = Mapping::with_capacity(self.0.len());
+        for (key_shape, value_shape) in self.0 {
+            let key =
+                map.next_key_seed(Guided(key_shape))?.ok_or_else(|| de::Error::custom("the mapping changed length"))?;
+            let value = map.next_value_seed(Guided(value_shape))?;
+            if out.contains_key(&key) {
+                let shown = key.as_str().map_or_else(|| format!("{key:?}"), |k| format!("\"{k}\""));
+                return Err(de::Error::custom(format!("duplicate entry with key {shown}")));
+            }
+            out.insert(key, value);
+        }
+        Ok(Value::Mapping(out))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 
 fn as_mapping<'a>(v: &'a Value, ctx: &str) -> Result<&'a Mapping> {
@@ -94,7 +266,9 @@ fn as_mapping<'a>(v: &'a Value, ctx: &str) -> Result<&'a Mapping> {
     }
 }
 
-/// Render a scalar as a string (numbers and booleans included).
+/// Render a scalar as a string. (After [`load`] every non-null scalar is
+/// already its literal text; numbers and booleans only appear in `!tagged`
+/// nodes.)
 fn scalar_string(v: &Value) -> Option<Option<String>> {
     match v {
         Value::Null => Some(None),
@@ -181,6 +355,21 @@ impl<'a> Entry<'a> {
                     .parse::<T>()
                     .map(Some)
                     .map_err(|_| Error::invalid(format!("{ctx}: '{key}' must be a non-negative integer (got '{s}')")))
+            }
+        }
+    }
+
+    /// A TCP port: 1–65535.
+    fn port(&mut self, key: &str) -> Result<Option<u16>> {
+        let ctx = self.ctx.clone();
+        match self.get(key) {
+            None => Ok(None),
+            Some(v) => {
+                let s = scalar_string(v).flatten().unwrap_or_default();
+                match s.trim().parse::<u16>() {
+                    Ok(p) if p > 0 => Ok(Some(p)),
+                    _ => Err(Error::invalid(format!("{ctx}: '{key}' must be a port between 1 and 65535 (got '{s}')"))),
+                }
             }
         }
     }
@@ -425,12 +614,13 @@ fn parse_service(v: &Value, idx: usize, warnings: &mut Vec<String>) -> Result<Pa
     {
         warnings.push(format!("{ctx}: both 'runtime' ({r}) and legacy 'env' ({l}) are set; using runtime"));
     }
-    if let Some(raw) = runtime_raw.or(env_raw) {
-        match Runtime::from_str(&raw) {
+    let runtime_raw = runtime_raw.or(env_raw);
+    let mut unsupported_runtime = None;
+    if let Some(raw) = &runtime_raw {
+        match Runtime::from_str(raw) {
             Ok(r) => spec.runtime = Some(r),
-            Err(_) => warnings.push(format!(
-                "{ctx}: runtime '{raw}' is not supported natively; using auto-detection (add a Dockerfile)"
-            )),
+            // Reported below, once we know whether an image is set.
+            Err(_) => unsupported_runtime = Some(raw.clone()),
         }
     }
     if spec.runtime == Some(Runtime::Static) && service_type == ServiceType::WebService {
@@ -466,6 +656,22 @@ fn parse_service(v: &Value, idx: usize, warnings: &mut Vec<String>) -> Result<Pa
                     opt_trim(scalar_string(other).ok_or_else(|| Error::invalid(format!("{ctx}: invalid image")))?);
             }
         }
+    }
+
+    match (&spec.image, &unsupported_runtime) {
+        (Some(image), Some(raw)) => {
+            warnings.push(format!("{ctx}: runtime '{raw}' is ignored: the service runs the image '{image}'"))
+        }
+        (None, Some(raw)) => warnings
+            .push(format!("{ctx}: runtime '{raw}' is not supported natively; using auto-detection (add a Dockerfile)")),
+        (Some(image), None) if runtime_raw.is_some() => {
+            // An explicit, supported runtime that the image makes moot.
+            if let Some(r) = spec.runtime.filter(|r| *r != Runtime::Image) {
+                warnings.push(format!("{ctx}: runtime '{r}' is ignored: the service runs the image '{image}'"));
+                spec.runtime = None;
+            }
+        }
+        (_, None) => {}
     }
 
     // build settings
@@ -506,9 +712,14 @@ fn parse_service(v: &Value, idx: usize, warnings: &mut Vec<String>) -> Result<Pa
     spec.publish_dir = opt_trim(e.string("staticPublishPath")?);
 
     // runtime settings
-    spec.port = e.number::<u16>("port")?;
+    spec.port = e.port("port")?;
     spec.health_check_path = opt_trim(e.string("healthCheckPath")?);
     spec.instances = e.number::<u32>("numInstances")?;
+    if service_type == ServiceType::CronJob && spec.instances.take().is_some() {
+        warnings.push(format!(
+            "{ctx}: numInstances is ignored: cron jobs have no long-running instances (each run starts one container)"
+        ));
+    }
     spec.auto_deploy = e.bool("autoDeploy")?;
     if let Some(trigger) = opt_trim(e.string("autoDeployTrigger")?) {
         let on = match trigger.to_ascii_lowercase().as_str() {
@@ -660,6 +871,67 @@ services:
         }));
         assert!(bp.warnings.iter().any(|w| w.contains("more than once")));
         assert!(bp.warnings.iter().any(|w| w.contains("previewValue")));
+    }
+
+    #[test]
+    fn scalars_are_kept_exactly_as_written() {
+        let cases = [
+            ("3.10", "3.10"),
+            ("0x1F", "0x1F"),
+            ("0o17", "0o17"),
+            ("1e3", "1e3"),
+            ("True", "True"),
+            ("+5", "+5"),
+            (".5", ".5"),
+            ("0.30", "0.30"),
+            ("0123", "0123"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-9223372036854775809", "-9223372036854775809"),
+            ("123456789012345678901234567890123456789012345", "123456789012345678901234567890123456789012345"),
+            ("'3.10'", "3.10"),
+            ("\"yes\"", "yes"),
+            ("!!str 3.10", "3.10"),
+        ];
+        let mut yaml = String::from("services:\n  - type: worker\n    name: w\n    branch: 1.10\n    envVars:\n");
+        for (i, (lit, _)) in cases.iter().enumerate() {
+            yaml.push_str(&format!("      - key: K{i}\n        value: {lit}\n"));
+        }
+        let bp = parse(&yaml).unwrap();
+        let s = &bp.services[0];
+        assert_eq!(s.branch.as_deref(), Some("1.10"));
+        for (i, (lit, want)) in cases.iter().enumerate() {
+            let got = s.env_vars.iter().find_map(|v| match v {
+                EnvVarSpec::Value { key, value } if *key == format!("K{i}") => Some(value.as_str()),
+                _ => None,
+            });
+            assert_eq!(got, Some(*want), "{lit}");
+        }
+        assert!(bp.warnings.is_empty(), "{:?}", bp.warnings);
+    }
+
+    #[test]
+    fn typed_fields_parse_their_literal_text() {
+        let bp = parse(
+            "x-v: &v 3.10\nservices:\n  - type: web\n    name: a\n    numInstances: 2\n    port: 8080\n    autoDeploy: True\n    envVars:\n      - {key: A, value: *v}\n      - {key: B, value: ~}\n      - {key: C, generateValue: yes}\n",
+        )
+        .unwrap();
+        let s = &bp.services[0];
+        assert_eq!((s.instances, s.port, s.auto_deploy), (Some(2), Some(8080), Some(true)));
+        assert!(s.env_vars.contains(&EnvVarSpec::Value { key: "A".into(), value: "3.10".into() }));
+        assert!(s.env_vars.contains(&EnvVarSpec::Value { key: "B".into(), value: String::new() }));
+        assert!(s.env_vars.contains(&EnvVarSpec::Generate { key: "C".into() }));
+        for (port, ok) in [("70000", false), ("0", false), ("-1", false), ("65535", true), ("\"80\"", true)] {
+            let r = parse(&format!("services:\n  - {{type: web, name: a, port: {port}}}\n"));
+            match r {
+                Ok(bp) => assert!(ok, "{port}: {:?}", bp.services[0].port),
+                Err(e) => {
+                    assert!(!ok, "{port}: {e}");
+                    assert!(e.to_string().contains("between 1 and 65535"), "{e}");
+                }
+            }
+        }
+        let err = parse("services:\n  - {type: web, name: a}\n  - {type: web, name: b, name: c}\n").unwrap_err();
+        assert!(err.to_string().contains("duplicate"), "{err}");
     }
 
     #[test]

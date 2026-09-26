@@ -55,5 +55,5 @@ pub async fn logs(
 ) -> ApiResult<Response> {
     let job = st.store.require_job_run(&id).await?;
     let stream = st.engine.job_logs(&job.id, q.follow).await?;
-    Ok(sse::log_response(stream, true))
+    Ok(sse::log_response(stream, true, &st.shutdown))
 }

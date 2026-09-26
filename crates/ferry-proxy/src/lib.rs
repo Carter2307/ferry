@@ -19,15 +19,29 @@
 //! 4. [`RouteTable::resolve`] → 404 / 503 (suspended) / 503 + `Retry-After`
 //!    (no upstreams) error pages, or an upstream.
 //! 5. Forward as HTTP/1.1 to `http://<upstream><path?query>` with the original
-//!    `Host`, streamed bodies, hop-by-hop headers stripped and
-//!    `X-Forwarded-{For,Proto,Host,Port}`, `X-Real-IP`, `X-Request-Id` set.
+//!    `Host`, streamed bodies (re-framed: chunked when the length is unknown),
+//!    hop-by-hop headers stripped, client-supplied forwarding headers
+//!    (`Forwarded`, every `X-Forwarded-*`, `X-Real-IP`…) dropped, and
+//!    `Forwarded`, `X-Forwarded-{For,Proto,Host,Port}`, `X-Real-IP` set from
+//!    what the proxy saw (it is the edge: `X-Forwarded-For` is the client's
+//!    address alone); `X-Request-Id` is set unless present.
 //!    Bodyless GET/HEAD requests are retried once on another upstream when
 //!    the connection fails; otherwise failures → 502.
-//! 6. `101 Switching Protocols` (websockets) → both sides are spliced.
+//! 6. `101 Switching Protocols` (websockets, HTTP/1.1 only) → both sides are
+//!    spliced.
 //!
 //! Proxy-generated error pages carry an `x-ferry-error: <kind>` header
 //! (`bad_request`, `not_found`, `method_not_allowed`, `suspended`,
 //! `no_upstreams`, `bad_gateway`).
+//!
+//! Client connections are bounded by [`ConnectionLimits`]: a global cap
+//! (from the open-file limit by default) and a per-address cap, a TLS
+//! handshake timeout, a deadline for the first request head (whatever the
+//! protocol turns out to be), HTTP/1 header read timeouts, an idle timeout
+//! for connections without a request in flight (HTTP/2 included) that
+//! shrinks while the cap is reached, and HTTP/2 keep-alive pings. Requests
+//! in flight (SSE, uploads) and websocket tunnels are never timed out; TCP
+//! keep-alive probes close them once the client machine is gone.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,6 +52,7 @@ use ferry_core::{CancellationToken, Result};
 mod body;
 mod handler;
 mod headers;
+mod limits;
 mod pages;
 mod routes;
 mod server;
@@ -45,6 +60,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
+pub use limits::ConnectionLimits;
 pub use routes::{Resolution, RouteSnapshot, RouteTable, normalize_host};
 
 /// Proxy listeners and TLS settings.
@@ -59,6 +75,8 @@ pub struct ProxyConfig {
     pub tls_hooks: Option<Arc<dyn TlsHooks>>,
     /// Redirect HTTP → HTTPS for hosts where `tls_hooks.has_certificate(host)`.
     pub redirect_https: bool,
+    /// Connection caps and timeouts (both listeners).
+    pub limits: ConnectionLimits,
 }
 
 impl std::fmt::Debug for ProxyConfig {
@@ -68,6 +86,7 @@ impl std::fmt::Debug for ProxyConfig {
             .field("https_addr", &self.https_addr)
             .field("tls", &self.tls.is_some())
             .field("redirect_https", &self.redirect_https)
+            .field("limits", &self.limits)
             .finish()
     }
 }
@@ -75,7 +94,14 @@ impl std::fmt::Debug for ProxyConfig {
 impl ProxyConfig {
     /// Plain HTTP only.
     pub fn http(addr: SocketAddr) -> Self {
-        ProxyConfig { http_addr: addr, https_addr: None, tls: None, tls_hooks: None, redirect_https: false }
+        ProxyConfig {
+            http_addr: addr,
+            https_addr: None,
+            tls: None,
+            tls_hooks: None,
+            redirect_https: false,
+            limits: ConnectionLimits::default(),
+        }
     }
 }
 

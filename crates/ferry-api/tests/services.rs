@@ -176,7 +176,8 @@ async fn patch_stores_settings_and_calls_the_engine() {
     let v = app.patch("/api/v1/services/web", json!({"port": 0})).await.json();
     assert_eq!(v["port"], Value::Null);
 
-    // instances → scale, suspended → suspend, domains → refresh_routes
+    // instances → scale, suspended → suspend (first: no containers are
+    // started only to be stopped), domains → refresh_routes
     let v = app
         .patch("/api/v1/services/web", json!({"instances": 3, "suspended": true, "custom_domains": ["x.example.com"]}))
         .await
@@ -186,7 +187,7 @@ async fn patch_stores_settings_and_calls_the_engine() {
     assert_eq!(state_of(&v), ServiceState::Suspended);
     assert_eq!(
         app.engine.calls(),
-        vec![format!("scale {id} 3"), format!("suspend {id}"), format!("refresh_routes {id}")]
+        vec![format!("suspend {id}"), format!("scale {id} 3"), format!("refresh_routes {id}")]
     );
     app.engine.clear();
 
@@ -204,15 +205,29 @@ async fn patch_stores_settings_and_calls_the_engine() {
 async fn patch_switches_sources_and_validates() {
     let app = TestApp::new().await;
     app.create_service(json!({"name": "web", "image": "nginx:alpine"})).await;
+    // replacing the source is never a silent side effect: the old one must be
+    // cleared in the same request (409 naming both otherwise)
+    let r = app.patch("/api/v1/services/web", json!({"repo_url": "https://github.com/a/b"})).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    let msg = r.json()["error"]["message"].as_str().unwrap().to_string();
+    assert!(msg.contains("nginx:alpine") && msg.contains("--image \"\""), "{msg}");
+    assert_eq!(app.store.require_service("web").await.unwrap().image.as_deref(), Some("nginx:alpine"));
     // switching to git drops the image and the image runtime
-    let v = app.patch("/api/v1/services/web", json!({"repo_url": "https://github.com/a/b"})).await.json();
+    let v = app.patch("/api/v1/services/web", json!({"repo_url": "https://github.com/a/b", "image": ""})).await.json();
     assert_eq!(v["repo_url"], "https://github.com/a/b");
     assert_eq!(v["image"], Value::Null);
     assert_eq!(v["runtime"], "auto");
-    // and back
-    let v = app.patch("/api/v1/services/web", json!({"image": "busybox"})).await.json();
+    // and back (credentials in the repo URL are never echoed)
+    app.patch("/api/v1/services/web", json!({"repo_url": "https://u:tok3n@github.com/a/b", "image": ""})).await;
+    let r = app.patch("/api/v1/services/web", json!({"image": "busybox"})).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    assert!(!r.text().contains("tok3n") && r.text().contains("--repo \\\"\\\""), "{}", r.text());
+    let v = app.patch("/api/v1/services/web", json!({"image": "busybox", "repo_url": ""})).await.json();
     assert_eq!(v["repo_url"], Value::Null);
     assert_eq!(v["runtime"], "image");
+    // re-setting the same kind of source is not a switch
+    let v = app.patch("/api/v1/services/web", json!({"image": "busybox:stable"})).await.json();
+    assert_eq!(v["image"], "busybox:stable");
 
     for body in [
         json!({"instances": 0}),
@@ -515,4 +530,231 @@ async fn deploy_status_values_roundtrip() {
     let d = &app.get("/api/v1/services/web/deploys").await.json()[0];
     let status: DeployStatus = serde_json::from_value(d["status"].clone()).unwrap();
     assert_eq!(status, DeployStatus::Queued);
+}
+
+// ---------------------------------------------------------------------------
+// regressions
+
+#[tokio::test]
+async fn source_paths_outside_the_checkout_are_rejected_up_front() {
+    let app = TestApp::new().await;
+    let cases = [
+        json!({"name": "trav-root", "repo_url": "/srv/git/mono", "root_dir": "../../"}),
+        json!({"name": "trav-df", "repo_url": "/srv/git/mono", "dockerfile_path": "../../../../../etc/hosts"}),
+        json!({"name": "trav-df2", "repo_url": "/srv/git/mono", "root_dir": "api", "dockerfile_path": "../../Dockerfile"}),
+        json!({"name": "trav-pub", "type": "static", "publish_dir": "/etc"}),
+    ];
+    for body in cases {
+        let r = app.post("/api/v1/services", body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}: {}", r.text());
+    }
+    let r = app
+        .post("/api/v1/services", json!({"name": "x", "repo_url": "/srv/git/mono", "dockerfile_path": "../Dockerfile"}))
+        .await;
+    assert!(r.json()["error"]["message"].as_str().unwrap().contains("outside the source directory"), "{}", r.text());
+    // a Dockerfile next to the root directory is fine
+    app.create_service(
+        json!({"name": "ok", "repo_url": "/srv/git/mono", "root_dir": "api", "dockerfile_path": "../Dockerfile", "deploy": false}),
+    )
+    .await;
+    // and PATCH checks the combination too
+    let r = app.patch("/api/v1/services/ok", json!({"root_dir": ""})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    let r = app.patch("/api/v1/services/ok", json!({"root_dir": "../x"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+}
+
+#[tokio::test]
+async fn invalid_git_inputs_are_rejected_by_the_api() {
+    let app = TestApp::new().await;
+    for body in [
+        json!({"name": "w1", "repo_url": "-oProxyCommand=x"}),
+        json!({"name": "w2", "repo_url": "/tmp", "branch": "--upload-pack=touch"}),
+        json!({"name": "w3", "repo_url": "relative/path"}),
+    ] {
+        let r = app.post("/api/v1/services", body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}: {}", r.text());
+    }
+    app.create_service(json!({"name": "probe", "repo_url": "https://github.com/a/b", "deploy": false})).await;
+    for bad in ["zzzz", "--help", "abc", "a b"] {
+        let r = app.post("/api/v1/services/probe/deploys", json!({ "commit": bad })).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let r = app.patch("/api/v1/services/probe", json!({"branch": "-evil"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    // a commit only makes sense for git services
+    app.create_service(json!({"name": "img", "image": "nginx", "deploy": false})).await;
+    let r = app.post("/api/v1/services/img/deploys", json!({"commit": "abc123"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(app.engine.calls_with("deploy ").is_empty());
+}
+
+#[tokio::test]
+async fn uploads_are_refused_for_services_with_a_repo_or_image() {
+    let app = TestApp::new().await;
+    app.create_service(json!({"name": "ws", "image": "jmalloc/echo-server", "port": 8080, "deploy": false})).await;
+    app.create_service(json!({"name": "gs", "repo_url": "https://user:tok3n@github.com/a/b", "deploy": false})).await;
+    for svc in ["ws", "gs"] {
+        let r = app.send(upload_req(&format!("/api/v1/services/{svc}/deploys/upload"), tar_gz())).await;
+        assert_eq!(r.status, StatusCode::CONFLICT, "{svc}: {}", r.text());
+        assert!(!r.text().contains("tok3n"), "{}", r.text());
+    }
+    assert!(app.engine.calls_with("deploy ").is_empty());
+    assert_eq!(std::fs::read_dir(app.config.uploads_dir()).map(|d| d.count()).unwrap_or(0), 0);
+    // after clearing the source, uploads work
+    app.patch("/api/v1/services/ws", json!({"image": ""})).await;
+    let r = app.send(upload_req("/api/v1/services/ws/deploys/upload", tar_gz())).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text());
+}
+
+#[tokio::test]
+async fn cron_jobs_have_no_instances_and_logs_point_at_job_runs() {
+    let app = TestApp::new().await;
+    let cron = json!({"name": "tick", "type": "cron", "schedule": "* * * * *", "image": "busybox", "deploy": false});
+    let mut with_instances = cron.clone();
+    with_instances["instances"] = json!(3);
+    assert_eq!(app.post("/api/v1/services", with_instances).await.status, StatusCode::BAD_REQUEST);
+    app.create_service(cron).await;
+    let r = app.post("/api/v1/services/tick/scale", json!({"instances": 3})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json()["error"]["message"].as_str().unwrap().contains("cron"), "{}", r.text());
+    assert_eq!(app.patch("/api/v1/services/tick", json!({"instances": 2})).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(app.patch("/api/v1/services/tick", json!({"instances": 1})).await.status, StatusCode::OK);
+    assert!(app.engine.calls_with("scale").is_empty());
+
+    // runtime logs: a finite hint (even with follow), never an endless empty stream
+    app.post("/api/v1/services/tick/jobs", json!({})).await;
+    let r = app.get("/api/v1/services/tick/logs?follow=1").await;
+    assert_eq!(r.status, StatusCode::OK);
+    let events = sse_events(&r.text());
+    assert_eq!(events.last().unwrap().0, "end", "{}", r.text());
+    assert!(r.text().contains("ferry jobs tick") && r.text().contains("Latest run: job-"), "{}", r.text());
+    assert!(app.engine.calls_with("service_logs").is_empty());
+}
+
+#[tokio::test]
+async fn patch_resumes_after_scaling_and_reports_partial_failures() {
+    let app = TestApp::new().await;
+    let v = app.create_service(json!({"name": "web", "image": "nginx"})).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    app.post("/api/v1/services/web/suspend", json!({})).await;
+    app.engine.clear();
+    app.patch("/api/v1/services/web", json!({"instances": 2, "suspended": false})).await;
+    assert_eq!(app.engine.calls(), vec![format!("scale {id} 2"), format!("resume {id}")]);
+
+    // a failed side effect says what was already saved
+    app.engine.fail_scale.store(true, std::sync::atomic::Ordering::SeqCst);
+    let r = app.patch("/api/v1/services/web", json!({"build_command": "make", "instances": 3})).await;
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY);
+    let msg = r.json()["error"]["message"].as_str().unwrap().to_string();
+    assert!(msg.starts_with("settings saved, but scaling 'web' to 3 failed"), "{msg}");
+    assert_eq!(app.store.require_service("web").await.unwrap().build_command.as_deref(), Some("make"));
+    // nothing saved before the failure: the plain error
+    let r = app.patch("/api/v1/services/web", json!({"instances": 4})).await;
+    assert!(!r.json()["error"]["message"].as_str().unwrap().contains("saved"), "{}", r.text());
+}
+
+#[tokio::test]
+async fn deploy_hook_key_can_be_rotated() {
+    let app = TestApp::new().await;
+    let v = app.create_service(json!({"name": "web", "image": "nginx", "deploy": false})).await;
+    let old_path = v["deploy_hook_path"].as_str().unwrap().to_string();
+    let r = app.post("/api/v1/services/web/deploy-hook/rotate", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let new_path = r.json()["deploy_hook_path"].as_str().unwrap().to_string();
+    assert_ne!(old_path, new_path);
+    let hook = |p: &str| Request::builder().method(Method::POST).uri(p).body(Body::empty()).unwrap();
+    assert_eq!(app.send(hook(&old_path)).await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(app.send(hook(&new_path)).await.status, StatusCode::ACCEPTED);
+    assert_eq!(app.post("/api/v1/services/nope/deploy-hook/rotate", json!({})).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn deleting_a_referenced_service_needs_force() {
+    let app = TestApp::new().await;
+    app.create_service(json!({"name": "echo2", "type": "pserv"})).await;
+    app.create_service(
+        json!({"name": "echo1", "env": [{"key": "API", "value": "http://${{ service.echo2.hostport }}"}]}),
+    )
+    .await;
+    // a self-reference doesn't block
+    app.create_service(json!({"name": "solo", "env": [{"key": "ME", "value": "${{svc.solo.host}}"}]})).await;
+    let r = app.delete("/api/v1/services/echo2").await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    let msg = r.json()["error"]["message"].as_str().unwrap().to_string();
+    assert!(msg.contains("service 'echo1' (API)") && msg.contains("force=true"), "{msg}");
+    assert!(app.engine.calls_with("delete_service").is_empty());
+    assert_eq!(app.delete("/api/v1/services/echo2?force=true").await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.delete("/api/v1/services/solo").await.status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn follow_streams_end_when_the_server_shuts_down() {
+    use futures::StreamExt;
+    use tower::ServiceExt;
+    let app = TestApp::new().await;
+    app.create_service(json!({"name": "web"})).await;
+    let req = Request::builder()
+        .uri("/api/v1/services/web/logs?follow=1")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.router.clone().oneshot(req).await.unwrap();
+    let mut body = resp.into_body().into_data_stream();
+    let mut seen = String::new();
+    while seen.matches("event: log").count() < 2 {
+        seen.push_str(std::str::from_utf8(&body.next().await.unwrap().unwrap()).unwrap());
+    }
+    app.shutdown.cancel();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(2), body.next()).await;
+    assert!(matches!(next, Ok(None)), "the stream must end on shutdown");
+}
+
+#[tokio::test]
+async fn unknown_fields_are_json_400s() {
+    let app = TestApp::new().await;
+    app.create_service(json!({"name": "web", "image": "nginx", "deploy": false})).await;
+    let cases = [
+        (Method::POST, "/api/v1/services", json!({"name": "x", "imagee": "nginx"})),
+        (Method::PATCH, "/api/v1/services/web", json!({"instance": 2})),
+        (Method::POST, "/api/v1/services/web/scale", json!({"instances": 2, "force": true})),
+        (Method::PATCH, "/api/v1/services/web/env", json!({"sett": []})),
+        (Method::POST, "/api/v1/services/web/deploys", json!({"sha": "abc123"})),
+        (Method::POST, "/api/v1/datastores", json!({"name": "d", "kind": "redis", "size": 1})),
+        (Method::POST, "/api/v1/blueprints/apply", json!({"yaml": "", "dryrun": true})),
+    ];
+    for (method, uri, body) in cases {
+        let r = app.call(method.clone(), uri, Some(body.clone())).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{method} {uri} {body}: {}", r.text());
+        assert_eq!(r.code(), "invalid_request");
+        assert!(r.json()["error"]["message"].as_str().unwrap().contains("unknown field"), "{}", r.text());
+    }
+    assert!(app.engine.calls().is_empty());
+}
+
+#[tokio::test]
+async fn views_report_degraded_when_live_instances_are_down() {
+    let app = TestApp::new().await;
+    app.create_service(json!({"name": "dsk", "deploy": false})).await;
+    app.make_live("dsk", Some(8080)).await;
+    *app.engine.running.lock().unwrap() = Some(0);
+    let v = app.get("/api/v1/services/dsk").await.json();
+    assert_eq!(state_of(&v), ServiceState::Degraded, "{v}");
+    let list = app.get("/api/v1/services").await.json();
+    assert_eq!(state_of(&list[0]), ServiceState::Degraded, "{list}");
+    // counts are cached briefly: the list didn't ask the engine again
+    assert_eq!(app.engine.calls_with("service_status").len(), 1);
+
+    // every status call refreshes the count
+    *app.engine.running.lock().unwrap() = None;
+    assert_eq!(state_of(&app.get("/api/v1/services/dsk/status").await.json()), ServiceState::Live);
+    assert_eq!(state_of(&app.get("/api/v1/services/dsk").await.json()), ServiceState::Live);
+
+    // suspended or never deployed services don't need the engine at all
+    app.create_service(json!({"name": "idle", "deploy": false})).await;
+    app.post("/api/v1/services/dsk/suspend", json!({})).await;
+    app.engine.clear();
+    let list = app.get("/api/v1/services").await.json();
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert!(app.engine.calls_with("service_status").is_empty());
 }

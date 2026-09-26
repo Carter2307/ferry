@@ -9,6 +9,10 @@
 //! The framing is written by hand (instead of `axum::response::Sse`) because
 //! axum drops empty data fields, which would make `end` invisible to
 //! `EventSource`.
+//!
+//! Every stream also ends (without `event: end`: the log isn't complete) as
+//! soon as the server shuts down, so an open follower can never hold up the
+//! HTTP server's graceful shutdown.
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -16,7 +20,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use ferry_core::{LogLine, LogStream};
+use ferry_core::{CancellationToken, LogLine, LogStream};
 use futures::StreamExt;
 use http::{HeaderValue, header};
 
@@ -48,25 +52,32 @@ enum Phase {
 }
 
 /// Turn a log stream into an SSE HTTP response. `finite` streams get a final
-/// `event: end` frame when the log stream completes.
-pub fn log_response(stream: LogStream, finite: bool) -> Response {
-    let frames = futures::stream::unfold((stream, Phase::Streaming), move |(mut stream, phase)| async move {
+/// `event: end` frame when the log stream completes. The response body ends
+/// when `shutdown` is cancelled.
+pub fn log_response(stream: LogStream, finite: bool, shutdown: &CancellationToken) -> Response {
+    let shutdown = shutdown.clone();
+    let state = (stream, Phase::Streaming, shutdown);
+    let frames = futures::stream::unfold(state, move |(mut stream, phase, shutdown)| async move {
         if matches!(phase, Phase::Done) {
             return None;
         }
         loop {
             tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => return None,
                 item = stream.next() => match item {
                     Some(line) => {
                         if let Some(frame) = log_frame(&line) {
-                            return Some((Ok::<Bytes, Infallible>(frame), (stream, Phase::Streaming)));
+                            return Some((Ok::<Bytes, Infallible>(frame), (stream, Phase::Streaming, shutdown)));
                         }
                     }
-                    None if finite => return Some((Ok(Bytes::from_static(END_FRAME)), (stream, Phase::Done))),
+                    None if finite => {
+                        return Some((Ok(Bytes::from_static(END_FRAME)), (stream, Phase::Done, shutdown)));
+                    }
                     None => return None,
                 },
                 _ = tokio::time::sleep(KEEP_ALIVE) => {
-                    return Some((Ok(Bytes::from_static(KEEP_ALIVE_FRAME)), (stream, Phase::Streaming)));
+                    return Some((Ok(Bytes::from_static(KEEP_ALIVE_FRAME)), (stream, Phase::Streaming, shutdown)));
                 }
             }
         }
@@ -89,7 +100,7 @@ mod tests {
     #[tokio::test]
     async fn frames_finite_stream() {
         let lines = vec![LogLine::system("==> hi"), LogLine::new(LogStreamKind::Stdout, "a\nb")];
-        let resp = log_response(Box::pin(futures::stream::iter(lines)), true);
+        let resp = log_response(Box::pin(futures::stream::iter(lines)), true, &CancellationToken::new());
         assert_eq!(resp.headers()[header::CONTENT_TYPE], "text/event-stream");
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8(body.to_vec()).unwrap();
@@ -102,7 +113,8 @@ mod tests {
 
     #[tokio::test]
     async fn infinite_stream_has_no_end() {
-        let resp = log_response(Box::pin(futures::stream::iter(vec![LogLine::system("x")])), false);
+        let resp =
+            log_response(Box::pin(futures::stream::iter(vec![LogLine::system("x")])), false, &CancellationToken::new());
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(!text.contains("event: end"));
@@ -113,7 +125,7 @@ mod tests {
     async fn keep_alive_while_idle() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<LogLine>();
         let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
-        let resp = log_response(Box::pin(stream), true);
+        let resp = log_response(Box::pin(stream), true, &CancellationToken::new());
         let mut body = resp.into_body().into_data_stream();
         let first = body.next().await.unwrap().unwrap();
         assert_eq!(&first[..], KEEP_ALIVE_FRAME);
@@ -124,5 +136,24 @@ mod tests {
         let end = body.next().await.unwrap().unwrap();
         assert_eq!(&end[..], END_FRAME);
         assert!(body.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_ends_an_open_stream() {
+        // A followed log that never ends on its own (e.g. a queued deploy).
+        let stream = futures::stream::iter(vec![LogLine::system("first")]).chain(futures::stream::pending());
+        let token = CancellationToken::new();
+        let resp = log_response(Box::pin(stream), true, &token);
+        let mut body = resp.into_body().into_data_stream();
+        let first = body.next().await.unwrap().unwrap();
+        assert!(first.starts_with(b"event: log\n"));
+        token.cancel();
+        let rest = tokio::time::timeout(Duration::from_secs(1), body.next()).await.expect("the stream must end");
+        assert!(rest.is_none(), "no end frame: the log isn't complete");
+
+        // Cancelled before the first poll: nothing at all.
+        let resp = log_response(Box::pin(futures::stream::pending()), false, &token);
+        let mut body = resp.into_body().into_data_stream();
+        assert!(tokio::time::timeout(Duration::from_secs(1), body.next()).await.unwrap().is_none());
     }
 }

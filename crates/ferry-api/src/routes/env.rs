@@ -1,14 +1,19 @@
 //! Service env vars and env group links.
+//!
+//! Every change runs under the service's row lock (validation against the
+//! current variables, then the write) and on a detached task, so the write
+//! and the optional restart can't be separated by a client disconnect.
 
 use axum::Json;
 use axum::extract::State;
 use ferry_core::dto::{LinkEnvGroup, PatchEnv, ReplaceEnv, ServiceView};
-use ferry_core::{EnvVar, Error, Service};
+use ferry_core::{EnvVar, Error, Service, validate};
 
 use crate::AppState;
-use crate::checks;
+use crate::checks::{self, EnvChange};
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery, RestartQuery};
+use crate::locks;
 use crate::ops;
 use crate::views::service_view;
 
@@ -18,19 +23,24 @@ pub async fn list(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> A
     Ok(Json(st.store.list_env(&svc.id).await?))
 }
 
-/// Restart after an env change when asked to. The variables are already
-/// saved, so a failed restart is reported as the request's error.
+/// Restart after an env change when asked to (see
+/// [`ops::restart_for_env_change`]). The variables are already saved, so a
+/// failed restart is reported as the request's error, saying so.
 async fn maybe_restart(st: &AppState, svc: &Service, restart: bool) -> ApiResult<()> {
     if restart {
         let fresh = st.store.require_service(&svc.id).await?;
-        ops::restart_for_env_change(st.engine.as_ref(), &fresh).await.map_err(|e| {
-            let mut err = ApiError::from(e);
-            err.body.error.message =
-                format!("env vars saved, but restarting '{}' failed: {}", svc.name, err.body.error.message);
-            err
+        ops::restart_for_env_change(&st.store, st.engine.as_ref(), &fresh).await.map_err(|e| {
+            ApiError::from(e).prefixed(format!("env vars saved, but restarting '{}' failed: ", svc.name))
         })?;
     }
     Ok(())
+}
+
+/// Resolve `id` and lock the service's row; returns the row read under the lock.
+async fn locked_service(st: &AppState, id: &str) -> ApiResult<(Service, tokio::sync::OwnedMutexGuard<()>)> {
+    let service_id = st.store.require_service(id).await?.id;
+    let guard = locks::owner(&service_id).await;
+    Ok((st.store.require_service(&service_id).await?, guard))
 }
 
 /// `PUT /api/v1/services/{id}/env?restart=`
@@ -40,12 +50,16 @@ pub async fn replace(
     ApiQuery(q): ApiQuery<RestartQuery>,
     ApiJson(req): ApiJson<ReplaceEnv>,
 ) -> ApiResult<Json<Vec<EnvVar>>> {
-    let svc = st.store.require_service(&id).await?;
-    checks::validate_env_vars(&req.vars)?;
-    st.store.replace_env(&svc.id, &req.vars).await?;
-    tracing::info!(service = %svc.name, vars = req.vars.len(), "replaced env vars");
-    maybe_restart(&st, &svc, q.restart).await?;
-    Ok(Json(st.store.list_env(&svc.id).await?))
+    locks::detached(async move {
+        let (svc, _guard) = locked_service(&st, &id).await?;
+        validate::env_vars(&req.vars)?;
+        checks::check_service_env(&st.store, &svc, EnvChange { own: Some(&req.vars), ..Default::default() }).await?;
+        st.store.replace_env(&svc.id, &req.vars).await?;
+        tracing::info!(service = %svc.name, vars = req.vars.len(), "replaced env vars");
+        maybe_restart(&st, &svc, q.restart).await?;
+        Ok(Json(st.store.list_env(&svc.id).await?))
+    })
+    .await
 }
 
 /// `PATCH /api/v1/services/{id}/env?restart=`
@@ -55,12 +69,19 @@ pub async fn patch(
     ApiQuery(q): ApiQuery<RestartQuery>,
     ApiJson(req): ApiJson<PatchEnv>,
 ) -> ApiResult<Json<Vec<EnvVar>>> {
-    let svc = st.store.require_service(&id).await?;
-    checks::validate_env_vars(&req.set)?;
-    st.store.patch_env(&svc.id, &req.set, &req.unset).await?;
-    tracing::info!(service = %svc.name, set = req.set.len(), unset = req.unset.len(), "patched env vars");
-    maybe_restart(&st, &svc, q.restart).await?;
-    Ok(Json(st.store.list_env(&svc.id).await?))
+    locks::detached(async move {
+        let (svc, _guard) = locked_service(&st, &id).await?;
+        validate::env_vars(&req.set)?;
+        // The limits apply to the result, not just to the request.
+        let merged = checks::patched_env(&st.store.list_env(&svc.id).await?, &req.set, &req.unset);
+        validate::env_vars(&merged)?;
+        checks::check_service_env(&st.store, &svc, EnvChange { own: Some(&merged), ..Default::default() }).await?;
+        st.store.patch_env(&svc.id, &req.set, &req.unset).await?;
+        tracing::info!(service = %svc.name, set = req.set.len(), unset = req.unset.len(), "patched env vars");
+        maybe_restart(&st, &svc, q.restart).await?;
+        Ok(Json(st.store.list_env(&svc.id).await?))
+    })
+    .await
 }
 
 /// `POST /api/v1/services/{id}/env-groups`
@@ -69,12 +90,20 @@ pub async fn link_group(
     ApiPath(id): ApiPath<String>,
     ApiJson(req): ApiJson<LinkEnvGroup>,
 ) -> ApiResult<Json<ServiceView>> {
-    let svc = st.store.require_service(&id).await?;
-    let group = st.store.require_env_group(req.group.trim()).await?;
-    st.store.link_env_group(&svc.id, &group.id).await?;
-    tracing::info!(service = %svc.name, group = %group.name, "linked env group");
-    let svc = st.store.require_service(&svc.id).await?;
-    Ok(Json(service_view(&st.store, &st.config, svc).await?))
+    locks::detached(async move {
+        let (svc, _guard) = locked_service(&st, &id).await?;
+        let group = st.store.require_env_group(req.group.trim()).await?;
+        let linked = st.store.service_env_groups(&svc.id).await?;
+        if !linked.iter().any(|g| g.id == group.id) {
+            let vars = st.store.list_env(&group.id).await?;
+            checks::check_service_env(&st.store, &svc, EnvChange { link: Some(&vars), ..Default::default() }).await?;
+        }
+        st.store.link_env_group(&svc.id, &group.id).await?;
+        tracing::info!(service = %svc.name, group = %group.name, "linked env group");
+        let svc = st.store.require_service(&svc.id).await?;
+        Ok(Json(service_view(&st.store, &st.config, svc).await?))
+    })
+    .await
 }
 
 /// `DELETE /api/v1/services/{id}/env-groups/{group}`

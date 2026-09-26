@@ -112,6 +112,17 @@ pub struct RestartQuery {
     pub restart: bool,
 }
 
+/// `?force=&restart=` for deletions of resources other services depend on.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DeleteQuery {
+    /// Delete even though other services still use the resource.
+    #[serde(default, deserialize_with = "de_flag")]
+    pub force: bool,
+    /// (env groups) restart the live services that were linked to it.
+    #[serde(default, deserialize_with = "de_flag")]
+    pub restart: bool,
+}
+
 /// `?limit=` for listings.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct LimitQuery {

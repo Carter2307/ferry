@@ -140,8 +140,14 @@ async fn env_groups_crud_link_unlink_restart() {
     assert_eq!(app.delete("/api/v1/services/worker/env-groups/shared").await.status, StatusCode::NOT_FOUND);
     let _ = worker;
 
-    // delete
-    assert_eq!(app.delete("/api/v1/env-groups/shared").await.status, StatusCode::NO_CONTENT);
+    // delete: refused while linked (409 naming the services), unless forced
+    let r = app.delete("/api/v1/env-groups/shared").await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert!(r.json()["error"]["message"].as_str().unwrap().contains("'web'"), "{}", r.text());
+    assert!(app.store.find_env_group("shared").await.unwrap().is_some());
+    app.engine.clear();
+    assert_eq!(app.delete("/api/v1/env-groups/shared?force=true").await.status, StatusCode::NO_CONTENT);
+    assert!(app.engine.calls_with("restart").is_empty());
     assert_eq!(app.get("/api/v1/env-groups/shared").await.status, StatusCode::NOT_FOUND);
     assert_eq!(app.get("/api/v1/services/web").await.json()["env_groups"], json!([]));
 }
@@ -307,4 +313,146 @@ async fn datastore_provisioning_failure_is_recorded() {
     assert_eq!(v["status"], "failed");
     assert!(v["error"].as_str().unwrap().contains("daemon unreachable"));
     assert_eq!(v["external_url"], Value::Null);
+}
+
+// ---------------------------------------------------------------------------
+// regressions
+
+fn big(n: usize) -> String {
+    "x".repeat(n)
+}
+
+#[tokio::test]
+async fn env_sizes_are_limited_per_value_per_owner_and_combined() {
+    use ferry_core::validate::{MAX_ENV_TOTAL_BYTES, MAX_ENV_VALUE_BYTES};
+    let app = TestApp::new().await;
+    app.create_service(json!({"name": "probe"})).await;
+
+    // one oversized value (the original 1.5 MB report), named in the error
+    let r = app.patch("/api/v1/services/probe/env", json!({"set": [{"key": "HUGE", "value": big(1_500_000)}]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json()["error"]["message"].as_str().unwrap().contains("HUGE"), "{}", &r.text()[..200]);
+    let r = app
+        .put("/api/v1/services/probe/env", json!({"vars": [{"key": "V", "value": big(MAX_ENV_VALUE_BYTES + 1)}]}))
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = app
+        .post("/api/v1/services", json!({"name": "x", "env": [{"key": "V", "value": big(MAX_ENV_VALUE_BYTES + 1)}]}))
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    // duplicate keys in one request
+    let r = app
+        .put("/api/v1/services/probe/env", json!({"vars": [{"key": "A", "value": "1"}, {"key": "A", "value": "2"}]}))
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    // the total is checked on the merged result of PATCHes
+    let chunk = big(MAX_ENV_VALUE_BYTES - 64);
+    let per_patch = 3;
+    let mut accepted = 0;
+    for i in 0..20 {
+        let set: Vec<Value> =
+            (0..per_patch).map(|j| json!({"key": format!("K{i}_{j}"), "value": chunk.clone()})).collect();
+        let r = app.patch("/api/v1/services/probe/env", json!({ "set": set })).await;
+        if r.status == StatusCode::BAD_REQUEST {
+            assert!(r.json()["error"]["message"].as_str().unwrap().contains("maximum"), "{}", r.text());
+            break;
+        }
+        assert_eq!(r.status, StatusCode::OK);
+        accepted += 1;
+    }
+    assert!(accepted > 0 && accepted < 20);
+    let id = app.store.require_service("probe").await.unwrap().id;
+    let total: usize = app.store.list_env(&id).await.unwrap().iter().map(|v| v.key.len() + v.value.len() + 2).sum();
+    assert!(total <= MAX_ENV_TOTAL_BYTES);
+
+    // combined env: a group that fits alone but not with the service's own vars
+    let group_vars: Vec<Value> = (0..5).map(|j| json!({"key": format!("G{j}"), "value": chunk.clone()})).collect();
+    let r = app.post("/api/v1/env-groups", json!({"name": "fat", "vars": group_vars})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", &r.text()[..200.min(r.text().len())]);
+    let r = app.post("/api/v1/services/probe/env-groups", json!({"group": "fat"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json()["error"]["message"].as_str().unwrap().contains("service 'probe'"), "{}", r.text());
+    let own: Vec<Value> = (0..4).map(|j| json!({"key": format!("O{j}"), "value": chunk.clone()})).collect();
+    let r = app.post("/api/v1/services", json!({"name": "y", "env": own, "env_groups": ["fat"]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    // ...and growing a linked group is checked against every linked service
+    let own: Vec<Value> = (0..3).map(|j| json!({"key": format!("O{j}"), "value": chunk.clone()})).collect();
+    app.create_service(json!({"name": "small", "env": own, "env_groups": ["fat"]})).await;
+    let r = app.patch("/api/v1/env-groups/fat/env", json!({"set": [{"key": "G9", "value": chunk.clone()}]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json()["error"]["message"].as_str().unwrap().contains("service 'small'"), "{}", r.text());
+}
+
+#[tokio::test]
+async fn env_changes_during_the_first_deploy_queue_a_restart() {
+    let app = TestApp::new().await;
+    // an image service: its `create` deploy is still queued (not live)
+    let v = app.create_service(json!({"name": "racey", "image": "python:3.12-alpine", "port": 8000})).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    let r = app
+        .patch("/api/v1/services/racey/env?restart=true", json!({"set": [{"key": "VERSION", "value": "two"}]}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {id} env_change")]);
+
+    // env groups linked to it too
+    app.post("/api/v1/env-groups", json!({"name": "g"})).await;
+    app.post("/api/v1/services/racey/env-groups", json!({"group": "g"})).await;
+    app.engine.clear();
+    app.patch("/api/v1/env-groups/g/env?restart=true", json!({"set": [{"key": "X", "value": "1"}]})).await;
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {id} env_change")]);
+
+    // once nothing is in flight and nothing is live, there's nothing to restart
+    for d in app.store.active_deploys().await.unwrap() {
+        app.store.set_deploy_status(&d.id, ferry_core::DeployStatus::Canceled, None).await.unwrap();
+    }
+    app.engine.clear();
+    app.patch("/api/v1/services/racey/env?restart=true", json!({"set": [{"key": "VERSION", "value": "three"}]})).await;
+    assert!(app.engine.calls_with("restart").is_empty());
+}
+
+#[tokio::test]
+async fn deleting_a_linked_env_group_needs_force_and_can_restart() {
+    let app = TestApp::new().await;
+    app.post("/api/v1/env-groups", json!({"name": "shared", "vars": [{"key": "G1", "value": "one"}]})).await;
+    let e1 = app.create_service(json!({"name": "echo1", "env_groups": ["shared"]})).await;
+    app.create_service(json!({"name": "echo2", "env_groups": ["shared"]})).await;
+    app.make_live("echo1", Some(80)).await;
+    let r = app.delete("/api/v1/env-groups/shared").await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    let msg = r.json()["error"]["message"].as_str().unwrap().to_string();
+    assert!(msg.contains("'echo1'") && msg.contains("'echo2'"), "{msg}");
+    app.engine.clear();
+    let r = app.delete("/api/v1/env-groups/shared?force=true&restart=true").await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    // only the live one restarts, and without the group's variables
+    assert_eq!(app.engine.calls_with("restart"), vec![format!("restart {} env_change", e1["id"].as_str().unwrap())]);
+    assert!(app.store.effective_env(e1["id"].as_str().unwrap()).await.unwrap().is_empty());
+    // unlinked groups delete without force
+    app.post("/api/v1/env-groups", json!({"name": "lonely"})).await;
+    assert_eq!(app.delete("/api/v1/env-groups/lonely").await.status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn deleting_a_referenced_datastore_needs_force() {
+    let app = TestApp::new().await;
+    app.post("/api/v1/datastores", json!({"name": "pg2", "kind": "postgres"})).await;
+    app.post("/api/v1/datastores", json!({"name": "unused", "kind": "redis"})).await;
+    app.create_service(
+        json!({"name": "echo2", "env": [{"key": "PG2", "value": "${{datastore.pg2.connectionString}}"}]}),
+    )
+    .await;
+    // through an env group as well
+    app.post("/api/v1/env-groups", json!({"name": "db", "vars": [{"key": "DB_HOST", "value": "${{db.pg2.host}}"}]}))
+        .await;
+    app.create_service(json!({"name": "api", "env_groups": ["db"]})).await;
+    app.engine.clear();
+    let r = app.delete("/api/v1/datastores/pg2").await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    let msg = r.json()["error"]["message"].as_str().unwrap().to_string();
+    assert!(msg.contains("service 'echo2' (PG2)") && msg.contains("service 'api' (DB_HOST)"), "{msg}");
+    assert!(app.engine.calls().is_empty());
+    assert_eq!(app.delete("/api/v1/datastores/unused").await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.delete("/api/v1/datastores/pg2?force=1").await.status, StatusCode::NO_CONTENT);
 }

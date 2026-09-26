@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use ferry_core::{CancellationToken, Error, LogSink, Result, Runtime, ServiceType};
 
 mod archive;
+mod buildenv;
 mod detect;
 mod docker;
 mod dockerfile;
@@ -60,8 +61,13 @@ pub struct BuildRequest {
     pub publish_dir: Option<String>,
     /// Full image reference to produce, e.g. `ferry/web:dep-…`.
     pub image_tag: String,
-    /// Env vars available at build time: `--build-arg` for user Dockerfiles,
-    /// declared as `ARG` in generated ones.
+    /// Env vars available at build time. Always passed as BuildKit secrets
+    /// (`--secret id=KEY`, values through the docker CLI's environment, never
+    /// its command line): generated Dockerfiles mount them into the steps
+    /// that run project code (`RUN --mount=type=secret,id=KEY,env=KEY`) and
+    /// never declare them as `ARG`, so values stay out of the image history.
+    /// User Dockerfiles additionally get `--build-arg KEY`, so the ARGs they
+    /// declare keep working.
     pub build_args: Vec<(String, String)>,
     /// Labels added to the image (`--label`).
     pub labels: BTreeMap<String, String>,
@@ -98,7 +104,8 @@ pub struct DockerfileOptions {
     pub build_command: Option<String>,
     pub start_command: Option<String>,
     pub publish_dir: Option<String>,
-    /// Build-arg names to declare with `ARG`.
+    /// Build-time variable names (see [`BuildRequest::build_args`]): exposed
+    /// to install/build steps through BuildKit secret mounts, never `ARG`.
     pub build_arg_keys: Vec<String>,
 }
 
@@ -135,6 +142,8 @@ pub struct Builder {
     docker_bin: String,
     /// Serializes git operations on one service's cache.
     repo_locks: RepoLocks,
+    /// Keys the cache digest of the build-time env.
+    env_key: buildenv::EnvKey,
 }
 
 /// What [`prepare_context`] decided.
@@ -144,6 +153,8 @@ struct Prepared {
     runtime: Runtime,
     port_hint: Option<u16>,
     messages: Vec<String>,
+    /// The generated Dockerfile declares the env digest build arg.
+    env_digest_arg: bool,
 }
 
 impl Builder {
@@ -151,9 +162,11 @@ impl Builder {
     /// after each build. `repos_dir`: persistent git caches
     /// (`<repos_dir>/<service_id>`) for fast incremental fetches.
     pub fn new(builds_dir: PathBuf, repos_dir: PathBuf, docker_bin: String) -> Self {
+        let repos_dir = absolute(repos_dir);
         Builder {
             builds_dir: absolute(builds_dir),
-            repos_dir: absolute(repos_dir),
+            env_key: buildenv::EnvKey::new(&repos_dir),
+            repos_dir,
             docker_bin,
             repo_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
@@ -259,10 +272,14 @@ impl Builder {
             BuildSource::Archive { path } => {
                 logs.system("==> Extracting uploaded source archive");
                 let (archive_path, dest, token) = (path.clone(), scratch.to_path_buf(), cancel.clone());
-                let root_dir = req.root_dir.clone();
+                let hints = RootHints {
+                    root_dir: req.root_dir.clone(),
+                    dockerfile_path: req.dockerfile_path.clone(),
+                    publish_dir: req.publish_dir.clone(),
+                };
                 let res = tokio::task::spawn_blocking(move || -> std::result::Result<_, archive::ExtractError> {
                     let report = archive::extract_archive_file(&archive_path, &dest, &token)?;
-                    let root = choose_archive_root(&dest, root_dir.as_deref())?;
+                    let root = choose_archive_root(&dest, &hints)?;
                     Ok((report, root))
                 })
                 .await
@@ -335,13 +352,21 @@ impl Builder {
 
         // 3. docker build.
         logs.system(format!("==> Building image {}", req.image_tag.trim()));
+        let env_digest = match prepared.env_digest_arg && !build_args.is_empty() {
+            true => Some(self.env_key.digest(&build_args).await),
+            false => None,
+        };
+        let docker_host = docker::daemon_host().await;
         let build = docker::DockerBuild {
             docker_bin: &self.docker_bin,
             dockerfile: &prepared.dockerfile,
             context: &prepared.context,
             tag: req.image_tag.trim(),
             labels: &req.labels,
-            build_args: &build_args,
+            env: &build_args,
+            build_args: prepared.runtime == Runtime::Docker,
+            env_digest: env_digest.as_deref(),
+            docker_host: docker_host.as_deref(),
             no_cache: req.clear_cache,
         };
         docker::build(&build, logs, cancel).await?;
@@ -392,21 +417,47 @@ impl Builder {
     }
 }
 
-/// Root of an extracted archive: its single top-level directory when it has
-/// one and nothing else (`project/...` archives), else the extraction dir.
-/// When a `root_dir` only exists relative to the extraction dir itself (a
-/// monorepo whose root holds a single directory), that interpretation wins.
-fn choose_archive_root(extracted: &Path, root_dir: Option<&str>) -> io::Result<PathBuf> {
+/// The service paths that tell how an uploaded archive is rooted.
+#[derive(Debug, Clone, Default)]
+struct RootHints {
+    root_dir: Option<String>,
+    dockerfile_path: Option<String>,
+    publish_dir: Option<String>,
+}
+
+/// Root of an extracted archive. An archive holding a single directory is
+/// either wrapped (`tar czf app.tgz app/`: that directory is the project) or
+/// the project itself holds a single directory (`ferry up` never wraps:
+/// e.g. only `public/`). The interpretation where the service's configured
+/// paths exist wins — a root directory that exists in only one of them
+/// decides, then the Dockerfile path and publish directory (weighing more
+/// than a merely recognizable project); ties strip the wrapper.
+fn choose_archive_root(extracted: &Path, hints: &RootHints) -> io::Result<PathBuf> {
     let Some(top) = archive::single_top_level_dir(extracted)? else {
         return Ok(extracted.to_path_buf());
     };
-    if let Some(rd) = root_dir.map(str::trim).filter(|r| !r.is_empty())
-        && fsutil::resolve_root_dir(&top, Some(rd)).is_err()
-        && fsutil::resolve_root_dir(extracted, Some(rd)).is_ok()
-    {
-        return Ok(extracted.to_path_buf());
-    }
-    Ok(top)
+    let root_dir = hints.root_dir.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    let context = |base: &Path| fsutil::resolve_root_dir(base, root_dir).ok();
+    let as_is = match (context(&top), context(extracted)) {
+        (Some(stripped), Some(as_is)) => root_score(&as_is, hints) > root_score(&stripped, hints),
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    Ok(if as_is { extracted.to_path_buf() } else { top })
+}
+
+/// How well a build context matches the service: 2 per configured path
+/// found in it, 1 when a runtime is detected there.
+fn root_score(context: &Path, hints: &RootHints) -> u32 {
+    let found = |p: &Option<String>, dir: bool| {
+        let Some(rel) = p.as_deref().map(str::trim).filter(|p| !p.is_empty()) else { return false };
+        let Ok(rel) = fsutil::normalize_relative("path", rel) else { return false };
+        let full = context.join(rel);
+        if dir { full.is_dir() } else { full.is_file() }
+    };
+    2 * u32::from(found(&hints.dockerfile_path, false))
+        + 2 * u32::from(found(&hints.publish_dir, true))
+        + u32::from(detect::detect(context).is_some())
 }
 
 fn absolute(p: PathBuf) -> PathBuf {
@@ -504,7 +555,7 @@ fn prepare_context(req: &PrepareRequest) -> std::result::Result<Prepared, String
             format!("Dockerfile not found at ./{} (paths are relative to the root directory)", display_rel(rel))
         })?;
         messages.push(format!("==> Using Dockerfile at ./{}", display_rel(rel)));
-        return Ok(Prepared { context, dockerfile, runtime, port_hint: None, messages });
+        return Ok(Prepared { context, dockerfile, runtime, port_hint: None, messages, env_digest_arg: false });
     }
 
     let generated = generate_dockerfile(runtime, &context, &req.options).map_err(|e| match e {
@@ -519,7 +570,16 @@ fn prepare_context(req: &PrepareRequest) -> std::result::Result<Prepared, String
         .map_err(|e| format!("writing the generated Dockerfile: {e}"))?;
     let name = dockerfile.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     messages.push(format!("==> Generated {name} for the {} runtime", runtime_label(used_runtime)));
-    Ok(Prepared { context, dockerfile, runtime: used_runtime, port_hint: generated.port_hint, messages })
+    let digest_line = format!("ARG {}", dockerfile::ENV_DIGEST_ARG);
+    let env_digest_arg = generated.contents.lines().any(|l| l.trim() == digest_line);
+    Ok(Prepared {
+        context,
+        dockerfile,
+        runtime: used_runtime,
+        port_hint: generated.port_hint,
+        messages,
+        env_digest_arg,
+    })
 }
 
 fn runtime_label(r: Runtime) -> &'static str {
@@ -592,8 +652,10 @@ pub fn detect_runtime(dir: &Path) -> Option<Runtime> {
 
 /// Generate a Dockerfile for a native runtime (`Node`, `Python`, `Go`,
 /// `Rust`, `Ruby`, `Static`). Static sites (service type `StaticSite`, or
-/// runtime `Static`) are served by `nginx:alpine` on port 80, after an
-/// optional node build stage when `package.json` exists.
+/// runtime `Static`) are served by `nginx:alpine` on port 80, after a build
+/// stage when there is a build command (or a `build` script): Node for
+/// package.json, else the toolchain the project uses (Python for MkDocs,
+/// Ruby for Jekyll, Hugo, Go).
 pub fn generate_dockerfile(runtime: Runtime, dir: &Path, opts: &DockerfileOptions) -> Result<GeneratedDockerfile> {
     dockerfile::generate(runtime, dir, opts)
 }
@@ -744,16 +806,48 @@ mod tests {
 
     #[test]
     fn archive_root_selection() {
+        let root_dir = |r: &str| RootHints { root_dir: Some(r.into()), ..Default::default() };
         let d = tempfile::tempdir().unwrap();
         fs::create_dir_all(d.path().join("proj/services/api")).unwrap();
         // single top-level dir → it becomes the root
-        assert!(choose_archive_root(d.path(), None).unwrap().ends_with("proj"));
-        assert!(choose_archive_root(d.path(), Some("services/api")).unwrap().ends_with("proj"));
+        assert!(choose_archive_root(d.path(), &RootHints::default()).unwrap().ends_with("proj"));
+        assert!(choose_archive_root(d.path(), &root_dir("services/api")).unwrap().ends_with("proj"));
         // root_dir only valid from the extraction dir → keep the extraction dir
-        assert_eq!(choose_archive_root(d.path(), Some("proj/services/api")).unwrap(), d.path());
+        assert_eq!(choose_archive_root(d.path(), &root_dir("proj/services/api")).unwrap(), d.path());
         // root files → no stripping
         fs::write(d.path().join("README"), "x").unwrap();
-        assert_eq!(choose_archive_root(d.path(), None).unwrap(), d.path());
+        assert_eq!(choose_archive_root(d.path(), &RootHints::default()).unwrap(), d.path());
+    }
+
+    #[test]
+    fn archive_root_keeps_a_projects_only_directory() {
+        let publish = |p: &str| RootHints { publish_dir: Some(p.into()), ..Default::default() };
+        // `ferry up --dir only --type static --publish-dir public` where
+        // `only/` holds just `public/index.html`: the archive is rooted.
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("public")).unwrap();
+        fs::write(d.path().join("public/index.html"), "hi").unwrap();
+        assert_eq!(choose_archive_root(d.path(), &publish("public")).unwrap(), d.path());
+        assert_eq!(choose_archive_root(d.path(), &publish("./public/")).unwrap(), d.path());
+        // Without a publish dir, serving public/ as the root is equivalent.
+        assert!(choose_archive_root(d.path(), &RootHints::default()).unwrap().ends_with("public"));
+
+        // A custom Dockerfile path inside the only directory.
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("docker")).unwrap();
+        fs::write(d.path().join("docker/Dockerfile"), "FROM busybox").unwrap();
+        let hints = RootHints { dockerfile_path: Some("docker/Dockerfile".into()), ..Default::default() };
+        assert_eq!(choose_archive_root(d.path(), &hints).unwrap(), d.path());
+
+        // A wrapped archive still strips its wrapper, also when the publish
+        // dir only appears after the build or lives inside the project.
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("site/public")).unwrap();
+        fs::write(d.path().join("site/package.json"), "{}").unwrap();
+        assert!(choose_archive_root(d.path(), &publish("dist")).unwrap().ends_with("site"));
+        assert!(choose_archive_root(d.path(), &publish("public")).unwrap().ends_with("site"));
+        let hints = RootHints { dockerfile_path: Some("Dockerfile".into()), ..Default::default() };
+        assert!(choose_archive_root(d.path(), &hints).unwrap().ends_with("site"));
     }
 
     #[test]

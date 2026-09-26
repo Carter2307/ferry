@@ -13,6 +13,7 @@ ferry-proxy.workspace = true
 ferry-tls.workspace = true
 ferry-engine.workspace = true
 ferry-api.workspace = true
+bollard.workspace = true
 tokio.workspace = true
 axum.workspace = true
 clap.workspace = true

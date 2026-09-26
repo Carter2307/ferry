@@ -14,7 +14,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
-use ferry_core::{Config, Engine, Store};
+use ferry_core::{CancellationToken, Config, Engine, Store};
 use tower_http::trace::TraceLayer;
 
 pub mod blueprint;
@@ -23,8 +23,10 @@ mod auth;
 mod checks;
 mod error;
 mod extract;
+mod locks;
 mod ops;
 mod routes;
+mod runtime;
 mod sse;
 mod views;
 
@@ -47,6 +49,9 @@ pub struct AppState {
     pub engine: Arc<dyn Engine>,
     /// Docker server version (for `/api/v1/info`).
     pub docker_version: Option<String>,
+    /// Cancelled when the server shuts down: open SSE log streams end so the
+    /// HTTP server's graceful shutdown can complete.
+    pub shutdown: CancellationToken,
 }
 
 /// Build the complete router (API + hooks + dashboard + healthz).
@@ -65,6 +70,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/services/{id}/resume", post(services::resume))
         .route("/v1/services/{id}/scale", post(services::scale))
         .route("/v1/services/{id}/rollback", post(services::rollback))
+        .route("/v1/services/{id}/deploy-hook/rotate", post(services::rotate_deploy_hook))
         // deploys
         .route("/v1/services/{id}/deploys", get(deploys::list).post(deploys::trigger))
         .route("/v1/services/{id}/deploys/upload", post(deploys::upload).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)))
@@ -106,6 +112,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/index.html", get(info::dashboard))
         .merge(hooks)
         .nest("/api", api)
+        .method_not_allowed_fallback(info::method_not_allowed)
         .fallback(info::not_found)
         .layer(TraceLayer::new_for_http().make_span_with(|req: &http::Request<axum::body::Body>| {
             // Path only: query strings may carry secrets (?access_token=, ?key=).

@@ -72,7 +72,11 @@ pub(crate) struct ServicePlan {
     pub existing: Option<Service>,
     /// New or changed own variables.
     pub env_set: Vec<EnvVar>,
-    /// Env groups (names) to link, in order; only links that don't exist yet.
+    /// Env groups (names) to unlink before linking `link_groups`: set when
+    /// the declared `fromGroup` order differs from the stored link order
+    /// (links are appended, so the declared groups are relinked in order).
+    pub unlink_groups: Vec<String>,
+    /// Env groups (names) to link, in order (appended after existing links).
     pub link_groups: Vec<String>,
     /// Stored settings differ from the existing row.
     pub settings_changed: bool,
@@ -80,6 +84,9 @@ pub(crate) struct ServicePlan {
     pub build_changed: bool,
     pub instances_changed: bool,
     pub domains_changed: bool,
+    /// An existing service with a source that was never deployed (e.g. an
+    /// earlier apply was interrupted) → it gets its first deploy now.
+    pub needs_deploy: bool,
     /// Own env vars or env group links changed → restart if live.
     pub env_changed: bool,
     /// Human-readable changes (updates only).
@@ -248,10 +255,13 @@ pub async fn plan(store: &Store, config: &Config, bp: &Blueprint) -> Result<Plan
     // ---- services ----------------------------------------------------------------
     let offset = bp.env_groups.len();
     let mut services: Vec<ServicePlan> = Vec::new();
+    // Link order of every blueprint service after the apply (group names).
+    let mut final_links: Vec<Vec<String>> = Vec::new();
     for (i, spec) in bp.services.iter().enumerate() {
         let ctx = format!("service '{}'", spec.name);
         let existing = service_existing[i].clone();
         let desired = desired_service(spec, existing.as_ref()).map_err(|e| prefix_err(&ctx, e))?;
+        checks::source_paths(&desired).map_err(|e| prefix_err(&ctx, e))?;
         let p = &pending[offset + i];
         debug_assert_eq!(p.owner, Owner::Service(i));
         let (env_set, env_changes) = env_diff(&p.vars, &p.existing);
@@ -259,25 +269,39 @@ pub async fn plan(store: &Store, config: &Config, bp: &Blueprint) -> Result<Plan
             Some(x) => store.service_env_groups(&x.id).await?.into_iter().map(|g| g.name).collect(),
             None => Vec::new(),
         };
-        let link_groups: Vec<String> = spec.env_groups.iter().filter(|g| !linked.contains(g)).cloned().collect();
+        let links = plan_links(&linked, &spec.env_groups);
+        let never_deployed = match &existing {
+            Some(x) => !x.suspended && store.latest_deploy(&x.id).await?.is_none(),
+            None => false,
+        };
 
         let mut sp = ServicePlan {
             desired,
             existing: existing.clone(),
-            env_changed: !env_set.is_empty() || !link_groups.is_empty(),
+            env_changed: !env_set.is_empty() || !links.link.is_empty() || links.reordered.is_some(),
             env_set,
-            link_groups,
+            unlink_groups: links.unlink,
+            link_groups: links.link,
             settings_changed: false,
             build_changed: false,
             instances_changed: false,
             domains_changed: false,
+            needs_deploy: false,
             changes: Vec::new(),
         };
+        final_links.push(links.result);
         match &existing {
             Some(old) => {
                 let mut changes = diff_service(old, &mut sp);
                 changes.extend(env_changes);
-                changes.extend(sp.link_groups.iter().map(|g| format!("env group {g}: linked")));
+                changes.extend(links.added.iter().map(|g| format!("env group {g}: linked")));
+                if let Some((from, to)) = &links.reordered {
+                    changes.push(format!("env group order: {} → {}", show_list(from), show_list(to)));
+                }
+                if never_deployed && sp.has_source() && !sp.build_changed {
+                    sp.needs_deploy = true;
+                    changes.push("not deployed yet: queuing its first deploy".to_string());
+                }
                 sp.changes = changes;
                 if sp.build_changed && !sp.has_source() {
                     warnings.push(format!(
@@ -294,6 +318,57 @@ pub async fn plan(store: &Store, config: &Config, bp: &Blueprint) -> Result<Plan
             }
         }
         services.push(sp);
+    }
+
+    // ---- environment sizes ------------------------------------------------------
+    // Each owner's variables, and each service's combined environment (groups
+    // in link order + own), must stay within the limits after the apply.
+    let mut planned_groups: HashMap<String, Vec<EnvVar>> = HashMap::new();
+    for (i, gp) in groups.iter().enumerate() {
+        let vars = upserted(&pending[i].existing, &gp.set);
+        validate::env_vars(&vars).map_err(|e| prefix_err(&format!("env group '{}'", gp.name), e))?;
+        planned_groups.insert(gp.name.clone(), vars);
+    }
+    let mut group_vars = async |name: &str| -> Result<Vec<EnvVar>> {
+        if let Some(v) = planned_groups.get(name) {
+            return Ok(v.clone());
+        }
+        match store_groups.iter().find(|g| g.name == name) {
+            Some(g) => {
+                let vars = store.list_env(&g.id).await?;
+                planned_groups.insert(name.to_string(), vars.clone());
+                Ok(vars)
+            }
+            None => Ok(Vec::new()),
+        }
+    };
+    for (i, sp) in services.iter().enumerate() {
+        let ctx = format!("service '{}'", sp.desired.name);
+        let own = upserted(&pending[offset + i].existing, &sp.env_set);
+        validate::env_vars(&own).map_err(|e| prefix_err(&ctx, e))?;
+        let mut layers = Vec::new();
+        for g in &final_links[i] {
+            layers.push(group_vars(g).await?);
+        }
+        layers.push(own);
+        checks::effective_env_size(&sp.desired.name, &layers)?;
+    }
+    // Services outside the blueprint linked to a group the blueprint changes.
+    let in_blueprint: HashSet<&str> = bp.services.iter().map(|s| s.name.as_str()).collect();
+    for gp in &groups {
+        let Some(g) = gp.existing.as_ref().filter(|_| !gp.set.is_empty()) else { continue };
+        for svc in store.env_group_services(&g.id).await? {
+            if in_blueprint.contains(svc.name.as_str()) {
+                continue;
+            }
+            let mut layers = Vec::new();
+            for linked in store.service_env_groups(&svc.id).await? {
+                layers.push(group_vars(&linked.name).await?);
+            }
+            layers.push(store.list_env(&svc.id).await?);
+            checks::effective_env_size(&svc.name, &layers)
+                .map_err(|e| prefix_err(&format!("env group '{}'", gp.name), e))?;
+        }
     }
 
     // ---- custom domains & default hosts -------------------------------------------
@@ -431,6 +506,15 @@ fn compile_reference(
     targets: &Targets<'_>,
 ) -> Result<String> {
     if let Some(kind) = targets.datastores.get(name) {
+        if target == RefTarget::Service {
+            let what = match kind {
+                DatastoreKind::Postgres => "database",
+                DatastoreKind::Redis => "key value",
+            };
+            return Err(Error::invalid(format!(
+                "{ctx}: '{name}' is a {what}, not a service: use fromDatabase, or fromService with type: keyvalue"
+            )));
+        }
         if !DATASTORE_PROPS.contains(&property) {
             return Err(Error::invalid(format!(
                 "{ctx}: unsupported property '{property}' for datastore '{name}' (expected connectionString, host, port, hostport, user, password or database)"
@@ -606,6 +690,55 @@ fn env_diff(vars: &[(String, Slot)], existing: &[EnvVar]) -> (Vec<EnvVar>, Vec<S
     (set, changes)
 }
 
+/// `existing` with `set` upserted (what `Store::patch_env` produces).
+fn upserted(existing: &[EnvVar], set: &[EnvVar]) -> Vec<EnvVar> {
+    checks::patched_env(existing, set, &[])
+}
+
+// ---------------------------------------------------------------------------
+// env group links
+
+/// How to converge a service's env group links to the declared `fromGroup`s.
+#[derive(Debug, Default, PartialEq)]
+struct LinkPlan {
+    /// Linked groups to unlink first (only when reordering).
+    unlink: Vec<String>,
+    /// Groups to link, in order (appended after the remaining links).
+    link: Vec<String>,
+    /// Declared groups that weren't linked yet.
+    added: Vec<String>,
+    /// (current, declared) relative order of the declared groups, when it differs.
+    reordered: Option<(Vec<String>, Vec<String>)>,
+    /// The link order after the apply.
+    result: Vec<String>,
+}
+
+/// Later links take precedence (`ferry_core::env::merge`), so the declared
+/// groups must end up in the declared order — on a fresh server and after a
+/// re-apply alike. Links are always appended; when appending the missing
+/// groups wouldn't give the declared order, the declared groups are unlinked
+/// and relinked in order. Links the blueprint doesn't mention are kept
+/// (nothing is ever deleted), before the declared ones.
+fn plan_links(linked: &[String], declared: &[String]) -> LinkPlan {
+    let added: Vec<String> = declared.iter().filter(|g| !linked.contains(g)).cloned().collect();
+    let current: Vec<String> = linked.iter().filter(|g| declared.contains(g)).cloned().collect();
+    let after_append: Vec<&String> = current.iter().chain(&added).collect();
+    if after_append.iter().copied().eq(declared.iter()) {
+        let mut result = linked.to_vec();
+        result.extend(added.iter().cloned());
+        return LinkPlan { unlink: Vec::new(), link: added.clone(), added, reordered: None, result };
+    }
+    let mut result: Vec<String> = linked.iter().filter(|g| !declared.contains(g)).cloned().collect();
+    result.extend(declared.iter().cloned());
+    LinkPlan {
+        reordered: (!current.is_empty()).then(|| (current.clone(), declared.to_vec())),
+        unlink: current,
+        link: declared.to_vec(),
+        added,
+        result,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // services
 
@@ -746,10 +879,35 @@ mod tests {
         );
         assert_eq!(c(RefTarget::Service, "api", "hostport").unwrap(), "${{service.api.hostport}}");
         assert!(c(RefTarget::Datastore, "api", "host").is_err());
+        let err = c(RefTarget::Service, "db", "host").unwrap_err().to_string();
+        assert!(err.contains("'db' is a database, not a service"), "{err}");
+        assert!(c(RefTarget::Service, "cache", "hostport").is_err());
         assert!(c(RefTarget::Datastore, "cache", "database").is_err());
         assert!(c(RefTarget::Service, "api", "connectionString").is_err());
         assert!(c(RefTarget::Any, "nope", "host").is_err());
         assert!(c(RefTarget::Datastore, "db", "bogus").is_err());
+    }
+
+    #[test]
+    fn link_plans_converge_to_the_declared_order() {
+        let v = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // nothing linked yet: append in order
+        let p = plan_links(&[], &v(&["a", "b"]));
+        assert_eq!((p.unlink, p.link.clone(), p.reordered, p.result), (v(&[]), v(&["a", "b"]), None, v(&["a", "b"])));
+        // already in order, one more appended
+        let p = plan_links(&v(&["x", "a"]), &v(&["a", "b"]));
+        assert_eq!((p.unlink, p.link, p.result), (v(&[]), v(&["b"]), v(&["x", "a", "b"])));
+        // a group declared before an existing link: relink both in order
+        let p = plan_links(&v(&["b"]), &v(&["a", "b"]));
+        assert_eq!((p.unlink.clone(), p.link.clone(), p.result.clone()), (v(&["b"]), v(&["a", "b"]), v(&["a", "b"])));
+        assert_eq!(p.reordered, Some((v(&["b"]), v(&["a", "b"]))));
+        assert_eq!(p.added, v(&["a"]));
+        // swapped order, extra link kept first
+        let p = plan_links(&v(&["b", "x", "a"]), &v(&["a", "b"]));
+        assert_eq!((p.unlink, p.link, p.result), (v(&["b", "a"]), v(&["a", "b"]), v(&["x", "a", "b"])));
+        // unchanged
+        let p = plan_links(&v(&["a", "b"]), &v(&["a", "b"]));
+        assert_eq!(p, LinkPlan { result: v(&["a", "b"]), ..Default::default() });
     }
 
     #[test]

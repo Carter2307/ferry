@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{OriginalUri, State};
 use axum::response::{IntoResponse, Response};
 use ferry_core::dto::ServerInfo;
 use http::{HeaderValue, Uri, header};
@@ -54,8 +54,9 @@ pub async fn dashboard() -> Response {
     resp
 }
 
-/// Unknown `/api` route.
-pub async fn api_not_found(uri: Uri) -> ApiError {
+/// Unknown `/api` route (the full path: the nested router only sees the part
+/// after `/api`).
+pub async fn api_not_found(OriginalUri(uri): OriginalUri) -> ApiError {
     ApiError::not_found(format!("no API route for {}", uri.path()))
 }
 

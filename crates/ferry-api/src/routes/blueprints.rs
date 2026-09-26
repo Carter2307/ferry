@@ -10,6 +10,7 @@ use crate::AppState;
 use crate::blueprint;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiBytes, ApiQuery, de_flag};
+use crate::locks;
 
 /// Applies are serialized so two concurrent applies can't race on creating
 /// the same resources.
@@ -44,7 +45,10 @@ fn utf8(body: &[u8]) -> Result<String, ApiError> {
 
 /// Decide between a JSON [`ApplyBlueprint`] body and raw YAML. Raw YAML is
 /// recognized by its content type, or — for clients that send a generic
-/// content type — by not being a JSON object.
+/// content type — by not being a JSON `{"yaml": ...}` object. A body that
+/// starts with `{` but isn't such an object (a YAML document in flow style,
+/// or a blueprint written as JSON, which is YAML too) is raw YAML unless the
+/// content type says JSON.
 pub fn read_request(headers: &HeaderMap, body: &[u8], query_dry_run: bool) -> Result<(String, bool), ApiError> {
     let media = media_type(headers);
     if is_yaml(&media) {
@@ -52,11 +56,25 @@ pub fn read_request(headers: &HeaderMap, body: &[u8], query_dry_run: bool) -> Re
     }
     let looks_like_json = body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{');
     if is_json(&media) || looks_like_json {
-        let req: ApplyBlueprint = serde_json::from_slice(body)
-            .map_err(|e| ApiError::bad_request(format!("invalid JSON body (expected {{\"yaml\": ...}}): {e}")))?;
-        return Ok((req.yaml, req.dry_run || query_dry_run));
+        let json_err = match serde_json::from_slice::<ApplyBlueprint>(body) {
+            Ok(req) => return Ok((req.yaml, req.dry_run || query_dry_run)),
+            Err(e) => ApiError::bad_request(format!("invalid JSON body (expected {{\"yaml\": ...}}): {e}")),
+        };
+        if is_json(&media) || meant_as_request(body) {
+            return Err(json_err);
+        }
     }
     Ok((utf8(body)?, query_dry_run))
+}
+
+/// A body that parses as a mapping with an `ApplyBlueprint` key (`yaml`,
+/// `dry_run`) was meant as the JSON request, so its error is the useful one.
+fn meant_as_request(body: &[u8]) -> bool {
+    match serde_yaml::from_slice::<serde_yaml::Value>(body) {
+        Ok(serde_yaml::Value::Mapping(m)) => m.contains_key("yaml") || m.contains_key("dry_run"),
+        // Not a YAML mapping either: report the JSON error.
+        _ => true,
+    }
 }
 
 /// `POST /api/v1/blueprints/apply` — JSON `{yaml, dry_run}` or raw YAML with `?dry_run=`.
@@ -68,16 +86,21 @@ pub async fn apply(
 ) -> ApiResult<Json<BlueprintResult>> {
     let (yaml, dry_run) = read_request(&headers, &body, q.dry_run)?;
     let bp = blueprint::parse(&yaml)?;
-    let _guard = APPLY_LOCK.lock().await;
-    let result = blueprint::apply(&st.store, &st.config, st.engine.as_ref(), &bp, dry_run).await?;
-    tracing::info!(
-        dry_run,
-        actions = result.actions.len(),
-        deploys = result.deploys.len(),
-        warnings = result.warnings.len(),
-        "applied blueprint"
-    );
-    Ok(Json(result))
+    // Applies write many rows and queue deploys: run to completion even if
+    // the client disconnects midway.
+    locks::detached(async move {
+        let _guard = APPLY_LOCK.lock().await;
+        let result = blueprint::apply(&st.store, &st.config, st.engine.as_ref(), &bp, dry_run).await?;
+        tracing::info!(
+            dry_run,
+            actions = result.actions.len(),
+            deploys = result.deploys.len(),
+            warnings = result.warnings.len(),
+            "applied blueprint"
+        );
+        Ok(Json(result))
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -108,5 +131,17 @@ mod tests {
         assert_eq!(y, "services:\n  - x");
         assert!(read_request(&headers(Some("application/json")), b"services: []", false).is_err());
         assert!(read_request(&headers(Some("text/yaml; charset=utf-8")), &[0xff, 0xfe], false).is_err());
+        // flow-style YAML (and JSON-written blueprints) sent as text are raw YAML
+        let flow = b"{services: [{type: worker, name: w, image: busybox}]}";
+        let (y, d) = read_request(&headers(Some("text/plain")), flow, true).unwrap();
+        assert_eq!((y.as_bytes(), d), (&flow[..], true));
+        let json_bp = br#"{"services": [{"type": "worker", "name": "w"}]}"#;
+        assert_eq!(read_request(&headers(None), json_bp, false).unwrap().0.as_bytes(), json_bp);
+        // ...but not with a JSON content type, and not when it was meant as the request
+        assert!(read_request(&headers(Some("application/json")), flow, false).is_err());
+        let err = read_request(&headers(None), br#"{"yaml": "a: 1", "dry_run": tru}"#, false).unwrap_err();
+        assert!(err.body.error.message.contains("invalid JSON body"), "{err}");
+        let err = read_request(&headers(None), br#"{"yaml": "a: 1", "extra": 1}"#, false).unwrap_err();
+        assert!(err.body.error.message.contains("unknown field"), "{err}");
     }
 }

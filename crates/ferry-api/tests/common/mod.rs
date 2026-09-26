@@ -11,8 +11,8 @@ use axum::body::Body;
 use ferry_api::{AppState, router};
 use ferry_core::dto::{InstanceStatus, RuntimeStatus};
 use ferry_core::{
-    Config, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Engine, Error, JobRun, JobTrigger,
-    LogLine, LogOptions, LogStream, Result, ServiceState, Store, compute_service_state,
+    CancellationToken, Config, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Engine, Error, JobRun,
+    JobTrigger, LogLine, LogOptions, LogStream, Result, ServiceState, Store, compute_service_state,
 };
 use http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -27,6 +27,9 @@ pub struct MockEngine {
     pub calls: Mutex<Vec<String>>,
     pub fail_provision: AtomicBool,
     pub fail_restart: AtomicBool,
+    pub fail_scale: AtomicBool,
+    /// Running instances `service_status` reports (default: all desired).
+    pub running: Mutex<Option<u32>>,
 }
 
 impl MockEngine {
@@ -36,6 +39,8 @@ impl MockEngine {
             calls: Mutex::new(Vec::new()),
             fail_provision: AtomicBool::new(false),
             fail_restart: AtomicBool::new(false),
+            fail_scale: AtomicBool::new(false),
+            running: Mutex::new(None),
         }
     }
 
@@ -119,8 +124,15 @@ impl Engine for MockEngine {
             return Err(Error::docker("restart exploded"));
         }
         let svc = self.store.require_service(service_id).await?;
-        let live = svc.live_deploy_id.clone().ok_or_else(|| Error::conflict("no live deploy"))?;
-        let d = Deploy::new(service_id, trigger, DeploySource::Reuse { image: "img".into(), from_deploy: Some(live) });
+        // Like the real engine: reuse the live image, or queue behind a
+        // first deploy that is still in flight.
+        let in_flight = self.store.active_deploys().await?.into_iter().any(|d| d.service_id == service_id);
+        let from = match (&svc.live_deploy_id, in_flight) {
+            (Some(live), _) => Some(live.clone()),
+            (None, true) => None,
+            (None, false) => return Err(Error::conflict("no live deploy")),
+        };
+        let d = Deploy::new(service_id, trigger, DeploySource::Reuse { image: "img".into(), from_deploy: from });
         self.store.create_deploy(&d).await?;
         Ok(d)
     }
@@ -137,6 +149,9 @@ impl Engine for MockEngine {
 
     async fn scale(&self, service_id: &str, instances: u32) -> Result<()> {
         self.record(format!("scale {service_id} {instances}"));
+        if self.fail_scale.load(Ordering::SeqCst) {
+            return Err(Error::docker("scale exploded"));
+        }
         self.store.set_instances(service_id, instances).await
     }
 
@@ -154,22 +169,27 @@ impl Engine for MockEngine {
         self.record(format!("service_status {service_id}"));
         let svc = self.store.require_service(service_id).await?;
         let latest = self.store.latest_deploy(service_id).await?;
-        Ok(RuntimeStatus {
-            service_id: svc.id.clone(),
-            state: compute_service_state(&svc, latest.as_ref(), Some(1)),
-            desired_instances: svc.desired_instances(),
-            instances: vec![InstanceStatus {
-                container_id: "c0ffee".into(),
-                name: "ferry-web-x".into(),
+        let desired = svc.desired_instances().max(1);
+        let running = self.running.lock().unwrap().unwrap_or(desired);
+        let instances = (0..desired)
+            .map(|i| InstanceStatus {
+                container_id: format!("c0ffee{i}"),
+                name: format!("ferry-web-x{i}"),
                 deploy_id: svc.live_deploy_id.clone(),
-                state: "running".into(),
+                state: if i < running { "running" } else { "exited" }.into(),
                 host_port: Some(32768),
                 started_at: None,
                 restart_count: Some(0),
                 cpu_percent: Some(1.5),
                 memory_bytes: Some(1024),
                 memory_limit_bytes: None,
-            }],
+            })
+            .collect();
+        Ok(RuntimeStatus {
+            service_id: svc.id.clone(),
+            state: compute_service_state(&svc, latest.as_ref(), Some(running)),
+            desired_instances: svc.desired_instances(),
+            instances,
         })
     }
 
@@ -224,6 +244,7 @@ pub struct TestApp {
     pub store: Store,
     pub engine: Arc<MockEngine>,
     pub config: Arc<Config>,
+    pub shutdown: CancellationToken,
     pub dir: tempfile::TempDir,
 }
 
@@ -262,13 +283,15 @@ impl TestApp {
         let config = Arc::new(config);
         let store = Store::open_in_memory().await.unwrap();
         let engine = Arc::new(MockEngine::new(store.clone()));
+        let shutdown = CancellationToken::new();
         let router = router(AppState {
             config: config.clone(),
             store: store.clone(),
             engine: engine.clone() as Arc<dyn Engine>,
             docker_version: Some("27.0.0".into()),
+            shutdown: shutdown.clone(),
         });
-        TestApp { router, store, engine, config, dir }
+        TestApp { router, store, engine, config, shutdown, dir }
     }
 
     pub async fn send(&self, req: Request<Body>) -> Resp {

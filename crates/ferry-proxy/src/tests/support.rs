@@ -20,7 +20,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use crate::body::{self, ProxyBody};
-use crate::{ProxyConfig, RouteTable, server};
+use crate::{ConnectionLimits, ProxyConfig, RouteTable, server};
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -54,11 +54,18 @@ pub(crate) struct Options {
     pub hooks: Option<Arc<dyn TlsHooks>>,
     pub redirect_https: bool,
     pub drain: Duration,
+    pub limits: ConnectionLimits,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tls: None, hooks: None, redirect_https: false, drain: server::DRAIN_TIMEOUT }
+        Options {
+            tls: None,
+            hooks: None,
+            redirect_https: false,
+            drain: server::DRAIN_TIMEOUT,
+            limits: ConnectionLimits::default(),
+        }
     }
 }
 
@@ -83,6 +90,7 @@ impl TestProxy {
             tls: opts.tls,
             tls_hooks: opts.hooks,
             redirect_https: opts.redirect_https,
+            limits: opts.limits,
         };
         let routes = RouteTable::new();
         let shutdown = CancellationToken::new();

@@ -542,6 +542,7 @@ async fn existing_services_keep_their_source_when_repo_and_image_are_omitted() {
     let app = TestApp::new().await;
     app.create_service(json!({"name": "w", "repo_url": "https://github.com/a/b", "branch": "dev", "deploy": false}))
         .await;
+    app.make_live("w", None).await;
     let (status, res) = apply(&app, "services:\n  - {type: web, name: w}\n", false).await;
     assert_eq!(status, StatusCode::OK, "{res}");
     assert_eq!(action_of(&res, "w")["action"], "unchanged", "{res}");
@@ -582,4 +583,85 @@ async fn env_var_key_copies_from_existing_services() {
     assert_eq!(get(&env, "T"), Some("t0k"));
     assert_eq!(get(&env, "U"), None);
     assert!(res["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("MISSING")));
+}
+
+// ---------------------------------------------------------------------------
+// regressions
+
+#[tokio::test]
+async fn reapply_deploys_services_an_interrupted_apply_left_undeployed() {
+    let app = TestApp::new().await;
+    // What an interrupted apply leaves behind: the row, but no deploy at all.
+    let v = app.create_service(json!({"name": "b", "image": "nginx", "deploy": false})).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    let yaml = "services:\n  - {type: web, name: b, image: nginx}\n";
+    let (status, res) = apply(&app, yaml, false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(action_of(&res, "b")["action"], "update", "{res}");
+    assert!(action_of(&res, "b")["changes"].to_string().contains("not deployed yet"), "{res}");
+    assert_eq!(
+        app.engine.calls_with("deploy "),
+        vec![format!("deploy {id} blueprint commit=- clear_cache=false source=-")]
+    );
+    // once it has a deploy, a re-apply is a no-op again
+    app.engine.clear();
+    let (_, res) = apply(&app, yaml, false).await;
+    assert_eq!(action_of(&res, "b")["action"], "unchanged", "{res}");
+    assert!(app.engine.calls_with("deploy ").is_empty());
+    // services without a source, and suspended ones, are left alone
+    app.create_service(json!({"name": "src-less", "deploy": false})).await;
+    let (_, res) = apply(&app, "services:\n  - {type: web, name: src-less}\n", false).await;
+    assert_eq!(action_of(&res, "src-less")["action"], "unchanged", "{res}");
+    assert!(app.engine.calls_with("deploy ").is_empty());
+}
+
+#[tokio::test]
+async fn env_group_precedence_follows_the_blueprint_not_the_history() {
+    let app = TestApp::new().await;
+    let groups = "envVarGroups:\n  - {name: a, envVars: [{key: X, value: from-a}]}\n  - {name: b, envVars: [{key: X, value: from-b}]}\n";
+    let first = format!("{groups}services:\n  - {{type: worker, name: w, envVars: [{{fromGroup: b}}]}}\n");
+    let (status, res) = apply(&app, &first, false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    let second =
+        format!("{groups}services:\n  - {{type: worker, name: w, envVars: [{{fromGroup: a}}, {{fromGroup: b}}]}}\n");
+    let (_, res) = apply(&app, &second, false).await;
+    let changes = action_of(&res, "w")["changes"].to_string();
+    assert!(changes.contains("env group a: linked") && changes.contains("env group order"), "{res}");
+    // later groups win, as on a fresh server applying the same blueprint
+    let id = app.store.require_service("w").await.unwrap().id;
+    let linked: Vec<String> = app.store.service_env_groups(&id).await.unwrap().into_iter().map(|g| g.name).collect();
+    assert_eq!(linked, vec!["a", "b"]);
+    let x = app.store.effective_env(&id).await.unwrap().into_iter().find(|v| v.key == "X").unwrap();
+    assert_eq!(x.value, "from-b");
+    // converged: re-applying changes nothing
+    let (_, res) = apply(&app, &second, false).await;
+    assert_eq!(action_of(&res, "w")["action"], "unchanged", "{res}");
+}
+
+#[tokio::test]
+async fn env_values_keep_their_yaml_literal_text() {
+    let app = TestApp::new().await;
+    let yaml = "services:\n  - type: worker\n    name: py\n    envVars:\n      - {key: PYTHON_VERSION, value: 3.10}\n      - {key: DEBUG, value: True}\n      - {key: MASK, value: 0x1F}\n      - {key: BIG, value: 18446744073709551616}\n";
+    // sent as raw YAML in flow style too
+    let (status, res) = apply(&app, yaml, false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    let env = env_of(&app, "py").await;
+    assert_eq!(
+        (get(&env, "PYTHON_VERSION"), get(&env, "DEBUG"), get(&env, "MASK"), get(&env, "BIG")),
+        (Some("3.10"), Some("True"), Some("0x1F"), Some("18446744073709551616"))
+    );
+    let flow = "{services: [{type: worker, name: flow, envVars: [{key: V, value: 1.20}]}]}";
+    let r = app
+        .send(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/v1/blueprints/apply")
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .header("content-type", "text/plain")
+                .body(Body::from(flow))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(get(&env_of(&app, "flow").await, "V"), Some("1.20"));
 }

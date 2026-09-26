@@ -238,6 +238,121 @@ pub(crate) fn go_version(dir: &Path) -> Option<String> {
     })
 }
 
+/// What a `pyproject.toml` says about how the project is installed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PyProject {
+    /// `[project] name`, else `[tool.poetry] name`.
+    pub name: Option<String>,
+    /// A PEP 621 `[project]` table.
+    pub project: bool,
+    /// A `[build-system]` table (the project can be built as a package).
+    pub build_system: bool,
+    /// A `[tool.poetry]` table.
+    pub poetry: bool,
+    /// `[tool.poetry] package-mode = false` or `[tool.uv] package = false`.
+    pub not_a_package: bool,
+    /// Explicit packaging configuration: `packages = …` / `py-modules = …`,
+    /// or a `[tool.setuptools…]` / `[tool.hatch.build…]` table.
+    pub explicit_packages: bool,
+    /// `dynamic = […]` metadata (needs the whole tree to be resolved).
+    pub dynamic: bool,
+}
+
+/// Minimal pyproject.toml reader (tables and `key = value` lines); good
+/// enough to choose an install strategy, not a general TOML parser.
+pub(crate) fn parse_pyproject(contents: &str) -> PyProject {
+    let mut info = PyProject::default();
+    let mut section = String::new();
+    for raw in contents.lines() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            section = line.trim_start_matches('[').trim_end_matches(']').trim().to_string();
+            match section.as_str() {
+                "project" => info.project = true,
+                "build-system" => info.build_system = true,
+                "tool.poetry" => info.poetry = true,
+                s if s.starts_with("tool.setuptools") || s.starts_with("tool.hatch.build") => {
+                    info.explicit_packages = true;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let (key, value) = (key.trim(), value.trim());
+        let unquoted = value.trim_matches(|c| c == '"' || c == '\'');
+        match (section.as_str(), key) {
+            ("project", "name") => info.name = Some(unquoted.to_string()),
+            ("tool.poetry", "name") if info.name.is_none() => info.name = Some(unquoted.to_string()),
+            ("tool.poetry", "package-mode") | ("tool.uv", "package") if value == "false" => info.not_a_package = true,
+            ("project", "dynamic") => info.dynamic = true,
+            (_, "packages" | "py-modules") => info.explicit_packages = true,
+            _ => {}
+        }
+    }
+    info.name = info.name.filter(|n| !n.is_empty());
+    info
+}
+
+/// The package a Go source file declares, `None` when it has no package
+/// clause or is excluded from normal builds (`//go:build ignore`).
+pub(crate) fn go_package_name(src: &str) -> Option<String> {
+    let mut in_block = false;
+    for raw in src.lines() {
+        let mut line = raw.trim();
+        if in_block {
+            match line.find("*/") {
+                Some(i) => {
+                    in_block = false;
+                    line = line[i + 2..].trim();
+                }
+                None => continue,
+            }
+        }
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(expr) = line.strip_prefix("//go:build").or_else(|| line.strip_prefix("// +build")) {
+            if expr.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).any(|t| t == "ignore") {
+                return None;
+            }
+            continue;
+        }
+        if line.starts_with("//") {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("/*") {
+            in_block = !rest.contains("*/");
+            continue;
+        }
+        let rest = line.strip_prefix("package")?;
+        if !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        return rest
+            .split(|c: char| c.is_whitespace() || c == ';' || c == '/')
+            .find(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    None
+}
+
+/// Does `dir` hold a buildable `package main` (ignoring tests and files
+/// excluded by build constraints)?
+pub(crate) fn go_dir_is_main(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else { return false };
+    entries.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().into_owned();
+        name.ends_with(".go")
+            && !name.ends_with("_test.go")
+            && e.file_type().is_ok_and(|t| t.is_file())
+            && read_text(dir, &name).and_then(|src| go_package_name(&src)).is_some_and(|p| p == "main")
+    })
+}
+
 /// Binary information extracted from Cargo.toml.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CargoInfo {
@@ -467,5 +582,50 @@ mod tests {
         touch(auto.path(), "src/lib.rs", "");
         let only_pkg = parse_cargo_toml("[package]\nname = \"lib-and-bins\"\n");
         assert_eq!(rust_binary(auto.path(), &only_pkg).unwrap(), "server");
+    }
+
+    #[test]
+    fn pyproject_parsing() {
+        // `uv init` app: [project] only, no build system.
+        let uv = parse_pyproject(
+            "[project]\nname = \"app\"\nversion = \"0.1.0\"\nrequires-python = \">=3.12\"\ndependencies = [\n  \"flask>=3\", # web\n]\n",
+        );
+        assert_eq!(uv.name.as_deref(), Some("app"));
+        assert!(uv.project && !uv.build_system && !uv.poetry && !uv.not_a_package && !uv.explicit_packages);
+
+        let poetry = parse_pyproject(
+            "[tool.poetry]\nname = 'svc'\npackage-mode = false\n\n[tool.poetry.dependencies]\npython = \"^3.12\"\n\n[build-system]\nrequires = [\"poetry-core\"]\n",
+        );
+        assert_eq!(poetry.name.as_deref(), Some("svc"));
+        assert!(poetry.poetry && poetry.build_system && poetry.not_a_package);
+
+        let packaged = parse_pyproject(
+            "[build-system]\nrequires = [\"setuptools\"]\n[project]\nname = \"lib\"\ndynamic = [\"version\"]\n[tool.setuptools.packages.find]\nwhere = [\"src\"]\n",
+        );
+        assert!(packaged.build_system && packaged.explicit_packages && packaged.dynamic);
+        assert!(parse_pyproject("[tool.uv]\npackage = false\n").not_a_package);
+        assert_eq!(parse_pyproject("[tool.black]\nline-length = 100\n"), PyProject::default());
+    }
+
+    #[test]
+    fn go_package_clauses() {
+        assert_eq!(go_package_name("package main\n").as_deref(), Some("main"));
+        assert_eq!(
+            go_package_name("// Copyright\n/* block\n comment */\n\npackage server // the server\n").as_deref(),
+            Some("server")
+        );
+        assert_eq!(go_package_name("//go:build tools\n\npackage tools\n").as_deref(), Some("tools"));
+        assert_eq!(go_package_name("//go:build ignore\n\npackage main\n"), None);
+        assert_eq!(go_package_name("// +build ignore\n\npackage main\n"), None);
+        assert_eq!(go_package_name("packagemain\n"), None);
+        assert_eq!(go_package_name(""), None);
+
+        let d = tempfile::tempdir().unwrap();
+        touch(d.path(), "lib.go", "package mylib\n");
+        touch(d.path(), "lib_test.go", "package main\n");
+        touch(d.path(), "gen.go", "//go:build ignore\n\npackage main\n");
+        assert!(!go_dir_is_main(d.path()));
+        touch(d.path(), "main.go", "package main\n\nfunc main() {}\n");
+        assert!(go_dir_is_main(d.path()));
     }
 }

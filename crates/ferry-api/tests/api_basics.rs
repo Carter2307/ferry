@@ -166,3 +166,19 @@ async fn server_info() {
     let app = TestApp::new().await;
     assert_eq!(app.get("/api/v1/info").await.json()["github_webhook_enabled"], false);
 }
+
+#[tokio::test]
+async fn every_error_outside_the_api_is_json_too() {
+    let app = TestApp::new().await;
+    for (method, path) in [(Method::POST, "/healthz"), (Method::DELETE, "/"), (Method::PUT, "/index.html")] {
+        let r = app.send(req(method.clone(), path).body(Body::empty()).unwrap()).await;
+        assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED, "{method} {path}");
+        assert_eq!(r.headers["content-type"], "application/json", "{method} {path}");
+        assert_eq!(r.code(), "method_not_allowed");
+    }
+    let r = app.send(req(Method::DELETE, "/hooks/github").body(Body::empty()).unwrap()).await;
+    assert_eq!((r.status, r.code()), (StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed".to_string()));
+    // the API 404 names the full path
+    let r = app.get("/api/v1/nope").await;
+    assert_eq!(r.json()["error"]["message"], "no API route for /api/v1/nope");
+}
