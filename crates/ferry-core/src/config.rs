@@ -43,6 +43,8 @@ pub struct Config {
     pub default_port: u16,
     /// Deploy images to keep per service for rollbacks.
     pub keep_images: usize,
+    /// Finished job runs (and their logs) kept per service.
+    pub keep_job_runs: usize,
     /// Path/name of the docker CLI (used for `docker build`).
     pub docker_bin: String,
     /// Seconds a new deploy has to become healthy.
@@ -71,6 +73,7 @@ impl Default for Config {
             build_concurrency: 2,
             default_port: 10000,
             keep_images: 5,
+            keep_job_runs: 100,
             docker_bin: "docker".to_string(),
             health_check_timeout_secs: 120,
             datastore_bind_ip: "127.0.0.1".to_string(),

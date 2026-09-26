@@ -145,20 +145,35 @@ pub fn repo_url(url: &str) -> Result<()> {
     if u.starts_with('-') {
         return invalid("must not start with '-'");
     }
+    if u.contains("::") {
+        return invalid("git remote-helper transports (ext::, fd::, …) are not supported");
+    }
+    if u.contains('\\') {
+        return invalid("must not contain backslashes");
+    }
+    let has_parent = |path: &str| path.split('/').any(|seg| seg == "..");
     if let Some(idx) = u.find("://") {
         let scheme = &u[..idx];
+        let rest = &u[idx + 3..];
         return match scheme {
-            "https" | "http" | "ssh" | "git" | "file" if u.len() > idx + 3 => Ok(()),
+            "file" if !rest.starts_with('/') => invalid("file:// URLs must use an absolute path (file:///path)"),
+            "file" if has_parent(rest) => invalid("'..' is not allowed in local paths"),
+            "https" | "http" | "ssh" | "git" | "file" if !rest.is_empty() => Ok(()),
             _ => invalid("unsupported scheme (use https://, ssh://, git://, file:// or an absolute path)"),
         };
     }
-    if u.starts_with('/') {
-        return Ok(());
+    if u.starts_with("file:") {
+        return invalid("file URLs must look like file:///absolute/path");
     }
-    // scp-like: [user@]host:path (host without '/').
+    if u.starts_with('/') {
+        return if has_parent(u) { invalid("'..' is not allowed in local paths") } else { Ok(()) };
+    }
+    // scp-like: [user@]host:path (host without '/', at least 2 chars so a
+    // Windows drive letter like C: isn't mistaken for a host).
     if let Some(colon) = u.find(':') {
         let host = &u[..colon];
-        if !host.is_empty() && !host.contains('/') && colon + 1 < u.len() {
+        let host_name = host.rsplit('@').next().unwrap_or(host);
+        if host_name.len() > 1 && !host.contains('/') && colon + 1 < u.len() {
             return Ok(());
         }
     }
@@ -354,6 +369,20 @@ mod tests {
         assert!(repo_url("rel/path").is_err());
         assert!(repo_url("--upload-pack=x").is_err());
         assert!(repo_url("ftp://x/y").is_err());
+        for bad in [
+            "ext::sh -c touch%S",
+            "fd::3",
+            "file://./x",
+            "file://x",
+            "file:x",
+            "file:///../x",
+            "/a/../b",
+            "C:\\x",
+            "C:x",
+        ] {
+            assert!(repo_url(bad).is_err(), "{bad}");
+        }
+        assert!(repo_url("ssh://git@github.com:22/a/b").is_ok());
         assert!(branch("feature/x-1").is_ok());
         assert!(branch("-evil").is_err());
         assert!(branch("a..b").is_err());

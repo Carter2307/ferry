@@ -809,6 +809,24 @@ impl Store {
             .collect()
     }
 
+    /// Delete the finished job runs of a service beyond the newest `keep`
+    /// finished ones. Returns the ids of the deleted runs (so their log files
+    /// can be removed). Pending/running jobs are never deleted.
+    pub async fn prune_job_runs(&self, service_id: &str, keep: u32) -> Result<Vec<String>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM job_runs WHERE service_id = ?1 AND status NOT IN ('pending', 'running')
+             ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?2",
+        )
+        .bind(service_id)
+        .bind(i64::from(keep))
+        .fetch_all(&self.pool)
+        .await?;
+        for id in &ids {
+            sqlx::query("DELETE FROM job_runs WHERE id = ?").bind(id).execute(&self.pool).await?;
+        }
+        Ok(ids)
+    }
+
     /// Pending / running jobs of all services, oldest first.
     pub async fn active_job_runs(&self) -> Result<Vec<JobRun>> {
         sqlx::query("SELECT * FROM job_runs WHERE status IN ('pending', 'running') ORDER BY created_at, rowid")
@@ -1027,6 +1045,16 @@ mod tests {
         store.update_job_run(&j).await.unwrap();
         assert_eq!(store.require_job_run(&j.id).await.unwrap().exit_code, Some(0));
         assert_eq!(store.list_job_runs(&svc.id, 10).await.unwrap().len(), 1);
+        for _ in 0..3 {
+            let mut done = JobRun::new(&svc.id, JobTrigger::Schedule, None);
+            done.status = JobStatus::Succeeded;
+            store.create_job_run(&done).await.unwrap();
+        }
+        let running = JobRun::new(&svc.id, JobTrigger::Manual, None);
+        store.create_job_run(&running).await.unwrap();
+        let pruned = store.prune_job_runs(&svc.id, 2).await.unwrap();
+        assert_eq!(pruned.len(), 2, "4 finished runs, keep 2");
+        assert!(store.get_job_run(&running.id).await.unwrap().is_some(), "pending runs are kept");
 
         store.delete_service(&svc.id).await.unwrap();
         assert!(store.get_deploy(&d1.id).await.unwrap().is_none());

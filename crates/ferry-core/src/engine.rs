@@ -100,6 +100,14 @@ pub trait Engine: Send + Sync + 'static {
     /// Output of a job run. With `follow`, stays open until the job finishes.
     async fn job_logs(&self, job_id: &str, follow: bool) -> Result<LogStream>;
 
+    /// Stop a pending or running job (the container gets a 10s grace period)
+    /// and mark it `canceled`. Conflict when it already finished. Returns the
+    /// updated job.
+    async fn cancel_job(&self, job_id: &str) -> Result<JobRun> {
+        let _ = job_id;
+        Err(crate::Error::invalid("canceling jobs is not supported by this engine"))
+    }
+
     /// Start provisioning a datastore whose row already exists in the store
     /// (status `creating`). Returns immediately; status becomes `available`
     /// or `failed` later.

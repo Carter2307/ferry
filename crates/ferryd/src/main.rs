@@ -68,6 +68,9 @@ struct Args {
     /// Built images kept per service (for rollbacks).
     #[arg(long, env = "FERRY_KEEP_IMAGES", default_value_t = 5)]
     keep_images: usize,
+    /// Finished job runs (and their logs) kept per service.
+    #[arg(long, env = "FERRY_KEEP_JOB_RUNS", default_value_t = 100)]
+    keep_job_runs: usize,
     /// docker CLI used for builds.
     #[arg(long, env = "FERRY_DOCKER_BIN", default_value = "docker")]
     docker_bin: String,
@@ -258,6 +261,7 @@ fn build_config(args: Args) -> anyhow::Result<Config> {
         build_concurrency: args.build_concurrency.max(1),
         default_port: args.default_port,
         keep_images: args.keep_images.max(1),
+        keep_job_runs: args.keep_job_runs.max(1),
         docker_bin: args.docker_bin,
         health_check_timeout_secs: args.health_check_timeout.max(5),
         datastore_bind_ip: "127.0.0.1".to_string(),

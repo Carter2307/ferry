@@ -535,6 +535,7 @@ impl Datastore {
 /// A plain environment variable. Values may contain references such as
 /// `${{datastore.db.connectionString}}` (see [`crate::env`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvVar {
     pub key: String,
     pub value: String,
