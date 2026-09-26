@@ -137,10 +137,9 @@ fn lock_data_dir(data_dir: &Path) -> anyhow::Result<std::fs::File> {
         .with_context(|| format!("opening {}", path.display()))?;
     match file.try_lock() {
         Ok(()) => Ok(file),
-        Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!(
-            "another ferryd is already running with data directory {}",
-            data_dir.display()
-        ),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            anyhow::bail!("another ferryd is already running with data directory {}", data_dir.display())
+        }
         Err(std::fs::TryLockError::Error(e)) => Err(e).with_context(|| format!("locking {}", path.display())),
     }
 }
@@ -305,6 +304,12 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
     let _ = rustls::crypto::ring::default_provider().install_default();
+    // The proxy sizes its connection cap from the open-file limit; raise the
+    // soft limit to the hard one (launchd's default soft limit is only 256).
+    match rlimit::increase_nofile_limit(u64::MAX) {
+        Ok(n) => tracing::debug!(nofile = n, "open file limit"),
+        Err(e) => tracing::warn!("could not raise the open file limit: {e}"),
+    }
 
     let args = Args::parse();
     let acme_directory = args.acme_directory.clone();
@@ -314,7 +319,9 @@ async fn main() -> anyhow::Result<()> {
     let _data_dir_lock = lock_data_dir(&config.data_dir)?;
 
     // Fail fast (before touching Docker) if a public listener can't bind.
-    for (what, addr) in [("proxy", Some(config.proxy_addr)), ("HTTPS proxy", config.proxy_https_addr), ("API", Some(config.api_addr))] {
+    for (what, addr) in
+        [("proxy", Some(config.proxy_addr)), ("HTTPS proxy", config.proxy_https_addr), ("API", Some(config.api_addr))]
+    {
         if let Some(addr) = addr.filter(|_| what != "HTTPS proxy" || config.tls_enabled()) {
             std::net::TcpListener::bind(addr).with_context(|| format!("cannot listen on {addr} ({what} address)"))?;
         }

@@ -151,6 +151,12 @@ async fn create_service(st: AppState, req: CreateService) -> ApiResult<(StatusCo
         if let Err(e) = st.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Create)).await {
             tracing::warn!(service = %svc.name, "queuing the first deploy failed: {e}");
         }
+    } else if svc.is_public_http() {
+        // No deploy yet: route the hosts right away so they answer 503
+        // ("no instances yet") instead of 404 until the next reconcile pass.
+        if let Err(e) = st.engine.refresh_routes(&svc.id).await {
+            tracing::debug!(service = %svc.name, "installing routes for a new service failed: {e}");
+        }
     }
     let svc = st.store.require_service(&svc.id).await?;
     Ok((StatusCode::CREATED, Json(service_view(&st.store, &st.config, svc).await?)))

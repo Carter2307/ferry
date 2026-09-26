@@ -11,6 +11,7 @@
 //! | `service`   | `host`, `port`, `hostport` (`host:port`), `url` (public URL), `internalUrl` (`http://host:port`) |
 //!
 //! `db`/`database` are aliases for `datastore`, `svc` for `service`.
+//! Write `$${{` for a literal `${{`.
 //! Example: `DATABASE_URL=${{datastore.main-db.connectionString}}`.
 
 use crate::config::Config;
@@ -59,6 +60,13 @@ pub fn resolve_value(value: &str, ctx: &RefContext<'_>) -> Result<String> {
     let mut out = String::with_capacity(value.len());
     let mut rest = value;
     while let Some(start) = rest.find("${{") {
+        // `$${{` is an escaped, literal `${{`.
+        if start > 0 && rest.as_bytes()[start - 1] == b'$' {
+            out.push_str(&rest[..start - 1]);
+            out.push_str("${{");
+            rest = &rest[start + 3..];
+            continue;
+        }
         out.push_str(&rest[..start]);
         let after = &rest[start + 3..];
         let Some(end) = after.find("}}") else {
@@ -218,6 +226,7 @@ mod tests {
         );
         assert_eq!(resolve_value("http://${{service.api.hostport}}/v1", &ctx).unwrap(), "http://api:3000/v1");
         assert_eq!(resolve_value("plain $HOME ${notref}", &ctx).unwrap(), "plain $HOME ${notref}");
+        assert_eq!(resolve_value("tpl $${{ x }} and ${{db.db.port}}", &ctx).unwrap(), "tpl ${{ x }} and 5432");
         assert!(resolve_value("${{datastore.nope.host}}", &ctx).is_err());
         assert!(resolve_value("${{service.api.url}}", &ctx).is_err());
         assert!(resolve_value("${{service.api.port", &ctx).is_err());

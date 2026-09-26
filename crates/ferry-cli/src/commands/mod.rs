@@ -67,7 +67,7 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         Command::Create(a) => services::create(ctx, a).await,
         Command::Show(a) => services::show(ctx, &a.name).await,
         Command::Update(a) => services::update(ctx, a).await,
-        Command::Delete(a) => services::delete(ctx, &a.name, a.yes).await,
+        Command::Delete(a) => services::delete(ctx, &a.name, a.yes, a.force).await,
         Command::Deploy(a) => deploys::deploy(ctx, a).await,
         Command::Up(a) => up::up(ctx, a).await,
         Command::Deploys(a) => deploys::list(ctx, &a.name, a.limit).await,
@@ -97,7 +97,7 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
             DbCommand::Create(a) => db::create(ctx, a).await,
             DbCommand::Ls => db::list(ctx).await,
             DbCommand::Show(a) => db::show(ctx, &a.name).await,
-            DbCommand::Rm(a) => db::remove(ctx, &a.name, a.yes).await,
+            DbCommand::Rm(a) => db::remove(ctx, &a.name, a.yes, a.force).await,
         },
         Command::EnvGroup(c) => match c {
             EnvGroupCommand::Create(a) => env::group_create(ctx, &a.name, a.vars).await,
@@ -105,7 +105,7 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
             EnvGroupCommand::Show(a) => env::group_show(ctx, &a.name).await,
             EnvGroupCommand::Set(a) => env::group_set(ctx, &a.name, a.vars, !a.no_restart).await,
             EnvGroupCommand::Unset(a) => env::group_unset(ctx, &a.name, a.keys, !a.no_restart).await,
-            EnvGroupCommand::Rm(a) => env::group_remove(ctx, &a.name, a.yes).await,
+            EnvGroupCommand::Rm(a) => env::group_remove(ctx, &a.name, a.yes, a.force, a.restart).await,
             EnvGroupCommand::Link(a) => env::group_link(ctx, &a.service, &a.group).await,
             EnvGroupCommand::Unlink(a) => env::group_unlink(ctx, &a.service, &a.group).await,
         },
@@ -397,6 +397,25 @@ pub fn or_dash(v: Option<&str>) -> String {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => "-".to_string(),
     }
+}
+
+/// Query for delete endpoints that refuse (409) while a resource is still
+/// referenced or linked, unless forced.
+pub(crate) fn force_query(force: bool, restart: bool) -> Vec<(&'static str, String)> {
+    let mut q = Vec::new();
+    if force {
+        q.push(("force", "true".to_string()));
+    }
+    if restart {
+        q.push(("restart", "true".to_string()));
+    }
+    q
+}
+
+/// Add a `--force` hint to a 409 answer of a delete endpoint.
+pub(crate) fn with_force_hint(err: anyhow::Error, force: bool) -> anyhow::Error {
+    let conflict = err.chain().any(|e| e.downcast_ref::<crate::client::ApiError>().is_some_and(|a| a.status == 409));
+    if conflict && !force { err.context("still in use — re-run with --force to delete it anyway") } else { err }
 }
 
 #[cfg(test)]

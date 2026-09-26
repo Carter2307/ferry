@@ -369,11 +369,14 @@ pub async fn update(ctx: &Ctx, mut a: UpdateArgs) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete(ctx: &Ctx, name: &str, yes: bool) -> Result<()> {
+pub async fn delete(ctx: &Ctx, name: &str, yes: bool, force: bool) -> Result<()> {
     // Resolve an id to the service's real name for the prompt and messages.
     let service = ctx.client.get::<ServiceView>(&["services", name], &[]).await?.data.service;
     confirm(&format!("delete service '{}' with all its deploys", service.name), yes).await?;
-    ctx.client.delete_no_content(&["services", &service.id]).await?;
+    ctx.client
+        .delete_no_content(&["services", &service.id], &super::force_query(force, false))
+        .await
+        .map_err(|e| super::with_force_hint(e, force))?;
     if ctx.json {
         return print_json(&serde_json::json!({ "deleted": service.name, "id": service.id }));
     }

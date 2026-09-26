@@ -2451,11 +2451,12 @@ function scaleDialog(ctx) {
 }
 function deleteServiceDialog(ctx) {
   const shown = (ctx.svc && ctx.svc.name) || ctx.name;
+  const force = forceBox('Delete even if other services reference it (their next deploy or restart will fail)');
   confirmDialog({
     title: `Delete ${shown}?`,
     message: 'This stops every instance and permanently removes the service with its deploy history, built images, environment variables and disk. This can’t be undone.',
-    confirmLabel: 'Delete service', danger: true, typeToConfirm: shown,
-    action: () => api.del(`/services/${enc(ctx.name)}`),
+    confirmLabel: 'Delete service', danger: true, typeToConfirm: shown, extra: force.el,
+    action: () => api.del(`/services/${enc(ctx.name)}${force.checked ? '?force=true' : ''}`),
   }).then((ok) => {
     if (!ok) return;
     toast(`Deleted ${shown}.`, 'ok');
@@ -2463,17 +2464,30 @@ function deleteServiceDialog(ctx) {
     navigate('#/services');
   });
 }
+// Checkbox for delete dialogs whose endpoint refuses (409) while the resource
+// is still referenced; the server's message lists the references.
+function forceBox(label) {
+  const cb = h('input', { type: 'checkbox' });
+  const el = h('label', { class: 'hint', style: { display: 'flex', gap: '8px', alignItems: 'center' } }, cb, label);
+  return { el, get checked() { return cb.checked; } };
+}
 function cancelDeployDialog(ctx, d, after) {
   let res = null;
   confirmDialog({
     title: 'Cancel this deploy?',
     message: 'The build or rollout stops and whatever is live now keeps serving.',
     confirmLabel: 'Cancel deploy', cancelLabel: 'Keep deploying', danger: true,
-    action: async () => { res = await api.post(`/deploys/${enc(d.id)}/cancel`); },
+    action: async () => {
+      try { res = await api.post(`/deploys/${enc(d.id)}/cancel`); } catch (e) {
+        if (e && e.status === 409) { res = { status: 'too_late', message: errMsg(e) }; return; }
+        throw e;
+      }
+    },
   }).then((ok) => {
     if (!ok) return;
     const st = res && res.status;
-    if (st && st !== 'canceled') toast(`Too late to cancel: the deploy is already ${(DEPLOY_STATUSES[st] || { label: st }).label.toLowerCase()}.`, 'warn');
+    if (st === 'too_late') toast(res.message || 'Too late to cancel: traffic already switched to this deploy.', 'warn');
+    else if (st && st !== 'canceled') toast(`Too late to cancel: the deploy is already ${(DEPLOY_STATUSES[st] || { label: st }).label.toLowerCase()}.`, 'warn');
     else toast('Deploy canceled.', 'ok');
     ctx.refresh().catch(() => {});
     if (after) after();
@@ -3200,7 +3214,16 @@ function tabSettings(ctx, scope, body) {
       h('div', { class: 'panel panel-pad stack' },
         secretField(url, { mask: (u) => u.replace(/([?&]key=)[^&]*/, (_m, p) => p + '•'.repeat(16)), label: 'deploy hook URL' }),
         localHint(url, 'Other machines'),
-        h('p', { class: 'muted' }, 'Example: ', h('code', null, 'curl -X POST "$FERRY_DEPLOY_HOOK"'))));
+        h('p', { class: 'muted' }, 'Example: ', h('code', null, 'curl -X POST "$FERRY_DEPLOY_HOOK"')),
+        h('div', null, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => rotateHook() }, 'Regenerate URL'))));
+  }
+  function rotateHook() {
+    confirmDialog({
+      title: 'Regenerate the deploy hook URL?',
+      message: 'The current URL stops working immediately. Update it wherever it is used (CI, scripts).',
+      confirmLabel: 'Regenerate', danger: true,
+      action: async () => { ctx.apply(await api.post(`/services/${enc(ctx.name)}/deploy-hook/rotate`)); },
+    }).then((ok) => { if (ok) toast('Deploy hook URL regenerated.', 'ok'); });
   }
   function localHint(url, who) {
     return isLoopback(url) ? h('p', { class: 'hint', style: { color: 'var(--warn)' } }, `${who} can’t reach this local address: serve Ferry on a public host (ferryd --dashboard-host, with HTTPS).`) : null;
@@ -3461,11 +3484,12 @@ function viewDatastore(scope, page, parts) {
   const body = h('div', null, loadingState());
   page.append(head, body);
   let ds = null;
+  const dsForce = forceBox('Delete even if services still reference it');
   delBtn.addEventListener('click', () => confirmDialog({
     title: `Delete ${name}?`,
     message: 'This removes the container and its data volume. Every row or key it holds is permanently lost, and services that reference it will fail to start.',
-    confirmLabel: 'Delete datastore', danger: true, typeToConfirm: name,
-    action: () => api.del(`/datastores/${enc(name)}`),
+    confirmLabel: 'Delete datastore', danger: true, typeToConfirm: name, extra: dsForce.el,
+    action: () => api.del(`/datastores/${enc(name)}${dsForce.checked ? '?force=true' : ''}`),
   }).then((ok) => { if (ok) { toast(`Deleted ${name}.`, 'ok'); navigate('#/datastores'); } }));
 
   const draw = () => {
@@ -3650,13 +3674,15 @@ function viewEnvGroup(scope, page, parts) {
   }
   delBtn.addEventListener('click', () => {
     const svcs = linked();
+    const restart = forceBox('Restart the linked live services now so they drop these variables');
     confirmDialog({
       title: `Delete ${name}?`,
       message: svcs.length
         ? `It is linked to ${svcs.join(', ')}. Those services lose these variables on their next deploy or restart.`
         : 'The group and its variables are permanently removed.',
       confirmLabel: 'Delete env group', danger: true, typeToConfirm: svcs.length ? name : undefined,
-      action: () => api.del(`/env-groups/${enc(name)}`),
+      extra: svcs.length ? restart.el : null,
+      action: () => api.del(`/env-groups/${enc(name)}${svcs.length ? `?force=true${restart.checked ? '&restart=true' : ''}` : ''}`),
     }).then((ok) => {
       if (!ok) return;
       toast(`Deleted ${name}.`, 'ok');

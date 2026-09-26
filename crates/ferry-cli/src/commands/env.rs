@@ -281,11 +281,14 @@ pub async fn group_unset(ctx: &Ctx, name: &str, keys: Vec<String>, restart: bool
     group_patch(ctx, name, PatchEnv { set: Vec::new(), unset: keys }, restart).await
 }
 
-pub async fn group_remove(ctx: &Ctx, name: &str, yes: bool) -> Result<()> {
+pub async fn group_remove(ctx: &Ctx, name: &str, yes: bool, force: bool, restart: bool) -> Result<()> {
     // Resolve an id to the group's real name for the prompt and messages.
     let group = ctx.client.get::<EnvGroupView>(&["env-groups", name], &[]).await?.data.group;
     confirm(&format!("delete env group '{}'", group.name), yes).await?;
-    ctx.client.delete_no_content(&["env-groups", &group.id]).await?;
+    ctx.client
+        .delete_no_content(&["env-groups", &group.id], &super::force_query(force, restart))
+        .await
+        .map_err(|e| super::with_force_hint(e, force))?;
     if ctx.json {
         return print_json(&serde_json::json!({ "deleted": group.name, "id": group.id }));
     }

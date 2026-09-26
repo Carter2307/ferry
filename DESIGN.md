@@ -122,7 +122,14 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    `naming.image_tag(name, deploy_id)`, build args = the service's resolved env,
    labels `naming.service_labels`. Image → `docker.ensure_image` (pull; always
    pull when the tag is `latest`/untagged). Reuse → verify the image exists.
-   Record `image`, `commit_sha`, `commit_message` on the deploy.
+   Record `image`, `commit_sha`, `commit_message` on the deploy (the commit is
+   recorded as soon as it is checked out — `BuildEvent::CheckedOut` — so failed
+   builds show it too). Pulled images are **pinned**: tagged locally as
+   `naming.image_tag(name, deploy_id)`, which becomes `deploy.image` (the
+   user's reference stays in `source.image`), so rollbacks are exact even when
+   `:latest` moves. Build-time env reaches builds as **BuildKit secrets**
+   (`--secret id=KEY,env=KEY`; generated Dockerfiles mount them per `RUN`),
+   never as `ARG`s, so values don't end up in the image history.
    Cron jobs stop here: mark `live`, set `live_deploy_id`, deactivate previous.
 4. **Start** (`deploying`): port = `env::choose_port(service.port, user_env,
    build.port_hint, docker.image_exposed_ports(image), config.default_port)`
@@ -144,9 +151,17 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    * workers: still running 5s after start.
    Stream new containers' output into the deploy log while waiting.
 6. **Swap**: web/static → `routes.set_service_routes(id, config.service_hosts(svc),
-   new upstreams)`. Then stop (10s grace) and remove old instances, set deploy
-   `live`, `live_deploy_id`, previous live → `deactivated`. Log
-   `==> Your service is live 🎉` and the URL.
+   new upstreams)`; immediately mark the deploy `live` (`live_deploy_id`,
+   previous live → `deactivated`) — so a crash while draining can't cause an
+   outage — then stop (10s grace) and remove old instances. Log
+   `==> Your service is live 🎉` and the URL. A cancel after the swap is a
+   Conflict ("too late to cancel").
+   The deploy's full container spec (image, resolved env, command, port,
+   disk) is **snapshotted** when it goes live. The reconciler, scale, resume
+   and one-off jobs always start instances from the live deploy's snapshot —
+   never from current settings/env — so settings and env changes take effect
+   only through a deploy or restart (like Render), and a failed env-change
+   deploy can't break self-healing.
 7. **Failure**: remove new containers, keep old ones serving, status
    `build_failed`/`deploy_failed` with a concise `error`.
 8. **Cleanup**: keep the newest `config.keep_images` images of this service
@@ -193,6 +208,7 @@ demand after scale/suspend/resume:
   restart `No`. Output streamed into `logs/jobs/<id>.log`; status `running` →
   `succeeded` (exit 0) / `failed`; container removed after.
 * `run_job` on non-cron services requires `command`; needs a live deploy.
+  One-off jobs mount the service's disk.
 
 ## 8. Datastores
 
@@ -204,6 +220,9 @@ demand after scale/suspend/resume:
 * Publish internal port on `datastore_bind_ip:host_port`; alias = name;
   restart `UnlessStopped`. Status `creating → available | failed` (error set).
 * Delete: remove container + volume, then the row.
+* A new datastore never adopts a pre-existing volume of the same name (error
+  instead). Readiness probes pass secrets via the exec environment
+  (`REDISCLI_AUTH`), never argv; passwords never appear in logs or errors.
 
 ## 9. Logs
 
@@ -215,7 +234,8 @@ demand after scale/suspend/resume:
 * Runtime logs: `docker.logs` of each current container, merged; `instance`
   = last 6 chars of the container name.
 * API streams as **SSE**: `event: log` + `data: <LogLine JSON>`; finite streams
-  end with `event: end`. Keep-alive comments every 15s.
+  end with `event: end` + an empty `data:` line (so EventSource dispatches it).
+  Keep-alive comments every 15s. All streams end when the server shuts down.
 
 ## 10. HTTP API (`ferry-api`)
 
@@ -233,13 +253,14 @@ JSON bodies; 404 JSON for unknown `/api` routes.
 | `POST /api/v1/services` | `CreateService` → 201 `ServiceView` (queues a `create` deploy when it has a repo/image, unless `deploy:false`) |
 | `GET /api/v1/services/{id}` | `ServiceView` |
 | `PATCH /api/v1/services/{id}` | `UpdateService` → `ServiceView` (instances → `engine.scale`, suspended → `engine.suspend/resume`, custom_domains → `engine.refresh_routes`; the rest is stored) |
-| `DELETE /api/v1/services/{id}` | 204 (`engine.delete_service`) |
+| `DELETE /api/v1/services/{id}?force=` | 204 (`engine.delete_service`); 409 listing the referencing services when other services reference it via `${{service.…}}`, unless `force=true` |
 | `GET /api/v1/services/{id}/status` | `RuntimeStatus` |
 | `GET /api/v1/services/{id}/logs?follow=&tail=` | SSE |
 | `POST /api/v1/services/{id}/restart` | 202 `Deploy` |
 | `POST /api/v1/services/{id}/suspend` · `/resume` | `ServiceView` |
 | `POST /api/v1/services/{id}/scale` | `ScaleRequest` → `ServiceView` |
-| `POST /api/v1/services/{id}/rollback` | `RollbackRequest` → 202 `Deploy` |
+| `POST /api/v1/services/{id}/rollback` | `RollbackRequest` → 202 `Deploy` (only to deploys that went live) |
+| `POST /api/v1/services/{id}/deploy-hook/rotate` | → `ServiceView` with a new `deploy_hook_path` (old URL stops working) |
 | `GET /api/v1/services/{id}/deploys?limit=20` | `[Deploy]` newest first |
 | `POST /api/v1/services/{id}/deploys` | `TriggerDeploy` → 202 `Deploy` |
 | `POST /api/v1/services/{id}/deploys/upload?clear_cache=` | raw `.tar.gz` body (≤ 512 MiB) saved to `uploads/<new id>.tar.gz` → 202 `Deploy` (trigger `upload`, source `Archive`) |
@@ -260,16 +281,24 @@ JSON bodies; 404 JSON for unknown `/api` routes.
 | `GET /api/v1/jobs/{job_id}/logs?follow=` | SSE |
 | `GET /api/v1/datastores` | `[DatastoreView]` |
 | `POST /api/v1/datastores` | `CreateDatastore` → 201 `DatastoreView` (row `creating`, then `engine.provision_datastore`) |
-| `GET /api/v1/datastores/{id}` · `DELETE` | `DatastoreView` · 204 |
+| `GET /api/v1/datastores/{id}` · `DELETE ?force=` | `DatastoreView` · 204 (409 while referenced, unless `force=true`) |
 | `GET /api/v1/env-groups` · `POST` | `[EnvGroupView]` · `CreateEnvGroup` → 201 `EnvGroupView` |
-| `GET /api/v1/env-groups/{id}` · `DELETE` | `EnvGroupView` · 204 |
+| `GET /api/v1/env-groups/{id}` · `DELETE ?force=&restart=` | `EnvGroupView` · 204 (409 while linked, unless `force=true`; `restart=true` restarts the linked live services) |
 | `PUT` / `PATCH /api/v1/env-groups/{id}/env?restart=` | `ReplaceEnv` / `PatchEnv` → `EnvGroupView` (restart linked live services) |
 | `POST /api/v1/blueprints/apply` | `ApplyBlueprint` JSON, or raw YAML (`Content-Type: application/yaml` / `text/yaml`, `?dry_run=`) → `BlueprintResult` |
-| `GET\|POST /hooks/deploy/{service_id}?key=` | 202 `Deploy` (trigger `deploy_hook`); wrong key → 401 (no bearer needed) |
+| `GET\|POST /hooks/deploy/{service_id}?key=` | 202 minimal deploy summary (trigger `deploy_hook`, credentials redacted); service **id** only; unknown id or wrong key → the same 401 (no enumeration) |
 | `POST /hooks/github` | GitHub webhook. 404 unless `github_webhook_secret` set; verify `X-Hub-Signature-256` (HMAC-SHA256, constant-time) → 401; `ping` → 200; `push` → deploy (trigger `webhook`, commit = `after`) every service with `auto_deploy`, matching `git::normalize_repo_url` of `repository.clone_url`/`ssh_url`/`html_url`, and `refs/heads/<branch>`; deleted-branch pushes ignored → 200 `{"deploys": [...]}` |
 
 Name rules: `validate::resource_name` for services/datastores (names shared
-between both), `validate::env_group_name`, `validate::env_key`.
+between both; id-shaped names are rejected), `validate::env_group_name`,
+`validate::env_vars` (32 KiB per value, 256 KiB per owner, also checked on
+the merged service + linked groups). Request bodies reject unknown fields.
+Git inputs are validated up front (`validate::repo_url` — absolute local
+paths only —, `branch`, `commit`). Switching a service between git and image
+requires clearing the other source in the same PATCH. Cron jobs always have
+exactly 1 instance. Writes to one service are serialized, and custom-domain
+claims are globally serialized. GitHub webhooks also accept form-encoded
+deliveries and ignore replayed payloads.
 
 ## 11. Blueprints (`ferry.yaml` / `render.yaml`)
 
@@ -384,7 +413,27 @@ URL, auto-deploy) · **Jobs** (cron: run now + history + logs) ; datastores
 blueprint (paste YAML → dry run → apply). Light/dark via `prefers-color-scheme`.
 Polls status every 5s on detail pages.
 
-## 14. Coding rules
+## 14. Operational safety
+
+* The data directory is created `0700` (it holds env values, datastore
+  passwords, credentialed repo URLs); `api_token` and `instance_id` are `0600`.
+* `ferryd` holds an exclusive lock on `<data-dir>/ferryd.lock`, and records
+  ownership of its Docker name prefix on a marker volume `<prefix>-owner`.
+  A server refuses to start on a prefix owned by another data dir (or when an
+  empty data dir finds foreign containers) unless `--take-over` is given, so
+  it can never reconcile away another server's workloads.
+* The dashboard/API is only exposed through the public proxy by default for
+  local base domains; on public domains it must be enabled explicitly
+  (`--dashboard-host`), ideally with HTTPS.
+* Shutdown: first SIGINT/SIGTERM drains (API ≤ 10s, then the engine stops
+  jobs and records interrupted deploys, ≤ 25s); a second signal exits at once.
+* Proxy: `X-Forwarded-For` is the peer address only (client-supplied
+  forwarding headers are dropped; RFC 7239 `Forwarded` is set). Connection
+  timeouts (TLS handshake, header read, idle) and a connection cap derived
+  from the open-file limit (raised to the hard limit at startup).
+* Env values may contain a literal `${{` written as `$${{`.
+
+## 15. Coding rules
 
 * Rust 2024, stable. No `unwrap()`/`expect()` outside tests except on
   invariants documented in a comment. No `todo!()` left behind.
@@ -397,7 +446,7 @@ Polls status every 5s on detail pages.
   explicit version (not to the workspace root).
 * `cargo clippy -p <crate> --all-targets -- -D warnings` must pass; `cargo fmt`.
 
-## 15. Testing
+## 16. Testing
 
 * Unit tests next to the code; integration tests in `crates/<crate>/tests/`.
 * Docker-dependent tests are **gated**: they run only when `FERRY_E2E=1` and

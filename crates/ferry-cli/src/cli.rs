@@ -241,6 +241,9 @@ pub struct DeleteArgs {
     /// Don't ask for confirmation
     #[arg(short, long)]
     pub yes: bool,
+    /// Delete even if other services still reference it (their next deploy or restart will fail)
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -494,6 +497,9 @@ pub struct DbRmArgs {
     /// Don't ask for confirmation
     #[arg(short, long)]
     pub yes: bool,
+    /// Delete even if other services still reference it (their next deploy or restart will fail)
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -564,6 +570,12 @@ pub struct EnvGroupRmArgs {
     /// Don't ask for confirmation
     #[arg(short, long)]
     pub yes: bool,
+    /// Delete even if services are still linked to it
+    #[arg(long)]
+    pub force: bool,
+    /// With --force: restart the linked live services so they drop the group's variables
+    #[arg(long, requires = "force")]
+    pub restart: bool,
 }
 
 #[derive(Debug, Clone, Args)]

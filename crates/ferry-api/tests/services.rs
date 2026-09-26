@@ -261,7 +261,9 @@ async fn delete_goes_through_the_engine() {
     let v = app.create_service(json!({"name": "web"})).await;
     let r = app.delete("/api/v1/services/web").await;
     assert_eq!(r.status, StatusCode::NO_CONTENT);
-    assert_eq!(app.engine.calls(), vec![format!("delete_service {}", v["id"].as_str().unwrap())]);
+    let id = v["id"].as_str().unwrap();
+    // A public service created without a source gets its routes right away.
+    assert_eq!(app.engine.calls(), vec![format!("refresh_routes {id}"), format!("delete_service {id}")]);
     assert_eq!(app.get("/api/v1/services/web").await.status, StatusCode::NOT_FOUND);
     assert_eq!(app.delete("/api/v1/services/web").await.status, StatusCode::NOT_FOUND);
 }
@@ -729,7 +731,18 @@ async fn unknown_fields_are_json_400s() {
         assert_eq!(r.code(), "invalid_request");
         assert!(r.json()["error"]["message"].as_str().unwrap().contains("unknown field"), "{}", r.text());
     }
-    assert!(app.engine.calls().is_empty());
+    // Only the route installation from creating "web" (deploy: false).
+    assert!(app.engine.calls().iter().all(|c| c.starts_with("refresh_routes")), "{:?}", app.engine.calls());
+}
+
+#[tokio::test]
+async fn public_services_without_a_deploy_get_routes_immediately() {
+    let app = TestApp::new().await;
+    let web = app.create_service(json!({"name": "web", "deploy": false, "image": "nginx"})).await;
+    let worker = app.create_service(json!({"name": "bg", "type": "worker", "deploy": false, "image": "busybox"})).await;
+    let calls = app.engine.calls();
+    assert!(calls.contains(&format!("refresh_routes {}", web["id"].as_str().unwrap())), "{calls:?}");
+    assert!(!calls.iter().any(|c| c.contains(worker["id"].as_str().unwrap())), "{calls:?}");
 }
 
 #[tokio::test]

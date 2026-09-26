@@ -123,11 +123,14 @@ fn reference(d: &ferry_core::Datastore) -> String {
     format!("${{{{datastore.{}.connectionString}}}}", d.name)
 }
 
-pub async fn remove(ctx: &Ctx, name: &str, yes: bool) -> Result<()> {
+pub async fn remove(ctx: &Ctx, name: &str, yes: bool, force: bool) -> Result<()> {
     // Resolve an id to the datastore's real name for the prompt and messages.
     let ds = ctx.client.get::<DatastoreView>(&["datastores", name], &[]).await?.data.datastore;
     confirm(&format!("delete datastore '{}' and all its data", ds.name), yes).await?;
-    ctx.client.delete_no_content(&["datastores", &ds.id]).await?;
+    ctx.client
+        .delete_no_content(&["datastores", &ds.id], &super::force_query(force, false))
+        .await
+        .map_err(|e| super::with_force_hint(e, force))?;
     if ctx.json {
         return print_json(&serde_json::json!({ "deleted": ds.name, "id": ds.id }));
     }

@@ -211,8 +211,8 @@ impl Client {
     }
 
     /// DELETE expecting no content (204); any body is ignored.
-    pub async fn delete_no_content(&self, segments: &[&str]) -> Result<()> {
-        let url = self.api_url(segments, &[])?;
+    pub async fn delete_no_content(&self, segments: &[&str], query: Query<'_>) -> Result<()> {
+        let url = self.api_url(segments, query)?;
         let rb = self.http.delete(url.clone()).timeout(REQUEST_TIMEOUT);
         self.send(rb, &url).await?;
         Ok(())
