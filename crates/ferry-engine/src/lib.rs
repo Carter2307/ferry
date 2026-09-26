@@ -10,10 +10,12 @@
 //! * deploy/job log storage and live following.
 //!
 //! Module map: `deploy` (queue, workers, cancel), `pipeline` (one deploy),
-//! `instances` (container specs, env, ports), `health` (probes),
-//! `reconcile` (convergence + routes), `ops` (suspend/resume/scale/delete),
-//! `jobs` (one-off jobs + cron), `datastores`, `status` (status + runtime
-//! logs), `logs` (deploy/job log hub), `images` (pull policy + retention).
+//! `spec` (the launch spec a live deploy's instances and jobs run with),
+//! `instances` (container specs, ports, disks), `health` (probes),
+//! `reconcile` (convergence, routes, route watcher), `ops`
+//! (suspend/resume/scale/delete), `jobs` (one-off jobs + cron),
+//! `datastores`, `status` (status + runtime logs), `logs` (deploy/job log
+//! hub), `images` (pull policy + retention).
 
 mod datastores;
 mod deploy;
@@ -25,6 +27,7 @@ mod logs;
 mod ops;
 mod pipeline;
 mod reconcile;
+mod spec;
 mod state;
 mod status;
 #[cfg(test)]
@@ -60,13 +63,15 @@ impl FerryEngine {
     }
 
     /// Boot sequence, then return (background tasks keep running until
-    /// `shutdown` is cancelled):
+    /// `shutdown` is cancelled; [`FerryEngine::stopped`] waits for them):
     /// 1. ensure the Docker network and data directories exist;
     /// 2. mark deploys/jobs interrupted by a previous crash as failed;
-    /// 3. reconcile once synchronously (so routes are live before the proxy
-    ///    starts serving);
-    /// 4. spawn deploy workers, the reconcile loop, the cron scheduler and
-    ///    datastore provisioning for rows still `creating`.
+    /// 3. install the routes of every service synchronously (so they are live
+    ///    before the proxy starts serving); the rest of the boot convergence
+    ///    (stopping stale instances, starting missing ones) continues in the
+    ///    background;
+    /// 4. spawn deploy workers, the reconcile loop, the route watcher, the
+    ///    cron scheduler and datastore provisioning for rows still `creating`.
     ///
     /// Calling it twice is a `Conflict` error.
     pub async fn start(self: &Arc<Self>, shutdown: CancellationToken) -> Result<()> {
@@ -77,7 +82,7 @@ impl FerryEngine {
         // Everything the engine spawns stops with `shutdown`.
         {
             let internal = inner.shutdown.clone();
-            tokio::spawn(async move {
+            inner.spawn(async move {
                 shutdown.cancelled().await;
                 internal.cancel();
             });
@@ -100,13 +105,32 @@ impl FerryEngine {
         // No build runs yet: scratch directories are leftovers of a crash.
         remove_stale_build_dirs(&config.builds_dir()).await;
         deploy::recover_interrupted(inner).await?;
-        reconcile::reconcile_all(inner).await?;
+        reconcile::reconcile_all(inner, reconcile::Pass::Boot).await?;
 
-        tokio::spawn(reconcile::run_loop(inner.clone()));
-        tokio::spawn(jobs::run_scheduler(inner.clone()));
+        inner.spawn(reconcile::run_loop(inner.clone()));
+        inner.spawn(reconcile::watch_routes(inner.clone()));
+        inner.spawn(jobs::run_scheduler(inner.clone()));
+        inner.spawn(deploy::fail_queued_on_shutdown(inner.clone()));
         datastores::resume_provisioning(inner).await?;
         info!(prefix = %inner.naming.prefix(), "engine started");
         Ok(())
+    }
+
+    /// Resolves once the `shutdown` token given to [`FerryEngine::start`] is
+    /// cancelled and every background task has wound down: running deploys
+    /// recorded as interrupted (with their new instances removed), queued
+    /// ones failed with their logs finished, running jobs stopped (with their
+    /// grace period) and recorded, loops stopped. Await it (with a timeout)
+    /// before exiting the process. Resolves at once if the engine was never
+    /// started.
+    pub async fn stopped(&self) {
+        let inner = &self.inner;
+        if !inner.started.load(Ordering::SeqCst) {
+            return;
+        }
+        inner.shutdown.cancelled().await;
+        inner.tasks.close();
+        inner.tasks.wait().await;
     }
 }
 

@@ -1,5 +1,5 @@
 //! One deploy, start to finish: build (or pull / reuse) → start instances →
-//! health check → route swap → drain the old instances → live. On failure
+//! health check → route swap → live → drain the old instances. On failure
 //! the new instances are removed and the old ones keep serving.
 
 use std::collections::{HashMap, HashSet};
@@ -9,22 +9,24 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use ferry_build::{BuildRequest, BuildSource};
+use ferry_build::{BuildEvent, BuildRequest, BuildSource};
 use ferry_core::{
-    Deploy, DeploySource, DeployStatus, DeployTrigger, Error, LogLine, LogSink, Runtime, Service, ServiceType, env,
+    Deploy, DeploySource, DeployStatus, DeployTrigger, EnvVar, Error, LogLine, LogSink, Runtime, Service, ServiceType,
+    env,
 };
 use ferry_docker::{ContainerInfo, Docker};
 use futures::StreamExt;
 use futures::future::try_join_all;
-use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::health::{Probe, wait_healthy};
+use crate::health::{HealthCheck, Probe, wait_healthy};
 use crate::images;
-use crate::instances::{self, BuildInfo, Plan, STOP_GRACE_SECS};
+use crate::instances::{self, BuildInfo, STOP_GRACE_SECS};
 use crate::logs::LogHandle;
+use crate::spec::{self, LaunchSpec};
 use crate::state::{ActiveDeploy, DeployOptions, Inner, SetGuard, deploying_set};
 use crate::util::{error_message, instance_id, lock};
 
@@ -33,6 +35,13 @@ use crate::util::{error_message, instance_id, lock};
 const DRAIN_DELAY: Duration = Duration::from_secs(2);
 /// Log lines of a crashed instance copied into the deploy log.
 const CRASH_TAIL_LINES: usize = 50;
+/// How often a deploy waiting for a referenced service looks again.
+const REFERENCE_POLL: Duration = Duration::from_secs(2);
+/// A deploy waits at most this long (or twice the health-check timeout, if
+/// longer) for the first deploy of a service it references.
+const REFERENCE_WAIT_MIN: Duration = Duration::from_secs(15 * 60);
+/// Launch specs of recent non-live deploys are deleted after each deploy.
+const SPEC_GC_WINDOW: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -130,8 +139,18 @@ async fn execute(
     record_build(ctx, &deploy, &built).await.map_err(Failure::build)?;
     ctx.check_cancel(Stage::Build)?;
 
+    // Services this one references by port must have deployed first.
+    wait_for_references(ctx).await?;
+
     if svc.service_type == ServiceType::CronJob {
-        return go_live(ctx, None).await.map_err(Failure::deploy);
+        // Nothing to start: freeze what the runs will use, and go live.
+        let svc = current_service(ctx, Stage::Deploy).await?;
+        let user_env = spec::resolve_user_env(inner, &svc).await.map_err(Failure::deploy)?;
+        let deploy = inner.store.require_deploy(&ctx.deploy_id).await.map_err(Failure::deploy)?;
+        let spec = LaunchSpec::new(&svc, &deploy, built.image, None, built.info.runtime, user_env, &inner.config);
+        mark_live(ctx, &spec).await.map_err(Failure::deploy)?;
+        announce_live(ctx, None).await;
+        return Ok(());
     }
     deploy_stage(ctx, built).await
 }
@@ -142,6 +161,16 @@ fn start_line(deploy: &Deploy) -> String {
             format!("==> Rolling back to deploy {from} (deploy {})", deploy.id)
         }
         (trigger, _) => format!("==> Starting deploy {} (trigger: {trigger})", deploy.id),
+    }
+}
+
+/// The service as it is now (it may have been changed while building).
+async fn current_service(ctx: &Ctx, stage: Stage) -> Result<Service, Failure> {
+    match ctx.inner.store.get_service(&ctx.service_id).await {
+        Ok(Some(s)) if s.suspended => Err(ctx.canceled(stage, "service suspended")),
+        Ok(Some(s)) => Ok(s),
+        Ok(None) => Err(ctx.canceled(stage, "service deleted")),
+        Err(e) => Err(Failure { stage, error: e, logged: false }),
     }
 }
 
@@ -165,7 +194,16 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
                 return Err(Failure::build(Error::Build("the service has no image to deploy".into())));
             }
             pull(ctx, &image).await.map_err(Failure::build)?;
-            Ok(Built { image, info: BuildInfo { runtime: Some(Runtime::Image), port_hint: None } })
+            // Pin what was pulled: the reference may move (`latest`, a re-pushed
+            // tag), but rollbacks, restarts, crash replacements and jobs of this
+            // deploy must run exactly this image. The pin is one of the service's
+            // own images, so retention deletes only this tag, never the pulled image.
+            let pinned = inner.naming.image_tag(&svc.name, &deploy.id);
+            inner.docker.tag_image(&image, &pinned).await.map_err(|e| {
+                Failure::build(Error::Build(format!("pinning image {image} as {pinned}: {}", error_message(&e))))
+            })?;
+            ctx.log.system(format!("==> Pinned {image} as {pinned}"));
+            Ok(Built { image: pinned, info: BuildInfo { runtime: Some(Runtime::Image), port_hint: None } })
         }
         DeploySource::Reuse { image, from_deploy } => {
             let (image, from_deploy) =
@@ -174,7 +212,7 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
             let exists = inner.docker.image_exists(image).await.map_err(Failure::build)?;
             if !exists {
                 return Err(Failure::build(Error::Build(format!(
-                    "image {image} no longer exists (only the newest {} built images of a service are kept): \
+                    "image {image} no longer exists (only the newest {} images of a service are kept): \
                      deploy again from source",
                     inner.config.keep_images
                 ))));
@@ -194,9 +232,11 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
     }
 }
 
-/// A restart queued while another deploy was running must reuse what is
-/// live *now* (else it would roll that deploy back): re-point its source at
-/// the current live deploy. Rollbacks keep their explicit target.
+/// Restarts reuse what is live when they run, not when they were queued
+/// (else a restart queued behind another deploy would roll that deploy
+/// back, and one queued behind a first deploy would have nothing to reuse):
+/// re-point their source at the current live deploy. Rollbacks keep their
+/// explicit target.
 async fn current_reuse_target(
     ctx: &Ctx,
     svc: &Service,
@@ -209,16 +249,24 @@ async fn current_reuse_target(
         return Ok(unchanged);
     }
     let inner = &ctx.inner;
-    let Some(live_id) = svc.live_deploy_id.as_deref().filter(|id| Some(*id) != from_deploy) else {
-        return Ok(unchanged);
+    let Some(live_id) = svc.live_deploy_id.as_deref() else {
+        return Err(Error::Build(format!(
+            "service '{}' has no live deploy to restart (its deploy did not go live)",
+            svc.name
+        )));
     };
     let Some(live_image) = inner.store.get_deploy(live_id).await?.and_then(|d| d.image) else {
-        return Ok(unchanged);
+        return Err(Error::Build(format!("the live deploy {live_id} of '{}' has no image", svc.name)));
     };
+    if from_deploy == Some(live_id) && image == live_image {
+        return Ok(unchanged);
+    }
     let mut d = inner.store.require_deploy(&deploy.id).await?;
     d.source = DeploySource::Reuse { image: live_image.clone(), from_deploy: Some(live_id.to_string()) };
     inner.store.update_deploy(&d).await?;
-    ctx.log.system(format!("==> The live deploy changed since this restart was queued: restarting {live_id}"));
+    if from_deploy != Some(live_id) {
+        ctx.log.system(format!("==> The live deploy changed since this restart was queued: restarting {live_id}"));
+    }
     Ok((live_image, Some(live_id.to_string())))
 }
 
@@ -254,26 +302,57 @@ async fn build_image(
         labels: inner.naming.service_labels(&svc.id, &deploy.id),
         clear_cache: opts.clear_cache,
     };
-    match inner.builder.build(&req, ctx.log.sink(), ctx.cancel()).await {
+    // The commit is recorded as soon as it is checked out, so failed,
+    // canceled and in-progress builds show it too.
+    let (events_tx, mut events) = mpsc::unbounded_channel();
+    let result = {
+        let build = inner.builder.build_with_events(&req, ctx.log.sink(), ctx.cancel(), Some(&events_tx));
+        tokio::pin!(build);
+        loop {
+            tokio::select! {
+                r = &mut build => break r,
+                Some(event) = events.recv() => on_build_event(ctx, event).await,
+            }
+        }
+    };
+    drop(events_tx);
+    while let Ok(event) = events.try_recv() {
+        on_build_event(ctx, event).await;
+    }
+    match result {
         Ok(out) => {
-            // Record the commit right away (visible while deploying).
-            if out.commit_sha.is_some() || out.commit_message.is_some() {
-                match inner.store.require_deploy(&deploy.id).await {
-                    Ok(mut d) => {
-                        d.commit_sha = out.commit_sha.clone();
-                        d.commit_message = out.commit_message.clone();
-                        if let Err(e) = inner.store.update_deploy(&d).await {
-                            warn!(deploy = %deploy.id, "cannot record the commit: {e}");
-                        }
-                    }
-                    Err(e) => warn!(deploy = %deploy.id, "cannot record the commit: {e}"),
-                }
+            if let Some(sha) = out.commit_sha.clone() {
+                record_commit(ctx, sha, out.commit_message.clone()).await;
             }
             Ok(Built { image: out.image, info: BuildInfo { runtime: Some(out.runtime), port_hint: out.port_hint } })
         }
         Err(Error::Canceled) => Err(Failure::build(Error::Canceled)),
         // The builder already wrote "==> Build failed: <reason>".
         Err(e) => Err(Failure { stage: Stage::Build, error: e, logged: true }),
+    }
+}
+
+async fn on_build_event(ctx: &Ctx, event: BuildEvent) {
+    match event {
+        BuildEvent::CheckedOut { commit_sha, commit_message } => record_commit(ctx, commit_sha, commit_message).await,
+    }
+}
+
+/// Store the commit on the deploy (unless it is already there).
+async fn record_commit(ctx: &Ctx, sha: String, message: Option<String>) {
+    let store = &ctx.inner.store;
+    let recorded = async {
+        let mut d = store.require_deploy(&ctx.deploy_id).await?;
+        if d.commit_sha.as_deref() == Some(sha.as_str()) && d.commit_message == message {
+            return Ok(());
+        }
+        d.commit_sha = Some(sha);
+        d.commit_message = message;
+        store.update_deploy(&d).await
+    }
+    .await;
+    if let Err(e) = recorded {
+        warn!(deploy = %ctx.deploy_id, "cannot record the commit: {e}");
     }
 }
 
@@ -327,6 +406,107 @@ async fn record_build(ctx: &Ctx, deploy: &Deploy, built: &Built) -> ferry_core::
 }
 
 // ---------------------------------------------------------------------------
+// references to other services
+
+/// Services referenced by port (`${{service.X.port}}`, `hostport`,
+/// `internalUrl`) have no known port until their first deploy goes live.
+/// When one of them is still deploying (e.g. a blueprint that deploys every
+/// service at once), wait for it instead of failing. Bounded; circular waits
+/// fail right away. Unresolvable references for any other reason are left to
+/// the resolution itself (which fails the deploy with the reason).
+async fn wait_for_references(ctx: &Ctx) -> Result<(), Failure> {
+    let inner = &ctx.inner;
+    let limit =
+        Duration::from_secs(inner.config.health_check_timeout_secs.max(1).saturating_mul(2)).max(REFERENCE_WAIT_MIN);
+    let deadline = Instant::now() + limit;
+    let mut announced: HashSet<String> = HashSet::new();
+    let result = loop {
+        let svc = current_service(ctx, Stage::Build).await?;
+        let pending = match pending_references(inner, &svc).await {
+            Ok(p) => p,
+            Err(e) => break Err(Failure::build(e)),
+        };
+        if pending.is_empty() {
+            break Ok(());
+        }
+        let ids: HashSet<String> = pending.iter().map(|s| s.id.clone()).collect();
+        let circular = inner.with_rt(|rt| {
+            rt.reference_waits.insert(svc.id.clone(), ids.clone());
+            waits_on(&rt.reference_waits, &ids, &svc.id)
+        });
+        if circular {
+            let names: Vec<&str> = pending.iter().map(|s| s.name.as_str()).collect();
+            break Err(Failure::deploy(Error::invalid(format!(
+                "cannot resolve environment variables: '{}' and {} reference each other's port and \
+                 neither has deployed yet: deploy one of them without the reference first",
+                svc.name,
+                names.join(", ")
+            ))));
+        }
+        for s in &pending {
+            if announced.insert(s.id.clone()) {
+                ctx.log.system(format!(
+                    "==> Waiting for service '{}' to finish deploying: its port is referenced in the environment",
+                    s.name
+                ));
+            }
+        }
+        if Instant::now() >= deadline {
+            // Let the resolution report which reference is unresolvable.
+            break Ok(());
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(REFERENCE_POLL) => {}
+            _ = ctx.cancel().cancelled() => break Err(Failure::build(Error::Canceled)),
+        }
+    };
+    inner.with_rt(|rt| rt.reference_waits.remove(&ctx.service_id));
+    result
+}
+
+/// Referenced services whose port is unknown and that have a deploy in
+/// progress.
+async fn pending_references(inner: &Inner, svc: &Service) -> ferry_core::Result<Vec<Service>> {
+    let user = inner.store.effective_env(&svc.id).await?;
+    let names = spec::referenced_services(&user);
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (_, refs) = inner.store.reference_targets(&inner.config).await?;
+    let services = inner.store.list_services().await?;
+    let active = inner.store.active_deploys().await?;
+    let mut pending = Vec::new();
+    for name in names {
+        if name == svc.name || refs.iter().any(|r| r.name == name && r.port.is_some()) {
+            continue;
+        }
+        if let Some(target) = services.iter().find(|s| s.name == name)
+            && active.iter().any(|d| d.service_id == target.id)
+        {
+            pending.push(target.clone());
+        }
+    }
+    Ok(pending)
+}
+
+/// Whether any of `from` (transitively) waits for `target`.
+fn waits_on(waits: &HashMap<String, HashSet<String>>, from: &HashSet<String>, target: &str) -> bool {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut stack: Vec<&str> = from.iter().map(String::as_str).collect();
+    while let Some(id) = stack.pop() {
+        if id == target {
+            return true;
+        }
+        if seen.insert(id)
+            && let Some(next) = waits.get(id)
+        {
+            stack.extend(next.iter().map(String::as_str));
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
 // deploy stage
 
 async fn deploy_stage(ctx: &Ctx, built: Built) -> Result<(), Failure> {
@@ -340,9 +520,8 @@ async fn deploy_stage(ctx: &Ctx, built: Built) -> Result<(), Failure> {
     inner.store.set_deploy_status(&ctx.deploy_id, DeployStatus::Deploying, None).await.map_err(Failure::deploy)?;
 
     let mut started: Vec<(ContainerInfo, Instant)> = Vec::new();
-    let mut swapped = false;
-    let result = start_and_swap(ctx, &built, &mut started, &mut swapped).await;
-    if result.is_err() && !swapped {
+    let result = start_and_swap(ctx, &built, &mut started).await;
+    if result.is_err() && !ctx.active.is_swapped() {
         remove_new_instances(ctx, &started).await;
     }
     result
@@ -360,45 +539,48 @@ async fn remove_new_instances(ctx: &Ctx, started: &[(ContainerInfo, Instant)]) {
     crate::deploy::remove_deploy_containers(&ctx.inner, &ctx.deploy_id).await;
 }
 
-async fn start_and_swap(
-    ctx: &Ctx,
-    built: &Built,
-    started: &mut Vec<(ContainerInfo, Instant)>,
-    swapped: &mut bool,
-) -> Result<(), Failure> {
+/// The log line for the port, and a hint for when nothing listens on it.
+fn port_hint(port: u16, user_env: &[EnvVar]) -> String {
+    match user_env.iter().rev().find(|v| v.key == "PORT") {
+        Some(v) if v.value.trim().parse::<u16>().ok() != Some(port) => format!(
+            "the app gets PORT={} from its environment but Ferry expects it to listen on port {port}",
+            v.value.trim()
+        ),
+        _ => format!("does the app listen on $PORT ({port})?"),
+    }
+}
+
+async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerInfo, Instant)>) -> Result<(), Failure> {
     let inner = &ctx.inner;
     let config = &inner.config;
-    let svc = match inner.store.get_service(&ctx.service_id).await.map_err(Failure::deploy)? {
-        Some(s) => s,
-        None => return Err(ctx.canceled(Stage::Deploy, "service deleted")),
-    };
-    if svc.suspended {
-        return Err(ctx.canceled(Stage::Deploy, "service suspended"));
-    }
+    let svc = current_service(ctx, Stage::Deploy).await?;
     let desired = svc.desired_instances().max(1) as usize;
 
-    // Port, env, command, disk.
-    let user_env = instances::user_env(inner, &svc).await.map_err(Failure::deploy)?;
+    // Environment (references resolved now), port, command, disk: the spec
+    // every instance of this deploy runs with, for as long as it is live.
+    let user_env = spec::resolve_user_env(inner, &svc).await.map_err(Failure::deploy)?;
     let port = if svc.listens() {
         let exposed = inner.docker.image_exposed_ports(&built.image).await.map_err(Failure::deploy)?;
         let hint = built.info.port_hint;
         let port = env::choose_port(svc.port, &user_env, hint, &exposed, config.default_port);
         let reason = instances::port_reason(svc.port, &user_env, hint, &exposed);
         ctx.log.system(format!("==> Using port {port} ({reason})"));
+        if let Some(warning) = instances::port_env_mismatch(port, &user_env) {
+            ctx.log.system(format!("==> Warning: {warning}"));
+        }
         Some(port)
     } else {
         None
     };
+    let hint = port.map(|p| port_hint(p, &user_env));
     let mut deploy = inner.store.require_deploy(&ctx.deploy_id).await.map_err(Failure::deploy)?;
     deploy.port = port;
     inner.store.update_deploy(&deploy).await.map_err(Failure::deploy)?;
-    let env = instances::container_env(inner, &svc, &deploy, port).await.map_err(Failure::deploy)?;
-    let volume = instances::disk_volume(inner, &svc).await.map_err(Failure::deploy)?;
-    if let Some(v) = &volume {
+    let spec = LaunchSpec::new(&svc, &deploy, built.image.clone(), port, built.info.runtime, user_env, config);
+    let plan = spec::plan(inner, &svc, &spec).await.map_err(Failure::deploy)?;
+    if let Some(v) = &plan.volume {
         ctx.log.system(format!("==> Mounting disk at {}", v.target));
     }
-    let plan =
-        Plan { image: built.image.clone(), port, env, cmd: instances::start_cmd(&svc, built.info.runtime), volume };
 
     let mut old: Vec<ContainerInfo> = instances::service_containers(inner, &svc.id, true)
         .await
@@ -424,31 +606,38 @@ async fn start_and_swap(
     ctx.log.system(format!("==> Starting {desired} instance(s)"));
     for _ in 0..desired {
         ctx.check_cancel(Stage::Deploy)?;
-        let spec = instances::service_spec(&inner.naming, &svc, &ctx.deploy_id, &plan);
-        let info = inner.docker.run_container(&spec).await.map_err(|e| {
+        let container_spec = instances::service_spec(&inner.naming, &svc, &ctx.deploy_id, &plan);
+        let info = inner.docker.run_container(&container_spec).await.map_err(|e| {
             Failure::deploy(Error::Docker(format!("starting an instance failed: {}", error_message(&e))))
         })?;
-        let at = match info.host_port {
-            Some(p) => format!(" (127.0.0.1:{p})"),
-            None => String::new(),
+        let at = match (port, info.host_port) {
+            (Some(p), Some(h)) => format!(" (port {p}, published on 127.0.0.1:{h})"),
+            (Some(p), None) => format!(" (port {p})"),
+            _ => String::new(),
         };
         ctx.log.system(format!("==> Started instance {}{at}", instance_id(&info.name)));
         started.push((info, Instant::now()));
     }
 
     // Health checks, with the new instances' output in the deploy log.
-    let probe = Probe::for_service(&svc, config.default_host(&svc.name));
     let timeout_secs = config.health_check_timeout_secs.max(1);
+    let check = HealthCheck {
+        probe: Probe::for_service(&svc, config.default_host(&svc.name)),
+        deadline: Instant::now() + Duration::from_secs(timeout_secs),
+        timeout_secs,
+        container_port: port,
+        port_hint: hint,
+        worker: svc.service_type == ServiceType::BackgroundWorker,
+        progress: ctx.log.sink().clone(),
+    };
     ctx.log.system(format!(
         "==> Waiting for {} instance(s) to become healthy: {} (timeout {timeout_secs}s)",
         started.len(),
-        probe.describe()
+        check.probe.describe()
     ));
     let containers: Vec<ContainerInfo> = started.iter().map(|(c, _)| c.clone()).collect();
     let mut capture = OutputCapture::start(&inner.docker, &containers, ctx.log.sink());
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let checks =
-        try_join_all(started.iter().map(|(c, at)| wait_healthy(inner, c, &probe, *at, deadline, timeout_secs)));
+    let checks = try_join_all(started.iter().map(|(c, at)| wait_healthy(inner, &check, c, *at)));
     let outcome = tokio::select! {
         r = checks => Some(r),
         _ = ctx.cancel().cancelled() => None,
@@ -465,11 +654,13 @@ async fn start_and_swap(
         Some(Ok(ports)) => ports,
     };
     ctx.log.system("==> Health check passed");
-    ctx.check_cancel(Stage::Deploy)?;
 
-    // Swap: from here on the new instances serve traffic and are kept.
+    // The point of no return: after this the deploy can no longer be
+    // canceled, and it goes live even if the server stops right after.
+    if !ctx.active.commit_swap() {
+        return Err(Failure::deploy(Error::Canceled));
+    }
     let svc = inner.store.get_service(&svc.id).await.ok().flatten().unwrap_or(svc);
-    *swapped = true;
     if svc.is_public_http() {
         // The ports the health checks verified (fresher than the start info).
         let upstreams: Vec<SocketAddr> = verified_ports
@@ -481,9 +672,16 @@ async fn start_and_swap(
         inner.routes.set_service_routes(&svc.id, &config.service_hosts(&svc), upstreams);
         ctx.log.system("==> Routing traffic to the new instance(s)");
     }
+    // Live right away (before the old instances are drained): if the server
+    // stops or crashes while draining, it comes back with this deploy.
+    mark_live(ctx, &spec).await.map_err(Failure::deploy)?;
+
     if !old.is_empty() {
         if svc.is_public_http() {
-            tokio::time::sleep(DRAIN_DELAY).await;
+            tokio::select! {
+                _ = tokio::time::sleep(DRAIN_DELAY) => {}
+                _ = inner.shutdown.cancelled() => {}
+            }
         }
         ctx.log.system(format!("==> Stopping {} old instance(s)", old.len()));
         if let Err(e) = instances::retire(inner, &old, STOP_GRACE_SECS).await {
@@ -493,12 +691,15 @@ async fn start_and_swap(
             ));
         }
     }
-    go_live(ctx, port).await.map_err(Failure::deploy)
+    announce_live(ctx, port).await;
+    Ok(())
 }
 
-/// Mark the deploy live, the previous live deploy deactivated, and say so.
-async fn go_live(ctx: &Ctx, port: Option<u16>) -> ferry_core::Result<()> {
+/// Mark the deploy live (storing its launch spec first), the previous live
+/// deploy deactivated.
+async fn mark_live(ctx: &Ctx, spec: &LaunchSpec) -> ferry_core::Result<()> {
     let inner = &ctx.inner;
+    spec::save(&inner.store, &ctx.deploy_id, spec).await?;
     let svc = inner.store.require_service(&ctx.service_id).await?;
     let previous = svc.live_deploy_id.clone();
     inner.store.set_deploy_status(&ctx.deploy_id, DeployStatus::Live, None).await?;
@@ -510,10 +711,23 @@ async fn go_live(ctx: &Ctx, port: Option<u16>) -> ferry_core::Result<()> {
         inner.store.set_deploy_status(&prev, DeployStatus::Deactivated, None).await?;
     }
     info!(service = %svc.name, deploy = %ctx.deploy_id, "deploy live");
+    Ok(())
+}
+
+/// Say that the deploy is live, and where.
+async fn announce_live(ctx: &Ctx, port: Option<u16>) {
+    let inner = &ctx.inner;
+    let svc = match inner.store.get_service(&ctx.service_id).await {
+        Ok(Some(s)) => s,
+        _ => {
+            ctx.log.system("==> Your service is live 🎉");
+            return;
+        }
+    };
     if svc.service_type == ServiceType::CronJob {
         let schedule = svc.schedule.as_deref().unwrap_or("?");
         ctx.log.system(format!("==> Your cron job is live 🎉 (schedule: {schedule}, UTC)"));
-        return Ok(());
+        return;
     }
     ctx.log.system("==> Your service is live 🎉");
     if svc.is_public_http() {
@@ -523,7 +737,15 @@ async fn go_live(ctx: &Ctx, port: Option<u16>) -> ferry_core::Result<()> {
     } else if let Some(p) = port {
         ctx.log.system(format!("==> Reachable on the private network at {}:{p}", svc.name));
     }
-    Ok(())
+}
+
+/// The failure line of a deploy log: named after the stage that failed,
+/// like the deploy's status (`build_failed` / `deploy_failed`).
+pub(crate) fn failure_line(status: DeployStatus, message: &str) -> String {
+    match status {
+        DeployStatus::BuildFailed => format!("==> Build failed: {message}"),
+        _ => format!("==> Deploy failed: {message}"),
+    }
 }
 
 async fn record_failure(ctx: &Ctx, failure: Failure) {
@@ -537,13 +759,13 @@ async fn record_failure(ctx: &Ctx, failure: Failure) {
             Some(reason) => (DeployStatus::Canceled, reason.clone(), format!("==> Deploy canceled: {reason}")),
             None if inner.shutdown.is_cancelled() => {
                 let m = "interrupted by server shutdown".to_string();
-                (failed_status, m.clone(), format!("==> Deploy failed: {m}"))
+                (failed_status, m.clone(), failure_line(failed_status, &m))
             }
             None => (DeployStatus::Canceled, "canceled".to_string(), "==> Deploy canceled".to_string()),
         },
         other => {
             let m = error_message(other);
-            (failed_status, m.clone(), format!("==> Deploy failed: {m}"))
+            (failed_status, m.clone(), failure_line(failed_status, &m))
         }
     };
     if !failure.logged {
@@ -557,7 +779,6 @@ async fn record_failure(ctx: &Ctx, failure: Failure) {
 
 /// The deploy task panicked: fail it and remove whatever it started.
 pub(crate) async fn handle_crash(inner: &Arc<Inner>, deploy: &Deploy, log: &LogHandle, message: &str) {
-    log.system(format!("==> Deploy failed: {message}"));
     match inner.store.get_deploy(&deploy.id).await {
         Ok(Some(d)) if d.status.is_active() => {
             let status = if d.status == DeployStatus::Deploying {
@@ -565,12 +786,15 @@ pub(crate) async fn handle_crash(inner: &Arc<Inner>, deploy: &Deploy, log: &LogH
             } else {
                 DeployStatus::BuildFailed
             };
+            log.system(failure_line(status, message));
             if let Err(e) = inner.store.set_deploy_status(&d.id, status, Some(message)).await {
                 warn!(deploy = %d.id, "cannot record the deploy's failure: {e}");
             }
             crate::deploy::remove_deploy_containers(inner, &d.id).await;
         }
-        Ok(_) => {}
+        // Already live (it failed while draining the old instances): the
+        // reconciler removes what is left of them.
+        Ok(_) => log.system(format!("==> Warning: {message}")),
         Err(e) => warn!(deploy = %deploy.id, "cannot read the crashed deploy: {e}"),
     }
 }
@@ -709,12 +933,22 @@ pub(crate) async fn cleanup_after_deploy(inner: &Arc<Inner>, service_id: &str) {
                     .filter(|d| d.image.as_deref() == Some(image.as_str()))
                     .map(|d| d.id.clone())
                     .collect();
-                instances::delete_build_info(&inner.store, &ids).await;
+                instances::forget_deploys(&inner.store, &ids).await;
             }
             Err(Error::Conflict(m)) => debug!(image = %image, "image still in use, kept: {m}"),
             Err(e) => warn!(image = %image, "cannot remove old image: {e}"),
         }
     }
+    // Only the live deploy's launch spec is ever used again: drop those of
+    // the recent deploys that are no longer (or never were) live. Older ones
+    // were dropped by earlier cleanups.
+    let stale_specs: Vec<String> = deploys
+        .iter()
+        .take(SPEC_GC_WINDOW)
+        .filter(|d| Some(&d.id) != svc.live_deploy_id.as_ref() && !d.status.is_active())
+        .map(|d| d.id.clone())
+        .collect();
+    spec::forget(&inner.store, &stale_specs).await;
     cleanup_uploads(inner, &svc).await;
 }
 
@@ -790,6 +1024,32 @@ mod tests {
         assert!(seen.covers(&line(2, "c")));
         assert!(!seen.covers(&line(2, "d")), "same timestamp, different text");
         assert!(!seen.covers(&line(3, "e")));
+    }
+
+    #[test]
+    fn failure_lines_name_the_failed_stage() {
+        assert_eq!(failure_line(DeployStatus::BuildFailed, "no such image"), "==> Build failed: no such image");
+        assert_eq!(failure_line(DeployStatus::DeployFailed, "crashed"), "==> Deploy failed: crashed");
+    }
+
+    #[test]
+    fn port_hints_point_at_the_port_variable() {
+        assert_eq!(port_hint(8000, &[]), "does the app listen on $PORT (8000)?");
+        assert_eq!(port_hint(8000, &[EnvVar::new("PORT", "8000")]), "does the app listen on $PORT (8000)?");
+        let h = port_hint(8000, &[EnvVar::new("PORT", "9000")]);
+        assert!(h.contains("PORT=9000") && h.contains("8000"), "{h}");
+    }
+
+    #[test]
+    fn circular_reference_waits_are_detected() {
+        let mut waits: HashMap<String, HashSet<String>> = HashMap::new();
+        let set = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<HashSet<String>>();
+        waits.insert("a".into(), set(&["b"]));
+        waits.insert("b".into(), set(&["c"]));
+        assert!(!waits_on(&waits, &set(&["b"]), "a"));
+        waits.insert("c".into(), set(&["a"]));
+        assert!(waits_on(&waits, &set(&["b"]), "a"), "a → b → c → a");
+        assert!(!waits_on(&waits, &set(&["x"]), "a"));
     }
 
     #[test]

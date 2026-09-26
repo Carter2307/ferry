@@ -344,7 +344,9 @@ async fn image_web_service_lifecycle() {
     // (1) live, 200 through the proxy.
     let d1 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
     assert_eq!(d1.port, Some(80), "nginx EXPOSEs 80");
-    assert_eq!(d1.image.as_deref(), Some("nginx:alpine"));
+    // The pulled image is pinned as one of the service's own images.
+    assert_eq!(d1.image, Some(format!("{}/web:{}", h.prefix, d1.id)));
+    assert!(h.deploy_log(&d1.id).await.contains(&format!("==> Pinned nginx:alpine as {}/web:", h.prefix)));
     let body = h.wait_ok("web", "/", Duration::from_secs(30)).await;
     assert!(body.contains("nginx"), "{body}");
     let log = h.deploy_log(&d1.id).await;

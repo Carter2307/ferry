@@ -3,8 +3,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ferry_core::naming::{LABEL_DATASTORE, LABEL_INSTANCE};
 use ferry_core::{Datastore, DatastoreKind, DatastoreStatus, Error, LogSink, Naming, Result};
-use ferry_docker::{ContainerSpec, ContainerState, PortPublish, RestartPolicy, VolumeMount, free_host_port};
+use ferry_docker::{
+    ContainerInfo, ContainerSpec, ContainerState, PortPublish, RestartPolicy, VolumeMount, free_host_port,
+};
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -94,6 +97,12 @@ pub(crate) fn ready_command(ds: &Datastore) -> Vec<String> {
     }
 }
 
+/// `message` with every occurrence of the datastore's password masked:
+/// the Redis probe carries it in its argv, and Docker errors quote the argv.
+pub(crate) fn redact(message: &str, ds: &Datastore) -> String {
+    if ds.password.is_empty() { message.to_string() } else { message.replace(&ds.password, "********") }
+}
+
 fn is_ready(kind: DatastoreKind, exit_code: i64, output: &str) -> bool {
     match kind {
         DatastoreKind::Postgres => exit_code == 0,
@@ -119,13 +128,14 @@ pub(crate) async fn provision(inner: &Arc<Inner>, datastore_id: &str) -> Result<
     if !registered {
         return Ok(());
     }
-    let inner = inner.clone();
-    tokio::spawn(async move {
+    let task_inner = inner.clone();
+    inner.spawn(async move {
+        let inner = task_inner;
         let id = ds.id.clone();
         let task = {
             let inner = inner.clone();
             let id = id.clone();
-            tokio::spawn(async move { provision_task(&inner, &id, &token).await })
+            inner.clone().spawn(async move { provision_task(&inner, &id, &token).await })
         };
         let outcome = match task.await {
             Ok(r) => r,
@@ -135,8 +145,10 @@ pub(crate) async fn provision(inner: &Arc<Inner>, datastore_id: &str) -> Result<
             if matches!(e, Error::Canceled) {
                 debug!(datastore = %ds.name, "provisioning canceled");
             } else {
-                error!(datastore = %ds.name, "provisioning failed: {e}");
-                mark_failed(&inner, &id, &error_message(&e)).await;
+                // Never let the password reach the server log or the API.
+                let message = redact(&error_message(&e), &ds);
+                error!(datastore = %ds.name, "provisioning failed: {message}");
+                mark_failed(&inner, &id, &message).await;
             }
         }
         inner.with_rt(|rt| rt.provisioning.remove(&id));
@@ -183,15 +195,31 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
     }
     info!(datastore = %ds.name, kind = %ds.kind, image = %ds.image(), "provisioning datastore");
 
+    check_volume_owner(inner, &ds).await?;
     inner.docker.ensure_volume(&naming.datastore_volume(&ds.name), &naming.datastore_labels(&ds.id)).await?;
-    let container_id = match existing {
-        Some(c) if running => c.id,
-        Some(c) if matches!(c.state, ContainerState::Exited | ContainerState::Created | ContainerState::Paused) => {
-            inner.docker.start_container(&c.id).await?;
-            c.id
+    // An existing stopped container is started; one that can't be (its host
+    // port was taken meanwhile, it is paused, dead...) is recreated with the
+    // same volume, which keeps the data.
+    // (container, whether it is up) of the existing container.
+    let existing: Option<(ContainerInfo, bool)> = match existing {
+        Some(c) if running => Some((c, true)),
+        Some(c) if matches!(c.state, ContainerState::Exited | ContainerState::Created) => {
+            match inner.docker.start_container(&c.id).await {
+                Ok(()) => Some((c, true)),
+                Err(e) => {
+                    let why = redact(&error_message(&e), &ds);
+                    warn!(datastore = %ds.name, "cannot start the existing container ({why}): recreating it");
+                    Some((c, false))
+                }
+            }
         }
+        Some(c) => Some((c, false)),
+        None => None,
+    };
+    let container_id = match existing {
+        Some((c, true)) => c.id,
         other => {
-            if let Some(c) = other {
+            if let Some((c, _)) = other {
                 inner.docker.remove_container(&c.id, true).await?;
             }
             let image = ds.image();
@@ -212,6 +240,33 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
         info!(datastore = %ds.name, "datastore available");
     }
     Ok(())
+}
+
+/// A datastore never adopts a volume it did not create: a volume with its
+/// name left by something else (another server with the same prefix, a
+/// reset data directory, a manual `docker volume create`) holds data the new
+/// datastore's credentials can't open (Postgres keeps the password it was
+/// initialized with) and that must not be exposed under the new name.
+async fn check_volume_owner(inner: &Inner, ds: &Datastore) -> Result<()> {
+    let name = inner.naming.datastore_volume(&ds.name);
+    if !inner.docker.volume_exists(&name).await? {
+        return Ok(());
+    }
+    let volume = inner
+        .docker
+        .bollard()
+        .inspect_volume(&name)
+        .await
+        .map_err(|e| Error::Docker(format!("inspecting volume {name}: {e}")))?;
+    let label = |k: &str| volume.labels.get(k).map(String::as_str);
+    if label(LABEL_DATASTORE) == Some(ds.id.as_str()) && label(LABEL_INSTANCE) == Some(inner.naming.prefix()) {
+        return Ok(());
+    }
+    Err(Error::conflict(format!(
+        "a Docker volume named {name} already exists and was not created for this datastore \
+         (it may hold another database's data): remove it with `docker volume rm {name}` \
+         (or pick another name), then delete and create the datastore again"
+    )))
 }
 
 /// Create the container; if the stored host port was taken meanwhile,
@@ -253,13 +308,15 @@ async fn wait_ready(inner: &Inner, ds: &Datastore, container_id: &str, cancel: &
                 let tail: Vec<String> =
                     inner.docker.logs(container_id, false, Some(5)).map(|l| l.line).collect::<Vec<_>>().await;
                 let code = c.exit_code.map(|c| format!(" with code {c}")).unwrap_or_default();
-                return Err(Error::Docker(format!("the {} container exited{code}: {}", ds.kind, tail.join(" | "))));
+                let tail = redact(&tail.join(" | "), ds);
+                return Err(Error::Docker(format!("the {} container exited{code}: {tail}", ds.kind)));
             }
             Some(c) if c.state.is_running() => {
                 match tokio::time::timeout(PROBE_TIMEOUT, inner.docker.exec(container_id, &argv)).await {
                     Ok(Ok(out)) if is_ready(ds.kind, out.exit_code, &out.output) => return Ok(()),
-                    Ok(Ok(out)) => out.output.trim().chars().take(200).collect(),
-                    Ok(Err(e)) => error_message(&e),
+                    Ok(Ok(out)) => redact(&out.output.trim().chars().take(200).collect::<String>(), ds),
+                    // Docker's errors quote the probe's argv (and so the password).
+                    Ok(Err(e)) => format!("readiness probe failed: {}", redact(&error_message(&e), ds)),
                     Err(_) => "readiness probe timed out".into(),
                 }
             }
@@ -367,6 +424,18 @@ mod tests {
         assert_eq!(ready_command(&ds), vec!["redis-cli", "--no-auth-warning", "-a", "secret", "ping"]);
         assert!(is_ready(DatastoreKind::Redis, 0, "PONG\n"));
         assert!(!is_ready(DatastoreKind::Redis, 0, "NOAUTH Authentication required."));
+    }
+
+    #[test]
+    fn passwords_are_redacted() {
+        let mut ds = Datastore::new("cache", DatastoreKind::Redis);
+        ds.password = "S3CRET".into();
+        let m = "running \"redis-cli --no-auth-warning -a S3CRET ping\" in container x: is restarting";
+        let r = redact(m, &ds);
+        assert!(!r.contains("S3CRET"), "{r}");
+        assert!(r.contains("-a ******** ping"), "{r}");
+        ds.password = String::new();
+        assert_eq!(redact("nothing to hide", &ds), "nothing to hide");
     }
 
     #[test]
