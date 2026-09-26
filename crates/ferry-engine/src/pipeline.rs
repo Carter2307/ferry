@@ -468,7 +468,7 @@ async fn wait_for_references(ctx: &Ctx) -> Result<(), Failure> {
 /// progress.
 async fn pending_references(inner: &Inner, svc: &Service) -> ferry_core::Result<Vec<Service>> {
     let user = inner.store.effective_env(&svc.id).await?;
-    let names = spec::referenced_services(&user);
+    let names = spec::port_referenced_services(&user);
     if names.is_empty() {
         return Ok(Vec::new());
     }

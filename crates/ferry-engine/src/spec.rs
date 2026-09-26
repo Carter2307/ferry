@@ -162,9 +162,10 @@ pub(crate) async fn plan(inner: &Inner, svc: &Service, spec: &LaunchSpec) -> Res
     Ok(Plan { image: spec.image.clone(), port: spec.port, env: spec.container_env(), cmd: spec.cmd.clone(), volume })
 }
 
-/// Names of the services referenced by `${{service.NAME.…}}` (or `svc.`)
-/// in the values of `vars`.
-pub(crate) fn referenced_services(vars: &[EnvVar]) -> Vec<String> {
+/// Names of the services whose port is referenced in the values of `vars`
+/// (`${{service.NAME.port}}`, `hostport` or `internalUrl`; `svc.` too):
+/// those references resolve only once the service's port is known.
+pub(crate) fn port_referenced_services(vars: &[EnvVar]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for v in vars {
         let mut rest = v.value.as_str();
@@ -172,8 +173,9 @@ pub(crate) fn referenced_services(vars: &[EnvVar]) -> Vec<String> {
             let after = &rest[start + 3..];
             let Some(end) = after.find("}}") else { break };
             let parts: Vec<&str> = after[..end].split('.').map(str::trim).collect();
-            if let [kind, name, _] = parts.as_slice()
+            if let [kind, name, prop] = parts.as_slice()
                 && matches!(kind.to_ascii_lowercase().as_str(), "service" | "svc")
+                && matches!(*prop, "port" | "hostport" | "internalUrl")
                 && !names.iter().any(|n| n == name)
             {
                 names.push((*name).to_string());
@@ -247,13 +249,19 @@ mod tests {
     }
 
     #[test]
-    fn finds_service_references() {
+    fn finds_port_references_to_services() {
         let vars = vec![
             EnvVar::new("A", "${{service.api.hostport}}"),
             EnvVar::new("B", "http://${{ svc.worker.port }}/x and ${{service.api.port}}"),
             EnvVar::new("C", "${{datastore.db.connectionString}} ${{service.broken"),
             EnvVar::new("D", "plain"),
+            // Known without a deploy: no need to wait for these services.
+            EnvVar::new("E", "${{service.web.url}} ${{service.web.host}}"),
+            EnvVar::new("F", "${{service.internal.internalUrl}}"),
         ];
-        assert_eq!(referenced_services(&vars), vec!["api".to_string(), "worker".to_string()]);
+        assert_eq!(
+            port_referenced_services(&vars),
+            vec!["api".to_string(), "worker".to_string(), "internal".to_string()]
+        );
     }
 }

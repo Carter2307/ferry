@@ -389,6 +389,11 @@ async fn worker_loop(inner: Arc<Inner>, service_id: String, generation: u64, wak
 /// Take `deploy_id` off the queue if it is still the next queued deploy
 /// (caller holds the queue lock). `Err` = the store failed.
 async fn claim(inner: &Inner, service_id: &str, deploy_id: &str) -> std::result::Result<Option<Claimed>, ()> {
+    // Shutting down: nothing new starts (the shutdown sweep fails what is
+    // still queued, under this same lock).
+    if inner.shutdown.is_cancelled() {
+        return Ok(None);
+    }
     match next_queued(inner, service_id).await {
         Ok(Some(d)) if d.id == deploy_id => {}
         Ok(_) => return Ok(None),

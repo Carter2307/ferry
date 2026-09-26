@@ -25,6 +25,11 @@ struct Fixture {
 }
 
 async fn fixture(build_concurrency: usize) -> Fixture {
+    fixture_with(build_concurrency, "docker").await
+}
+
+/// `docker_bin` is the CLI the builder runs `docker build` with.
+async fn fixture_with(build_concurrency: usize, docker_bin: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let config = Arc::new(Config {
         data_dir: dir.path().to_path_buf(),
@@ -36,7 +41,7 @@ async fn fixture(build_concurrency: usize) -> Fixture {
     // Port 9 (discard) on loopback: connections are refused immediately.
     let bollard = bollard::Docker::connect_with_http("http://127.0.0.1:9", 2, bollard::API_DEFAULT_VERSION).unwrap();
     let docker = Docker::from_bollard(bollard);
-    let builder = Builder::new(config.builds_dir(), config.repos_dir(), "docker".into());
+    let builder = Builder::new(config.builds_dir(), config.repos_dir(), docker_bin.into());
     let routes = RouteTable::new();
     let engine = FerryEngine::new(config, store.clone(), docker, builder, routes.clone());
     Fixture { _dir: dir, engine, store, routes }
@@ -141,6 +146,46 @@ async fn failing_pull_marks_build_failed_with_logs() {
     let replay: Vec<String> =
         f.engine.deploy_logs(&d.id, false).await.unwrap().map(|l| l.line).collect::<Vec<_>>().await;
     assert_eq!(replay, lines);
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-c", "user.name=Ferry Test", "-c", "user.email=test@ferry.invalid"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[tokio::test]
+async fn failed_builds_record_the_checked_out_commit() {
+    if std::process::Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipped: git is not installed");
+        return;
+    }
+    // The checkout works; `docker build` can't even start.
+    let f = fixture_with(2, "/nonexistent/ferry-test-docker").await;
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(repo.path().join("Dockerfile"), "FROM busybox:stable\nRUN exit 3\n").unwrap();
+    git(repo.path(), &["init", "-q", "-b", "main"]);
+    git(repo.path(), &["add", "-A"]);
+    git(repo.path(), &["commit", "-q", "-m", "broken build"]);
+    let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+    let svc = service(&f.store, "echo", ServiceType::WebService, |s| {
+        s.repo_url = Some(repo.path().display().to_string());
+        s.branch = "main".into();
+    })
+    .await;
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let lines = log_lines(&f.engine, &d.id).await;
+    let d = wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
+    assert_eq!(d.status, DeployStatus::BuildFailed, "{d:?}\n{lines:?}");
+    // The failed deploy says which commit broke the build.
+    assert_eq!(d.commit_sha.as_deref(), Some(sha.as_str()), "{lines:?}");
+    assert_eq!(d.commit_message.as_deref(), Some("broken build"));
+    assert!(lines.iter().any(|l| l.starts_with("==> Build failed")), "{lines:?}");
 }
 
 #[tokio::test]

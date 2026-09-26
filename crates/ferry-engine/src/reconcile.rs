@@ -133,17 +133,30 @@ pub(crate) async fn reconcile_all(inner: &Arc<Inner>, pass: Pass) -> Result<()> 
         })
         .await;
 
-    // Re-read the services: one created during this pass may already have
-    // routes (its first deploy went live meanwhile).
-    let known: HashSet<String> = inner.store.list_services().await?.into_iter().map(|s| s.id).collect();
-    for route in inner.routes.snapshot() {
-        if route.service_id != DASHBOARD_ROUTE && !known.contains(&route.service_id) {
-            inner.routes.remove_service(&route.service_id);
-        }
-    }
+    remove_deleted_routes(inner).await?;
 
     reconcile_datastores(inner, &datastores, &all).await;
     remove_orphans(inner, &services, &datastores, &all).await;
+    Ok(())
+}
+
+/// Remove the routes of services that no longer exist. The routes are read
+/// *before* the services: routes are only ever installed for services that
+/// exist, so a route whose service is missing from the later read belongs to
+/// a deleted service — never to one created during the pass (whose first
+/// deploy may already have installed routes).
+async fn remove_deleted_routes(inner: &Inner) -> Result<()> {
+    let routes = inner.routes.snapshot();
+    let known: HashSet<String> = inner.store.list_services().await?.into_iter().map(|s| s.id).collect();
+    let mut removed: HashSet<&str> = HashSet::new();
+    for route in &routes {
+        if route.service_id != DASHBOARD_ROUTE
+            && !known.contains(&route.service_id)
+            && removed.insert(route.service_id.as_str())
+        {
+            inner.routes.remove_service(&route.service_id);
+        }
+    }
     Ok(())
 }
 
@@ -297,17 +310,20 @@ async fn start_missing(
 }
 
 /// After instances were started outside a deploy (resume, scale, crash
-/// replacement), add them to the routes as soon as they accept connections
-/// instead of waiting for the next pass.
+/// replacement) or Docker restarted one, add them to the routes as soon as
+/// they accept connections instead of waiting for the next pass. While one
+/// warm-up of the service runs, another request makes it look once more
+/// before it ends (the change may have come after its last look).
 pub(crate) fn spawn_route_warmup(inner: &Arc<Inner>, service_id: &str) {
     let Some(guard) = SetGuard::insert(inner, service_id, warmups_set) else {
+        inner.with_rt(|rt| rt.warmup_again.insert(service_id.to_string()));
         return;
     };
     let task_inner = inner.clone();
     let service_id = service_id.to_string();
     inner.spawn(async move {
         let inner = task_inner;
-        let _guard = guard;
+        let guard = guard;
         let deadline = Instant::now() + Duration::from_secs(inner.config.health_check_timeout_secs.max(10));
         while Instant::now() < deadline {
             tokio::select! {
@@ -319,7 +335,21 @@ pub(crate) fn spawn_route_warmup(inner: &Arc<Inner>, service_id: &str) {
                 return;
             }
             match refresh_routes_locked(&inner, &service_id).await {
-                Ok((routable, running)) if routable >= running => return,
+                Ok((routable, running)) if routable >= running => {
+                    // Done, unless asked to look again (checked and released
+                    // together, so no request falls in between).
+                    let done = inner.with_rt(|rt| {
+                        if rt.warmup_again.remove(&service_id) {
+                            return false;
+                        }
+                        rt.warmups.remove(&service_id);
+                        true
+                    });
+                    if done {
+                        guard.disarm();
+                        return;
+                    }
+                }
                 Ok(_) => {}
                 Err(e) => {
                     debug!(service = %service_id, "route warm-up: {e}");
@@ -568,8 +598,8 @@ mod tests {
         v.iter().map(|c| c.name.as_str()).collect()
     }
 
-    #[tokio::test]
-    async fn failed_datastores_are_retried_with_backoff() {
+    /// Engine state with an in-memory store and an unreachable Docker.
+    async fn test_inner() -> (tempfile::TempDir, Inner) {
         let dir = tempfile::tempdir().unwrap();
         let config = Arc::new(ferry_core::Config { data_dir: dir.path().to_path_buf(), ..Default::default() });
         let store = ferry_core::Store::open_in_memory().await.unwrap();
@@ -583,6 +613,46 @@ mod tests {
             builder,
             ferry_proxy::RouteTable::new(),
         );
+        (dir, inner)
+    }
+
+    #[tokio::test]
+    async fn routes_of_deleted_services_are_removed() {
+        let (_dir, inner) = test_inner().await;
+        let svc = Service::new("web", ferry_core::ServiceType::WebService);
+        inner.store.create_service(&svc).await.unwrap();
+        let up: SocketAddr = "127.0.0.1:4000".parse().unwrap();
+        inner.routes.set_service_routes(&svc.id, &["web.localhost".into()], vec![up]);
+        inner.routes.set_service_routes("srv-gone", &["gone.localhost".into(), "gone.example.com".into()], vec![up]);
+        inner.routes.set_service_routes(DASHBOARD_ROUTE, &["ferry.localhost".into()], vec![up]);
+        remove_deleted_routes(&inner).await.unwrap();
+        let ids: HashSet<String> = inner.routes.snapshot().into_iter().map(|r| r.service_id).collect();
+        assert!(ids.contains(&svc.id), "{ids:?}");
+        assert!(ids.contains(DASHBOARD_ROUTE), "{ids:?}");
+        assert!(!ids.contains("srv-gone"), "{ids:?}");
+    }
+
+    #[tokio::test]
+    async fn warmup_guards_release_their_key_unless_disarmed() {
+        let (_dir, inner) = test_inner().await;
+        let inner = Arc::new(inner);
+        let g = SetGuard::insert(&inner, "srv-1", warmups_set).unwrap();
+        assert!(SetGuard::insert(&inner, "srv-1", warmups_set).is_none(), "one warm-up per service");
+        drop(g);
+        let g = SetGuard::insert(&inner, "srv-1", warmups_set).unwrap();
+        // Released by its owner, then taken by a new warm-up: the old guard
+        // must leave the new one's key alone.
+        inner.with_rt(|rt| rt.warmups.remove("srv-1"));
+        let newer = SetGuard::insert(&inner, "srv-1", warmups_set).unwrap();
+        g.disarm();
+        assert!(inner.with_rt(|rt| rt.warmups.contains("srv-1")));
+        drop(newer);
+        assert!(!inner.with_rt(|rt| rt.warmups.contains("srv-1")));
+    }
+
+    #[tokio::test]
+    async fn failed_datastores_are_retried_with_backoff() {
+        let (_dir, inner) = test_inner().await;
         let t0 = Instant::now();
         assert!(retry_due(&inner, "dbs-1", t0), "first retry right away");
         assert!(!retry_due(&inner, "dbs-1", t0 + Duration::from_secs(59)));

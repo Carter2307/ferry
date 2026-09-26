@@ -75,30 +75,35 @@ pub(crate) fn datastore_spec(naming: &Naming, ds: &Datastore, bind_ip: &str, hos
     }
 }
 
-/// The readiness command, and how to judge its output.
-pub(crate) fn ready_command(ds: &Datastore) -> Vec<String> {
+/// The readiness command and the environment it runs with. Credentials go
+/// in the environment, never in the argv (which Docker reports in exec
+/// inspection and process listings).
+pub(crate) fn ready_command(ds: &Datastore) -> (Vec<String>, Vec<(&'static str, String)>) {
     match ds.kind {
         // Over TCP: the entrypoint's temporary init server only listens on
         // the unix socket, so this is ready once the real server is up.
-        DatastoreKind::Postgres => vec![
-            "pg_isready".into(),
-            "-h".into(),
-            "127.0.0.1".into(),
-            "-p".into(),
-            ds.internal_port().to_string(),
-            "-U".into(),
-            ds.username.clone(),
-            "-d".into(),
-            ds.database.clone().unwrap_or_else(|| ds.username.clone()),
-        ],
-        DatastoreKind::Redis => {
-            vec!["redis-cli".into(), "--no-auth-warning".into(), "-a".into(), ds.password.clone(), "ping".into()]
-        }
+        DatastoreKind::Postgres => (
+            vec![
+                "pg_isready".into(),
+                "-h".into(),
+                "127.0.0.1".into(),
+                "-p".into(),
+                ds.internal_port().to_string(),
+                "-U".into(),
+                ds.username.clone(),
+                "-d".into(),
+                ds.database.clone().unwrap_or_else(|| ds.username.clone()),
+            ],
+            Vec::new(),
+        ),
+        // redis-cli reads the password from REDISCLI_AUTH.
+        DatastoreKind::Redis => (vec!["redis-cli".into(), "ping".into()], vec![("REDISCLI_AUTH", ds.password.clone())]),
     }
 }
 
-/// `message` with every occurrence of the datastore's password masked:
-/// the Redis probe carries it in its argv, and Docker errors quote the argv.
+/// `message` with every occurrence of the datastore's password masked
+/// (defense in depth: container output and Docker errors should never
+/// carry it, but they end up in the server log and the datastore's error).
 pub(crate) fn redact(message: &str, ds: &Datastore) -> String {
     if ds.password.is_empty() { message.to_string() } else { message.replace(&ds.password, "********") }
 }
@@ -296,8 +301,9 @@ fn is_port_conflict(e: &Error) -> bool {
 async fn wait_ready(inner: &Inner, ds: &Datastore, container_id: &str, cancel: &CancellationToken) -> Result<()> {
     let limit = MIN_READY_TIMEOUT.max(Duration::from_secs(inner.config.health_check_timeout_secs));
     let deadline = Instant::now() + limit;
-    let cmd = ready_command(ds);
+    let (cmd, env) = ready_command(ds);
     let argv: Vec<&str> = cmd.iter().map(String::as_str).collect();
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
     loop {
         if cancel.is_cancelled() {
             return Err(Error::Canceled);
@@ -312,10 +318,9 @@ async fn wait_ready(inner: &Inner, ds: &Datastore, container_id: &str, cancel: &
                 return Err(Error::Docker(format!("the {} container exited{code}: {tail}", ds.kind)));
             }
             Some(c) if c.state.is_running() => {
-                match tokio::time::timeout(PROBE_TIMEOUT, inner.docker.exec(container_id, &argv)).await {
+                match tokio::time::timeout(PROBE_TIMEOUT, inner.docker.exec_with_env(container_id, &argv, &env)).await {
                     Ok(Ok(out)) if is_ready(ds.kind, out.exit_code, &out.output) => return Ok(()),
                     Ok(Ok(out)) => redact(&out.output.trim().chars().take(200).collect::<String>(), ds),
-                    // Docker's errors quote the probe's argv (and so the password).
                     Ok(Err(e)) => format!("readiness probe failed: {}", redact(&error_message(&e), ds)),
                     Err(_) => "readiness probe timed out".into(),
                 }
@@ -393,8 +398,9 @@ mod tests {
         );
         assert_eq!(spec.restart_policy, RestartPolicy::UnlessStopped);
         assert_eq!(spec.labels["ferry.datastore"], ds.id);
-        let cmd = ready_command(&ds);
+        let (cmd, env) = ready_command(&ds);
         assert_eq!(cmd[0], "pg_isready");
+        assert!(env.is_empty());
         assert!(cmd.windows(2).any(|w| w == ["-U", "main_db"]));
         assert!(cmd.windows(2).any(|w| w == ["-d", "main_db"]));
         assert!(is_ready(DatastoreKind::Postgres, 0, ""));
@@ -421,7 +427,11 @@ mod tests {
         assert!(spec.env.is_empty());
         assert_eq!(spec.volumes[0].target, "/data");
         assert_eq!(spec.publish.as_ref().map(|p| p.host_ip.as_str()), Some("0.0.0.0"));
-        assert_eq!(ready_command(&ds), vec!["redis-cli", "--no-auth-warning", "-a", "secret", "ping"]);
+        // The password travels in the exec's environment, never in its argv.
+        let (cmd, env) = ready_command(&ds);
+        assert_eq!(cmd, vec!["redis-cli", "ping"]);
+        assert!(cmd.iter().all(|a| !a.contains("secret")));
+        assert_eq!(env, vec![("REDISCLI_AUTH", "secret".to_string())]);
         assert!(is_ready(DatastoreKind::Redis, 0, "PONG\n"));
         assert!(!is_ready(DatastoreKind::Redis, 0, "NOAUTH Authentication required."));
     }

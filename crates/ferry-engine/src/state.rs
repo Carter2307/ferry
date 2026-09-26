@@ -71,6 +71,8 @@ pub(crate) struct Runtime {
     pub deleting_datastores: HashSet<String>,
     /// Services with a route warm-up task running.
     pub warmups: HashSet<String>,
+    /// Services whose running warm-up must look once more before it ends.
+    pub warmup_again: HashSet<String>,
     /// Failed datastores: when the reconciler may retry them, and the
     /// current back-off.
     pub datastore_retries: HashMap<String, (std::time::Instant, Duration)>,
@@ -257,11 +259,21 @@ impl SetGuard {
     }
 }
 
+impl SetGuard {
+    /// The key was already removed (by the owner, atomically with other
+    /// bookkeeping): don't remove it again, it may belong to a new owner.
+    pub fn disarm(mut self) {
+        self.key.clear();
+    }
+}
+
 impl Drop for SetGuard {
     fn drop(&mut self) {
         let set = self.set;
         let key = std::mem::take(&mut self.key);
-        self.inner.with_rt(|rt| set(rt).remove(&key));
+        if !key.is_empty() {
+            self.inner.with_rt(|rt| set(rt).remove(&key));
+        }
     }
 }
 
