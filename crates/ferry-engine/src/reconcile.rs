@@ -2,8 +2,13 @@
 //! says, at boot, every 10 seconds, and on demand (scale / suspend / resume
 //! / after deploys). It never touches a service whose deploy is in the
 //! deploying phase (that deploy holds the service lock).
+//!
+//! Instances are always started from the live deploy's launch spec (see
+//! `spec`), never from the current settings. A route watcher follows the
+//! host ports of running instances every second, so that routes follow a
+//! container Docker restarted on a new port without waiting for a pass.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,11 +25,17 @@ use tracing::{debug, error, info, warn};
 
 use crate::health::{TCP_SETTLE, tcp_accepting};
 use crate::instances::{self, STOP_GRACE_SECS};
+use crate::spec;
 use crate::state::{Inner, SetGuard, warmups_set};
 use crate::util::{error_message, instance_id};
 
 /// Interval of the periodic pass.
 pub(crate) const INTERVAL: Duration = Duration::from_secs(10);
+/// The first periodic pass after boot comes sooner (re-inspect what the boot
+/// pass found, e.g. containers a crashed server was stopping).
+const FIRST_PASS_AFTER: Duration = Duration::from_secs(2);
+/// How often the route watcher lists running instances.
+const ROUTE_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 /// Route id of the dashboard (installed by ferryd; never removed here).
 pub(crate) const DASHBOARD_ROUTE: &str = "__dashboard";
 /// Back-off between retries of a failed datastore.
@@ -35,20 +46,42 @@ const CONCURRENCY: usize = 8;
 /// Route warm-up: how often newly started instances are re-checked.
 const WARMUP_POLL: Duration = Duration::from_millis(500);
 
+/// Which pass is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pass {
+    /// At boot, before the proxy serves: only the routes are installed
+    /// synchronously; the rest of each service's convergence (stopping stale
+    /// instances with their grace period, starting missing ones) continues in
+    /// the background, so the proxy starts serving the live instances at once.
+    Boot,
+    Periodic,
+}
+
 /// The periodic loop (until shutdown). Each pass runs in its own task so a
 /// panic is logged instead of stopping reconciliation.
 pub(crate) async fn run_loop(inner: Arc<Inner>) {
+    let mut wait = FIRST_PASS_AFTER;
     loop {
         tokio::select! {
             _ = inner.shutdown.cancelled() => return,
-            _ = tokio::time::sleep(INTERVAL) => {}
+            _ = tokio::time::sleep(wait) => {}
             _ = inner.reconcile_wake.notified() => {}
         }
+        wait = INTERVAL;
         let pass = {
             let inner = inner.clone();
-            tokio::spawn(async move { reconcile_all(&inner).await })
+            tokio::spawn(async move { reconcile_all(&inner, Pass::Periodic).await })
         };
-        match pass.await {
+        let abort = pass.abort_handle();
+        let outcome = tokio::select! {
+            r = pass => r,
+            // Nothing a pass does must finish before the server stops.
+            _ = inner.shutdown.cancelled() => {
+                abort.abort();
+                return;
+            }
+        };
+        match outcome {
             Ok(Ok(())) => {}
             Ok(Err(e)) => warn!("reconcile pass failed: {e}"),
             Err(e) => error!("reconcile pass panicked: {e}"),
@@ -57,7 +90,7 @@ pub(crate) async fn run_loop(inner: Arc<Inner>) {
 }
 
 /// One full pass.
-pub(crate) async fn reconcile_all(inner: &Arc<Inner>) -> Result<()> {
+pub(crate) async fn reconcile_all(inner: &Arc<Inner>, pass: Pass) -> Result<()> {
     let _pass = inner.reconcile_lock.lock().await;
     let prefix = inner.naming.prefix().to_string();
     // List containers *before* reading the store: a container that existed at
@@ -74,11 +107,24 @@ pub(crate) async fn reconcile_all(inner: &Arc<Inner>) -> Result<()> {
                 return;
             }
             // Busy (deploying, scaling, being suspended...): next pass.
-            let Some(_guard) = inner.service_locks.try_lock(&svc.id) else {
+            let Some(guard) = inner.service_locks.try_lock(&svc.id) else {
                 debug!(service = %svc.name, "reconcile: service busy, skipped");
                 return;
             };
             if inner.is_deploying(&svc.id) {
+                return;
+            }
+            if pass == Pass::Boot {
+                if let Err(e) = refresh_routes_locked(inner, &svc.id).await {
+                    warn!(service = %svc.name, "installing routes failed: {}", error_message(&e));
+                }
+                let (task_inner, id, name) = (inner.clone(), svc.id.clone(), svc.name.clone());
+                inner.spawn(async move {
+                    let _guard = guard;
+                    if let Err(e) = converge_service(&task_inner, &id).await {
+                        warn!(service = %name, "reconciling service failed: {}", error_message(&e));
+                    }
+                });
                 return;
             }
             if let Err(e) = converge_service(inner, &svc.id).await {
@@ -87,15 +133,30 @@ pub(crate) async fn reconcile_all(inner: &Arc<Inner>) -> Result<()> {
         })
         .await;
 
-    let known: HashSet<&str> = services.iter().map(|s| s.id.as_str()).collect();
-    for route in inner.routes.snapshot() {
-        if route.service_id != DASHBOARD_ROUTE && !known.contains(route.service_id.as_str()) {
-            inner.routes.remove_service(&route.service_id);
-        }
-    }
+    remove_deleted_routes(inner).await?;
 
     reconcile_datastores(inner, &datastores, &all).await;
     remove_orphans(inner, &services, &datastores, &all).await;
+    Ok(())
+}
+
+/// Remove the routes of services that no longer exist. The routes are read
+/// *before* the services: routes are only ever installed for services that
+/// exist, so a route whose service is missing from the later read belongs to
+/// a deleted service — never to one created during the pass (whose first
+/// deploy may already have installed routes).
+async fn remove_deleted_routes(inner: &Inner) -> Result<()> {
+    let routes = inner.routes.snapshot();
+    let known: HashSet<String> = inner.store.list_services().await?.into_iter().map(|s| s.id).collect();
+    let mut removed: HashSet<&str> = HashSet::new();
+    for route in &routes {
+        if route.service_id != DASHBOARD_ROUTE
+            && !known.contains(&route.service_id)
+            && removed.insert(route.service_id.as_str())
+        {
+            inner.routes.remove_service(&route.service_id);
+        }
+    }
     Ok(())
 }
 
@@ -108,28 +169,48 @@ pub(crate) async fn converge_service(inner: &Arc<Inner>, service_id: &str) -> Re
         Some(id) => inner.store.get_deploy(id).await?,
         None => None,
     };
+    // What the live deploy's instances run with (not the current settings).
+    let spec = match &live {
+        Some(live) => Some(spec::for_deploy(inner, &svc, live).await),
+        None => None,
+    };
+    // A disk can't be shared: one instance, and stale instances go before a
+    // new one starts. Otherwise the live deploy's missing instances start
+    // first, so that a service never has fewer instances than it could.
+    let disk = svc.disk_mount_path.is_some() || matches!(&spec, Some(Ok(s)) if s.disk_mount_path.is_some());
+    let desired = if disk { svc.desired_instances().min(1) } else { svc.desired_instances() } as usize;
     let containers = instances::service_containers(inner, &svc.id, true).await?;
-    let desired = svc.desired_instances() as usize;
     let (keep, mut remove) = partition(&containers, live.as_ref().map(|d| d.id.as_str()), desired);
+    remove.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Routes first, so nothing is routed to instances about to be removed.
     update_routes(inner, &svc, &keep).await;
 
-    if !remove.is_empty() {
-        info!(service = %svc.name, count = remove.len(), "removing stale or surplus instances");
-        remove.sort_by(|a, b| a.name.cmp(&b.name));
-        if let Err(e) = instances::retire(inner, &remove, STOP_GRACE_SECS).await {
-            warn!(service = %svc.name, "removing instances failed: {e}");
-        }
-    }
-
     let missing = desired.saturating_sub(keep.len());
-    if missing > 0
-        && let Some(live) = &live
-    {
-        start_missing(inner, &svc, live, missing).await?;
+    if disk {
+        remove_stale(inner, &svc, &remove).await;
     }
-    Ok(())
+    let started = match (&live, spec, missing) {
+        (Some(live), Some(spec), 1..) => match spec {
+            Ok(spec) => start_missing(inner, &svc, live, &spec, missing).await,
+            Err(e) => Err(e),
+        },
+        _ => Ok(()),
+    };
+    if !disk {
+        remove_stale(inner, &svc, &remove).await;
+    }
+    started
+}
+
+async fn remove_stale(inner: &Inner, svc: &Service, remove: &[ContainerInfo]) {
+    if remove.is_empty() {
+        return;
+    }
+    info!(service = %svc.name, count = remove.len(), "removing stale or surplus instances");
+    if let Err(e) = instances::retire(inner, remove, STOP_GRACE_SECS).await {
+        warn!(service = %svc.name, "removing instances failed: {e}");
+    }
 }
 
 /// Split a service's containers into the ones to keep (running-ish
@@ -193,9 +274,16 @@ async fn update_routes(inner: &Inner, svc: &Service, keep: &[ContainerInfo]) -> 
     (n, running)
 }
 
-/// Start `count` instances of the live deploy (same spec as the deploy).
-async fn start_missing(inner: &Arc<Inner>, svc: &Service, live: &Deploy, count: usize) -> Result<()> {
-    let plan = instances::plan_for_deploy(inner, svc, live).await?;
+/// Start `count` instances of the live deploy, from its launch spec (never
+/// from settings or env changed since: those need a deploy or restart).
+async fn start_missing(
+    inner: &Arc<Inner>,
+    svc: &Service,
+    live: &Deploy,
+    spec: &spec::LaunchSpec,
+    count: usize,
+) -> Result<()> {
+    let plan = spec::plan(inner, svc, spec).await?;
     if !inner.docker.image_exists(&plan.image).await? {
         warn!(service = %svc.name, image = %plan.image, "cannot start instances: the live image no longer exists");
         return Ok(());
@@ -222,16 +310,20 @@ async fn start_missing(inner: &Arc<Inner>, svc: &Service, live: &Deploy, count: 
 }
 
 /// After instances were started outside a deploy (resume, scale, crash
-/// replacement), add them to the routes as soon as they accept connections
-/// instead of waiting for the next pass.
+/// replacement) or Docker restarted one, add them to the routes as soon as
+/// they accept connections instead of waiting for the next pass. While one
+/// warm-up of the service runs, another request makes it look once more
+/// before it ends (the change may have come after its last look).
 pub(crate) fn spawn_route_warmup(inner: &Arc<Inner>, service_id: &str) {
     let Some(guard) = SetGuard::insert(inner, service_id, warmups_set) else {
+        inner.with_rt(|rt| rt.warmup_again.insert(service_id.to_string()));
         return;
     };
-    let inner = inner.clone();
+    let task_inner = inner.clone();
     let service_id = service_id.to_string();
-    tokio::spawn(async move {
-        let _guard = guard;
+    inner.spawn(async move {
+        let inner = task_inner;
+        let guard = guard;
         let deadline = Instant::now() + Duration::from_secs(inner.config.health_check_timeout_secs.max(10));
         while Instant::now() < deadline {
             tokio::select! {
@@ -243,7 +335,21 @@ pub(crate) fn spawn_route_warmup(inner: &Arc<Inner>, service_id: &str) {
                 return;
             }
             match refresh_routes_locked(&inner, &service_id).await {
-                Ok((routable, running)) if routable >= running => return,
+                Ok((routable, running)) if routable >= running => {
+                    // Done, unless asked to look again (checked and released
+                    // together, so no request falls in between).
+                    let done = inner.with_rt(|rt| {
+                        if rt.warmup_again.remove(&service_id) {
+                            return false;
+                        }
+                        rt.warmups.remove(&service_id);
+                        true
+                    });
+                    if done {
+                        guard.disarm();
+                        return;
+                    }
+                }
                 Ok(_) => {}
                 Err(e) => {
                     debug!(service = %service_id, "route warm-up: {e}");
@@ -274,6 +380,68 @@ pub(crate) async fn refresh_routes_locked(inner: &Inner, service_id: &str) -> Re
     let containers = instances::service_containers(inner, &svc.id, false).await?;
     let (keep, _) = partition(&containers, svc.live_deploy_id.as_deref(), usize::MAX);
     Ok(update_routes(inner, &svc, &keep).await)
+}
+
+/// Running instances of every service: service id → (container id, host
+/// port) pairs, sorted.
+type Fleet = HashMap<String, Vec<(String, Option<u16>)>>;
+
+/// Follows the host ports of running instances (every
+/// [`ROUTE_WATCH_INTERVAL`]). Docker restarts a crashed instance on a new
+/// ephemeral host port: the routes of a service whose running instances or
+/// ports changed are refreshed right away (as soon as the instances accept
+/// connections) instead of at the next pass.
+pub(crate) async fn watch_routes(inner: Arc<Inner>) {
+    let prefix = inner.naming.prefix().to_string();
+    let mut previous: Option<Fleet> = None;
+    loop {
+        tokio::select! {
+            _ = inner.shutdown.cancelled() => return,
+            _ = tokio::time::sleep(ROUTE_WATCH_INTERVAL) => {}
+        }
+        let running = match inner
+            .docker
+            .list_containers(&[(LABEL_INSTANCE, prefix.as_str()), (LABEL_ROLE, ROLE_SERVICE)], false)
+            .await
+        {
+            Ok(list) => list,
+            Err(e) => {
+                debug!("route watcher: {e}");
+                continue;
+            }
+        };
+        let fleet = fleet_of(&running);
+        if let Some(previous) = &previous {
+            for service_id in changed_services(previous, &fleet) {
+                if !inner.is_service_deleting(&service_id) {
+                    spawn_route_warmup(&inner, &service_id);
+                }
+            }
+        }
+        previous = Some(fleet);
+    }
+}
+
+fn fleet_of(running: &[ContainerInfo]) -> Fleet {
+    let mut fleet: Fleet = HashMap::new();
+    for c in running.iter().filter(|c| c.state.is_running()) {
+        if let Some(service_id) = c.labels.get(LABEL_SERVICE) {
+            fleet.entry(service_id.clone()).or_default().push((c.id.clone(), c.host_port));
+        }
+    }
+    for instances in fleet.values_mut() {
+        instances.sort();
+    }
+    fleet
+}
+
+/// Services whose running instances (or their ports) differ.
+fn changed_services(before: &Fleet, after: &Fleet) -> Vec<String> {
+    let mut changed: Vec<String> =
+        after.iter().filter(|(id, now)| before.get(*id) != Some(now)).map(|(id, _)| id.clone()).collect();
+    changed.extend(before.keys().filter(|id| !after.contains_key(*id)).cloned());
+    changed.sort();
+    changed
 }
 
 /// Re-install a service's routes with its current hosts but the upstreams
@@ -330,26 +498,20 @@ async fn reconcile_datastores(inner: &Arc<Inner>, datastores: &[Datastore], all:
                 || (c.labels.get(LABEL_ROLE).map(String::as_str) == Some(ROLE_DATASTORE)
                     && c.labels.get(LABEL_DATASTORE) == Some(&ds.id))
         });
-        match container {
-            None => {
-                info!(datastore = %ds.name, "datastore container is missing: recreating it");
-                if let Err(e) = crate::datastores::provision(inner, &ds.id).await {
-                    warn!(datastore = %ds.name, "cannot recreate datastore: {e}");
-                }
-            }
-            Some(c) if matches!(c.state, ContainerState::Exited | ContainerState::Created) => {
-                info!(datastore = %ds.name, "datastore container is stopped: starting it");
-                if let Err(e) = inner.docker.start_container(&c.id).await {
-                    warn!(datastore = %ds.name, "cannot start datastore container: {e}");
-                }
-            }
-            Some(c) if c.state == ContainerState::Dead => {
-                info!(datastore = %ds.name, "datastore container is dead: recreating it");
-                if let Err(e) = crate::datastores::provision(inner, &ds.id).await {
-                    warn!(datastore = %ds.name, "cannot recreate datastore: {e}");
-                }
-            }
-            Some(_) => {}
+        let why = match container {
+            None => "missing",
+            Some(c) => match c.state {
+                ContainerState::Exited | ContainerState::Created => "stopped",
+                ContainerState::Paused => "paused",
+                ContainerState::Dead => "dead",
+                _ => continue,
+            },
+        };
+        // Provisioning starts it (or recreates it with the same volume when it
+        // can't be started) and records a failure on the datastore.
+        info!(datastore = %ds.name, "datastore container is {why}: provisioning it again");
+        if let Err(e) = crate::datastores::provision(inner, &ds.id).await {
+            warn!(datastore = %ds.name, "cannot provision datastore: {e}");
         }
     }
 }
@@ -436,8 +598,8 @@ mod tests {
         v.iter().map(|c| c.name.as_str()).collect()
     }
 
-    #[tokio::test]
-    async fn failed_datastores_are_retried_with_backoff() {
+    /// Engine state with an in-memory store and an unreachable Docker.
+    async fn test_inner() -> (tempfile::TempDir, Inner) {
         let dir = tempfile::tempdir().unwrap();
         let config = Arc::new(ferry_core::Config { data_dir: dir.path().to_path_buf(), ..Default::default() });
         let store = ferry_core::Store::open_in_memory().await.unwrap();
@@ -451,6 +613,46 @@ mod tests {
             builder,
             ferry_proxy::RouteTable::new(),
         );
+        (dir, inner)
+    }
+
+    #[tokio::test]
+    async fn routes_of_deleted_services_are_removed() {
+        let (_dir, inner) = test_inner().await;
+        let svc = Service::new("web", ferry_core::ServiceType::WebService);
+        inner.store.create_service(&svc).await.unwrap();
+        let up: SocketAddr = "127.0.0.1:4000".parse().unwrap();
+        inner.routes.set_service_routes(&svc.id, &["web.localhost".into()], vec![up]);
+        inner.routes.set_service_routes("srv-gone", &["gone.localhost".into(), "gone.example.com".into()], vec![up]);
+        inner.routes.set_service_routes(DASHBOARD_ROUTE, &["ferry.localhost".into()], vec![up]);
+        remove_deleted_routes(&inner).await.unwrap();
+        let ids: HashSet<String> = inner.routes.snapshot().into_iter().map(|r| r.service_id).collect();
+        assert!(ids.contains(&svc.id), "{ids:?}");
+        assert!(ids.contains(DASHBOARD_ROUTE), "{ids:?}");
+        assert!(!ids.contains("srv-gone"), "{ids:?}");
+    }
+
+    #[tokio::test]
+    async fn warmup_guards_release_their_key_unless_disarmed() {
+        let (_dir, inner) = test_inner().await;
+        let inner = Arc::new(inner);
+        let g = SetGuard::insert(&inner, "srv-1", warmups_set).unwrap();
+        assert!(SetGuard::insert(&inner, "srv-1", warmups_set).is_none(), "one warm-up per service");
+        drop(g);
+        let g = SetGuard::insert(&inner, "srv-1", warmups_set).unwrap();
+        // Released by its owner, then taken by a new warm-up: the old guard
+        // must leave the new one's key alone.
+        inner.with_rt(|rt| rt.warmups.remove("srv-1"));
+        let newer = SetGuard::insert(&inner, "srv-1", warmups_set).unwrap();
+        g.disarm();
+        assert!(inner.with_rt(|rt| rt.warmups.contains("srv-1")));
+        drop(newer);
+        assert!(!inner.with_rt(|rt| rt.warmups.contains("srv-1")));
+    }
+
+    #[tokio::test]
+    async fn failed_datastores_are_retried_with_backoff() {
+        let (_dir, inner) = test_inner().await;
         let t0 = Instant::now();
         assert!(retry_due(&inner, "dbs-1", t0), "first retry right away");
         assert!(!retry_due(&inner, "dbs-1", t0 + Duration::from_secs(59)));
@@ -467,6 +669,28 @@ mod tests {
         let (_, backoff) = inner.with_rt(|rt| rt.datastore_retries["dbs-1"]);
         assert_eq!(backoff, DATASTORE_RETRY_MAX);
         assert!(retry_due(&inner, "dbs-2", t0), "tracked per datastore");
+    }
+
+    #[test]
+    fn route_watcher_notices_restarts_on_new_ports() {
+        let mut a = c("a", "live", ContainerState::Running);
+        a.labels.insert(LABEL_SERVICE.to_string(), "srv-1".into());
+        let mut b = c("b", "live", ContainerState::Running);
+        b.labels.insert(LABEL_SERVICE.to_string(), "srv-2".into());
+        let before = fleet_of(&[a.clone(), b.clone()]);
+        assert!(changed_services(&before, &before).is_empty());
+        // Docker restarted `a` on another host port.
+        let mut moved = a.clone();
+        moved.host_port = Some(2000);
+        assert_eq!(changed_services(&before, &fleet_of(&[moved, b.clone()])), vec!["srv-1".to_string()]);
+        // `b` stopped (restarting: not running), `a` unchanged.
+        let mut restarting = b.clone();
+        restarting.state = ContainerState::Restarting;
+        assert_eq!(changed_services(&before, &fleet_of(&[a.clone(), restarting])), vec!["srv-2".to_string()]);
+        // A new instance of `srv-1`.
+        let mut extra = c("x", "live", ContainerState::Running);
+        extra.labels.insert(LABEL_SERVICE.to_string(), "srv-1".into());
+        assert_eq!(changed_services(&before, &fleet_of(&[a, b, extra])), vec!["srv-1".to_string()]);
     }
 
     #[test]

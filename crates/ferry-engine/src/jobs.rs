@@ -15,6 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::instances;
 use crate::logs::{LogHandle, LogKind};
+use crate::spec::{self, LaunchSpec};
 use crate::state::{Inner, RunningJob};
 use crate::util::{error_message, panic_message};
 
@@ -39,6 +40,9 @@ pub(crate) async fn run_job(
     if svc.suspended {
         return Err(Error::conflict(format!("service '{}' is suspended", svc.name)));
     }
+    if inner.shutdown.is_cancelled() {
+        return Err(Error::conflict("the server is shutting down: run the job again once it is back"));
+    }
     let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
     if svc.service_type != ServiceType::CronJob && command.is_none() {
         return Err(Error::invalid(format!(
@@ -56,8 +60,12 @@ pub(crate) async fn run_job(
         .clone()
         .ok_or_else(|| Error::conflict(format!("the live deploy {} of '{}' has no image", live.id, svc.name)))?;
 
+    // Jobs run exactly like the live deploy's instances (its launch spec),
+    // not with settings or env changed since it went live.
+    let spec = spec::for_deploy(inner, &svc, &live).await;
+
     let mut job = JobRun::new(&svc.id, trigger, command);
-    job.image = Some(image);
+    job.image = Some(spec.as_ref().map_or(image, |s| s.image.clone()));
     inner.store.create_job_run(&job).await?;
     let log = inner.logs.open(LogKind::Job, &job.id);
     let (done_tx, done_rx) = watch::channel(false);
@@ -68,10 +76,10 @@ pub(crate) async fn run_job(
     info!(service = %svc.name, job = %job.id, trigger = %trigger, "job started");
 
     let (inner2, job2) = (inner.clone(), job.clone());
-    tokio::spawn(async move {
+    inner.spawn(async move {
         let task = {
             let (inner, job, log, cancel) = (inner2.clone(), job2.clone(), log.clone(), cancel.clone());
-            tokio::spawn(async move { execute(&inner, &svc, job, &log, &cancel).await })
+            inner2.spawn(async move { execute(&inner, &svc, spec, job, &log, &cancel).await })
         };
         if let Err(e) = task.await {
             error!(job = %job2.id, "job task failed: {e}");
@@ -88,21 +96,28 @@ pub(crate) async fn run_job(
 }
 
 /// Run the job's container to completion.
-async fn execute(inner: &Arc<Inner>, svc: &Service, job: JobRun, log: &LogHandle, cancel: &CancellationToken) {
+async fn execute(
+    inner: &Arc<Inner>,
+    svc: &Service,
+    spec: Result<LaunchSpec>,
+    job: JobRun,
+    log: &LogHandle,
+    cancel: &CancellationToken,
+) {
     let image = job.image.clone().unwrap_or_default();
     let container_name = inner.naming.job_container(&svc.name, &job.id);
     let prepared = async {
-        let live_id = svc.live_deploy_id.clone().unwrap_or_default();
-        let live = inner.store.require_deploy(&live_id).await?;
-        let env = instances::container_env(inner, svc, &live, None).await?;
+        let spec = spec?;
         if !inner.docker.image_exists(&image).await? {
             return Err(Error::conflict(format!("image {image} no longer exists: deploy the service again")));
         }
-        Ok(env)
+        // The service's disk, where the live instance has it.
+        let volume = instances::disk_volume(inner, &svc.id, spec.disk_mount_path.as_deref()).await?;
+        Ok((spec, volume))
     }
     .await;
-    let env = match prepared {
-        Ok(env) => env,
+    let (spec, volume) = match prepared {
+        Ok(p) => p,
         Err(e) => {
             let m = error_message(&e);
             log.system(format!("==> Job failed: {m}"));
@@ -110,18 +125,22 @@ async fn execute(inner: &Arc<Inner>, svc: &Service, job: JobRun, log: &LogHandle
             return;
         }
     };
-    let command = job.command.clone().or_else(|| svc.start_command.clone()).filter(|c| !c.trim().is_empty());
-    let spec = ContainerSpec {
+    // The command given, else the start command the live deploy runs with.
+    let command = job.command.clone().or_else(|| spec.start_command.clone()).filter(|c| !c.trim().is_empty());
+    if let Some(v) = &volume {
+        log.system(format!("==> Mounting the service's disk at {}", v.target));
+    }
+    let container_spec = ContainerSpec {
         name: container_name.clone(),
         image: image.clone(),
-        env,
+        env: spec.job_env(),
         cmd: command.as_deref().map(instances::sh_c),
         entrypoint: None,
         labels: inner.naming.job_labels(&svc.id, &job.id),
         network: Some(inner.naming.network()),
         network_aliases: Vec::new(),
         publish: None,
-        volumes: Vec::new(),
+        volumes: volume.into_iter().collect(),
         restart_policy: RestartPolicy::No,
         memory_limit_bytes: None,
         nano_cpus: None,
@@ -134,7 +153,7 @@ async fn execute(inner: &Arc<Inner>, svc: &Service, job: JobRun, log: &LogHandle
     if let Err(e) = mark_running(inner, &job.id).await {
         warn!(job = %job.id, "cannot mark job running: {e}");
     }
-    let info = match inner.docker.run_container(&spec).await {
+    let info = match inner.docker.run_container(&container_spec).await {
         Ok(info) => info,
         Err(e) => {
             let m = format!("starting the job container failed: {}", error_message(&e));

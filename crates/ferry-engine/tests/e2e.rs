@@ -107,13 +107,22 @@ impl Drop for Harness {
 }
 
 async fn harness(tweak: impl FnOnce(&mut Config)) -> Harness {
+    harness_named("ferrytest-engine", tweak).await
+}
+
+/// Regression tests of fixed findings use their own prefix family.
+async fn fix_harness(tweak: impl FnOnce(&mut Config)) -> Harness {
+    harness_named("ferryfix-engine", tweak).await
+}
+
+async fn harness_named(base: &str, tweak: impl FnOnce(&mut Config)) -> Harness {
     if std::env::var("RUST_LOG").is_ok() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .with_test_writer()
             .try_init();
     }
-    let prefix = format!("ferrytest-engine-{}", ids::random_secret(8));
+    let prefix = format!("{base}-{}", ids::random_secret(8));
     let cleanup = Cleanup { prefix: prefix.clone() };
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().canonicalize().unwrap();
@@ -223,9 +232,12 @@ impl Harness {
     }
 
     /// Wait for a deploy and require the given final status (printing its
-    /// log otherwise).
+    /// log otherwise). A deploy is live as soon as traffic switched to it;
+    /// this also waits for the end of its log (old instances drained).
     async fn expect(&self, d: &Deploy, status: DeployStatus) -> Deploy {
         let done = self.wait_terminal(&d.id).await;
+        let follow = self.engine.deploy_logs(&d.id, true).await.unwrap().collect::<Vec<_>>();
+        assert!(tokio::time::timeout(Duration::from_secs(60), follow).await.is_ok(), "the log of {} never ended", d.id);
         if done.status != status {
             panic!(
                 "deploy {} ended {} (expected {status}): {:?}\n--- log ---\n{}",
@@ -344,7 +356,9 @@ async fn image_web_service_lifecycle() {
     // (1) live, 200 through the proxy.
     let d1 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
     assert_eq!(d1.port, Some(80), "nginx EXPOSEs 80");
-    assert_eq!(d1.image.as_deref(), Some("nginx:alpine"));
+    // The pulled image is pinned as one of the service's own images.
+    assert_eq!(d1.image, Some(format!("{}/web:{}", h.prefix, d1.id)));
+    assert!(h.deploy_log(&d1.id).await.contains(&format!("==> Pinned nginx:alpine as {}/web:", h.prefix)));
     let body = h.wait_ok("web", "/", Duration::from_secs(30)).await;
     assert!(body.contains("nginx"), "{body}");
     let log = h.deploy_log(&d1.id).await;
@@ -496,7 +510,12 @@ async fn git_service_redeploys_rollback_and_env() {
     assert!(ok_count.load(Ordering::Relaxed) > 20);
     assert_eq!(d2.commit_sha.as_deref(), Some(sha2.as_str()));
     assert_eq!(h.store.require_deploy(&d1.id).await.unwrap().status, DeployStatus::Deactivated);
-    assert!(h.containers(&format!("ferry.deploy={}", d1.id)).is_empty(), "old instances are removed");
+    // The deploy is live as soon as traffic switched; the old instances are
+    // drained and removed right after.
+    h.wait_until("the old instances to be removed", Duration::from_secs(30), || async {
+        h.containers(&format!("ferry.deploy={}", d1.id)).is_empty()
+    })
+    .await;
     assert_eq!(h.upstreams("echo"), 2);
 
     // (6) env change + restart.
@@ -515,7 +534,7 @@ async fn git_service_redeploys_rollback_and_env() {
     let d4 = h.engine.restart(&svc.id, DeployTrigger::Restart).await.unwrap();
     let d4 = h.expect(&d4, DeployStatus::DeployFailed).await;
     let error = d4.error.clone().unwrap_or_default();
-    assert!(error.contains("exited") || error.contains("crashed"), "{error}");
+    assert!(error.contains("crashed (exit code 3)"), "the exit code is reported: {error}");
     let log = h.deploy_log(&d4.id).await;
     assert!(log.contains("boom-before-exit"), "the crashed instance's output is in the log:\n{log}");
     assert!(log.contains("==> Deploy failed:"), "{log}");
@@ -535,7 +554,11 @@ async fn git_service_redeploys_rollback_and_env() {
     assert_eq!(commit, d1.commit_sha);
     assert_eq!(h.store.require_deploy(&d3.id).await.unwrap().status, DeployStatus::Deactivated);
 
-    // Status and runtime logs.
+    // Status and runtime logs (once the previous instances are drained).
+    h.wait_until("the previous instances to be removed", Duration::from_secs(30), || async {
+        h.engine.service_status(&svc.id).await.unwrap().instances.len() == 2
+    })
+    .await;
     let st = h.engine.service_status(&svc.id).await.unwrap();
     assert_eq!(st.state, ServiceState::Live);
     assert_eq!(st.instances.len(), 2);
@@ -789,4 +812,362 @@ async fn cancel_deploys() {
     let ok = h.create_service("fine", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
     h.deploy_live(&ok, DeployRequest::new(DeployTrigger::Manual)).await;
     h.wait_ok("fine", "/", Duration::from_secs(30)).await;
+
+    // Once traffic switched to the new instances, a cancel is refused at
+    // once (no waiting for the old instances to drain).
+    let d = h.engine.deploy(&ok.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    h.wait_until("the traffic switch", Duration::from_secs(60), || async {
+        h.deploy_log(&d.id).await.contains("==> Routing traffic")
+            || h.store.require_deploy(&d.id).await.unwrap().status.is_terminal()
+    })
+    .await;
+    let started = Instant::now();
+    match h.engine.cancel_deploy(&d.id).await {
+        Err(ferry_core::Error::Conflict(m)) => assert!(m.contains("too late"), "{m}"),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    h.expect(&d, DeployStatus::Live).await;
+}
+
+// ---------------------------------------------------------------------------
+// Regression tests of fixed findings (prefix `ferryfix-engine-…`).
+
+/// `docker inspect -f <format> <object>` (empty on failure).
+fn inspect(object: &str, format: &str) -> String {
+    docker_cli(&["inspect", "-f", format, object]).1
+}
+
+/// The value of `key` in a container's environment.
+fn container_env(container: &str, key: &str) -> Option<String> {
+    let env: Vec<String> = serde_json::from_str(&inspect(container, "{{json .Config.Env}}")).unwrap_or_default();
+    env.iter().find_map(|kv| kv.strip_prefix(&format!("{key}=")).map(str::to_string))
+}
+
+fn image_id(image: &str) -> String {
+    docker_cli(&["image", "inspect", "-f", "{{.Id}}", image]).1
+}
+
+/// Settings and env changed without a deploy, a failed env-change deploy and
+/// a failed recreate deploy of a disk service never change what the live
+/// deploy's instances run: scale-ups, crash replacements and one-off jobs use
+/// the live deploy's launch spec.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_deploys_keep_their_launch_spec() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let svc = h.create_service("web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    h.store.set_env(&svc.id, "GREETING", "one").await.unwrap();
+    let d1 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    h.wait_ok("web", "/", Duration::from_secs(30)).await;
+    let deploy_label = format!("ferry.deploy={}", d1.id);
+
+    // Saved, not deployed: a start command that crashes and a new env value.
+    let mut changed = h.store.require_service(&svc.id).await.unwrap();
+    changed.start_command = Some("exit 3".into());
+    h.store.update_service(&changed).await.unwrap();
+    h.store.set_env(&svc.id, "GREETING", "two").await.unwrap();
+    // A scale-up starts the new instance like the others.
+    h.engine.scale(&svc.id, 2).await.unwrap();
+    h.wait_until("2 routed instances", Duration::from_secs(60), || async { h.upstreams("web") == 2 }).await;
+    let instances = h.containers(&deploy_label);
+    assert_eq!(instances.len(), 2);
+    for c in &instances {
+        assert_eq!(container_env(c, "GREETING").as_deref(), Some("one"), "instance {c}");
+        assert!(!inspect(c, "{{json .Config.Cmd}}").contains("exit 3"), "instance {c}");
+    }
+
+    // An env change that can't be resolved fails its deploy...
+    h.store.set_env(&svc.id, "BAD", "${{datastore.nope.connectionString}}").await.unwrap();
+    let r = h.engine.restart(&svc.id, DeployTrigger::EnvChange).await.unwrap();
+    let r = h.expect(&r, DeployStatus::DeployFailed).await;
+    assert!(r.error.as_deref().is_some_and(|e| e.contains("cannot resolve")), "{r:?}");
+    // ...and the live deploy still heals: lost instances come back as deployed.
+    let mut args = vec!["rm", "-f"];
+    args.extend(instances.iter().map(String::as_str));
+    assert!(docker_cli(&args).0);
+    h.wait_until("replacement instances", Duration::from_secs(60), || async {
+        let now = h.containers(&deploy_label);
+        now.len() == 2
+            && now.iter().all(|c| !instances.contains(c) && inspect(c, "{{.State.Running}}") == "true")
+            && h.upstreams("web") == 2
+    })
+    .await;
+    h.wait_ok("web", "/", Duration::from_secs(30)).await;
+    for c in h.containers(&deploy_label) {
+        assert_eq!(container_env(&c, "GREETING").as_deref(), Some("one"), "instance {c}");
+        assert_eq!(container_env(&c, "BAD"), None, "instance {c}");
+    }
+    assert_eq!(h.store.require_service(&svc.id).await.unwrap().live_deploy_id.as_deref(), Some(d1.id.as_str()));
+
+    // A disk service: one-off jobs get the disk; a failed recreate deploy
+    // (which stops the old instance first) doesn't leave the service down.
+    let disk = h
+        .create_service("dsk", ServiceType::WebService, |s| {
+            s.image = Some("nginx:alpine".into());
+            s.disk_mount_path = Some("/data".into());
+        })
+        .await;
+    let dd1 = h.deploy_live(&disk, DeployRequest::new(DeployTrigger::Create)).await;
+    let c1 = h.containers(&format!("ferry.deploy={}", dd1.id))[0].clone();
+    assert!(docker_cli(&["exec", &c1, "sh", "-c", "echo kept > /data/f"]).0);
+    let job = h.engine.run_job(&disk.id, Some("cat /data/f".into()), JobTrigger::Manual).await.unwrap();
+    let job = h.wait_job(&job.id).await;
+    let lines: Vec<LogLine> = h.engine.job_logs(&job.id, false).await.unwrap().collect().await;
+    assert_eq!(job.status, JobStatus::Succeeded, "{lines:?}");
+    assert!(lines.iter().any(|l| l.line == "kept"), "the job reads the service's disk: {lines:?}");
+    assert!(lines.iter().any(|l| l.line.contains("Mounting the service's disk at /data")), "{lines:?}");
+
+    let mut broken = h.store.require_service(&disk.id).await.unwrap();
+    broken.start_command = Some("exit 3".into());
+    h.store.update_service(&broken).await.unwrap();
+    let r = h.engine.restart(&disk.id, DeployTrigger::Restart).await.unwrap();
+    let r = h.expect(&r, DeployStatus::DeployFailed).await;
+    assert!(h.deploy_log(&r.id).await.contains("redeployed in place"));
+    h.wait_ok("dsk", "/", Duration::from_secs(60)).await;
+    let back = h.containers(&format!("ferry.deploy={}", dd1.id));
+    assert_eq!(back.len(), 1, "the live deploy's instance is back");
+    assert!(!inspect(&back[0], "{{json .Config.Cmd}}").contains("exit 3"));
+    assert_eq!(docker_cli(&["exec", &back[0], "cat", "/data/f"]).1, "kept");
+}
+
+/// Image deploys are pinned to what was pulled: a moved tag changes neither
+/// the live deploy's crash replacements nor a rollback.
+#[tokio::test(flavor = "multi_thread")]
+async fn image_deploys_are_pinned() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    // A local-only `:latest` tag (the pull fails, the local copy is used).
+    let src = format!("{}/src:latest", h.prefix);
+    assert!(docker_cli(&["tag", "nginx:alpine", &src]).0);
+    let svc = h.create_service("web", ServiceType::WebService, |s| s.image = Some(src.clone())).await;
+    let d1 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    let pinned = format!("{}/web:{}", h.prefix, d1.id);
+    assert_eq!(d1.image.as_deref(), Some(pinned.as_str()));
+    assert_eq!(image_id(&pinned), image_id("nginx:alpine"));
+    assert!(h.wait_ok("web", "/", Duration::from_secs(30)).await.contains("nginx"));
+
+    // The tag moves to an image that can't serve: that deploy fails...
+    assert!(docker_cli(&["tag", "busybox:stable", &src]).0);
+    let d2 = h.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    h.expect(&d2, DeployStatus::DeployFailed).await;
+    // ...and a crash replacement of the live deploy still runs its image.
+    let before = h.containers(&format!("ferry.deploy={}", d1.id));
+    assert!(docker_cli(&["rm", "-f", &before[0]]).0);
+    h.wait_until("a replacement instance", Duration::from_secs(60), || async {
+        let now = h.containers(&format!("ferry.deploy={}", d1.id));
+        now.len() == 1 && now[0] != before[0] && inspect(&now[0], "{{.State.Running}}") == "true"
+    })
+    .await;
+    let replacement = h.containers(&format!("ferry.deploy={}", d1.id))[0].clone();
+    assert_eq!(inspect(&replacement, "{{.Config.Image}}"), pinned);
+    assert!(h.wait_ok("web", "/", Duration::from_secs(30)).await.contains("nginx"));
+
+    // Another version goes live; a rollback restores exactly the first image.
+    let mut s = h.store.require_service(&svc.id).await.unwrap();
+    s.start_command = Some("exec httpd -f -p 8080 -h /etc".into());
+    s.port = Some(8080);
+    h.store.update_service(&s).await.unwrap();
+    let d3 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Manual)).await;
+    assert_eq!(image_id(d3.image.as_deref().unwrap()), image_id("busybox:stable"));
+    s.start_command = None;
+    s.port = None;
+    h.store.update_service(&s).await.unwrap();
+    let d4 = h.engine.rollback(&svc.id, &d1.id).await.unwrap();
+    let d4 = h.expect(&d4, DeployStatus::Live).await;
+    assert_eq!(d4.image.as_deref(), Some(pinned.as_str()));
+    assert!(h.wait_ok("web", "/", Duration::from_secs(30)).await.contains("nginx"));
+
+    // Deleting the service removes only Ferry's tags, never the pulled images.
+    h.engine.delete_service(&svc.id).await.unwrap();
+    assert!(h.own_images("web").is_empty(), "{:?}", h.own_images("web"));
+    assert!(docker_cli(&["image", "inspect", "nginx:alpine"]).0);
+    assert!(docker_cli(&["image", "inspect", "busybox:stable"]).0);
+}
+
+/// A service referencing another one's port while both deploy for the first
+/// time (a blueprint apply) waits for it instead of failing.
+#[tokio::test(flavor = "multi_thread")]
+async fn port_references_wait_for_the_first_deploy() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let api = h
+        .create_service("api", ServiceType::PrivateService, |s| {
+            s.image = Some("python:3.12-alpine".into());
+            s.start_command = Some("sleep 6; exec python -m http.server $PORT".into());
+        })
+        .await;
+    h.store.set_env(&api.id, "PORT", "9000").await.unwrap();
+    let web = h.create_service("web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    h.store.set_env(&web.id, "INTERNAL_HOSTPORT", "${{service.api.hostport}}").await.unwrap();
+
+    let da = h.engine.deploy(&api.id, DeployRequest::new(DeployTrigger::Blueprint)).await.unwrap();
+    let dw = h.engine.deploy(&web.id, DeployRequest::new(DeployTrigger::Blueprint)).await.unwrap();
+    let dw = h.expect(&dw, DeployStatus::Live).await;
+    let da = h.expect(&da, DeployStatus::Live).await;
+    assert_eq!(da.port, Some(9000));
+    let log = h.deploy_log(&dw.id).await;
+    assert!(log.contains("Waiting for service 'api'"), "{log}");
+    let c = h.containers(&format!("ferry.deploy={}", dw.id))[0].clone();
+    assert_eq!(container_env(&c, "INTERNAL_HOSTPORT").as_deref(), Some("api:9000"));
+}
+
+/// Datastores never adopt a volume they did not create, and a stopped
+/// datastore container that can't start again (its host port was taken) is
+/// recreated with the same volume.
+#[tokio::test(flavor = "multi_thread")]
+async fn datastores_refuse_foreign_volumes_and_recover() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let volume = format!("{}-ds-stale-data", h.prefix);
+    assert!(docker_cli(&["volume", "create", &volume]).0);
+    let stale = Datastore::new("stale", DatastoreKind::Postgres);
+    h.store.create_datastore(&stale).await.unwrap();
+    h.engine.provision_datastore(&stale.id).await.unwrap();
+    h.wait_until("the datastore to fail", Duration::from_secs(60), || async {
+        h.store.require_datastore(&stale.id).await.unwrap().status == DatastoreStatus::Failed
+    })
+    .await;
+    let error = h.store.require_datastore(&stale.id).await.unwrap().error.unwrap_or_default();
+    assert!(error.contains("already exists") && error.contains(&volume), "{error}");
+    assert!(h.containers(&format!("ferry.datastore={}", stale.id)).is_empty());
+    h.engine.delete_datastore(&stale.id).await.unwrap();
+
+    let cache = Datastore::new("cache", DatastoreKind::Redis);
+    h.store.create_datastore(&cache).await.unwrap();
+    h.engine.provision_datastore(&cache.id).await.unwrap();
+    let cache = h.wait_datastore(&cache.id, Duration::from_secs(120)).await;
+    let container = format!("{}-ds-cache", h.prefix);
+    let auth = format!("REDISCLI_AUTH={}", cache.password);
+    let redis = |args: &[&str]| {
+        let mut all = vec!["exec", "-e", auth.as_str(), container.as_str(), "redis-cli"];
+        all.extend_from_slice(args);
+        docker_cli(&all).1
+    };
+    assert_eq!(redis(&["set", "k", "kept"]), "OK");
+    let port = cache.host_port.unwrap();
+    assert!(docker_cli(&["stop", &container]).0);
+    let blocker = std::net::TcpListener::bind(("127.0.0.1", port)).expect("the old host port is free");
+    h.wait_until("the datastore to be recreated on another port", Duration::from_secs(90), || async {
+        let ds = h.store.require_datastore(&cache.id).await.unwrap();
+        ds.status == DatastoreStatus::Available
+            && ds.host_port.is_some_and(|p| p != port)
+            && inspect(&container, "{{.State.Running}}") == "true"
+    })
+    .await;
+    drop(blocker);
+    assert_eq!(redis(&["get", "k"]), "kept", "the volume keeps the data");
+}
+
+/// Shutdown stops running jobs (with their grace period) and records them
+/// before `stopped()` resolves.
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_stops_running_jobs() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let svc = h
+        .create_service("bg", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("exec sleep 3600".into());
+        })
+        .await;
+    h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    let job = h.engine.run_job(&svc.id, Some("echo started; sleep 300".into()), JobTrigger::Manual).await.unwrap();
+    h.wait_until("the job to run", Duration::from_secs(60), || async {
+        h.store.require_job_run(&job.id).await.unwrap().status == JobStatus::Running
+            && !h.containers(&format!("ferry.job={}", job.id)).is_empty()
+    })
+    .await;
+
+    h.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(40), h.engine.stopped()).await.expect("the engine stops");
+    let j = h.store.require_job_run(&job.id).await.unwrap();
+    assert_eq!(j.status, JobStatus::Failed);
+    assert_eq!(j.error.as_deref(), Some("interrupted by server shutdown"));
+    assert!(h.containers(&format!("ferry.job={}", job.id)).is_empty(), "the job container is removed");
+    let lines: Vec<LogLine> = h.engine.job_logs(&job.id, true).await.unwrap().collect().await;
+    assert!(lines.iter().any(|l| l.line == "started"), "{lines:?}");
+    assert!(lines.last().is_some_and(|l| l.line.contains("interrupted by server shutdown")), "{lines:?}");
+}
+
+/// After a crash, a new server serves the live deploy as soon as the engine
+/// has started: routes are installed before stale instances (which may take
+/// their whole stop grace period) are removed in the background.
+#[tokio::test(flavor = "multi_thread")]
+async fn boot_routes_the_live_deploy_before_slow_cleanup() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let svc = h.create_service("web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    // Left behind by a crash: an instance of another deploy that ignores
+    // SIGTERM (so stopping it takes the full grace period).
+    let stale = format!("{}-web-stale", h.prefix);
+    let labels = [
+        format!("ferry.instance={}", h.prefix),
+        "ferry.managed=true".to_string(),
+        "ferry.role=service".to_string(),
+        format!("ferry.service={}", svc.id),
+        "ferry.deploy=dep-stale".to_string(),
+    ];
+    let mut args = vec!["run", "-d", "--name", stale.as_str()];
+    for l in &labels {
+        args.extend(["--label", l.as_str()]);
+    }
+    args.extend(["busybox:stable", "sleep", "3600"]);
+    assert!(docker_cli(&args).0);
+
+    // This server stops; a new one boots on the same data.
+    h.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(40), h.engine.stopped()).await.expect("the engine stops");
+    let routes = RouteTable::new();
+    let docker = Docker::connect().await.unwrap();
+    let builder = Builder::new(h.config.builds_dir(), h.config.repos_dir(), h.config.docker_bin.clone());
+    let engine = FerryEngine::new(h.config.clone(), h.store.clone(), docker, builder, routes.clone());
+    let shutdown = CancellationToken::new();
+    let started = Instant::now();
+    engine.start(shutdown.clone()).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "boot waited for the cleanup: {:?}", started.elapsed());
+    // Routed right away, to an instance that serves.
+    let upstream = match routes.resolve(&h.host("web")) {
+        ferry_proxy::Resolution::Upstream(addr) => addr,
+        other => panic!("no upstream right after boot: {other:?}"),
+    };
+    let resp = h.http.get(format!("http://{upstream}/")).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    // The stale instance goes in the background.
+    h.wait_until("the stale instance to be removed", Duration::from_secs(60), || async {
+        !docker_cli(&["inspect", &stale]).0
+    })
+    .await;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(40), engine.stopped()).await.expect("the new engine stops");
+}
+
+/// Docker restarts an instance on a new host port: the routes follow within
+/// a couple of seconds, not at the next reconcile pass.
+#[tokio::test(flavor = "multi_thread")]
+async fn routes_follow_restarted_instances() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let svc = h.create_service("web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    let d = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    h.wait_ok("web", "/", Duration::from_secs(30)).await;
+    let c = h.containers(&format!("ferry.deploy={}", d.id))[0].clone();
+    let port_of = |c: &str| inspect(c, "{{(index (index .NetworkSettings.Ports \"80/tcp\") 0).HostPort}}");
+    let before = port_of(&c);
+    assert!(docker_cli(&["restart", "-t", "1", &c]).0);
+    let restarted = Instant::now();
+    let after = port_of(&c);
+    let expected: SocketAddr = format!("127.0.0.1:{after}").parse().unwrap();
+    h.wait_until("the route to follow the new port", Duration::from_secs(15), || async {
+        let host = h.host("web");
+        h.routes.snapshot().into_iter().any(|r| r.host == host && r.upstreams == vec![expected])
+    })
+    .await;
+    assert!(
+        restarted.elapsed() < Duration::from_secs(6),
+        "routes took {:?} to follow port {before} → {after}",
+        restarted.elapsed()
+    );
+    h.wait_ok("web", "/", Duration::from_secs(5)).await;
 }

@@ -154,7 +154,7 @@ pub(crate) async fn delete_service(inner: &Arc<Inner>, service_id: &str) -> Resu
         inner.logs.remove(LogKind::Job, &j.id).await;
     }
     let ids: Vec<String> = deploys.iter().map(|d| d.id.clone()).collect();
-    instances::delete_build_info(&inner.store, &ids).await;
+    instances::forget_deploys(&inner.store, &ids).await;
     inner.service_locks.forget(&svc.id);
     info!(service = %svc.name, "service deleted");
     Ok(())

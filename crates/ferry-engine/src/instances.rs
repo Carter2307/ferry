@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ferry_core::env::{self, RefContext};
 use ferry_core::naming::{LABEL_INSTANCE, LABEL_ROLE, LABEL_SERVICE, ROLE_SERVICE};
-use ferry_core::{Deploy, EnvVar, Error, Naming, Result, Runtime, Service, ServiceType, Store, ids};
+use ferry_core::{EnvVar, Error, Naming, Result, Runtime, Service, ServiceType, Store, ids};
 use ferry_docker::{ContainerInfo, ContainerSpec, PortPublish, RestartPolicy, VolumeMount};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
@@ -54,13 +54,15 @@ pub(crate) async fn load_build_info(store: &Store, deploy_id: &str) -> Option<Bu
     }
 }
 
-/// Forget the build info of deploys (their image is gone). Best effort.
-pub(crate) async fn delete_build_info(store: &Store, deploy_ids: &[String]) {
+/// Forget what the engine stored about deploys (build info, launch spec):
+/// their image is gone, or they were deleted. Best effort.
+pub(crate) async fn forget_deploys(store: &Store, deploy_ids: &[String]) {
     for id in deploy_ids {
         if let Err(e) = store.delete_setting(&build_info_key(id)).await {
             debug!(deploy = %id, "cannot delete build info: {e}");
         }
     }
+    crate::spec::forget(store, deploy_ids).await;
 }
 
 /// The container command for a service: `["/bin/sh","-c", start_command]`
@@ -105,32 +107,17 @@ pub(crate) fn port_reason(
     }
 }
 
-/// Resolve `${{…}}` references in the service's effective env.
-async fn resolved_user_env(inner: &Inner, svc: &Service) -> Result<(Vec<EnvVar>, Vec<EnvVar>)> {
-    let user = inner.store.effective_env(&svc.id).await?;
-    let (datastores, services) = inner.store.reference_targets(&inner.config).await?;
-    let ctx = RefContext { datastores: &datastores, services: &services, advertise_host: &inner.config.advertise_host };
-    let resolved = env::resolve_all(&user, &ctx)?;
-    Ok((user, resolved))
-}
-
-/// The service's (unresolved) effective env.
-pub(crate) async fn user_env(inner: &Inner, svc: &Service) -> Result<Vec<EnvVar>> {
-    inner.store.effective_env(&svc.id).await
-}
-
-/// Container environment: Ferry's injected variables overridden by the
-/// user's resolved variables. Unresolvable references are an error.
-pub(crate) async fn container_env(
-    inner: &Inner,
-    svc: &Service,
-    deploy: &Deploy,
-    port: Option<u16>,
-) -> Result<Vec<(String, String)>> {
-    let (_, resolved) = resolved_user_env(inner, svc).await.map_err(|e| {
-        Error::invalid(format!("cannot resolve environment variables: {}", crate::util::error_message(&e)))
-    })?;
-    Ok(env::container_env(env::injected(svc, deploy, port, &inner.config), resolved))
+/// A warning when the user's `PORT` variable (which overrides the one Ferry
+/// injects) disagrees with the port Ferry publishes and health-checks.
+pub(crate) fn port_env_mismatch(port: u16, user_env: &[EnvVar]) -> Option<String> {
+    let value = user_env.iter().rev().find(|v| v.key == "PORT")?.value.trim().to_string();
+    if value.parse::<u16>().ok() == Some(port) {
+        return None;
+    }
+    Some(format!(
+        "the PORT environment variable is '{value}' but Ferry routes to container port {port}: \
+         the app gets PORT={value} (remove the PORT variable or change the service port)"
+    ))
 }
 
 /// Build args: the service's env with references resolved. Variables whose
@@ -151,14 +138,18 @@ pub(crate) async fn build_args(inner: &Inner, svc: &Service) -> Result<(Vec<(Str
     Ok((args, skipped))
 }
 
-/// The service's disk (creating the volume if needed).
-pub(crate) async fn disk_volume(inner: &Inner, svc: &Service) -> Result<Option<VolumeMount>> {
-    let Some(target) = svc.disk_mount_path.as_deref().map(str::trim).filter(|p| !p.is_empty()) else {
+/// The service's disk mounted at `mount_path` (creating the volume if needed).
+pub(crate) async fn disk_volume(
+    inner: &Inner,
+    service_id: &str,
+    mount_path: Option<&str>,
+) -> Result<Option<VolumeMount>> {
+    let Some(target) = mount_path.map(str::trim).filter(|p| !p.is_empty()) else {
         return Ok(None);
     };
-    let volume = inner.naming.service_volume(&svc.id);
+    let volume = inner.naming.service_volume(service_id);
     let mut labels = inner.naming.base_labels(ROLE_SERVICE);
-    labels.insert(LABEL_SERVICE.to_string(), svc.id.clone());
+    labels.insert(LABEL_SERVICE.to_string(), service_id.to_string());
     inner.docker.ensure_volume(&volume, &labels).await?;
     Ok(Some(VolumeMount { volume, target: target.to_string() }))
 }
@@ -196,29 +187,6 @@ pub(crate) fn service_spec(naming: &Naming, svc: &Service, deploy_id: &str, plan
         nano_cpus: None,
         working_dir: None,
     }
-}
-
-/// The plan for (re)starting instances of an existing deploy (reconciler,
-/// resume, scale): its image and port, the current env and settings.
-pub(crate) async fn plan_for_deploy(inner: &Inner, svc: &Service, deploy: &Deploy) -> Result<Plan> {
-    let image = deploy.image.clone().ok_or_else(|| Error::conflict(format!("deploy {} has no image", deploy.id)))?;
-    let info = load_build_info(&inner.store, &deploy.id).await;
-    let port = if svc.listens() {
-        match deploy.port {
-            Some(p) => Some(p),
-            None => {
-                let user = user_env(inner, svc).await?;
-                let exposed = inner.docker.image_exposed_ports(&image).await.unwrap_or_default();
-                let hint = info.and_then(|i| i.port_hint);
-                Some(env::choose_port(svc.port, &user, hint, &exposed, inner.config.default_port))
-            }
-        }
-    } else {
-        None
-    };
-    let env = container_env(inner, svc, deploy, port).await?;
-    let volume = disk_volume(inner, svc).await?;
-    Ok(Plan { image, port, env, cmd: start_cmd(svc, info.and_then(|i| i.runtime)), volume })
 }
 
 /// Containers of a service (role `service`), optionally including stopped ones.
@@ -280,7 +248,7 @@ pub(crate) async fn remove_volume_retrying(inner: &Inner, volume: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferry_core::{DeploySource, DeployTrigger};
+    use ferry_core::{Deploy, DeploySource, DeployTrigger};
 
     fn web() -> Service {
         let mut s = Service::new("web", ServiceType::WebService);
@@ -314,6 +282,15 @@ mod tests {
         assert_eq!(port_reason(None, &[], None, &[3000]), "EXPOSEd by the image");
         assert_eq!(port_reason(None, &[], None, &[3000, 3001]), "default port");
         assert_eq!(env::choose_port(None, &[], None, &[3000, 3001], 10000), 10000);
+    }
+
+    #[test]
+    fn port_env_mismatches_are_reported() {
+        assert_eq!(port_env_mismatch(8000, &[]), None);
+        assert_eq!(port_env_mismatch(8000, &[EnvVar::new("PORT", " 8000 ")]), None);
+        let w = port_env_mismatch(8000, &[EnvVar::new("PORT", "9000")]).unwrap();
+        assert!(w.contains("'9000'") && w.contains("8000"), "{w}");
+        assert!(port_env_mismatch(8000, &[EnvVar::new("PORT", "abc")]).is_some());
     }
 
     #[test]
@@ -395,7 +372,7 @@ mod tests {
         let info = BuildInfo { runtime: Some(Runtime::Static), port_hint: Some(80) };
         save_build_info(&store, "dep-1", info).await.unwrap();
         assert_eq!(load_build_info(&store, "dep-1").await, Some(info));
-        delete_build_info(&store, &["dep-1".to_string()]).await;
+        forget_deploys(&store, &["dep-1".to_string()]).await;
         assert_eq!(load_build_info(&store, "dep-1").await, None);
     }
 }

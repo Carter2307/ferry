@@ -25,6 +25,11 @@ struct Fixture {
 }
 
 async fn fixture(build_concurrency: usize) -> Fixture {
+    fixture_with(build_concurrency, "docker").await
+}
+
+/// `docker_bin` is the CLI the builder runs `docker build` with.
+async fn fixture_with(build_concurrency: usize, docker_bin: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let config = Arc::new(Config {
         data_dir: dir.path().to_path_buf(),
@@ -36,7 +41,7 @@ async fn fixture(build_concurrency: usize) -> Fixture {
     // Port 9 (discard) on loopback: connections are refused immediately.
     let bollard = bollard::Docker::connect_with_http("http://127.0.0.1:9", 2, bollard::API_DEFAULT_VERSION).unwrap();
     let docker = Docker::from_bollard(bollard);
-    let builder = Builder::new(config.builds_dir(), config.repos_dir(), "docker".into());
+    let builder = Builder::new(config.builds_dir(), config.repos_dir(), docker_bin.into());
     let routes = RouteTable::new();
     let engine = FerryEngine::new(config, store.clone(), docker, builder, routes.clone());
     Fixture { _dir: dir, engine, store, routes }
@@ -95,6 +100,16 @@ async fn deploy_validation_errors() {
 
     // Restart / rollback need something to reuse.
     assert!(matches!(e.restart(&image.id, DeployTrigger::Restart).await, Err(Error::Conflict(_))));
+    // Only deploys that went live can be rolled back to.
+    let mut failed =
+        Deploy::new(&image.id, DeployTrigger::Manual, DeploySource::Image { image: "nginx:alpine".into() });
+    failed.status = DeployStatus::DeployFailed;
+    failed.image = Some("ferrytest-unit/img:dep-x".into());
+    f.store.create_deploy(&failed).await.unwrap();
+    match e.rollback(&image.id, &failed.id).await {
+        Err(Error::Invalid(m)) => assert!(m.contains("never went live"), "{m}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
     let other = service(&f.store, "other", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
     let foreign = Deploy::new(&other.id, DeployTrigger::Manual, DeploySource::Image { image: "nginx:alpine".into() });
     f.store.create_deploy(&foreign).await.unwrap();
@@ -121,7 +136,8 @@ async fn failing_pull_marks_build_failed_with_logs() {
     assert_eq!(d.status, DeployStatus::BuildFailed, "{d:?}");
     assert!(d.error.is_some() && d.finished_at.is_some() && d.started_at.is_some());
     assert!(lines.first().is_some_and(|l| l.starts_with("==> Starting deploy")), "{lines:?}");
-    assert!(lines.last().is_some_and(|l| l.starts_with("==> Deploy failed:")), "{lines:?}");
+    // Named after the failed stage, like the status (build_failed).
+    assert!(lines.last().is_some_and(|l| l.starts_with("==> Build failed:")), "{lines:?}");
     // Nothing went live; the service is still deployable.
     assert!(f.store.require_service(&svc.id).await.unwrap().live_deploy_id.is_none());
     // Terminal deploys cannot be canceled.
@@ -130,6 +146,46 @@ async fn failing_pull_marks_build_failed_with_logs() {
     let replay: Vec<String> =
         f.engine.deploy_logs(&d.id, false).await.unwrap().map(|l| l.line).collect::<Vec<_>>().await;
     assert_eq!(replay, lines);
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-c", "user.name=Ferry Test", "-c", "user.email=test@ferry.invalid"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[tokio::test]
+async fn failed_builds_record_the_checked_out_commit() {
+    if std::process::Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipped: git is not installed");
+        return;
+    }
+    // The checkout works; `docker build` can't even start.
+    let f = fixture_with(2, "/nonexistent/ferry-test-docker").await;
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(repo.path().join("Dockerfile"), "FROM busybox:stable\nRUN exit 3\n").unwrap();
+    git(repo.path(), &["init", "-q", "-b", "main"]);
+    git(repo.path(), &["add", "-A"]);
+    git(repo.path(), &["commit", "-q", "-m", "broken build"]);
+    let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+    let svc = service(&f.store, "echo", ServiceType::WebService, |s| {
+        s.repo_url = Some(repo.path().display().to_string());
+        s.branch = "main".into();
+    })
+    .await;
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let lines = log_lines(&f.engine, &d.id).await;
+    let d = wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
+    assert_eq!(d.status, DeployStatus::BuildFailed, "{d:?}\n{lines:?}");
+    // The failed deploy says which commit broke the build.
+    assert_eq!(d.commit_sha.as_deref(), Some(sha.as_str()), "{lines:?}");
+    assert_eq!(d.commit_message.as_deref(), Some("broken build"));
+    assert!(lines.iter().any(|l| l.starts_with("==> Build failed")), "{lines:?}");
 }
 
 #[tokio::test]
@@ -328,12 +384,7 @@ async fn restarts_fold_into_queued_deploys_and_follow_the_live_deploy() {
     f.store.create_deploy(&stale).await.unwrap();
     let running = f.store.set_deploy_status(&stale.id, DeployStatus::Building, None).await.unwrap();
     let (_done_tx, done_rx) = tokio::sync::watch::channel(false);
-    let active = crate::state::ActiveDeploy {
-        service_id: svc.id.clone(),
-        cancel: ferry_core::CancellationToken::new(),
-        reason: Default::default(),
-        done: done_rx,
-    };
+    let active = crate::state::ActiveDeploy::new(&svc.id, ferry_core::CancellationToken::new(), done_rx);
     let log = f.engine.inner.logs.open(LogKind::Deploy, &stale.id);
     crate::pipeline::run(f.engine.inner.clone(), running, active, log.clone(), Default::default(), None).await;
     log.finish().await;
@@ -356,15 +407,133 @@ async fn restarts_fold_into_queued_deploys_and_follow_the_live_deploy() {
     f.store.create_deploy(&rollback).await.unwrap();
     let running = f.store.set_deploy_status(&rollback.id, DeployStatus::Building, None).await.unwrap();
     let (_done_tx, done_rx) = tokio::sync::watch::channel(false);
-    let active = crate::state::ActiveDeploy {
-        service_id: svc.id.clone(),
-        cancel: ferry_core::CancellationToken::new(),
-        reason: Default::default(),
-        done: done_rx,
-    };
+    let active = crate::state::ActiveDeploy::new(&svc.id, ferry_core::CancellationToken::new(), done_rx);
     let log = f.engine.inner.logs.open(LogKind::Deploy, &rollback.id);
     crate::pipeline::run(f.engine.inner.clone(), running, active, log.clone(), Default::default(), None).await;
     log.finish().await;
     let d = f.store.require_deploy(&rollback.id).await.unwrap();
     assert!(matches!(d.source, DeploySource::Reuse { from_deploy: Some(ref from), .. } if *from == live1.id));
+}
+
+#[tokio::test]
+async fn cancel_after_the_swap_is_refused_at_once() {
+    let f = fixture(2).await;
+    let svc = service(&f.store, "web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    let mut d = Deploy::new(&svc.id, DeployTrigger::Manual, DeploySource::Image { image: "nginx:alpine".into() });
+    d.status = DeployStatus::Deploying;
+    f.store.create_deploy(&d).await.unwrap();
+    let (_done_tx, done_rx) = tokio::sync::watch::channel(false);
+    let active = crate::state::ActiveDeploy::new(&svc.id, ferry_core::CancellationToken::new(), done_rx);
+    f.engine.inner.with_rt(|rt| rt.deploys.insert(d.id.clone(), active.clone()));
+
+    // Traffic switched: canceling is a conflict right away (no waiting for
+    // the old instances to drain), and the deploy is not canceled.
+    assert!(active.commit_swap());
+    let started = std::time::Instant::now();
+    match f.engine.cancel_deploy(&d.id).await {
+        Err(Error::Conflict(m)) => assert!(m.contains("too late"), "{m}"),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(!active.cancel.is_cancelled());
+    // Once live (marked right after the swap), the same.
+    f.store.set_deploy_status(&d.id, DeployStatus::Live, None).await.unwrap();
+    assert!(matches!(f.engine.cancel_deploy(&d.id).await, Err(Error::Conflict(m)) if m.contains("too late")));
+
+    // Before the swap a cancel wins, and the swap is then refused.
+    let (_done_tx, done_rx) = tokio::sync::watch::channel(false);
+    let other = crate::state::ActiveDeploy::new(&svc.id, ferry_core::CancellationToken::new(), done_rx);
+    assert!(other.request_cancel("canceled by user"));
+    assert!(!other.commit_swap());
+    assert_eq!(other.cancel_reason().as_deref(), Some("canceled by user"));
+}
+
+#[tokio::test]
+async fn restart_queues_behind_a_first_deploy_in_progress() {
+    let f = fixture(1).await;
+    let svc =
+        service(&f.store, "api", ServiceType::WebService, |s| s.repo_url = Some("/nonexistent/repo".into())).await;
+    // A first deploy is being built (claimed by a worker): nothing is live yet.
+    let mut first = Deploy::new(
+        &svc.id,
+        DeployTrigger::Create,
+        DeploySource::Git { repo_url: "/nonexistent/repo".into(), branch: "main".into(), commit: None },
+    );
+    first.status = DeployStatus::Building;
+    f.store.create_deploy(&first).await.unwrap();
+    let slot = f.engine.inner.build_slots.clone().acquire_owned().await.unwrap();
+
+    let restart = f.engine.restart(&svc.id, DeployTrigger::EnvChange).await.unwrap();
+    assert_ne!(restart.id, first.id);
+    assert_eq!(restart.status, DeployStatus::Queued);
+    assert_eq!(restart.trigger, DeployTrigger::EnvChange);
+    assert!(matches!(restart.source, DeploySource::Reuse { from_deploy: Some(ref from), .. } if *from == first.id));
+    // A second env change folds into the queued restart.
+    let again = f.engine.restart(&svc.id, DeployTrigger::EnvChange).await.unwrap();
+    assert_eq!(again.id, restart.id);
+    // The first deploy is not superseded (it is not queued).
+    assert_eq!(f.store.require_deploy(&first.id).await.unwrap().status, DeployStatus::Building);
+
+    // The first deploy failed: the restart has nothing to restart and says so.
+    f.store.set_deploy_status(&first.id, DeployStatus::BuildFailed, Some("boom")).await.unwrap();
+    drop(slot);
+    let done = wait_status(&f.store, &restart.id, |s| s.is_terminal()).await;
+    assert_eq!(done.status, DeployStatus::BuildFailed);
+    assert!(done.error.as_deref().is_some_and(|e| e.contains("no live deploy")), "{done:?}");
+    // Without any deploy at all, a restart is still a conflict.
+    let idle = service(&f.store, "idle", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    assert!(matches!(f.engine.restart(&idle.id, DeployTrigger::Restart).await, Err(Error::Conflict(_))));
+}
+
+#[tokio::test]
+async fn a_public_service_gets_its_route_when_first_deployed() {
+    let f = fixture(2).await;
+    let svc = service(&f.store, "fresh", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    assert_eq!(f.routes.resolve("fresh.localhost"), Resolution::NotFound);
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Create)).await.unwrap();
+    // 503 "no healthy instances yet" rather than 404 "unknown host".
+    assert_eq!(f.routes.resolve("fresh.localhost"), Resolution::NoUpstreams);
+    wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
+    // Workers have no route.
+    let worker =
+        service(&f.store, "bg", ServiceType::BackgroundWorker, |s| s.image = Some("busybox:stable".into())).await;
+    f.engine.deploy(&worker.id, DeployRequest::new(DeployTrigger::Create)).await.unwrap();
+    assert!(f.routes.snapshot().iter().all(|r| r.service_id != worker.id));
+}
+
+#[tokio::test]
+async fn shutdown_fails_queued_deploys_and_ends_their_followers() {
+    let f = fixture(1).await;
+    let svc = service(&f.store, "api", ServiceType::WebService, |s| {
+        s.repo_url = Some("/nonexistent/repo".into());
+    })
+    .await;
+    // The only build slot is taken: the deploy stays queued.
+    let slot = f.engine.inner.build_slots.clone().acquire_owned().await.unwrap();
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let follower = tokio::spawn(f.engine.deploy_logs(&d.id, true).await.unwrap().collect::<Vec<_>>());
+    f.engine.inner.started.store(true, std::sync::atomic::Ordering::SeqCst);
+    f.engine.inner.spawn(crate::deploy::fail_queued_on_shutdown(f.engine.inner.clone()));
+    f.engine.inner.shutdown.cancel();
+
+    // The follower's stream ends (instead of waiting forever), the deploy is
+    // failed, and the engine reports it has stopped.
+    let lines = tokio::time::timeout(Duration::from_secs(10), follower).await.unwrap().unwrap();
+    assert!(lines.last().is_some_and(|l| l.line.contains("interrupted by server shutdown")), "{lines:?}");
+    let d = f.store.require_deploy(&d.id).await.unwrap();
+    assert_eq!(d.status, DeployStatus::BuildFailed);
+    assert_eq!(d.error.as_deref(), Some("interrupted by server shutdown"));
+    tokio::time::timeout(Duration::from_secs(10), f.engine.stopped()).await.expect("the engine stops");
+    // Nothing new is accepted while shutting down.
+    assert!(matches!(
+        f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await,
+        Err(Error::Conflict(m)) if m.contains("shutting down")
+    ));
+    drop(slot);
+}
+
+#[tokio::test]
+async fn stopped_resolves_at_once_when_never_started() {
+    let f = fixture(1).await;
+    tokio::time::timeout(Duration::from_secs(1), f.engine.stopped()).await.expect("nothing to wait for");
 }

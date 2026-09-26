@@ -21,12 +21,12 @@ serde_json.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
-# Only for deleting the engine's own rows of the `settings` table (the Store
-# has no delete for settings); same version/features as the workspace.
+# Through `Docker::bollard()` (ferry-docker's escape hatch) for what its typed
+# API does not expose: the last exit code of a restarting container and the
+# labels of an existing volume.
+bollard.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# Tests build a Docker client for an unreachable daemon (Docker-free tests).
-bollard.workspace = true
 # E2E tests print engine logs when RUST_LOG is set.
 tracing-subscriber.workspace = true

@@ -12,6 +12,7 @@ use ferry_docker::Docker;
 use ferry_proxy::RouteTable;
 use tokio::sync::{Mutex as AsyncMutex, Notify, Semaphore, watch};
 use tokio::task::JoinHandle;
+use tokio_util::task::TaskTracker;
 
 use crate::logs::LogHub;
 use crate::util::{KeyedLocks, lock};
@@ -43,6 +44,9 @@ pub(crate) struct Inner {
     pub reconcile_wake: Notify,
     /// Cancelled when the server shuts down.
     pub shutdown: CancellationToken,
+    /// Every background task of the engine (workers, jobs, loops, cleanup),
+    /// so that shutdown can wait for them (`FerryEngine::stopped`).
+    pub tasks: TaskTracker,
     pub started: AtomicBool,
     pub worker_generation: AtomicU64,
     pub rt: StdMutex<Runtime>,
@@ -67,9 +71,14 @@ pub(crate) struct Runtime {
     pub deleting_datastores: HashSet<String>,
     /// Services with a route warm-up task running.
     pub warmups: HashSet<String>,
+    /// Services whose running warm-up must look once more before it ends.
+    pub warmup_again: HashSet<String>,
     /// Failed datastores: when the reconciler may retry them, and the
     /// current back-off.
     pub datastore_retries: HashMap<String, (std::time::Instant, Duration)>,
+    /// Deploys waiting for services they reference (service id → the ids of
+    /// the services it waits for), to detect circular waits.
+    pub reference_waits: HashMap<String, HashSet<String>>,
 }
 
 /// A service's deploy worker.
@@ -89,25 +98,57 @@ pub(crate) struct DeployOptions {
 pub(crate) struct ActiveDeploy {
     pub service_id: String,
     pub cancel: CancellationToken,
-    /// Why it was cancelled (becomes the deploy's error).
-    pub reason: Arc<StdMutex<Option<String>>>,
+    control: Arc<StdMutex<Control>>,
     /// Becomes `true` once the deploy reached a terminal status.
     pub done: watch::Receiver<bool>,
 }
 
+#[derive(Debug, Default)]
+struct Control {
+    /// Why it was cancelled (becomes the deploy's error).
+    reason: Option<String>,
+    /// Traffic was switched to the deploy: it can no longer be cancelled.
+    swapped: bool,
+}
+
 impl ActiveDeploy {
-    pub fn request_cancel(&self, reason: &str) {
-        {
-            let mut r = lock(&self.reason);
-            if r.is_none() {
-                *r = Some(reason.to_string());
-            }
+    pub fn new(service_id: &str, cancel: CancellationToken, done: watch::Receiver<bool>) -> Self {
+        ActiveDeploy { service_id: service_id.to_string(), cancel, control: Arc::default(), done }
+    }
+
+    /// Ask the deploy to stop. Returns `false` (and changes nothing) once
+    /// traffic was switched to it: from then on it always goes live.
+    pub fn request_cancel(&self, reason: &str) -> bool {
+        let mut control = lock(&self.control);
+        if control.swapped {
+            return false;
         }
+        if control.reason.is_none() {
+            control.reason = Some(reason.to_string());
+        }
+        // Under the lock, so that `commit_swap` sees it (or wins before it).
         self.cancel.cancel();
+        true
     }
 
     pub fn cancel_reason(&self) -> Option<String> {
-        lock(&self.reason).clone()
+        lock(&self.control).reason.clone()
+    }
+
+    /// The point of no return before routing traffic to the new instances:
+    /// `false` if the deploy was cancelled (or the server is shutting down).
+    pub fn commit_swap(&self) -> bool {
+        let mut control = lock(&self.control);
+        if self.cancel.is_cancelled() {
+            return false;
+        }
+        control.swapped = true;
+        true
+    }
+
+    /// Whether traffic was already switched to this deploy.
+    pub fn is_swapped(&self) -> bool {
+        lock(&self.control).swapped
     }
 
     /// Wait (bounded) until the deploy has finished.
@@ -158,6 +199,7 @@ impl Inner {
             reconcile_lock: AsyncMutex::new(()),
             reconcile_wake: Notify::new(),
             shutdown: CancellationToken::new(),
+            tasks: TaskTracker::new(),
             started: AtomicBool::new(false),
             worker_generation: AtomicU64::new(1),
             rt: StdMutex::new(Runtime::default()),
@@ -167,6 +209,15 @@ impl Inner {
     /// Run `f` on the bookkeeping state.
     pub fn with_rt<R>(&self, f: impl FnOnce(&mut Runtime) -> R) -> R {
         f(&mut lock(&self.rt))
+    }
+
+    /// Spawn a background task the engine waits for at shutdown.
+    pub fn spawn<F>(&self, task: F) -> JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.tasks.spawn(task)
     }
 
     /// Ask the reconcile loop for a pass soon.
@@ -208,11 +259,21 @@ impl SetGuard {
     }
 }
 
+impl SetGuard {
+    /// The key was already removed (by the owner, atomically with other
+    /// bookkeeping): don't remove it again, it may belong to a new owner.
+    pub fn disarm(mut self) {
+        self.key.clear();
+    }
+}
+
 impl Drop for SetGuard {
     fn drop(&mut self) {
         let set = self.set;
         let key = std::mem::take(&mut self.key);
-        self.inner.with_rt(|rt| set(rt).remove(&key));
+        if !key.is_empty() {
+            self.inner.with_rt(|rt| set(rt).remove(&key));
+        }
     }
 }
 

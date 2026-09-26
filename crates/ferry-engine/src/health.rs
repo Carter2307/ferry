@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use ferry_core::Service;
+use ferry_core::{LogSink, Service};
 use ferry_docker::{ContainerInfo, ContainerState};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
@@ -12,6 +12,11 @@ use crate::state::Inner;
 
 /// How often a new instance is probed.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// How often a progress line is logged while an instance is not healthy.
+pub(crate) const PROGRESS_EVERY: Duration = Duration::from_secs(10);
+/// Looking for the exit code of a crashed instance Docker restarts.
+const EXIT_CODE_POLLS: usize = 30;
+const EXIT_CODE_POLL: Duration = Duration::from_millis(100);
 /// Workers must still be running this long after start.
 pub(crate) const WORKER_MIN_UPTIME: Duration = Duration::from_secs(5);
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -73,15 +78,24 @@ pub(crate) async fn tcp_accepting(port: u16, settle: Duration) -> bool {
     }
 }
 
-/// One HTTP health probe. `Err` carries a short reason.
-pub(crate) async fn http_probe(client: &reqwest::Client, port: u16, path: &str, host: &str) -> Result<(), String> {
+/// Why an HTTP probe failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProbeError {
+    /// The app answered with an error status.
+    Status(String),
+    /// No answer at all (refused, closed, timed out).
+    Connection(String),
+}
+
+/// One HTTP health probe.
+pub(crate) async fn http_probe(client: &reqwest::Client, port: u16, path: &str, host: &str) -> Result<(), ProbeError> {
     let url = format!("http://127.0.0.1:{port}{path}");
     match client.get(&url).header(reqwest::header::HOST, host).send().await {
         Ok(resp) if resp.status().as_u16() < 400 => Ok(()),
-        Ok(resp) => Err(format!("GET {path} returned HTTP {}", resp.status().as_u16())),
-        Err(e) if e.is_timeout() => Err(format!("GET {path} timed out")),
-        Err(e) if e.is_connect() => Err(format!("GET {path}: connection refused")),
-        Err(_) => Err(format!("GET {path}: the connection was closed without a response")),
+        Ok(resp) => Err(ProbeError::Status(format!("GET {path} returned HTTP {}", resp.status().as_u16()))),
+        Err(e) if e.is_timeout() => Err(ProbeError::Connection(format!("GET {path} timed out"))),
+        Err(e) if e.is_connect() => Err(ProbeError::Connection(format!("GET {path}: connection refused"))),
+        Err(_) => Err(ProbeError::Connection(format!("GET {path}: the connection was closed without a response"))),
     }
 }
 
@@ -94,63 +108,132 @@ pub(crate) struct InstanceFailure {
     pub crashed: bool,
 }
 
+/// How the new instances of a deploy are checked.
+pub(crate) struct HealthCheck {
+    pub probe: Probe,
+    pub deadline: Instant,
+    pub timeout_secs: u64,
+    /// The port the app must listen on inside the container.
+    pub container_port: Option<u16>,
+    /// Appended to connection failures on timeout (e.g. "does the app listen
+    /// on $PORT (8000)?").
+    pub port_hint: Option<String>,
+    /// Background workers (a clean exit is a mistake worth explaining).
+    pub worker: bool,
+    /// Where progress lines go while waiting.
+    pub progress: LogSink,
+}
+
+/// What an instance's exit code usually means.
+fn exit_code_hint(code: i64) -> &'static str {
+    match code {
+        126 => ": the command is not executable",
+        127 => ": command not found, check the start command",
+        137 => ": killed (out of memory?)",
+        139 => ": segmentation fault",
+        _ => "",
+    }
+}
+
+/// The message for an instance whose process ended with `code`.
+pub(crate) fn exit_message(instance: &str, code: Option<i64>, worker: bool) -> String {
+    match code {
+        Some(0) if worker => format!("instance {instance} exited with code 0 (a background worker must keep running)"),
+        Some(0) => format!("instance {instance} exited with code 0 (the process must keep running)"),
+        Some(c) => format!("instance {instance} crashed (exit code {c}{})", exit_code_hint(c)),
+        None => format!("instance {instance} crashed"),
+    }
+}
+
+/// The last exit code of a container that Docker restarts (the restart
+/// policy brings crashed instances back). A running container reports 0, so
+/// this waits briefly for it to be seen restarting or stopped.
+async fn last_exit_code(inner: &Inner, id: &str) -> Option<i64> {
+    for _ in 0..EXIT_CODE_POLLS {
+        let state = inner.docker.bollard().inspect_container(id, None).await.ok()?.state?;
+        let restarting = state.restarting == Some(true);
+        let stopped = matches!(state.status.map(|s| s.to_string()).as_deref(), Some("exited" | "dead" | "restarting"));
+        if restarting || stopped {
+            return state.exit_code;
+        }
+        tokio::time::sleep(EXIT_CODE_POLL).await;
+    }
+    None
+}
+
 /// Probe one new instance every second until it is healthy, it crashes or
-/// `deadline` passes. `started` is when it was started. Returns the host
-/// port that was verified (`None` for workers).
+/// the check's deadline passes. `started` is when it was started. Returns
+/// the host port that was verified (`None` for workers). A progress line
+/// is logged every [`PROGRESS_EVERY`] while waiting.
 pub(crate) async fn wait_healthy(
     inner: &Inner,
+    check: &HealthCheck,
     container: &ContainerInfo,
-    probe: &Probe,
     started: Instant,
-    deadline: Instant,
-    timeout_secs: u64,
 ) -> Result<Option<u16>, InstanceFailure> {
     let instance = crate::util::instance_id(&container.name);
     let fail = |message: String, crashed: bool| InstanceFailure { container: container.clone(), message, crashed };
+    let port_text = |host_port: u16| match check.container_port {
+        Some(p) => format!("container port {p} (published as 127.0.0.1:{host_port})"),
+        None => format!("127.0.0.1:{host_port}"),
+    };
+    let mut next_progress = Instant::now() + PROGRESS_EVERY;
     loop {
-        let last: String = match inner.docker.inspect_container(&container.id).await {
+        // (reason, whether it is a connection problem the port hint explains)
+        let (last, connection): (String, bool) = match inner.docker.inspect_container(&container.id).await {
             Ok(None) => return Err(fail(format!("instance {instance} was removed"), false)),
             Ok(Some(info)) => match info.state {
                 ContainerState::Exited | ContainerState::Dead => {
-                    let code = info.exit_code.map(|c| format!(" with code {c}")).unwrap_or_default();
-                    return Err(fail(format!("instance {instance} exited{code}"), true));
+                    return Err(fail(exit_message(&instance, info.exit_code, check.worker), true));
                 }
                 ContainerState::Restarting => {
-                    return Err(fail(format!("instance {instance} crashed and is being restarted"), true));
+                    let code = last_exit_code(inner, &container.id).await;
+                    return Err(fail(exit_message(&instance, code, check.worker), true));
                 }
                 ContainerState::Running if info.restart_count.unwrap_or(0) > 0 => {
-                    return Err(fail(format!("instance {instance} crashed and was restarted"), true));
+                    let code = last_exit_code(inner, &container.id).await;
+                    return Err(fail(exit_message(&instance, code, check.worker), true));
                 }
-                ContainerState::Running => match probe {
+                ContainerState::Running => match &check.probe {
                     Probe::Uptime => {
                         if started.elapsed() >= WORKER_MIN_UPTIME {
                             return Ok(None);
                         }
-                        format!("instance {instance} has not been up for {}s yet", WORKER_MIN_UPTIME.as_secs())
+                        (format!("instance {instance} has not been up for {}s yet", WORKER_MIN_UPTIME.as_secs()), false)
                     }
                     Probe::Tcp => match info.host_port.or(container.host_port) {
                         Some(port) if tcp_accepting(port, TCP_SETTLE).await => return Ok(Some(port)),
-                        Some(port) => format!("nothing accepts connections on port {port} yet"),
+                        Some(port) => (format!("nothing accepts connections on {} yet", port_text(port)), true),
                         None => return Err(fail(format!("instance {instance} has no published port"), false)),
                     },
                     Probe::Http { path, host } => match (info.host_port.or(container.host_port), &inner.http) {
                         (Some(port), Ok(client)) => match http_probe(client, port, path, host).await {
                             Ok(()) => return Ok(Some(port)),
-                            Err(reason) => reason,
+                            Err(ProbeError::Status(reason)) => (reason, false),
+                            Err(ProbeError::Connection(reason)) => (format!("{reason} on {}", port_text(port)), true),
                         },
                         (None, _) => return Err(fail(format!("instance {instance} has no published port"), false)),
                         (_, Err(e)) => return Err(fail(e.clone(), false)),
                     },
                 },
-                other => format!("instance {instance} is {}", other.as_str()),
+                other => (format!("instance {instance} is {}", other.as_str()), false),
             },
-            Err(e) => format!("inspecting instance {instance}: {e}"),
+            Err(e) => (format!("inspecting instance {instance}: {e}"), false),
         };
         let now = Instant::now();
-        if now >= deadline {
-            return Err(fail(format!("health check timed out after {timeout_secs}s: {last}"), false));
+        if now >= check.deadline {
+            let hint = match (&check.port_hint, connection) {
+                (Some(h), true) => format!(": {h}"),
+                _ => String::new(),
+            };
+            return Err(fail(format!("health check timed out after {}s: {last}{hint}", check.timeout_secs), false));
         }
-        tokio::time::sleep(POLL_INTERVAL.min(deadline - now)).await;
+        if now >= next_progress {
+            next_progress = now + PROGRESS_EVERY;
+            let left = check.deadline.saturating_duration_since(now).as_secs();
+            check.progress.system(format!("==> Instance {instance} is not healthy yet: {last} ({left}s left)"));
+        }
+        tokio::time::sleep(POLL_INTERVAL.min(check.deadline - now)).await;
     }
 }
 
@@ -176,6 +259,21 @@ mod tests {
         pserv.health_check_path = Some("/up".into());
         assert!(matches!(Probe::for_service(&pserv, String::new()), Probe::Http { .. }));
         assert!(Probe::Tcp.describe().contains("TCP"));
+    }
+
+    #[test]
+    fn exit_messages_explain_the_exit_code() {
+        assert_eq!(
+            exit_message("abc123", Some(0), true),
+            "instance abc123 exited with code 0 (a background worker must keep running)"
+        );
+        assert!(exit_message("abc123", Some(0), false).contains("exited with code 0"));
+        assert_eq!(
+            exit_message("abc123", Some(127), false),
+            "instance abc123 crashed (exit code 127: command not found, check the start command)"
+        );
+        assert_eq!(exit_message("abc123", Some(3), false), "instance abc123 crashed (exit code 3)");
+        assert_eq!(exit_message("abc123", None, false), "instance abc123 crashed");
     }
 
     #[tokio::test]
@@ -249,9 +347,17 @@ mod tests {
         assert_eq!(http_probe(&client, port, "/redirect", "web.localhost").await, Ok(()), "3xx counts as healthy");
         assert_eq!(
             http_probe(&client, port, "/bad", "web.localhost").await,
-            Err("GET /bad returned HTTP 500".to_string())
+            Err(ProbeError::Status("GET /bad returned HTTP 500".to_string()))
         );
-        assert!(http_probe(&client, port, "/ok", "other.localhost").await.unwrap_err().contains("421"));
+        assert!(matches!(
+            http_probe(&client, port, "/ok", "other.localhost").await,
+            Err(ProbeError::Status(m)) if m.contains("421")
+        ));
         server.abort();
+        // Nothing listens: a connection problem (which the port hint explains).
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        assert!(matches!(http_probe(&client, port, "/ok", "web.localhost").await, Err(ProbeError::Connection(_))));
     }
 }
