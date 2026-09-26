@@ -82,6 +82,8 @@ struct Ctx {
     service_id: String,
     active: ActiveDeploy,
     log: LogHandle,
+    /// Resumes the (suspended) service once live (see `DeployOptions::resume`).
+    resume: bool,
 }
 
 impl Ctx {
@@ -112,7 +114,14 @@ pub(crate) async fn run(
     opts: DeployOptions,
     permit: Option<OwnedSemaphorePermit>,
 ) {
-    let ctx = Ctx { inner, deploy_id: deploy.id.clone(), service_id: deploy.service_id.clone(), active, log };
+    let ctx = Ctx {
+        inner,
+        deploy_id: deploy.id.clone(),
+        service_id: deploy.service_id.clone(),
+        active,
+        log,
+        resume: opts.resume,
+    };
     let result = execute(&ctx, deploy, opts, permit).await;
     if let Err(failure) = result {
         record_failure(&ctx, failure).await;
@@ -132,6 +141,13 @@ async fn execute(
         Err(e) => return Err(Failure::build(e)),
     };
     ctx.log.system(start_line(&deploy));
+    if ctx.resume {
+        ctx.log.system(format!(
+            "==> '{}' is suspended and the image of its live deploy no longer exists: it resumes when this deploy \
+             is live (and stays suspended if it fails)",
+            svc.name
+        ));
+    }
     info!(service = %svc.name, deploy = %deploy.id, "deploy started");
 
     let built = build_stage(ctx, &svc, &deploy, opts).await?;
@@ -164,9 +180,15 @@ fn start_line(deploy: &Deploy) -> String {
     }
 }
 
-/// The service as it is now (it may have been changed while building).
+/// The service as it is now (it may have been changed while building). A
+/// deploy that resumes the service sees it as it will be once live (a
+/// suspend during that deploy cancels it like any other).
 async fn current_service(ctx: &Ctx, stage: Stage) -> Result<Service, Failure> {
     match ctx.inner.store.get_service(&ctx.service_id).await {
+        Ok(Some(mut s)) if s.suspended && ctx.resume => {
+            s.suspended = false;
+            Ok(s)
+        }
         Ok(Some(s)) if s.suspended => Err(ctx.canceled(stage, "service suspended")),
         Ok(Some(s)) => Ok(s),
         Ok(None) => Err(ctx.canceled(stage, "service deleted")),
@@ -211,10 +233,16 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
             let (image, from_deploy) = (&image, &from_deploy);
             let exists = inner.docker.image_exists(image).await.map_err(Failure::build)?;
             if !exists {
+                // A restart reuses the live image (never deleted by retention).
+                let live = crate::deploy::is_restart(deploy.trigger);
+                let reason = images::missing_reason(inner, svc, image, live).await;
+                let what = match (from_deploy, live) {
+                    (Some(from), true) => format!("the image of the live deploy {from} ({image})"),
+                    (Some(from), false) => format!("the image of deploy {from} ({image})"),
+                    (None, _) => format!("image {image}"),
+                };
                 return Err(Failure::build(Error::Build(format!(
-                    "image {image} no longer exists (only the newest {} images of a service are kept): \
-                     deploy again from source",
-                    inner.config.keep_images
+                    "{what} no longer exists: {reason} — deploy again from source"
                 ))));
             }
             let info = match from_deploy {
@@ -539,14 +567,20 @@ async fn remove_new_instances(ctx: &Ctx, started: &[(ContainerInfo, Instant)]) {
     crate::deploy::remove_deploy_containers(&ctx.inner, &ctx.deploy_id).await;
 }
 
-/// The log line for the port, and a hint for when nothing listens on it.
+/// The hint for when the instance runs but nothing accepts connections on
+/// its port: the port (`$PORT`) and the address the app listens on (an app
+/// bound to 127.0.0.1 inside its container is unreachable from outside it).
 fn port_hint(port: u16, user_env: &[EnvVar]) -> String {
     match user_env.iter().rev().find(|v| v.key == "PORT") {
         Some(v) if v.value.trim().parse::<u16>().ok() != Some(port) => format!(
-            "the app gets PORT={} from its environment but Ferry expects it to listen on port {port}",
+            "the app gets PORT={} from its environment but Ferry expects it to listen on port {port}; it must also \
+             listen on 0.0.0.0 (an app listening on 127.0.0.1 inside its container can't be reached)",
             v.value.trim()
         ),
-        _ => format!("does the app listen on $PORT ({port})?"),
+        _ => format!(
+            "does the app listen on $PORT ({port}) on 0.0.0.0? An app listening on 127.0.0.1 (localhost) inside its \
+             container can't be reached"
+        ),
     }
 }
 
@@ -709,6 +743,11 @@ async fn mark_live(ctx: &Ctx, spec: &LaunchSpec) -> ferry_core::Result<()> {
         && d.status == DeployStatus::Live
     {
         inner.store.set_deploy_status(&prev, DeployStatus::Deactivated, None).await?;
+    }
+    if ctx.resume && svc.suspended {
+        inner.store.set_suspended(&svc.id, false).await?;
+        ctx.log.system(format!("==> Resumed '{}'", svc.name));
+        info!(service = %svc.name, deploy = %ctx.deploy_id, "service resumed by a deploy");
     }
     info!(service = %svc.name, deploy = %ctx.deploy_id, "deploy live");
     Ok(())
@@ -1033,11 +1072,14 @@ mod tests {
     }
 
     #[test]
-    fn port_hints_point_at_the_port_variable() {
-        assert_eq!(port_hint(8000, &[]), "does the app listen on $PORT (8000)?");
-        assert_eq!(port_hint(8000, &[EnvVar::new("PORT", "8000")]), "does the app listen on $PORT (8000)?");
+    fn port_hints_point_at_the_port_variable_and_the_bind_address() {
+        let h = port_hint(8000, &[]);
+        assert!(h.starts_with("does the app listen on $PORT (8000) on 0.0.0.0?"), "{h}");
+        assert!(h.contains("An app listening on 127.0.0.1 (localhost) inside its container can't be reached"), "{h}");
+        assert_eq!(port_hint(8000, &[EnvVar::new("PORT", "8000")]), h);
         let h = port_hint(8000, &[EnvVar::new("PORT", "9000")]);
         assert!(h.contains("PORT=9000") && h.contains("8000"), "{h}");
+        assert!(h.contains("0.0.0.0") && h.contains("127.0.0.1"), "{h}");
     }
 
     #[test]

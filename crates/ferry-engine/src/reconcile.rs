@@ -17,7 +17,7 @@ use ferry_core::naming::{
     LABEL_DATASTORE, LABEL_DEPLOY, LABEL_INSTANCE, LABEL_JOB, LABEL_ROLE, LABEL_SERVICE, ROLE_DATASTORE, ROLE_JOB,
     ROLE_SERVICE,
 };
-use ferry_core::{Datastore, DatastoreStatus, Deploy, Result, Service};
+use ferry_core::{Datastore, DatastoreStatus, Deploy, DeployStatus, Result, Service};
 use ferry_docker::{ContainerInfo, ContainerState};
 use futures::StreamExt;
 use futures::future::join_all;
@@ -203,14 +203,54 @@ pub(crate) async fn converge_service(inner: &Arc<Inner>, service_id: &str) -> Re
     started
 }
 
+/// Remove stale / surplus instances. Instances of deploys that never went
+/// live (failed, canceled, or interrupted by a crash while being health
+/// checked) never served: they are removed at once instead of getting the
+/// stop grace period — for a disk service that is the outage before the live
+/// instance starts again. The others (a previous live deploy's, surplus
+/// ones) get the grace period.
 async fn remove_stale(inner: &Inner, svc: &Service, remove: &[ContainerInfo]) {
     if remove.is_empty() {
         return;
     }
-    info!(service = %svc.name, count = remove.len(), "removing stale or surplus instances");
-    if let Err(e) = instances::retire(inner, remove, STOP_GRACE_SECS).await {
+    let never_live = never_live_deploys(inner, remove).await;
+    let (now, graceful): (Vec<ContainerInfo>, Vec<ContainerInfo>) = remove
+        .iter()
+        .cloned()
+        .partition(|c| c.labels.get(LABEL_DEPLOY).is_some_and(|d| never_live.contains(d.as_str())));
+    info!(
+        service = %svc.name,
+        count = remove.len(),
+        never_live = now.len(),
+        "removing stale or surplus instances"
+    );
+    let (at_once, with_grace) =
+        tokio::join!(instances::retire(inner, &now, 0), instances::retire(inner, &graceful, STOP_GRACE_SECS));
+    if let Err(e) = at_once.and(with_grace) {
         warn!(service = %svc.name, "removing instances failed: {e}");
     }
+}
+
+/// The deploys (among those of `containers`) that never went live.
+async fn never_live_deploys(inner: &Inner, containers: &[ContainerInfo]) -> HashSet<String> {
+    let ids: HashSet<&str> = containers.iter().filter_map(|c| c.labels.get(LABEL_DEPLOY)).map(String::as_str).collect();
+    let mut never_live = HashSet::new();
+    for id in ids {
+        match inner.store.get_deploy(id).await {
+            Ok(Some(d)) if never_went_live(d.status) => {
+                never_live.insert(id.to_string());
+            }
+            // Unknown deploys and store errors: keep the grace period.
+            Ok(_) => {}
+            Err(e) => debug!(deploy = id, "cannot read deploy: {e}"),
+        }
+    }
+    never_live
+}
+
+/// Terminal statuses of deploys that never served as the live deploy.
+fn never_went_live(status: DeployStatus) -> bool {
+    matches!(status, DeployStatus::BuildFailed | DeployStatus::DeployFailed | DeployStatus::Canceled)
 }
 
 /// Split a service's containers into the ones to keep (running-ish
@@ -285,7 +325,13 @@ async fn start_missing(
 ) -> Result<()> {
     let plan = spec::plan(inner, svc, spec).await?;
     if !inner.docker.image_exists(&plan.image).await? {
-        warn!(service = %svc.name, image = %plan.image, "cannot start instances: the live image no longer exists");
+        warn!(
+            service = %svc.name,
+            image = %plan.image,
+            "cannot start instances: the image of the live deploy {} no longer exists ({}): deploy again",
+            live.id,
+            crate::images::MissingImage::RemovedFromDocker
+        );
         return Ok(());
     }
     info!(service = %svc.name, deploy = %live.id, count, "starting missing instances");
@@ -669,6 +715,38 @@ mod tests {
         let (_, backoff) = inner.with_rt(|rt| rt.datastore_retries["dbs-1"]);
         assert_eq!(backoff, DATASTORE_RETRY_MAX);
         assert!(retry_due(&inner, "dbs-2", t0), "tracked per datastore");
+    }
+
+    #[tokio::test]
+    async fn instances_of_never_live_deploys_are_removed_without_grace() {
+        let (_dir, inner) = test_inner().await;
+        let svc = Service::new("dsk", ferry_core::ServiceType::WebService);
+        inner.store.create_service(&svc).await.unwrap();
+        let mut ids = Vec::new();
+        for status in [
+            DeployStatus::DeployFailed,
+            DeployStatus::Canceled,
+            DeployStatus::Deactivated,
+            DeployStatus::Live,
+            DeployStatus::BuildFailed,
+        ] {
+            let mut d = Deploy::new(
+                &svc.id,
+                ferry_core::DeployTrigger::Manual,
+                ferry_core::DeploySource::Image { image: "x".into() },
+            );
+            d.status = status;
+            inner.store.create_deploy(&d).await.unwrap();
+            ids.push(d.id);
+        }
+        let containers: Vec<ContainerInfo> = ids
+            .iter()
+            .map(|id| c(id, id, ContainerState::Running))
+            .chain([c("unknown", "dep-unknown", ContainerState::Running)])
+            .collect();
+        let never_live = never_live_deploys(&inner, &containers).await;
+        let expected: HashSet<String> = [ids[0].clone(), ids[1].clone(), ids[4].clone()].into();
+        assert_eq!(never_live, expected, "failed, canceled and interrupted deploys never served");
     }
 
     #[test]

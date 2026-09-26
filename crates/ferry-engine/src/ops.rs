@@ -10,7 +10,7 @@ use ferry_core::validate::MAX_INSTANCES;
 use ferry_core::{DeploySource, Error, Result, ServiceType};
 use tracing::{info, warn};
 
-use crate::images::is_own_image;
+use crate::images::{self, is_own_image};
 use crate::instances::{self, STOP_GRACE_SECS};
 use crate::logs::LogKind;
 use crate::state::{Inner, SetGuard, deleting_services_set};
@@ -23,9 +23,10 @@ fn check_not_deleting(inner: &Inner, service_id: &str, name: &str) -> Result<()>
     Ok(())
 }
 
-/// `Engine::suspend`: 503 at the proxy right away, cancel deploys in
-/// progress, then stop and remove every instance.
+/// `Engine::suspend`: 503 at the proxy right away, cancel deploys and stop
+/// running jobs, then stop and remove every instance.
 pub(crate) async fn suspend(inner: &Arc<Inner>, service_id: &str) -> Result<()> {
+    const REASON: &str = "service suspended";
     let svc = inner.store.require_service(service_id).await?;
     check_not_deleting(inner, &svc.id, &svc.name)?;
     inner.store.set_suspended(&svc.id, true).await?;
@@ -33,7 +34,12 @@ pub(crate) async fn suspend(inner: &Arc<Inner>, service_id: &str) -> Result<()> 
     if !hosts.is_empty() {
         inner.routes.set_service_suspended(&svc.id, &hosts);
     }
-    deploy::cancel_service_deploys(inner, &svc.id, "service suspended").await?;
+    // Jobs get their grace period while the deploys and instances go.
+    let jobs = jobs::cancel_service_jobs(inner, &svc.id, REASON);
+    deploy::cancel_service_deploys(inner, &svc.id, REASON).await?;
+    // A deploy resuming the service may have gone live (past its point of no
+    // return) before the cancel: the suspend still wins.
+    inner.store.set_suspended(&svc.id, true).await?;
     let _lock = inner.service_locks.lock(&svc.id).await;
     let containers = instances::service_containers(inner, &svc.id, true).await?;
     if !containers.is_empty() {
@@ -43,16 +49,27 @@ pub(crate) async fn suspend(inner: &Arc<Inner>, service_id: &str) -> Result<()> 
     if !hosts.is_empty() {
         inner.routes.set_service_suspended(&svc.id, &hosts);
     }
+    jobs::wait_jobs_stopped(&svc.id, &jobs).await;
     result?;
     info!(service = %svc.name, "service suspended");
     Ok(())
 }
 
 /// `Engine::resume`: start the live deploy's instances again (routes follow
-/// as soon as they accept connections).
+/// as soon as they accept connections). When the live deploy's image is gone
+/// there is nothing to start: Conflict, and the service stays suspended (a
+/// manual deploy resumes it, see `deploy::deploy`).
 pub(crate) async fn resume(inner: &Arc<Inner>, service_id: &str) -> Result<()> {
     let svc = inner.store.require_service(service_id).await?;
     check_not_deleting(inner, &svc.id, &svc.name)?;
+    if let Some((live, image)) = images::missing_live_image(inner, &svc).await? {
+        let reason = images::missing_reason(inner, &svc, &image, true).await;
+        let action = if svc.suspended { format!(": a manual deploy resumes '{}'", svc.name) } else { String::new() };
+        return Err(Error::conflict(format!(
+            "the image of the live deploy {} no longer exists — deploy again{action} ({reason})",
+            live.id
+        )));
+    }
     inner.store.set_suspended(&svc.id, false).await?;
     let _lock = inner.service_locks.lock(&svc.id).await;
     reconcile::converge_service(inner, &svc.id).await?;
@@ -108,8 +125,9 @@ pub(crate) async fn delete_service(inner: &Arc<Inner>, service_id: &str) -> Resu
     let Some(_deleting) = SetGuard::insert(inner, &svc.id, deleting_services_set) else {
         return Err(Error::conflict(format!("service '{}' is already being deleted", svc.name)));
     };
+    let jobs = jobs::cancel_service_jobs(inner, &svc.id, "service deleted");
     deploy::cancel_service_deploys(inner, &svc.id, "service deleted").await?;
-    jobs::stop_service_jobs(inner, &svc.id).await;
+    jobs::wait_jobs_stopped(&svc.id, &jobs).await;
     let _lock = inner.service_locks.lock(&svc.id).await;
     inner.routes.remove_service(&svc.id);
 

@@ -253,25 +253,48 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
 /// datastore's credentials can't open (Postgres keeps the password it was
 /// initialized with) and that must not be exposed under the new name.
 async fn check_volume_owner(inner: &Inner, ds: &Datastore) -> Result<()> {
+    match volume_owner(inner, ds).await? {
+        VolumeOwner::Missing | VolumeOwner::Datastore => Ok(()),
+        VolumeOwner::Foreign => {
+            let name = inner.naming.datastore_volume(&ds.name);
+            Err(Error::conflict(format!(
+                "a Docker volume named {name} already exists and was not created for this datastore \
+                 (it may hold another database's data): remove it with `docker volume rm {name}` \
+                 (or pick another name), then delete and create the datastore again"
+            )))
+        }
+    }
+}
+
+/// Who the datastore's data volume (by name) belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VolumeOwner {
+    Missing,
+    /// Created by this server for this datastore (labels
+    /// `ferry.datastore=<id>` and `ferry.instance=<prefix>`).
+    Datastore,
+    /// Anything else: another server, an earlier datastore of the same name,
+    /// a manual `docker volume create`...
+    Foreign,
+}
+
+async fn volume_owner(inner: &Inner, ds: &Datastore) -> Result<VolumeOwner> {
     let name = inner.naming.datastore_volume(&ds.name);
     if !inner.docker.volume_exists(&name).await? {
-        return Ok(());
+        return Ok(VolumeOwner::Missing);
     }
-    let volume = inner
-        .docker
-        .bollard()
-        .inspect_volume(&name)
-        .await
-        .map_err(|e| Error::Docker(format!("inspecting volume {name}: {e}")))?;
+    let volume = match inner.docker.bollard().inspect_volume(&name).await {
+        Ok(v) => v,
+        // Removed between the two calls.
+        Err(_) if !inner.docker.volume_exists(&name).await? => return Ok(VolumeOwner::Missing),
+        Err(e) => return Err(Error::Docker(format!("inspecting volume {name}: {e}"))),
+    };
     let label = |k: &str| volume.labels.get(k).map(String::as_str);
-    if label(LABEL_DATASTORE) == Some(ds.id.as_str()) && label(LABEL_INSTANCE) == Some(inner.naming.prefix()) {
-        return Ok(());
-    }
-    Err(Error::conflict(format!(
-        "a Docker volume named {name} already exists and was not created for this datastore \
-         (it may hold another database's data): remove it with `docker volume rm {name}` \
-         (or pick another name), then delete and create the datastore again"
-    )))
+    Ok(if label(LABEL_DATASTORE) == Some(ds.id.as_str()) && label(LABEL_INSTANCE) == Some(inner.naming.prefix()) {
+        VolumeOwner::Datastore
+    } else {
+        VolumeOwner::Foreign
+    })
 }
 
 /// Create the container; if the stored host port was taken meanwhile,
@@ -337,7 +360,10 @@ async fn wait_ready(inner: &Inner, ds: &Datastore, container_id: &str, cancel: &
     }
 }
 
-/// `Engine::delete_datastore`: container, then volume, then the row.
+/// `Engine::delete_datastore`: container, then volume, then the row. The
+/// volume is removed only if it was created for this datastore (see
+/// [`VolumeOwner`]): a datastore that failed because a foreign volume had its
+/// name never deletes someone else's data.
 pub(crate) async fn delete(inner: &Arc<Inner>, datastore_id: &str) -> Result<()> {
     let ds = inner.store.require_datastore(datastore_id).await?;
     let Some(_deleting) = SetGuard::insert(inner, &ds.id, deleting_datastores_set) else {
@@ -348,10 +374,25 @@ pub(crate) async fn delete(inner: &Arc<Inner>, datastore_id: &str) -> Result<()>
     }
     let _lock = inner.datastore_locks.lock(&ds.id).await;
     let name = inner.naming.datastore_container(&ds.name);
-    if let Some(c) = inner.docker.inspect_container(&name).await? {
+    if let Some(c) = inner.docker.inspect_container(&name).await?
+        && c.labels.get(LABEL_DATASTORE) == Some(&ds.id)
+        && c.labels.get(LABEL_INSTANCE).map(String::as_str) == Some(inner.naming.prefix())
+    {
         instances::retire(inner, &[c], STOP_GRACE_SECS).await?;
     }
-    instances::remove_volume_retrying(inner, &inner.naming.datastore_volume(&ds.name)).await?;
+    let volume = inner.naming.datastore_volume(&ds.name);
+    match volume_owner(inner, &ds).await? {
+        VolumeOwner::Datastore => instances::remove_volume_retrying(inner, &volume).await?,
+        VolumeOwner::Missing => {}
+        VolumeOwner::Foreign => warn!(
+            datastore = %ds.name,
+            volume = %volume,
+            "not removing Docker volume {volume}: it was not created for this datastore (its labels don't say \
+             ferry.datastore={} and ferry.instance={}); remove it yourself if its data is not needed",
+            ds.id,
+            inner.naming.prefix()
+        ),
+    }
     inner.store.delete_datastore(&ds.id).await?;
     inner.datastore_locks.forget(&ds.id);
     inner.with_rt(|rt| rt.datastore_retries.remove(&ds.id));
