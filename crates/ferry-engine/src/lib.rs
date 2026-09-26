@@ -5,7 +5,7 @@
 //!   drain old), rollbacks, restarts, cancellation;
 //! * a reconciler converging Docker to the desired state in the store
 //!   (instance counts, routes, suspended services, crash recovery);
-//! * the cron scheduler and one-off jobs;
+//! * the cron scheduler and one-off jobs (cancel, retention);
 //! * managed datastores (Postgres / Redis containers + volumes);
 //! * deploy/job log storage and live following.
 //!
@@ -215,6 +215,10 @@ impl Engine for FerryEngine {
     async fn job_logs(&self, job_id: &str, follow: bool) -> Result<LogStream> {
         let j = self.inner.store.require_job_run(job_id).await?;
         Ok(self.inner.logs.stream(LogKind::Job, &j.id, follow))
+    }
+
+    async fn cancel_job(&self, job_id: &str) -> Result<JobRun> {
+        jobs::cancel_job(&self.inner, job_id).await
     }
 
     async fn provision_datastore(&self, datastore_id: &str) -> Result<()> {

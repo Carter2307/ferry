@@ -18,9 +18,9 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, watch};
 use tracing::{error, info, warn};
 
 use crate::logs::LogKind;
-use crate::pipeline;
 use crate::state::{ActiveDeploy, DeployOptions, Inner, Worker};
 use crate::util::{error_message, panic_message};
+use crate::{images, pipeline};
 
 /// How long `cancel_deploy` (and suspend/delete) wait for a running deploy
 /// to wind down.
@@ -36,9 +36,31 @@ pub(crate) const SHUTDOWN: &str = "interrupted by server shutdown";
 /// `Engine::deploy`.
 pub(crate) async fn deploy(inner: &Arc<Inner>, service_id: &str, req: DeployRequest) -> Result<Deploy> {
     let svc = inner.store.require_service(service_id).await?;
-    check_deployable(inner, &svc)?;
+    let resume = resumes_suspended(inner, &svc, req.trigger).await;
+    if resume {
+        check_not_deleting(inner, &svc)?;
+    } else {
+        check_deployable(inner, &svc)?;
+    }
     let source = resolve_source(inner, &svc, &req).await?;
-    enqueue(inner, &svc, req.trigger, source, DeployOptions { clear_cache: req.clear_cache }, false).await
+    enqueue(inner, &svc, req.trigger, source, DeployOptions { clear_cache: req.clear_cache, resume }, false).await
+}
+
+/// A suspended service whose live image no longer exists can't be resumed
+/// (`resume` answers "deploy again"): a deploy the user asks for (manual or
+/// upload — never webhooks, deploy hooks or blueprints) is the way out. It
+/// runs although the service is suspended and resumes it once live.
+async fn resumes_suspended(inner: &Inner, svc: &Service, trigger: DeployTrigger) -> bool {
+    if !svc.suspended || !matches!(trigger, DeployTrigger::Manual | DeployTrigger::Upload) {
+        return false;
+    }
+    match images::missing_live_image(inner, svc).await {
+        Ok(missing) => missing.is_some(),
+        Err(e) => {
+            warn!(service = %svc.name, "cannot check the live image of the suspended service: {e}");
+            false
+        }
+    }
 }
 
 /// `Engine::rollback`.
@@ -60,9 +82,11 @@ pub(crate) async fn rollback(inner: &Arc<Inner>, service_id: &str, deploy_id: &s
         )));
     }
     if !inner.docker.image_exists(&image).await? {
+        let live = svc.live_deploy_id.as_deref() == Some(target.id.as_str());
+        let reason = images::missing_reason(inner, &svc, &image, live).await;
         return Err(Error::invalid(format!(
-            "the image of deploy {} ({image}) no longer exists: only the newest {} built images of a service are kept",
-            target.id, inner.config.keep_images
+            "cannot roll back to deploy {}: its image {image} no longer exists: {reason} — deploy again from source",
+            target.id
         )));
     }
     let source = DeploySource::Reuse { image, from_deploy: Some(target.id.clone()) };
@@ -85,6 +109,20 @@ pub(crate) async fn restart(inner: &Arc<Inner>, service_id: &str, trigger: Deplo
     if svc.live_deploy_id.is_some() && target.image.is_none() {
         return Err(Error::conflict(format!("the live deploy {} of '{}' has no image", target.id, svc.name)));
     }
+    // Nothing else in progress: the restart would reuse the live image right
+    // away, so a missing one is reported now instead of as a failed deploy.
+    // (Behind another deploy the pipeline checks what is live when it runs.)
+    if svc.live_deploy_id.is_some() && !inner.store.active_deploys().await?.iter().any(|d| d.service_id == svc.id) {
+        // Docker errors are left to the pipeline.
+        if let Ok(Some((live, image))) = images::missing_live_image(inner, &svc).await {
+            let reason = images::missing_reason(inner, &svc, &image, true).await;
+            return Err(Error::conflict(format!(
+                "cannot restart '{}': the image of the live deploy {} ({image}) no longer exists: {reason} — deploy \
+                 again from source",
+                svc.name, live.id
+            )));
+        }
+    }
     // The image is re-resolved when the restart runs (see the pipeline), so
     // a deploy that goes live in between is not rolled back.
     let source =
@@ -99,10 +137,15 @@ pub(crate) fn is_restart(trigger: DeployTrigger) -> bool {
     matches!(trigger, DeployTrigger::Restart | DeployTrigger::EnvChange)
 }
 
-fn check_deployable(inner: &Inner, svc: &Service) -> Result<()> {
+fn check_not_deleting(inner: &Inner, svc: &Service) -> Result<()> {
     if inner.is_service_deleting(&svc.id) {
         return Err(Error::conflict(format!("service '{}' is being deleted", svc.name)));
     }
+    Ok(())
+}
+
+fn check_deployable(inner: &Inner, svc: &Service) -> Result<()> {
+    check_not_deleting(inner, svc)?;
     if svc.suspended {
         return Err(Error::conflict(format!("service '{}' is suspended: resume it before deploying", svc.name)));
     }
@@ -186,7 +229,7 @@ async fn enqueue(
     }
     let deploy = Deploy::new(&svc.id, trigger, source);
     inner.store.create_deploy(&deploy).await?;
-    if opts.clear_cache {
+    if opts != DeployOptions::default() {
         inner.with_rt(|rt| rt.deploy_options.insert(deploy.id.clone(), opts));
     }
     // Followers may attach while the deploy waits in the queue.
@@ -529,7 +572,9 @@ pub(crate) async fn recover_interrupted(inner: &Arc<Inner>) -> Result<()> {
         let log = inner.logs.open(LogKind::Deploy, &d.id);
         log.system(pipeline::failure_line(status, INTERRUPTED));
         log.finish().await;
-        // Its containers (if any) belong to no live deploy: the reconciler removes them.
+        // Its containers (if any) never served as the live deploy: the
+        // reconciler removes them at once (no stop grace period), before it
+        // starts the live deploy's missing instances.
     }
     for mut j in inner.store.active_job_runs().await? {
         j.status = JobStatus::Failed;

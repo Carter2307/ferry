@@ -1032,6 +1032,9 @@ async fn datastores_refuse_foreign_volumes_and_recover() {
     assert!(error.contains("already exists") && error.contains(&volume), "{error}");
     assert!(h.containers(&format!("ferry.datastore={}", stale.id)).is_empty());
     h.engine.delete_datastore(&stale.id).await.unwrap();
+    // Deleting the datastore never deletes a volume Ferry did not create for it.
+    assert!(h.store.find_datastore(&stale.id).await.unwrap().is_none());
+    assert!(docker_cli(&["volume", "inspect", &volume]).0, "the foreign volume {volume} was deleted");
 
     let cache = Datastore::new("cache", DatastoreKind::Redis);
     h.store.create_datastore(&cache).await.unwrap();
@@ -1170,4 +1173,238 @@ async fn routes_follow_restarted_instances() {
         restarted.elapsed()
     );
     h.wait_ok("web", "/", Duration::from_secs(5)).await;
+}
+
+/// `docker run -d` a container labelled like an instance of `deploy_id`
+/// that ignores SIGTERM (a graceful stop takes the whole grace period).
+fn fake_instance(h: &Harness, name: &str, service_id: &str, deploy_id: &str) {
+    let labels = [
+        format!("ferry.instance={}", h.prefix),
+        "ferry.managed=true".to_string(),
+        "ferry.role=service".to_string(),
+        format!("ferry.service={service_id}"),
+        format!("ferry.deploy={deploy_id}"),
+    ];
+    let mut args = vec!["run", "-d", "--name", name];
+    for l in &labels {
+        args.extend(["--label", l.as_str()]);
+    }
+    args.extend(["busybox:stable", "sleep", "3600"]);
+    assert!(docker_cli(&args).0, "docker run {name}");
+}
+
+/// kill -9 while a recreate (disk) deploy health-checks its new instance:
+/// the old instance is already gone, the new one never went live. At boot
+/// that instance is removed at once (no stop grace period) and the live
+/// deploy's instance is back within seconds.
+#[tokio::test(flavor = "multi_thread")]
+async fn boot_removes_the_instance_of_an_interrupted_recreate_at_once() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let svc = h
+        .create_service("dsk", ServiceType::WebService, |s| {
+            s.image = Some("nginx:alpine".into());
+            s.disk_mount_path = Some("/data".into());
+        })
+        .await;
+    let d1 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    h.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(40), h.engine.stopped()).await.expect("the engine stops");
+
+    // What the crash left: the live instance stopped and removed, the new
+    // one running and its deploy still `deploying`.
+    let mut d2 = Deploy::new(
+        &svc.id,
+        DeployTrigger::Restart,
+        DeploySource::Reuse { image: d1.image.clone().unwrap(), from_deploy: Some(d1.id.clone()) },
+    );
+    d2.status = DeployStatus::Deploying;
+    d2.image = d1.image.clone();
+    h.store.create_deploy(&d2).await.unwrap();
+    for c in h.containers(&format!("ferry.deploy={}", d1.id)) {
+        assert!(docker_cli(&["rm", "-f", &c]).0);
+    }
+    let stale = format!("{}-dsk-interrupted", h.prefix);
+    fake_instance(&h, &stale, &svc.id, &d2.id);
+
+    // A new server boots on the same data.
+    let routes = RouteTable::new();
+    let docker = Docker::connect().await.unwrap();
+    let builder = Builder::new(h.config.builds_dir(), h.config.repos_dir(), h.config.docker_bin.clone());
+    let engine = FerryEngine::new(h.config.clone(), h.store.clone(), docker, builder, routes.clone());
+    let shutdown = CancellationToken::new();
+    let started = Instant::now();
+    engine.start(shutdown.clone()).await.unwrap();
+    let host = h.host("dsk");
+    h.wait_until("the live instance to serve again", Duration::from_secs(40), || async {
+        match routes.resolve(&host) {
+            ferry_proxy::Resolution::Upstream(addr) => {
+                h.http.get(format!("http://{addr}/")).send().await.is_ok_and(|r| r.status().as_u16() == 200)
+            }
+            _ => false,
+        }
+    })
+    .await;
+    let outage = started.elapsed();
+    assert!(outage < Duration::from_secs(8), "the live instance took {outage:?} to come back");
+    assert!(!docker_cli(&["inspect", &stale]).0, "the interrupted deploy's instance is removed");
+    let d2 = h.store.require_deploy(&d2.id).await.unwrap();
+    assert_eq!(d2.status, DeployStatus::DeployFailed);
+    assert_eq!(d2.error.as_deref(), Some("interrupted by server restart"));
+    assert_eq!(h.containers(&format!("ferry.deploy={}", d1.id)).len(), 1);
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(40), engine.stopped()).await.expect("the new engine stops");
+}
+
+/// The lines of a job's log so far (or all of them once it is finished).
+async fn job_lines(h: &Harness, id: &str, follow: bool) -> Vec<String> {
+    let stream = h.engine.job_logs(id, follow).await.unwrap().collect::<Vec<LogLine>>();
+    let lines = tokio::time::timeout(Duration::from_secs(60), stream).await.expect("the job log ends");
+    lines.into_iter().map(|l| l.line).collect()
+}
+
+/// A job is canceled with its container's grace period; suspending a
+/// service stops its running jobs.
+#[tokio::test(flavor = "multi_thread")]
+async fn jobs_are_canceled_and_suspend_stops_them() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let svc = h
+        .create_service("bg", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("exec sleep 3600".into());
+        })
+        .await;
+    h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    // Runs until SIGTERM, then says so and exits (after the current `sleep 1`).
+    let command = "trap 'echo got-term; exit 143' TERM; echo started; while true; do sleep 1; done";
+    async fn start(h: &Harness, service_id: &str, command: &str) -> ferry_core::JobRun {
+        let job = h.engine.run_job(service_id, Some(command.into()), JobTrigger::Manual).await.unwrap();
+        h.wait_until("the job to run", Duration::from_secs(60), || async {
+            h.store.require_job_run(&job.id).await.unwrap().status == JobStatus::Running
+                && job_lines(h, &job.id, false).await.iter().any(|l| l == "started")
+        })
+        .await;
+        job
+    }
+
+    let job = start(&h, &svc.id, command).await;
+    let asked = Instant::now();
+    let canceled = h.engine.cancel_job(&job.id).await.unwrap();
+    assert!(asked.elapsed() < Duration::from_secs(9), "graceful stop: {:?}", asked.elapsed());
+    assert_eq!(canceled.status, JobStatus::Canceled, "{canceled:?}");
+    assert_eq!(canceled.error.as_deref(), Some("canceled by user"));
+    assert_eq!(canceled.exit_code, Some(143));
+    assert!(canceled.finished_at.is_some());
+    assert!(h.containers(&format!("ferry.job={}", job.id)).is_empty(), "the job container is removed");
+    let lines = job_lines(&h, &job.id, true).await;
+    assert!(lines.iter().any(|l| l == "got-term"), "the container got its grace period: {lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some("==> Job canceled: canceled by user"), "{lines:?}");
+    match h.engine.cancel_job(&job.id).await {
+        Err(ferry_core::Error::Conflict(m)) => assert!(m.contains("already finished"), "{m}"),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+
+    // Suspend stops the running job before it returns.
+    let job = start(&h, &svc.id, command).await;
+    h.engine.suspend(&svc.id).await.unwrap();
+    let j = h.store.require_job_run(&job.id).await.unwrap();
+    assert_eq!(j.status, JobStatus::Canceled, "{j:?}");
+    assert_eq!(j.error.as_deref(), Some("service suspended"));
+    assert!(h.containers(&format!("ferry.job={}", job.id)).is_empty());
+    assert!(job_lines(&h, &job.id, true).await.iter().any(|l| l == "got-term"));
+    assert!(matches!(
+        h.engine.run_job(&svc.id, Some("true".into()), JobTrigger::Manual).await,
+        Err(ferry_core::Error::Conflict(_))
+    ));
+}
+
+/// Missing images: a rollback says the image was cleaned up by retention, a
+/// restart that it was removed from Docker; resuming a suspended service
+/// whose live image is gone is refused (it stays suspended) and a manual
+/// deploy resumes it.
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_images_are_explained_and_a_manual_deploy_resumes() {
+    require_e2e!();
+    let h = fix_harness(|c| c.keep_images = 1).await;
+    let svc = h.create_service("web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    let d1 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    let d2 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Manual)).await;
+    let d1_image = d1.image.clone().unwrap();
+    h.wait_until("retention to delete the first image", Duration::from_secs(30), || async {
+        !docker_cli(&["image", "inspect", &d1_image]).0
+    })
+    .await;
+    match h.engine.rollback(&svc.id, &d1.id).await {
+        Err(ferry_core::Error::Invalid(m)) => assert!(m.contains("image retention"), "{m}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // The live image removed behind Ferry's back (its instance keeps running).
+    assert!(docker_cli(&["rmi", "-f", d2.image.as_deref().unwrap()]).0);
+    match h.engine.restart(&svc.id, DeployTrigger::Restart).await {
+        Err(ferry_core::Error::Conflict(m)) => {
+            assert!(m.contains("removed from Docker") && m.contains(&d2.id), "{m}");
+        }
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+
+    h.engine.suspend(&svc.id).await.unwrap();
+    match h.engine.resume(&svc.id).await {
+        Err(ferry_core::Error::Conflict(m)) => assert!(
+            m.contains(&format!("the image of the live deploy {} no longer exists — deploy again", d2.id)),
+            "{m}"
+        ),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    assert!(h.store.require_service(&svc.id).await.unwrap().suspended, "still suspended");
+    assert_eq!(h.get("web", "/").await.unwrap().0, 503);
+    // Automatic deploys don't resume it; a manual one does, once live.
+    assert!(matches!(
+        h.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::DeployHook)).await,
+        Err(ferry_core::Error::Conflict(_))
+    ));
+    let d3 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Manual)).await;
+    assert!(h.deploy_log(&d3.id).await.contains("==> Resumed 'web'"), "{}", h.deploy_log(&d3.id).await);
+    assert!(!h.store.require_service(&svc.id).await.unwrap().suspended);
+    h.wait_ok("web", "/", Duration::from_secs(30)).await;
+    assert_eq!(h.engine.service_status(&svc.id).await.unwrap().state, ServiceState::Live);
+}
+
+/// A restart of a live cron job (the API queues one when its start command
+/// changes) snapshots the current start command, starts no container, and
+/// the next runs use the new command; the schedule is always the current one.
+#[tokio::test(flavor = "multi_thread")]
+async fn cron_restarts_snapshot_the_current_settings() {
+    require_e2e!();
+    let h = fix_harness(|_| {}).await;
+    let cron = h
+        .create_service("tick", ServiceType::CronJob, |s| {
+            s.image = Some("busybox:stable".into());
+            s.schedule = Some("0 0 * * *".into());
+            s.start_command = Some("echo first command".into());
+        })
+        .await;
+    let d1 = h.deploy_live(&cron, DeployRequest::new(DeployTrigger::Create)).await;
+    let mut changed = h.store.require_service(&cron.id).await.unwrap();
+    changed.start_command = Some("echo second command".into());
+    changed.schedule = Some("30 3 * * *".into());
+    h.store.update_service(&changed).await.unwrap();
+
+    // Saved, not applied yet: runs use the live deploy's command.
+    let job = h.engine.run_job(&cron.id, None, JobTrigger::Manual).await.unwrap();
+    assert_eq!(h.wait_job(&job.id).await.status, JobStatus::Succeeded);
+    assert!(job_lines(&h, &job.id, true).await.iter().any(|l| l == "first command"));
+
+    let d2 = h.engine.restart(&cron.id, DeployTrigger::Restart).await.unwrap();
+    let d2 = h.expect(&d2, DeployStatus::Live).await;
+    assert!(h.containers(&format!("ferry.deploy={}", d2.id)).is_empty(), "a cron restart starts no container");
+    assert_eq!(h.store.require_deploy(&d1.id).await.unwrap().status, DeployStatus::Deactivated);
+    let log = h.deploy_log(&d2.id).await;
+    assert!(log.contains("==> Your cron job is live") && log.contains("30 3 * * *"), "{log}");
+
+    let job = h.engine.run_job(&cron.id, None, JobTrigger::Manual).await.unwrap();
+    assert_eq!(h.wait_job(&job.id).await.status, JobStatus::Succeeded);
+    let lines = job_lines(&h, &job.id, true).await;
+    assert!(lines.iter().any(|l| l == "second command"), "{lines:?}");
 }

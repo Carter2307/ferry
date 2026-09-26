@@ -1,8 +1,14 @@
-//! Image reference helpers and the retention policy for built images.
+//! Image reference helpers, the retention policy for built images, and why
+//! an image a deploy needs is missing.
 
 use std::collections::HashSet;
+use std::fmt;
 
-use ferry_core::Deploy;
+use ferry_core::{Deploy, Result, Service};
+use tracing::debug;
+
+use crate::spec;
+use crate::state::Inner;
 
 /// The tag of an image reference: `Some("alpine")` for `nginx:alpine`,
 /// `None` for `nginx` or `localhost:5000/app`, and `Some("@digest")` for a
@@ -50,6 +56,79 @@ pub(crate) fn images_to_remove(
         }
     }
     seen.into_iter().skip(keep.max(1)).filter(|img| !protected.contains(*img)).map(str::to_string).collect()
+}
+
+/// Why an image a deploy used is no longer in Docker (for error messages:
+/// the way out differs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MissingImage {
+    /// Deleted by Ferry's retention: older than the newest `keep` images
+    /// built for the service.
+    Retention { keep: usize },
+    /// Removed from Docker by something else (`docker rmi`, `docker image
+    /// prune`, a reset Docker...).
+    RemovedFromDocker,
+}
+
+impl fmt::Display for MissingImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MissingImage::Retention { keep } => write!(
+                f,
+                "it was cleaned up by image retention, which keeps only the newest {keep} images built for a service"
+            ),
+            MissingImage::RemovedFromDocker => {
+                f.write_str("it was removed from Docker outside Ferry, e.g. by `docker rmi` or `docker image prune`")
+            }
+        }
+    }
+}
+
+/// Retention only ever deletes the service's own images beyond the newest
+/// `keep`: a missing image in that range was cleaned up by Ferry, anything
+/// else was removed behind its back. `deploys` is newest first.
+pub(crate) fn classify_missing(deploys: &[Deploy], repo: &str, keep: usize, image: &str) -> MissingImage {
+    if images_to_remove(deploys, repo, keep, &HashSet::new()).iter().any(|i| i == image) {
+        MissingImage::Retention { keep: keep.max(1) }
+    } else {
+        MissingImage::RemovedFromDocker
+    }
+}
+
+/// Why `image` (used by a deploy of `svc`) is gone. The live deploy's image
+/// is never deleted by retention, so for it the answer is always "removed
+/// from Docker".
+pub(crate) async fn missing_reason(inner: &Inner, svc: &Service, image: &str, live: bool) -> MissingImage {
+    if live {
+        return MissingImage::RemovedFromDocker;
+    }
+    match inner.store.deploys_with_images(&svc.id).await {
+        Ok(deploys) => classify_missing(&deploys, &inner.naming.image_repo(&svc.name), inner.config.keep_images, image),
+        Err(e) => {
+            debug!(service = %svc.name, "cannot tell why image {image} is missing: {e}");
+            MissingImage::RemovedFromDocker
+        }
+    }
+}
+
+/// The live deploy of `svc` and the image its instances run, when that
+/// image is no longer in Docker (`None`: no live deploy, or its image exists).
+pub(crate) async fn missing_live_image(inner: &Inner, svc: &Service) -> Result<Option<(Deploy, String)>> {
+    let Some(live_id) = svc.live_deploy_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(live) = inner.store.get_deploy(live_id).await? else {
+        return Ok(None);
+    };
+    let image = match spec::load(&inner.store, &live.id).await? {
+        Some(spec) => spec.image,
+        None => match live.image.clone() {
+            Some(image) => image,
+            // Live without an image (should not happen): nothing can start.
+            None => return Ok(Some((live, String::new()))),
+        },
+    };
+    if inner.docker.image_exists(&image).await? { Ok(None) } else { Ok(Some((live, image))) }
 }
 
 #[cfg(test)]
@@ -111,5 +190,17 @@ mod tests {
         // keep = 0 still keeps the newest one.
         assert_eq!(images_to_remove(&deploys, "ferry/web", 0, &none).len(), 5);
         assert!(images_to_remove(&deploys, "ferry/api", 1, &none).is_empty());
+    }
+
+    #[test]
+    fn missing_images_are_explained() {
+        let deploys = vec![dep(Some("ferry/web:d3")), dep(Some("ferry/web:d2")), dep(Some("ferry/web:d1"))];
+        // Beyond the newest 2 own images: retention deleted it.
+        assert_eq!(classify_missing(&deploys, "ferry/web", 2, "ferry/web:d1"), MissingImage::Retention { keep: 2 });
+        // Within the retention window, or not one of Ferry's images: removed outside Ferry.
+        assert_eq!(classify_missing(&deploys, "ferry/web", 2, "ferry/web:d2"), MissingImage::RemovedFromDocker);
+        assert_eq!(classify_missing(&deploys, "ferry/web", 2, "nginx:alpine"), MissingImage::RemovedFromDocker);
+        assert!(MissingImage::Retention { keep: 2 }.to_string().contains("image retention"));
+        assert!(MissingImage::RemovedFromDocker.to_string().contains("removed from Docker"));
     }
 }

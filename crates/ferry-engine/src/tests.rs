@@ -30,13 +30,15 @@ async fn fixture(build_concurrency: usize) -> Fixture {
 
 /// `docker_bin` is the CLI the builder runs `docker build` with.
 async fn fixture_with(build_concurrency: usize, docker_bin: &str) -> Fixture {
+    fixture_config(docker_bin, |c| c.build_concurrency = build_concurrency).await
+}
+
+async fn fixture_config(docker_bin: &str, tweak: impl FnOnce(&mut Config)) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let config = Arc::new(Config {
-        data_dir: dir.path().to_path_buf(),
-        name_prefix: "ferrytest-unit".into(),
-        build_concurrency,
-        ..Config::default()
-    });
+    let mut config =
+        Config { data_dir: dir.path().to_path_buf(), name_prefix: "ferrytest-unit".into(), ..Config::default() };
+    tweak(&mut config);
+    let config = Arc::new(config);
     let store = Store::open(&config.db_path()).await.unwrap();
     // Port 9 (discard) on loopback: connections are refused immediately.
     let bollard = bollard::Docker::connect_with_http("http://127.0.0.1:9", 2, bollard::API_DEFAULT_VERSION).unwrap();
@@ -536,4 +538,103 @@ async fn shutdown_fails_queued_deploys_and_ends_their_followers() {
 async fn stopped_resolves_at_once_when_never_started() {
     let f = fixture(1).await;
     tokio::time::timeout(Duration::from_secs(1), f.engine.stopped()).await.expect("nothing to wait for");
+}
+
+/// Wait until a job has finished and its task is done (log finished,
+/// retention applied).
+async fn wait_job_done(f: &Fixture, id: &str) -> JobRun {
+    for _ in 0..400 {
+        let job = f.store.get_job_run(id).await.unwrap();
+        let running = f.engine.inner.with_rt(|rt| rt.jobs.contains_key(id));
+        match job {
+            Some(j) if j.status.is_terminal() && !running => return j,
+            None if !running => panic!("job {id} was deleted"),
+            _ => tokio::time::sleep(Duration::from_millis(25)).await,
+        }
+    }
+    panic!("job {id} never finished");
+}
+
+/// A cron service with a live deploy (Docker is unreachable, so its runs
+/// fail right away, which is all retention needs).
+async fn live_cron(f: &Fixture, name: &str) -> Service {
+    let svc = service(&f.store, name, ServiceType::CronJob, |s| {
+        s.image = Some("busybox:stable".into());
+        s.schedule = Some("0 0 * * *".into());
+        s.start_command = Some("echo hi".into());
+    })
+    .await;
+    let mut live = Deploy::new(&svc.id, DeployTrigger::Create, DeploySource::Image { image: "busybox:stable".into() });
+    live.status = DeployStatus::Live;
+    live.image = Some(format!("ferrytest-unit/{name}:{}", live.id));
+    f.store.create_deploy(&live).await.unwrap();
+    f.store.set_live_deploy(&svc.id, Some(&live.id)).await.unwrap();
+    f.store.require_service(&svc.id).await.unwrap()
+}
+
+#[tokio::test]
+async fn finished_job_runs_beyond_the_retention_limit_are_deleted_with_their_logs() {
+    let f = fixture_config("docker", |c| c.keep_job_runs = 2).await;
+    let svc = live_cron(&f, "tick").await;
+    let log_file = |id: &str| f.engine.inner.logs.path(LogKind::Job, id).unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..4 {
+        let job = f.engine.run_job(&svc.id, None, JobTrigger::Manual).await.unwrap();
+        let done = wait_job_done(&f, &job.id).await;
+        assert_eq!(done.status, JobStatus::Failed, "{done:?}");
+        ids.push(job.id);
+    }
+    let kept: Vec<String> = f.store.list_job_runs(&svc.id, 100).await.unwrap().into_iter().map(|j| j.id).collect();
+    assert_eq!(kept, vec![ids[3].clone(), ids[2].clone()], "the newest 2 finished runs are kept");
+    for id in &ids[..2] {
+        assert!(!log_file(id).exists(), "the log of pruned run {id} is deleted");
+    }
+    for id in &ids[2..] {
+        assert!(log_file(id).exists(), "the log of kept run {id} is still there");
+    }
+    // Pending / running runs never count against the limit.
+    let mut running = JobRun::new(&svc.id, JobTrigger::Manual, None);
+    running.status = JobStatus::Running;
+    f.store.create_job_run(&running).await.unwrap();
+    let job = f.engine.run_job(&svc.id, None, JobTrigger::Manual).await.unwrap();
+    wait_job_done(&f, &job.id).await;
+    assert!(f.store.get_job_run(&running.id).await.unwrap().is_some());
+    assert_eq!(f.store.list_job_runs(&svc.id, 100).await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn cancel_job_conflicts_once_finished_and_recovers_orphaned_rows() {
+    let f = fixture(2).await;
+    let svc = live_cron(&f, "tick").await;
+    assert!(matches!(f.engine.cancel_job("job-missing").await, Err(Error::NotFound(_))));
+
+    // Finished: Conflict, nothing changes.
+    let job = f.engine.run_job(&svc.id, None, JobTrigger::Manual).await.unwrap();
+    let done = wait_job_done(&f, &job.id).await;
+    match f.engine.cancel_job(&job.id).await {
+        Err(Error::Conflict(m)) => assert!(m.contains("already finished"), "{m}"),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    assert_eq!(f.store.require_job_run(&job.id).await.unwrap().status, done.status);
+
+    // A run no task of this server owns (e.g. its result could not be
+    // recorded): canceled right away, its log finished.
+    let mut orphan = JobRun::new(&svc.id, JobTrigger::Schedule, None);
+    orphan.status = JobStatus::Running;
+    orphan.started_at = Some(chrono::Utc::now());
+    f.store.create_job_run(&orphan).await.unwrap();
+    let canceled = f.engine.cancel_job(&orphan.id).await.unwrap();
+    assert_eq!(canceled.status, JobStatus::Canceled);
+    assert_eq!(canceled.error.as_deref(), Some("canceled by user"));
+    assert!(canceled.finished_at.is_some());
+    assert!(!f.engine.inner.logs.is_open(LogKind::Job, &orphan.id));
+    let lines: Vec<String> =
+        f.engine.job_logs(&orphan.id, true).await.unwrap().map(|l| l.line).collect::<Vec<_>>().await;
+    assert_eq!(lines, vec!["==> Job canceled: canceled by user"]);
+    assert!(matches!(f.engine.cancel_job(&orphan.id).await, Err(Error::Conflict(_))));
+
+    // A run of a suspended service is refused without leaving anything registered.
+    f.store.set_suspended(&svc.id, true).await.unwrap();
+    assert!(matches!(f.engine.run_job(&svc.id, None, JobTrigger::Manual).await, Err(Error::Conflict(_))));
+    assert!(f.engine.inner.with_rt(|rt| rt.jobs.is_empty()));
 }

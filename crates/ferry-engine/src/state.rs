@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferry_build::Builder;
 use ferry_core::{CancellationToken, Config, Naming, Store};
@@ -88,9 +88,13 @@ pub(crate) struct Worker {
     pub handle: Option<JoinHandle<()>>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct DeployOptions {
     pub clear_cache: bool,
+    /// A manual deploy of a suspended service whose live image no longer
+    /// exists (so it can't simply be resumed): the service is resumed when
+    /// this deploy goes live, and stays suspended if it fails.
+    pub resume: bool,
 }
 
 /// A deploy a worker has claimed.
@@ -162,11 +166,42 @@ impl ActiveDeploy {
 #[derive(Clone)]
 pub(crate) struct RunningJob {
     pub service_id: String,
+    pub job_id: String,
+    /// When this process registered it.
+    pub started: Instant,
     pub cancel: CancellationToken,
+    /// Why it was stopped (canceled by a user, service suspended/deleted);
+    /// `None` when the token was cancelled by the server shutting down.
+    reason: Arc<StdMutex<Option<String>>>,
     pub done: watch::Receiver<bool>,
 }
 
 impl RunningJob {
+    pub fn new(service_id: &str, job_id: &str, cancel: CancellationToken, done: watch::Receiver<bool>) -> Self {
+        RunningJob {
+            service_id: service_id.to_string(),
+            job_id: job_id.to_string(),
+            started: Instant::now(),
+            cancel,
+            reason: Arc::default(),
+            done,
+        }
+    }
+
+    /// Stop the job (its container gets its grace period); the first reason
+    /// given is recorded.
+    pub fn request_cancel(&self, reason: &str) {
+        let mut current = lock(&self.reason);
+        if current.is_none() {
+            *current = Some(reason.to_string());
+        }
+        self.cancel.cancel();
+    }
+
+    pub fn cancel_reason(&self) -> Option<String> {
+        lock(&self.reason).clone()
+    }
+
     pub async fn wait_done(&self, limit: Duration) -> bool {
         let mut done = self.done.clone();
         matches!(tokio::time::timeout(limit, done.wait_for(|d| *d)).await, Ok(Ok(_)))
