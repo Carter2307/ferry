@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfcfc" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1c1c1c" />
+    <meta name="description" content="Ferry — self-hosted deploys for web services, workers, cron jobs, static sites and databases." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Ferry</title>
+    <!-- Applies the saved theme before first paint (external file: CSP-friendly). -->
+    <script src="/theme-init.js"></script>
+  </head>
+  <body>
+    <noscript>Ferry's dashboard needs JavaScript. The CLI (<code>ferry</code>) works without it.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
