@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::models::{Datastore, DatastoreKind, Deploy, EnvGroup, EnvVar, Runtime, Service, ServiceState, ServiceType};
 
 /// `GET /api/v1/info`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ServerInfo {
     pub version: String,
     pub base_domain: String,
@@ -24,7 +24,7 @@ pub struct ServerInfo {
 }
 
 /// A service as returned by the API (the stored row plus computed fields).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ServiceView {
     #[serde(flatten)]
     pub service: Service,
@@ -45,7 +45,7 @@ pub struct ServiceView {
 }
 
 /// `POST /api/v1/services`
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateService {
     pub name: String,
@@ -79,7 +79,7 @@ pub struct CreateService {
 /// settings, an empty string clears the value. Changing `instances` scales,
 /// `suspended` suspends/resumes, `custom_domains` refreshes routes; build
 /// settings take effect on the next deploy.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateService {
     pub repo_url: Option<String>,
@@ -103,7 +103,7 @@ pub struct UpdateService {
 }
 
 /// `POST /api/v1/services/{id}/deploys`
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TriggerDeploy {
     pub commit: Option<String>,
@@ -112,28 +112,28 @@ pub struct TriggerDeploy {
 }
 
 /// `POST /api/v1/services/{id}/rollback`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RollbackRequest {
     pub deploy_id: String,
 }
 
 /// `POST /api/v1/services/{id}/scale`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScaleRequest {
     pub instances: u32,
 }
 
 /// `PUT /api/v1/services/{id}/env` (replace all) and env group equivalent.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceEnv {
     pub vars: Vec<EnvVar>,
 }
 
 /// `PATCH /api/v1/services/{id}/env` (and env groups): upsert `set`, delete `unset`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchEnv {
     #[serde(default)]
@@ -143,14 +143,14 @@ pub struct PatchEnv {
 }
 
 /// `POST /api/v1/services/{id}/domains`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DomainRequest {
     pub domain: String,
 }
 
 /// `POST /api/v1/services/{id}/jobs`
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunJobRequest {
     /// Shell command (`sh -c`). Required for non-cron services.
@@ -158,7 +158,7 @@ pub struct RunJobRequest {
 }
 
 /// `POST /api/v1/services/{id}/env-groups`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LinkEnvGroup {
     /// Env group id or name.
@@ -166,7 +166,7 @@ pub struct LinkEnvGroup {
 }
 
 /// Live container state of one instance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InstanceStatus {
     pub container_id: String,
     pub name: String,
@@ -182,7 +182,7 @@ pub struct InstanceStatus {
 }
 
 /// `GET /api/v1/services/{id}/status`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RuntimeStatus {
     pub service_id: String,
     pub state: ServiceState,
@@ -191,7 +191,7 @@ pub struct RuntimeStatus {
 }
 
 /// `POST /api/v1/datastores`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateDatastore {
     pub name: String,
@@ -205,7 +205,7 @@ pub struct CreateDatastore {
 }
 
 /// A datastore with its connection info.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DatastoreView {
     #[serde(flatten)]
     pub datastore: Datastore,
@@ -218,7 +218,7 @@ pub struct DatastoreView {
 }
 
 /// `POST /api/v1/env-groups`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateEnvGroup {
     pub name: String,
@@ -227,7 +227,7 @@ pub struct CreateEnvGroup {
 }
 
 /// An env group with its variables and linked services.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EnvGroupView {
     #[serde(flatten)]
     pub group: EnvGroup,
@@ -238,7 +238,7 @@ pub struct EnvGroupView {
 
 /// `POST /api/v1/blueprints/apply` (JSON body) — or send the raw YAML with
 /// `Content-Type: application/yaml` and `?dry_run=true`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyBlueprint {
     /// Contents of `ferry.yaml` / `render.yaml`.
@@ -248,7 +248,7 @@ pub struct ApplyBlueprint {
 }
 
 /// One planned/performed change of a blueprint apply.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BlueprintAction {
     /// `service` | `datastore` | `env_group`
     pub resource: String,
@@ -261,7 +261,7 @@ pub struct BlueprintAction {
 }
 
 /// Result of a blueprint apply.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BlueprintResult {
     pub dry_run: bool,
     pub actions: Vec<BlueprintAction>,
@@ -273,12 +273,12 @@ pub struct BlueprintResult {
 }
 
 /// Error body: `{"error": {"code": "not_found", "message": "service 'x' not found"}}`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApiErrorBody {
     pub error: ApiErrorDetail,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApiErrorDetail {
     pub code: String,
     pub message: String,
@@ -287,5 +287,29 @@ pub struct ApiErrorDetail {
 impl From<&crate::Error> for ApiErrorBody {
     fn from(e: &crate::Error) -> Self {
         ApiErrorBody { error: ApiErrorDetail { code: e.code().to_string(), message: e.to_string() } }
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use utoipa::PartialSchema;
+
+    use super::*;
+    use crate::models::{DeploySource, ServiceType};
+
+    fn json<T: PartialSchema>() -> String {
+        serde_json::to_string(&T::schema()).unwrap_or_default()
+    }
+
+    #[test]
+    fn openapi_schemas_are_generated() {
+        let st = json::<ServiceType>();
+        assert!(st.contains("\"web_service\"") && st.contains("\"cron_job\"") && !st.contains("\"web\""), "{st}");
+        let view = json::<ServiceView>();
+        assert!(view.contains("deploy_hook_path") && view.contains("Service"), "{view}");
+        let source = json::<DeploySource>();
+        assert!(source.contains("kind") && source.contains("archive"), "{source}");
+        let create = json::<CreateService>();
+        assert!(create.contains("\"type\""), "{create}");
     }
 }

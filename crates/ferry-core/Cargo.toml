@@ -19,6 +19,7 @@ chrono.workspace = true
 uuid.workspace = true
 sqlx.workspace = true
 croner.workspace = true
+utoipa.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

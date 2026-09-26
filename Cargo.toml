@@ -53,6 +53,8 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
 croner = "3"
+utoipa = { version = "6", features = ["chrono"] }
+utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
 
 # docker
 bollard = "0.21"

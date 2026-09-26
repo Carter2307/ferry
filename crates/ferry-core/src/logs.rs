@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 /// Which output a line came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LogStreamKind {
     Stdout,
@@ -22,7 +22,7 @@ pub enum LogStreamKind {
 }
 
 /// One line of output.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LogLine {
     pub ts: DateTime<Utc>,
     pub stream: LogStreamKind,

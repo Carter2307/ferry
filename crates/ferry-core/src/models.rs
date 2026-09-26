@@ -53,6 +53,17 @@ macro_rules! str_enum {
             }
         }
 
+        impl utoipa::PartialSchema for $name {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                utoipa::openapi::schema::ObjectBuilder::new()
+                    .schema_type(utoipa::openapi::schema::Type::String)
+                    .enum_values(Some([$($canon),+]))
+                    .into()
+            }
+        }
+
+        impl utoipa::ToSchema for $name {}
+
         impl Serialize for $name {
             fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
                 s.serialize_str(self.as_str())
@@ -219,7 +230,7 @@ str_enum! {
 }
 
 /// Where a service's code comes from (derived from its fields).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     /// `repo_url` is set: clone and build.
@@ -231,7 +242,7 @@ pub enum SourceKind {
 }
 
 /// A deployable workload.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Service {
     pub id: String,
     /// Unique DNS-label name; also the private-network hostname.
@@ -349,7 +360,7 @@ impl Service {
 }
 
 /// Where a deploy's code / image comes from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DeploySource {
     /// Clone `repo_url` at `branch` (or the exact `commit`) and build.
@@ -363,7 +374,7 @@ pub enum DeploySource {
 }
 
 /// One attempt to ship a version of a service.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Deploy {
     pub id: String,
     pub service_id: String,
@@ -405,7 +416,7 @@ impl Deploy {
 }
 
 /// A cron-job run or one-off job (`ferry run`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct JobRun {
     pub id: String,
     pub service_id: String,
@@ -440,7 +451,7 @@ impl JobRun {
 }
 
 /// A managed Postgres or Redis instance (one container + one volume).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Datastore {
     pub id: String,
     /// Unique DNS-label name; also the private-network hostname.
@@ -534,7 +545,7 @@ impl Datastore {
 
 /// A plain environment variable. Values may contain references such as
 /// `${{datastore.db.connectionString}}` (see [`crate::env`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EnvVar {
     pub key: String,
@@ -548,7 +559,7 @@ impl EnvVar {
 }
 
 /// A named, reusable set of environment variables linked to services.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EnvGroup {
     pub id: String,
     pub name: String,
