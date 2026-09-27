@@ -1,0 +1,15 @@
+{
+  "title": "Guides",
+  "icon": "BookOpen",
+  "pages": [
+    "github-auto-deploy",
+    "language-guides",
+    "postgres-app",
+    "migrate-from-render",
+    "production",
+    "custom-domains-https",
+    "multiple-servers",
+    "host-docs-on-ferry",
+    "troubleshooting"
+  ]
+}

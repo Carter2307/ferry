@@ -1,0 +1,12 @@
+{
+  "title": "Ferry",
+  "pages": [
+    "index",
+    "getting-started",
+    "concepts",
+    "guides",
+    "reference",
+    "architecture",
+    "contributing"
+  ]
+}

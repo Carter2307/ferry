@@ -81,7 +81,8 @@ struct Args {
     #[arg(long, env = "FERRY_ADVERTISE_HOST", default_value = "127.0.0.1")]
     advertise_host: String,
     /// Take ownership of Docker resources (with this name prefix) that another
-    /// Ferry data directory owns — e.g. after moving the data directory.
+    /// Ferry data directory owns — e.g. after restoring a backup into a new data
+    /// directory or losing the old one (moving a data directory keeps ownership).
     #[arg(long)]
     take_over: bool,
     /// Print the OpenAPI document of the API and exit (used to generate the docs site).

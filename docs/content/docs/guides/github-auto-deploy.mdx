@@ -1,0 +1,188 @@
+---
+title: "Auto-deploy from GitHub"
+description: "Deploy a service on every push with a signed GitHub webhook, or trigger deploys from CI with a secret deploy hook URL."
+icon: GitBranch
+---
+
+import { Globe, Rocket, Webhook } from 'lucide-react';
+
+When you push to a branch, GitHub sends a `push` event to Ferry's webhook endpoint, `/hooks/github`. Ferry checks the signature and deploys the pushed commit of every service that tracks this repository and branch.
+
+```mermaid
+sequenceDiagram
+  participant Dev as git push
+  participant GH as GitHub
+  participant F as ferryd /hooks/github
+  participant E as Deploy queue
+  Dev->>GH: push to main
+  GH->>F: POST push event + X-Hub-Signature-256
+  F->>F: verify HMAC, skip replays
+  F->>E: deploy commit "after" of each matching service
+  F-->>GH: 200 {"deploys": [...]}
+```
+
+## Before you start
+
+- A Ferry server that GitHub can reach over HTTPS. The webhook endpoint is served by the API, so you expose it through the proxy with `--dashboard-host`, together with [automatic HTTPS](/docs/concepts/networking#automatic-https). [Production setup](/docs/guides/production) covers both.
+- The `ferry` CLI logged in to that server.
+
+<Callout type="warning" title="The dashboard host exposes the whole API">
+`--dashboard-host` routes the dashboard, the REST API and the webhooks through the public proxy. Every API call still needs the API token, but only enable it with HTTPS, so the token never travels in clear text.
+</Callout>
+
+## Set up the webhook
+
+<Steps>
+<Step>
+
+### Give ferryd a webhook secret
+
+Generate a random secret and pass it to `ferryd`, with the flag or the `FERRY_GITHUB_WEBHOOK_SECRET` environment variable. Without a secret, `/hooks/github` answers `404`.
+
+```bash title="Terminal"
+openssl rand -hex 32
+ferryd --base-domain apps.example.com \
+  --proxy-addr 0.0.0.0:80 --https-addr 0.0.0.0:443 --acme-email you@example.com \
+  --dashboard-host ferry.apps.example.com \
+  --github-webhook-secret <the secret>
+```
+
+`ferry info` then shows `GitHub webhook:  enabled`.
+
+</Step>
+<Step>
+
+### Create a service from the repository
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --branch main --follow
+```
+
+Auto-deploy is on by default. Turn it off with `--no-auto-deploy` (on `create` or `update`), and back on with `ferry update api --auto-deploy`. The branch defaults to `main`.
+
+For a **private repository**, Ferry needs read access when it clones:
+
+- **HTTPS with a token:** put a GitHub personal access token with read access to the repository's contents in the URL, `https://USERNAME:TOKEN@github.com/you/api`. Ferry keeps the credentials out of build logs and error messages, and hands them to git through its environment, not its command line.
+- **SSH:** use `git@github.com:you/api.git` and give the user that runs `ferryd` an SSH key that GitHub accepts (a deploy key, for example). Git runs in batch mode and accepts the host key on first connection.
+
+</Step>
+<Step>
+
+### Add the webhook in GitHub
+
+In the repository, open **Settings → Webhooks → Add webhook** and fill in:
+
+| Field | Value |
+|---|---|
+| Payload URL | `https://ferry.apps.example.com/hooks/github` |
+| Content type | `application/json` (`application/x-www-form-urlencoded` works too) |
+| Secret | the secret you gave `ferryd` |
+| Events | Just the `push` event |
+
+GitHub sends a `ping` first. Ferry answers `200` with `{"ok":true}`, and the webhook shows a green check.
+
+</Step>
+<Step>
+
+### Push
+
+Push a commit to `main`. The service gets a deploy with trigger `webhook` that builds exactly the pushed commit:
+
+```bash title="Terminal"
+ferry deploys api
+```
+
+```text title="Output"
+ID                         STATUS      TRIGGER   COMMIT                   CREATED    DURATION
+dep-c2225fad527c4b919c1b   deploying   webhook   fe41834 Add a comment    just now   1s
+dep-a53de39943a841aca2c3   live        create    d258434 Initial commit   just now   2s
+```
+
+The app gets the commit and branch as `FERRY_GIT_COMMIT` and `FERRY_GIT_BRANCH`.
+
+</Step>
+</Steps>
+
+## Which services a push deploys
+
+A `push` deploys every service that:
+
+1. has a git repository whose URL matches the pushed repository. Ferry compares normalized URLs (host, owner and name, lowercase, without scheme, credentials, port or `.git`), so `https://github.com/you/api`, `git@github.com:you/api.git` and `https://user:token@github.com/You/API` all match;
+2. tracks the pushed branch (`refs/heads/<branch>`);
+3. has auto-deploy on;
+4. isn't suspended.
+
+Several services can match one push, for example the services of a monorepo that use different root directories. The response lists the deploys it queued.
+
+Ferry ignores:
+
+- pushes of tags and other non-branch refs, and pushes that delete a branch;
+- deliveries it has already processed: the same body, or the same `X-GitHub-Delivery` id (the last 256 of each are remembered). Redelivering an old event from GitHub doesn't deploy it again;
+- every event other than `push` and `ping` (answered `200` with `{"ignored":true}`).
+
+## Test the endpoint
+
+GitHub signs each delivery with `X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the raw body>`. You can sign a request yourself to check your setup:
+
+```bash title="Terminal"
+SECRET='the secret'
+BODY='{"zen":"Keep it logically awesome."}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -s https://ferry.apps.example.com/hooks/github \
+  -H 'Content-Type: application/json' -H 'X-GitHub-Event: ping' \
+  -H "X-Hub-Signature-256: sha256=$SIG" -d "$BODY"
+# {"ok":true}
+```
+
+| Answer | Meaning |
+|---|---|
+| `200 {"ok":true}` | A signed `ping`: the secret matches. |
+| `200 {"deploys":[…]}` | A `push` was processed. An empty list means no service matched. |
+| `200 {"deploys":[],"ignored":true,"reason":"…"}` | A replayed or duplicate delivery. |
+| `401` `invalid or missing X-Hub-Signature-256` | The secret differs, or the request isn't from GitHub. |
+| `404` | The server has no webhook secret. |
+| `413` | The payload is larger than 25 MiB. |
+
+If a push deploys nothing, compare the service's repository URL and branch (`ferry show api`) with the push, and check that auto-deploy is on and the service isn't suspended.
+
+## Alternative: deploy hooks
+
+A deploy hook is a secret URL that deploys one service when you call it. Use it when you want to deploy from CI after your tests pass, or from any tool that can send an HTTP request. It doesn't need a webhook secret on the server.
+
+```bash title="Terminal"
+ferry deploy-hook show api
+# https://ferry.apps.example.com/hooks/deploy/srv-5c57d756f6ad47f59800?key=652f4935c8534c02aad20d953d8a7ff1
+curl -X POST 'https://ferry.apps.example.com/hooks/deploy/srv-5c57d756f6ad47f59800?key=652f4935c8534c02aad20d953d8a7ff1'
+```
+
+- `POST` and `GET` both work. The answer is `202` with a summary of the queued deploy (trigger `deploy_hook`).
+- The hook deploys the service's configured source: the head of its branch, its image (pulled again for `latest` or untagged images), or its last upload. It can't pick a commit.
+- The URL is the secret: store it as a CI secret. An unknown service id and a wrong key get the same `401`, so the hook can't be used to discover services. A suspended service answers `409`.
+- `ferry deploy-hook rotate api` replaces the key; the old URL stops working at once.
+- The printed URL starts with the server URL your CLI uses. From outside, call it on your public dashboard host.
+
+A GitHub Actions job that deploys after the tests pass:
+
+```yaml title=".github/workflows/deploy.yml"
+name: deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci && npm test
+      - run: curl -fsS -X POST "$FERRY_DEPLOY_HOOK"
+        env:
+          FERRY_DEPLOY_HOOK: ${{ secrets.FERRY_DEPLOY_HOOK }}
+```
+
+If you deploy with a hook, turn auto-deploy off (`ferry update api --no-auto-deploy`) so a push doesn't also deploy through the webhook.
+
+<Cards cols={3}>
+  <Card icon={<Rocket />} title="Deploys" href="/docs/concepts/deploys" description="What a deploy does once it's queued." />
+  <Card icon={<Webhook />} title="Webhooks API" href="/docs/reference/api/hooks" description="The deploy hook and GitHub webhook endpoints." />
+  <Card icon={<Globe />} title="Production setup" href="/docs/guides/production" description="HTTPS and the dashboard host." />
+</Cards>

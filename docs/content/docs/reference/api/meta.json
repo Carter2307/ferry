@@ -1,0 +1,17 @@
+{
+  "title": "API reference",
+  "icon": "Braces",
+  "pages": [
+    "info",
+    "services",
+    "deploys",
+    "env",
+    "env-groups",
+    "domains",
+    "jobs",
+    "datastores",
+    "blueprints",
+    "events",
+    "hooks"
+  ]
+}

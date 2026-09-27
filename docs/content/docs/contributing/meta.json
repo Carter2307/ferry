@@ -1,0 +1,10 @@
+{
+  "title": "Contributing",
+  "icon": "GitPullRequest",
+  "pages": [
+    "development",
+    "testing",
+    "web-client",
+    "docs-site"
+  ]
+}

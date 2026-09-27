@@ -1,0 +1,148 @@
+---
+title: "Docs site"
+description: "Work on this documentation site: write pages with the MDX components, regenerate the CLI, server and API references, and build the static export."
+icon: BookOpen
+---
+
+This site lives in `docs/`, a project of its own like the dashboard in `web/`. It uses [Fumadocs](https://fumadocs.dev) on Next.js 16 (App Router, React 19, TypeScript strict, Tailwind CSS v4) and is exported as a static site to `docs/out/`.
+
+## Develop
+
+Requirements: Node.js 20.19 or newer. Rust is only needed to regenerate the reference pages.
+
+```bash title="Terminal"
+cd docs
+npm install
+npm run dev                    # → http://localhost:3000
+npm run dev -- --port 3210     # when port 3000 is taken
+```
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | Next.js dev server with hot reload |
+| `npm run build` | Static export to `out/`, then the link check |
+| `npm start` | Serves `out/` locally |
+| `npm run typecheck` | `next typegen && tsc --noEmit` |
+| `npm run generate` | Regenerates the reference pages from the Rust code (needs `cargo`) |
+| `npm run generate:check` | Fails when a generated file is stale |
+| `npm run check-links` | Checks `out/` for broken internal links and anchors |
+
+## Write a page
+
+Pages are MDX files in `content/docs/`; the URL follows the path, so `content/docs/concepts/deploys.mdx` is `/docs/concepts/deploys`.
+
+```mdx title="content/docs/concepts/deploys.mdx"
+---
+title: Deploys
+description: How a deploy goes from queued to live with zero downtime.
+icon: Rocket
+---
+
+The body, in Markdown, with the components below.
+
+## Health checks
+
+…
+```
+
+- **Frontmatter:** `title` (required), `description` (one plain-text sentence without Markdown: it shows under the title and in search and Open Graph images), optional `icon` (a [lucide](https://lucide.dev/icons) icon name) and `full: true` for a wide page. Don't repeat the title as a `#` heading.
+- **Headings:** `##` and `###` build the "On this page" table of contents. The anchor is the slugified text: `## Health checks` becomes `#health-checks`.
+- **Order and sidebar:** each folder has a `meta.json` with `title`, `icon` and `pages` in order. A top-level folder is a sidebar section; a page missing from `pages` is built but not listed.
+- **Links:** absolute and without a trailing slash, such as `/docs/concepts/deploys` or `/docs/reference/cli#ferry-deploy`. CLI anchors are `#ferry-<command>` (`#ferry-env-set`), and each API operation has an anchor from its summary (`/docs/reference/api/services#scale-a-service`).
+- **Escaping:** outside code, write `\{`, `\}` and `\<`, or put the text in backticks. References like `${{datastore.NAME.connectionString}}` always go in backticks or code blocks.
+- **Style:** clear, task-oriented English in the second person, short paragraphs, runnable examples with the real defaults (`http://127.0.0.1:7878` for the API, `http://<name>.localhost:8080` for apps), tables for options, and callouts for warnings. Document only what the code does: check commands and flags against `--help` and behavior against the source.
+
+### Components
+
+These are available on every page without an import:
+
+| Component | Props | Use |
+|---|---|---|
+| `<Callout>` | `type`: `info` (default), `tip`, `success`, `warning`, `danger`; `title` | Notes and warnings |
+| `<Cards>` / `<Card>` | `Cards`: `cols` 2 (default) or 3 · `Card`: `title`, `description`, `href`, `icon`, `external` | Link grids |
+| `<Steps>` / `<Step>` | Start each step with a `###` heading | Procedures |
+| `<Tabs>` / `<Tab>` | `Tabs`: `items`, `groupId`, `persist`, `defaultIndex` · `Tab`: `value` | CLI, API and dashboard variants |
+| `<Accordions>` / `<Accordion>` | `Accordion`: `title` | FAQs |
+| `<Files>` / `<Folder>` / `<File>` | `name`, `defaultOpen` | File trees |
+| `<TypeTable>` | `type`: `{ field: { type, description, default, required } }` | Object shapes |
+| `<Badge>` | `variant`: `neutral`, `primary`, `success`, `warning`, `danger` | Inline pills |
+| `<Mermaid>` | `chart` | Diagrams (or a ` ```mermaid ` fence) |
+
+Card icons come from `lucide-react`: add `import { Rocket } from 'lucide-react';` at the top of the file and pass `icon={<Rocket />}`.
+
+```mdx title="Example"
+<Callout type="warning" title="Back up the data directory">
+It holds every secret of the server.
+</Callout>
+
+<Tabs items={['CLI', 'API']} groupId="interface" persist>
+  <Tab value="CLI">`ferry scale api 3`</Tab>
+  <Tab value="API">`POST /api/v1/services/api/scale`</Tab>
+</Tabs>
+```
+
+### Code blocks and diagrams
+
+Always set a language. Meta options: `title="Terminal"`, `lineNumbers` and `noCopy`. Mark lines with a trailing comment in the block's language: `[!code highlight]`, `[!code ++]` / `[!code --]` or `[!code focus]`.
+
+````text title="Example"
+```bash title="Terminal"
+ferry scale api 3 # [!code highlight]
+```
+````
+
+For diagrams, write a ` ```mermaid ` fence (flowchart, sequence or state diagram…): it renders in the browser, in Ferry's colors, in light and dark mode. Prefer `flowchart TB` for more than about four nodes so it fits the 760-pixel column; `<br/>` works in labels. Hand-made SVGs go in `public/` and are referenced as `/file.svg`.
+
+## Generated references
+
+Some pages are generated from the Rust code, so they can never drift from it. **Never edit them by hand:**
+
+| File | Source |
+|---|---|
+| `openapi/ferry.json` | `cargo run -p ferryd -- --dump-openapi`, verbatim |
+| `content/docs/reference/api/*` | fumadocs-openapi, one page per OpenAPI tag, plus `index.mdx` and `meta.json` |
+| `content/docs/reference/cli.mdx` | `cargo run -p ferry-cli -- markdown-help` (clap-markdown) |
+| `content/docs/reference/server-options.mdx` | `cargo run -p ferryd -- --dump-markdown-help`, plus the environment variables from `ferryd --help` |
+
+After changing a command, a flag, an API handler or a DTO, regenerate and commit the result:
+
+```bash title="Terminal"
+cd docs
+npm run generate         # runs cargo in the repository root
+npm run generate:check   # CI: exits 1 when a committed file is stale
+```
+
+To change their text, change the Rust side: the clap help of `ferry` and `ferryd`, and the `#[utoipa::path]` annotations and schema doc comments in `ferry-api` and `ferry-core`. To change how the pages are produced, edit `scripts/generate.mjs`. The generated files are committed, so `npm run build` works without Rust.
+
+The API pages have no "try it" playground: `ferryd` sends no CORS headers, so a browser can't call it from the docs' origin. Every server serves its own Swagger UI at `/api/docs` for that.
+
+## Build and deploy
+
+```bash title="Terminal"
+npm run build     # → out/: static HTML, the search index, Open Graph images, then the link check
+npm start         # preview out/
+```
+
+`npm run build` fails on any internal link or `#anchor` that doesn't resolve in the exported site, including those in the sidebar and the table of contents. Three build-time variables adjust the output:
+
+| Variable | Default | Used for |
+|---|---|---|
+| `DOCS_SITE_URL` | `http://localhost:3000` | The public URL of the site: canonical and Open Graph URLs |
+| `FERRY_DOCS_SERVER_URL` | `http://127.0.0.1:7878` | The "Dashboard" link and the server URL in the API request examples. Set it for a public site: the default only works on the reader's machine |
+| `DOCS_GIT_BRANCH` | `dev` | The branch of the "Edit on GitHub" links; it must contain `docs/` |
+
+`out/` is a plain static site: copy it to any static host, or [host the docs on Ferry itself](/docs/guides/host-docs-on-ferry).
+
+## Design
+
+The site uses the dashboard's design tokens: `app/global.css` imports `../web/src/styles/tokens.css` and maps them onto the Fumadocs theme variables for light and dark mode. That import is also why the Next.js bundler root is the repository, not `docs/`. Custom UI uses the token utilities (`bg-surface-100`, `text-foreground-light`, `border-border-strong`, `text-primary`, `mono-label`…) with `rounded-[var(--ferry-radius-md)]` for controls and `rounded-[var(--ferry-radius-lg)]` for cards. Change colors only in `tokens.css`, then rebuild both the dashboard and the docs.
+
+| Path | Contains |
+|---|---|
+| `app/` | The landing page, the docs layout and page, the 404 page (`not-found.tsx`), the search index, Open Graph images, Markdown versions of the pages for LLMs (`llms.txt`, `llms-full.txt`), `global.css` |
+| `components/layout/` | The site header (with the Light / Dark / System theme menu), the docs header slot, the sidebar, and the section links shown in the sidebar and the mobile drawer below `lg` |
+| `components/` | Also the search dialog (`search.tsx`, which ranks pages whose title or headings match first) and the API page renderer (`api-page.tsx`, which adds the `Authorization` header to the request samples) |
+| `components/mdx/` | Callout, Cards, Badge and Mermaid; `components/mdx.tsx` is the MDX component map |
+| `content/docs/` | The pages |
+| `lib/` | The content source, the OpenAPI loader and shared settings |
+| `scripts/` | `generate.mjs` and `check-links.mjs` |
