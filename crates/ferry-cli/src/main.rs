@@ -33,6 +33,10 @@ use crate::output::{Color, errln};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if matches!(cli.command, Command::MarkdownHelp) {
+        print!("{}", clap_markdown::help_markdown::<Cli>());
+        return ExitCode::SUCCESS;
+    }
     let settings = match load_settings(&cli) {
         Ok(s) => s,
         Err(e) => return report(&e),

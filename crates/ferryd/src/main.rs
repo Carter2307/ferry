@@ -84,6 +84,12 @@ struct Args {
     /// Ferry data directory owns — e.g. after moving the data directory.
     #[arg(long)]
     take_over: bool,
+    /// Print the OpenAPI document of the API and exit (used to generate the docs site).
+    #[arg(long, hide = true)]
+    dump_openapi: bool,
+    /// Print this command-line reference as Markdown and exit (used to generate the docs site).
+    #[arg(long, hide = true)]
+    dump_markdown_help: bool,
 }
 
 /// Make the data dir private (it holds secrets: env vars, datastore
@@ -316,6 +322,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let args = Args::parse();
+    if args.dump_openapi {
+        println!("{}", ferry_api::openapi::document_json());
+        return Ok(());
+    }
+    if args.dump_markdown_help {
+        print!("{}", clap_markdown::help_markdown::<Args>());
+        return Ok(());
+    }
     let acme_directory = args.acme_directory.clone();
     let take_over = args.take_over;
     let config = Arc::new(build_config(args)?);

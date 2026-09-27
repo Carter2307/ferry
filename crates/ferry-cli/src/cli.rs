@@ -35,6 +35,9 @@ pub struct GlobalArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Print this command-line reference as Markdown (used to generate the docs site)
+    #[command(name = "markdown-help", hide = true)]
+    MarkdownHelp,
     /// Verify the server URL and token (from --server/--token) and save them
     Login,
     /// Show server information
