@@ -259,6 +259,10 @@ FERRY_E2E=1 cargo test --workspace         # + Docker end-to-end tests
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+CI (`.github/workflows/ci.yml`) runs the same checks on Linux for every pull request and every push to
+`main`/`dev`: fmt, clippy and tests, the Docker end-to-end suites (`FERRY_E2E=1`), and the web dashboard's
+typecheck, lint, tests and build.
+
 Crates: `ferry-core` (models, store, contracts) · `ferry-docker` · `ferry-build` ·
 `ferry-proxy` · `ferry-tls` · `ferry-engine` · `ferry-api` (REST + SSE + OpenAPI) ·
 `ferry-cli` (`ferry`) · `ferryd`.

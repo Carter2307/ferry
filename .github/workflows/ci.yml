@@ -1,0 +1,77 @@
+# Checks every push to main/dev and every pull request on Linux — the
+# platform Ferry servers run on (Linux-only code paths, cgroups, OOM scores).
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Same toolchain as local development, so new lints arrive with a deliberate bump.
+  RUST_TOOLCHAIN: "1.95.0"
+
+jobs:
+  rust:
+    name: Rust — fmt, clippy, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --tests -- -D warnings
+      - run: cargo test --workspace
+
+  e2e:
+    name: Rust — Docker end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FERRY_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e
+      - run: docker version
+      # The CLI end-to-end test drives a real ferryd binary.
+      - run: cargo build -p ferryd
+      - run: cargo test --workspace
+      - name: Leftover test containers
+        if: always()
+        run: docker ps -a --filter label=ferry.managed=true
+
+  web:
+    name: Web dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
