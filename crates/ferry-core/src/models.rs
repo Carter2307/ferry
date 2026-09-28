@@ -1,9 +1,16 @@
 //! Domain models persisted in the store and returned by the API.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::ids;
+
+/// The current time at the precision the store keeps (microseconds), so a
+/// new model equals itself read back from the database (Linux clocks have
+/// nanoseconds, macOS microseconds).
+pub fn now() -> DateTime<Utc> {
+    Utc::now().trunc_subsecs(6)
+}
 
 /// Declares a string-backed enum with a canonical wire name plus accepted
 /// aliases. Serializes to the canonical name; deserializes (and `FromStr`s)
@@ -304,7 +311,7 @@ pub struct Service {
 impl Service {
     /// A new service with defaults: branch `main`, runtime auto, 1 instance, auto-deploy on.
     pub fn new(name: impl Into<String>, service_type: ServiceType) -> Self {
-        let now = Utc::now();
+        let now = now();
         Service {
             id: ids::new_id(ids::SERVICE),
             name: name.into(),
@@ -421,7 +428,7 @@ impl Deploy {
             image: None,
             port: None,
             error: None,
-            created_at: Utc::now(),
+            created_at: now(),
             started_at: None,
             finished_at: None,
         }
@@ -456,7 +463,7 @@ impl JobRun {
             status: JobStatus::Pending,
             exit_code: None,
             error: None,
-            created_at: Utc::now(),
+            created_at: now(),
             started_at: None,
             finished_at: None,
         }
@@ -497,7 +504,7 @@ impl Datastore {
     /// A new datastore with generated credentials and default version.
     pub fn new(name: impl Into<String>, kind: DatastoreKind) -> Self {
         let name = name.into();
-        let now = Utc::now();
+        let now = now();
         let (version, username, database) = match kind {
             DatastoreKind::Postgres => ("16".to_string(), name.replace('-', "_"), Some(name.replace('-', "_"))),
             DatastoreKind::Redis => ("7".to_string(), "default".to_string(), None),
@@ -592,7 +599,7 @@ pub struct EnvGroup {
 
 impl EnvGroup {
     pub fn new(name: impl Into<String>) -> Self {
-        let now = Utc::now();
+        let now = now();
         EnvGroup { id: ids::new_id(ids::ENV_GROUP), name: name.into(), created_at: now, updated_at: now }
     }
 }

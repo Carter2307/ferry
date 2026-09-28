@@ -260,8 +260,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same checks on Linux for every pull request and every push to
-`main`/`dev`: fmt, clippy and tests, the Docker end-to-end suites (`FERRY_E2E=1`), and the web dashboard's
-typecheck, lint, tests and build.
+`main`/`dev`: fmt, clippy and tests, the Docker end-to-end suites (`FERRY_E2E=1`), the web dashboard's
+typecheck, lint, tests and build, and the documentation site (generated references in sync, typecheck, build
+with link check).
 
 Crates: `ferry-core` (models, store, contracts) · `ferry-docker` · `ferry-build` ·
 `ferry-proxy` · `ferry-tls` · `ferry-engine` · `ferry-api` (REST + SSE + OpenAPI) ·
