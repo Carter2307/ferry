@@ -198,7 +198,12 @@ async fn last_exit(inner: &Inner, id: &str, started: Duration, memory_limit_byte
 
 /// How the container last exited according to its Docker events (`die`,
 /// with its exit code, and `oom`) since `since` (a time since the epoch).
-async fn exit_from_events(inner: &Inner, id: &str, since: Duration, memory_limit_bytes: Option<i64>) -> LastExit {
+pub(crate) async fn exit_from_events(
+    inner: &Inner,
+    id: &str,
+    since: Duration,
+    memory_limit_bytes: Option<i64>,
+) -> LastExit {
     let filters: HashMap<String, Vec<String>> = HashMap::from([
         ("type".to_string(), vec!["container".to_string()]),
         ("container".to_string(), vec![id.to_string()]),

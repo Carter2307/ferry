@@ -34,6 +34,13 @@ const JOB_STOP_GRACE_SECS: u32 = 10;
 const OUTPUT_DRAIN: Duration = Duration::from_secs(10);
 /// How long `cancel_job`, suspend and delete wait for a job to stop.
 const STOP_WAIT: Duration = Duration::from_secs(JOB_STOP_GRACE_SECS as u64 + 20);
+/// Exit code of a process killed by SIGKILL — the kernel's OOM killer's
+/// signal.
+const SIGKILL_EXIT_CODE: i64 = 137;
+/// How long (polls × interval) a SIGKILLed job's container is watched for
+/// Docker's OOM flag, which can be recorded just after the exit.
+const OOM_FLAG_POLLS: usize = 10;
+const OOM_FLAG_POLL: Duration = Duration::from_millis(100);
 /// The error of a job a user canceled.
 const CANCELED_BY_USER: &str = "canceled by user";
 /// The error of a job stopped by the server shutting down.
@@ -216,6 +223,11 @@ async fn execute(
         stopped_before_start(inner, &job.id, log, running).await;
         return;
     }
+    // A second early: Docker's event timestamps are its own clock's.
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .saturating_sub(Duration::from_secs(1));
     let info = match inner.docker.run_container(&container_spec).await {
         Ok(info) => info,
         Err(e) => {
@@ -258,7 +270,7 @@ async fn execute(
             let (status, why) = interruption(inner, running);
             (status, Some(code), Some(why))
         }
-        Ok(code) => (JobStatus::Failed, Some(code), Some(failure_reason(inner, &info.id, code).await)),
+        Ok(code) => (JobStatus::Failed, Some(code), Some(failure_reason(inner, &info.id, code, started).await)),
         Err(_) if interrupted => {
             let (status, why) = interruption(inner, running);
             (status, None, Some(why))
@@ -273,12 +285,30 @@ async fn execute(
 }
 
 /// Why a job's container exited with a non-zero `code`: out of memory
-/// (naming the limit) or just its exit code.
-async fn failure_reason(inner: &Inner, container_id: &str, code: i64) -> String {
-    match inner.docker.inspect_container(container_id).await {
-        Ok(Some(c)) if c.oom_killed => failure_text(code, true, c.memory_limit_bytes),
-        _ => failure_text(code, false, None),
+/// (naming the limit) or just its exit code. Only a SIGKILL can be the
+/// kernel's OOM killer, and Docker may record the OOM kill a moment after
+/// it reports the exit (seen on Linux hosts): a SIGKILLed job's container
+/// is looked at again briefly, then its Docker events since `started` (a
+/// time since the epoch) decide.
+async fn failure_reason(inner: &Inner, container_id: &str, code: i64, started: Duration) -> String {
+    let mut memory_limit_bytes = None;
+    for attempt in 0..OOM_FLAG_POLLS {
+        match inner.docker.inspect_container(container_id).await {
+            Ok(Some(c)) if c.oom_killed => return failure_text(code, true, c.memory_limit_bytes),
+            Ok(Some(c)) => memory_limit_bytes = c.memory_limit_bytes,
+            _ => break,
+        }
+        if code != SIGKILL_EXIT_CODE || attempt + 1 == OOM_FLAG_POLLS {
+            break;
+        }
+        tokio::time::sleep(OOM_FLAG_POLL).await;
     }
+    if code == SIGKILL_EXIT_CODE
+        && crate::health::exit_from_events(inner, container_id, started, memory_limit_bytes).await.oom_killed
+    {
+        return failure_text(code, true, memory_limit_bytes);
+    }
+    failure_text(code, false, None)
 }
 
 fn failure_text(code: i64, oom_killed: bool, memory_limit_bytes: Option<i64>) -> String {

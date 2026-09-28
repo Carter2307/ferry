@@ -17,6 +17,9 @@ use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const BUSYBOX: &str = "busybox:stable";
+/// Images the tests expect to be present already (a fresh CI runner has
+/// none): pulled once per test binary by [`connect`].
+const BASE_IMAGES: &[&str] = &[BUSYBOX, "nginx:alpine"];
 
 fn e2e_enabled() -> bool {
     std::env::var("FERRY_E2E").is_ok_and(|v| v == "1")
@@ -103,7 +106,16 @@ impl Drop for Cleanup {
 }
 
 async fn connect() -> Docker {
-    Docker::connect().await.expect("connect to Docker")
+    static PULLED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    let docker = Docker::connect().await.expect("connect to Docker");
+    PULLED
+        .get_or_init(|| async {
+            for image in BASE_IMAGES {
+                docker.ensure_image(image, &LogSink::noop()).await.expect("pulling a test image");
+            }
+        })
+        .await;
+    docker
 }
 
 async fn collect(stream: ferry_core::LogStream) -> Vec<LogLine> {

@@ -485,7 +485,7 @@ async fn restart_queues_behind_a_first_deploy_in_progress() {
     let f = fixture(1).await;
     let svc =
         service(&f.store, "api", ServiceType::WebService, |s| s.repo_url = Some("/nonexistent/repo".into())).await;
-    // A first deploy is being built (claimed by a worker): nothing is live yet.
+    // A first deploy is being built: nothing is live yet.
     let mut first = Deploy::new(
         &svc.id,
         DeployTrigger::Create,
@@ -493,7 +493,11 @@ async fn restart_queues_behind_a_first_deploy_in_progress() {
     );
     first.status = DeployStatus::Building;
     f.store.create_deploy(&first).await.unwrap();
-    let slot = f.engine.inner.build_slots.clone().acquire_owned().await.unwrap();
+    // The service's only worker is busy building it, so what is queued
+    // behind it stays queued (`first` is just a row here: a stand-in worker
+    // keeps a real one from claiming the restart, which needs no build slot).
+    let busy = crate::state::Worker { generation: u64::MAX, wake: Arc::new(tokio::sync::Notify::new()), handle: None };
+    f.engine.inner.with_rt(|rt| rt.workers.insert(svc.id.clone(), busy));
 
     let restart = f.engine.restart(&svc.id, DeployTrigger::EnvChange).await.unwrap();
     assert_ne!(restart.id, first.id);
@@ -506,9 +510,11 @@ async fn restart_queues_behind_a_first_deploy_in_progress() {
     // The first deploy is not superseded (it is not queued).
     assert_eq!(f.store.require_deploy(&first.id).await.unwrap().status, DeployStatus::Building);
 
-    // The first deploy failed: the restart has nothing to restart and says so.
+    // The first deploy failed and the worker moves on to the restart, which
+    // has nothing to restart and says so.
     f.store.set_deploy_status(&first.id, DeployStatus::BuildFailed, Some("boom")).await.unwrap();
-    drop(slot);
+    f.engine.inner.with_rt(|rt| rt.workers.remove(&svc.id));
+    crate::deploy::ensure_worker(&f.engine.inner, &svc.id);
     let done = wait_status(&f.store, &restart.id, |s| s.is_terminal()).await;
     assert_eq!(done.status, DeployStatus::BuildFailed);
     assert!(done.error.as_deref().is_some_and(|e| e.contains("no live deploy")), "{done:?}");
