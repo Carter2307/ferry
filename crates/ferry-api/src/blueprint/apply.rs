@@ -3,9 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ferry_core::dto::BlueprintResult;
-use ferry_core::{
-    Config, Datastore, DatastoreStatus, DeployRequest, DeployTrigger, Engine, EnvGroup, Error, Result, Store,
-};
+use ferry_core::{Config, Datastore, DeployRequest, DeployTrigger, Engine, EnvGroup, Error, Result, Store};
 
 use super::{Blueprint, plan};
 use crate::{locks, ops};
@@ -100,13 +98,12 @@ pub async fn apply(
         let ds = &dp.datastore;
         if !dp.create {
             if dp.limits_changed {
-                let saved = store.set_datastore_limits(&ds.id, ds.memory_limit_mb, ds.cpu_limit).await?;
+                store.set_datastore_limits(&ds.id, ds.memory_limit_mb, ds.cpu_limit).await?;
                 tracing::info!(datastore = %ds.name, "blueprint: changed datastore limits");
-                // Provisioning reads the row: only a running container needs
-                // the update (below, once the locks are released).
-                if saved.status == DatastoreStatus::Available {
-                    resized.push(ds);
-                }
+                // Applied to its container (below, once the locks are
+                // released) whatever its status: a failed datastore's
+                // container may still be there, and provisioning keeps it.
+                resized.push(ds);
             }
             continue;
         }

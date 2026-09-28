@@ -1564,12 +1564,22 @@ async fn db_limits_on_create_update_and_show() {
     assert_eq!(kv(&out.stdout, "Memory limit"), Some("1 GiB"), "{}", out.stdout);
     assert_eq!(kv(&out.stdout, "CPU limit"), Some("server default (1 CPU)"), "{}", out.stdout);
 
-    // A datastore still being created starts with the new limits.
+    // A datastore still being created, or failed: the server applied them to
+    // its container (if any).
     let mut creating = updated.clone();
     creating.status = DatastoreStatus::Creating;
     fake.on("PATCH", "/api/v1/datastores/new", Reply::ok(to_json(&datastore_view(creating))));
     let out = ferry(&url, h.path(), &["db", "update", "new", "--memory", "1G"]).await;
-    assert!(out.stdout.ends_with("It starts with these limits once provisioned.\n"), "{}", out.stdout);
+    assert!(out.stdout.ends_with("Applied to its container (or it is created with them).\n"), "{}", out.stdout);
+    let mut failed = updated.clone();
+    failed.status = DatastoreStatus::Failed;
+    fake.on("PATCH", "/api/v1/datastores/oom", Reply::ok(to_json(&datastore_view(failed))));
+    let out = ferry(&url, h.path(), &["db", "update", "oom", "--memory", "1G"]).await;
+    assert!(
+        out.stdout.ends_with("Applied to its container: provisioning retries with these limits.\n"),
+        "{}",
+        out.stdout
+    );
 
     // An older server: PATCH isn't allowed there.
     fake.on(

@@ -545,13 +545,13 @@ pub(crate) async fn watch_oom(inner: Arc<Inner>) {
     }
 }
 
-fn now_ns() -> i64 {
+pub(crate) fn now_ns() -> i64 {
     let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     i64::try_from(since_epoch.as_nanos()).unwrap_or(i64::MAX)
 }
 
 /// Docker's `since` for a time in ns since the epoch: `<seconds>.<nanoseconds>`.
-fn events_since(ns: i64) -> String {
+pub(crate) fn events_since(ns: i64) -> String {
     format!("{}.{:09}", ns.div_euclid(1_000_000_000), ns.rem_euclid(1_000_000_000))
 }
 

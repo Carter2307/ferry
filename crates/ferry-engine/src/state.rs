@@ -41,6 +41,10 @@ pub(crate) struct Inner {
     pub service_locks: KeyedLocks,
     /// Held while a datastore container is provisioned / deleted.
     pub datastore_locks: KeyedLocks,
+    /// Held while a datastore's limits are read from its row and applied to
+    /// its container (briefly: provisioning and limit changes both apply
+    /// them, and an older read must never be applied over a newer one).
+    pub datastore_limit_locks: KeyedLocks,
     /// Serializes full reconcile passes.
     pub reconcile_lock: AsyncMutex<()>,
     /// Wakes the reconcile loop early.
@@ -237,6 +241,7 @@ impl Inner {
             queue_lock: AsyncMutex::new(()),
             service_locks: KeyedLocks::default(),
             datastore_locks: KeyedLocks::default(),
+            datastore_limit_locks: KeyedLocks::default(),
             reconcile_lock: AsyncMutex::new(()),
             reconcile_wake: Notify::new(),
             shutdown: CancellationToken::new(),

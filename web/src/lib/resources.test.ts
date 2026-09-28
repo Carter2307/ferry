@@ -63,6 +63,18 @@ describe('memory sizes (same cases as resources.rs)', () => {
     expect(formatMemoryMb(1536)).toBe('1.5 GiB')
     expect(formatMemoryMb(1500)).toBe('1500 MiB')
     expect(formatMemoryMb(1024 * 1024)).toBe('1024 GiB')
+    // Same as ferry-core's format_memory_mb: GiB only when exact at 2 decimals.
+    for (const [mb, text] of [
+      [1088, '1088 MiB'],
+      [1152, '1152 MiB'],
+      [1280, '1.25 GiB'],
+      [1536, '1.5 GiB'],
+      [1664, '1664 MiB'],
+      [1792, '1.75 GiB'],
+    ] as const) {
+      expect(formatMemoryMb(mb)).toBe(text)
+      expect(parseMemoryMb(formatMemoryMb(mb))).toBe(mb)
+    }
   })
 })
 
@@ -115,7 +127,6 @@ describe('limit fields', () => {
     expect(limitFieldFrom('memory', 0)).toEqual(DEFAULT_LIMIT)
     expect(limitFieldFrom('memory', 1024)).toEqual({ choice: '1024', custom: '' })
     expect(limitFieldFrom('memory', 1536)).toEqual({ choice: 'custom', custom: '1.5 GiB' })
-    // 1088 MiB formats as "1.06 GiB", which would not round-trip.
     expect(limitFieldFrom('memory', 1088)).toEqual({ choice: 'custom', custom: '1088 MiB' })
     expect(limitFieldFrom('cpu', 0.5)).toEqual({ choice: '0.5', custom: '' })
     expect(limitFieldFrom('cpu', 0.75)).toEqual({ choice: 'custom', custom: '0.75' })

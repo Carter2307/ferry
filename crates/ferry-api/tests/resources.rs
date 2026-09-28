@@ -454,13 +454,15 @@ async fn datastore_limits_are_changed_in_place() {
     assert_eq!(v["status"], "creating");
     app.engine.clear();
 
-    // still creating: only the row changes (provisioning reads it)
+    // still creating: applied too (its container may exist already; the
+    // engine does nothing when it doesn't)
     let r = app.patch("/api/v1/datastores/db", json!({"memory_limit_mb": 1024})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!((r.json()["memory_limit_mb"].clone(), r.json()["cpu_limit"].clone()), (json!(1024), Value::Null));
     assert_eq!(r.json()["name"], "db");
     assert!(r.json()["internal_url"].as_str().unwrap().starts_with("postgresql://"));
-    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+    assert_eq!(app.engine.calls(), vec![format!("update_limits {id} 1024 -")]);
+    app.engine.clear();
 
     // available: applied to the container, by id or name, one field at a time
     let mut ds = app.store.require_datastore(&id).await.unwrap();
@@ -504,7 +506,9 @@ async fn datastore_limits_are_changed_in_place() {
     assert!(msg.contains("docker update exploded"), "{msg}");
     assert_eq!(app.store.require_datastore(&id).await.unwrap().memory_limit_mb, Some(256));
 
-    // failed datastores have nothing running to update
+    // failed (e.g. out of memory): its container may still be there,
+    // restarting with the old limits, and the next provisioning attempt
+    // keeps it, so the new limits are applied to it too
     app.engine.fail_update_limits.store(false, Ordering::SeqCst);
     let mut ds = app.store.require_datastore(&id).await.unwrap();
     ds.status = DatastoreStatus::Failed;
@@ -512,7 +516,7 @@ async fn datastore_limits_are_changed_in_place() {
     app.engine.clear();
     let r = app.patch("/api/v1/datastores/db", json!({"memory_limit_mb": 512})).await;
     assert_eq!((r.status, r.json()["memory_limit_mb"].clone()), (StatusCode::OK, json!(512)));
-    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+    assert_eq!(app.engine.calls(), vec![format!("update_limits {id} 512 2.35")]);
 }
 
 // ---------------------------------------------------------------------------

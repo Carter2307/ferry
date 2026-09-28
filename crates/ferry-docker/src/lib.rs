@@ -145,6 +145,13 @@ pub struct HostInfo {
     /// Name of the daemon's operating system, e.g. `Docker Desktop` or
     /// `Ubuntu 24.04 LTS`.
     pub operating_system: Option<String>,
+    /// Whether the kernel supports CPU CFS quotas. Without them (some NAS or
+    /// ARM kernels, rootless Docker without the cgroup `cpu` controller)
+    /// Docker refuses to create or update a container with a CPU limit
+    /// (`NanoCpus`). `None` = not reported.
+    pub cpu_cfs_quota: Option<bool>,
+    /// The daemon's default log driver (`json-file`, `journald`, `local`...).
+    pub logging_driver: Option<String>,
 }
 
 /// Docker container state.
@@ -308,6 +315,8 @@ impl Docker {
             memory_bytes: info.mem_total.and_then(|m| u64::try_from(m).ok()).filter(|m| *m > 0),
             docker_root_dir: info.docker_root_dir.filter(|d| !d.is_empty()),
             operating_system: info.operating_system.filter(|o| !o.is_empty()),
+            cpu_cfs_quota: info.cpu_cfs_quota,
+            logging_driver: info.logging_driver.filter(|d| !d.is_empty()),
         })
     }
 
@@ -319,15 +328,24 @@ impl Docker {
     /// Docker can't remove a memory or CPU limit, so `None` sets one nothing
     /// reaches instead: a 4 EB memory limit (reported as `None` by
     /// [`Docker::inspect_container`]) and a CPU quota of all the host's CPUs
-    /// (reported as is; this asks the daemon for its CPU count first).
+    /// (reported as is; this asks the daemon for its CPU count first). On a
+    /// host without CPU CFS quotas (see [`HostInfo::cpu_cfs_quota`]), where
+    /// Docker refuses any CPU quota, a `None` CPU limit is left out instead.
     pub async fn update_limits(&self, id: &str, limits: LimitsUpdate) -> Result<()> {
         errors::check_object_ref("container", id)?;
         let context = || format!("updating the limits of container {id}");
         let host_cpus = if limits.nano_cpus.is_some_and(|n| n > 0) {
             None
         } else {
-            let cpus = self.host_info().await.map_err(|e| Error::Docker(format!("{}: {e}", context())))?.cpus;
-            Some(cpus.ok_or_else(|| Error::Docker(format!("{}: the daemon did not report its CPU count", context())))?)
+            let host = self.host_info().await.map_err(|e| Error::Docker(format!("{}: {e}", context())))?;
+            match (host.cpu_cfs_quota, host.cpus) {
+                // No CPU quotas here: none to remove.
+                (Some(false), _) => None,
+                (_, Some(cpus)) => Some(cpus),
+                (_, None) => {
+                    return Err(Error::Docker(format!("{}: the daemon did not report its CPU count", context())));
+                }
+            }
         };
         self.inner
             .update_container(id, convert::update_body(&limits, host_cpus))
@@ -1160,6 +1178,21 @@ mod tests {
         let expected = "updating the limits of container c1: the daemon did not report its CPU count";
         assert!(matches!(&err, Error::Docker(m) if m == expected), "{err:?}");
         assert_eq!(blind.requests().len(), 1, "nothing is updated");
+
+        // No CPU CFS quotas on the host: Docker refuses any NanoCpus, so "no
+        // CPU limit" leaves it out (there is none to remove).
+        let no_cfs = FakeDaemon::start(|req: &Request| match req.target.as_str() {
+            "/info" => (200, serde_json::json!({"NCPU": 4, "CpuCfsQuota": false}).to_string()),
+            _ => (200, serde_json::json!({"Warnings": []}).to_string()),
+        })
+        .await;
+        let memory_only = LimitsUpdate { memory_limit_bytes: Some(64 << 20), ..LimitsUpdate::default() };
+        no_cfs.docker.update_limits("c1", memory_only).await.unwrap();
+        let requests = no_cfs.requests();
+        assert_eq!(requests.len(), 2, "{requests:?}");
+        let body = requests[1].json();
+        assert!(body.get("NanoCpus").is_none(), "{body}");
+        assert_eq!(body["Memory"], 64 << 20);
     }
 
     #[tokio::test]
@@ -1167,7 +1200,7 @@ mod tests {
         let daemon = FakeDaemon::start(|_: &Request| {
             let info = serde_json::json!({
                 "NCPU": 4, "MemTotal": 8_217_317_376i64, "DockerRootDir": "/var/lib/docker",
-                "OperatingSystem": "Docker Desktop"
+                "OperatingSystem": "Docker Desktop", "CpuCfsQuota": true, "LoggingDriver": "json-file"
             });
             (200, info.to_string())
         })
@@ -1180,6 +1213,8 @@ mod tests {
                 memory_bytes: Some(8_217_317_376),
                 docker_root_dir: Some("/var/lib/docker".into()),
                 operating_system: Some("Docker Desktop".into()),
+                cpu_cfs_quota: Some(true),
+                logging_driver: Some("json-file".into()),
             }
         );
         let empty =

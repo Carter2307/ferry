@@ -93,8 +93,9 @@ struct Args {
     /// Max processes + threads per container, a fork-bomb guard (0 = unlimited).
     #[arg(long, env = "FERRY_PIDS_LIMIT", value_name = "N", default_value_t = 1024)]
     pids_limit: u32,
-    /// Rotate each container's Docker log at this size (e.g. 10M; 0 = keep
-    /// the Docker daemon's log configuration).
+    /// Rotate each container's Docker log at this size, with the json-file
+    /// driver (e.g. 10M; 0 = keep the Docker daemon's log configuration). A
+    /// daemon whose default log driver isn't json-file keeps its driver.
     #[arg(long, env = "FERRY_LOG_MAX_SIZE", value_name = "SIZE", default_value = "10M")]
     #[arg(value_parser = parse_size)]
     log_max_size: u32,
@@ -104,7 +105,8 @@ struct Args {
     log_max_files: u32,
     /// Deploys and new datastores fail early when less disk than this is free
     /// on the data directory's (or the local Docker root's) filesystem (e.g.
-    /// 1G; 0 = no check).
+    /// 1G; 0 = no check). Recreating an existing datastore's container isn't
+    /// blocked.
     #[arg(long, env = "FERRY_MIN_FREE_DISK", value_name = "SIZE", default_value = "1G")]
     #[arg(value_parser = parse_size)]
     min_free_disk: u32,
@@ -139,16 +141,9 @@ fn parse_default_memory(s: &str) -> Result<u32, String> {
 /// `--default-cpu-limit`: CPUs within the accepted limit range, or 0
 /// (unlimited).
 fn parse_default_cpus(s: &str) -> Result<f64, String> {
+    // (A non-zero amount that rounds to 0, like `0.004`, is refused by
+    // parse_cpus: it must not silently mean "unlimited".)
     let cpus = resources::parse_cpus(s).map_err(|e| e.to_string())?;
-    // Parsing rounds to 0.01 CPU: `0.004` must not silently mean "unlimited".
-    if cpus == 0.0 && s.contains(|c: char| matches!(c, '1'..='9')) {
-        return Err(format!(
-            "CPU limit must be between {} and {} CPUs, or 0 for unlimited (got {})",
-            resources::MIN_CPU_LIMIT,
-            resources::MAX_CPU_LIMIT,
-            s.trim()
-        ));
-    }
     if cpus > 0.0 {
         resources::validate_cpus(cpus).map_err(|e| e.to_string())?;
     }
@@ -156,7 +151,9 @@ fn parse_default_cpus(s: &str) -> Result<f64, String> {
 }
 
 /// One line describing the container limits, for the startup banner.
-fn limits_summary(config: &Config) -> String {
+/// `host`: a daemon whose default log driver isn't `json-file` keeps it
+/// (the engine only sets `json-file` rotation over `json-file`).
+fn limits_summary(config: &Config, host: Option<&ferry_docker::HostInfo>) -> String {
     let memory = match config.default_memory_limit_mb {
         0 => "unlimited memory".to_string(),
         mb => resources::format_memory_mb(mb),
@@ -170,9 +167,11 @@ fn limits_summary(config: &Config) -> String {
         0 => "no pids limit".to_string(),
         n => format!("{n} pids"),
     };
-    let logs = match config.log_max_size_mb {
-        0 => "Docker's log settings".to_string(),
-        mb => format!("logs rotated at {} × {}", resources::format_memory_mb(mb), config.log_max_files),
+    let kept_driver = host.and_then(|h| h.logging_driver.as_deref()).filter(|d| *d != "json-file");
+    let logs = match (config.log_max_size_mb, kept_driver) {
+        (0, _) => "Docker's log settings".to_string(),
+        (_, Some(driver)) => format!("Docker's {driver} log driver (kept)"),
+        (mb, None) => format!("logs rotated at {} × {}", resources::format_memory_mb(mb), config.log_max_files),
     };
     format!("{memory} / {cpu} per container (default), {pids}, {logs}")
 }
@@ -189,9 +188,16 @@ fn docker_summary(version: Option<&str>, host: Option<&ferry_docker::HostInfo>) 
     }
 }
 
-/// Warnings about default limits the Docker host can't honour.
+/// Warnings about limits the Docker host can't honour.
 fn capacity_warnings(config: &Config, host: &ferry_docker::HostInfo) -> Vec<String> {
     let mut warnings = Vec::new();
+    if host.cpu_cfs_quota == Some(false) {
+        warnings.push(
+            "the Docker host's kernel has no CPU CFS quota support (Docker refuses CPU limits there): CPU limits are \
+             not enforced on this host"
+                .to_string(),
+        );
+    }
     if let Some(cpus) = host.cpus
         && config.default_cpu_limit > f64::from(cpus)
     {
@@ -223,7 +229,8 @@ fn should_set_oom_score_adj(current: Option<i32>, wanted: i32) -> bool {
 /// Make the kernel's OOM killer pick containers (and anything else) before
 /// ferryd when the host runs out of memory. Best effort: lowering the score
 /// needs root or CAP_SYS_RESOURCE. Processes ferryd spawns (git, the docker
-/// CLI) inherit the value; containers don't (dockerd starts them).
+/// CLI) are reset to 0 by ferry-build (a runaway git must not be spared);
+/// containers never inherit it (dockerd starts them).
 #[cfg(target_os = "linux")]
 fn set_oom_score_adj(wanted: i32) {
     const PATH: &str = "/proc/self/oom_score_adj";
@@ -598,7 +605,7 @@ async fn main() -> anyhow::Result<()> {
     println!("  Apps            : {}", config.url_for_host(&format!("<name>.{}", config.base_domain)));
     println!("  Docker          : {}", docker_summary(docker_version.as_deref(), docker_host.as_ref()));
     println!("  Data            : {}", config.data_dir.display());
-    println!("  Limits          : {}", limits_summary(&config));
+    println!("  Limits          : {}", limits_summary(&config, docker_host.as_ref()));
     match config.min_free_disk_mb {
         0 => println!("  Free disk check : off"),
         mb => println!(
@@ -744,7 +751,7 @@ mod tests {
         let line = error_line(&["--default-cpu-limit", "1000"]);
         assert!(line.contains("--default-cpu-limit") && line.contains("between 0.01 and 512 CPUs"), "{line}");
         let line = error_line(&["--default-cpu-limit", "0.004"]);
-        assert!(line.contains("or 0 for unlimited (got 0.004)"), "rounding must not mean unlimited: {line}");
+        assert!(line.contains("between 0.01 and 512 CPUs (got 0.004)"), "rounding must not mean unlimited: {line}");
         let line = error_line(&["--default-cpu-limit=-1"]);
         assert!(line.contains("--default-cpu-limit") && line.contains("invalid CPU amount '-1'"), "{line}");
         let line = error_line(&["--log-max-files", "0"]);
@@ -817,7 +824,7 @@ mod tests {
     fn banner_lines() {
         let config = Config::default();
         assert_eq!(
-            limits_summary(&config),
+            limits_summary(&config, None),
             "512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3"
         );
         let custom = Config {
@@ -828,7 +835,7 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(
-            limits_summary(&custom),
+            limits_summary(&custom, None),
             "2 GiB / 1.5 CPUs per container (default), 1024 pids, logs rotated at 100 MiB × 2"
         );
         let off = Config {
@@ -839,9 +846,17 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(
-            limits_summary(&off),
+            limits_summary(&off, None),
             "unlimited memory / unlimited CPU per container (default), no pids limit, Docker's log settings"
         );
+        // Another log driver than json-file is kept.
+        let journald = ferry_docker::HostInfo { logging_driver: Some("journald".into()), ..Default::default() };
+        assert_eq!(
+            limits_summary(&config, Some(&journald)),
+            "512 MiB / 1 CPU per container (default), 1024 pids, Docker's journald log driver (kept)"
+        );
+        let json_file = ferry_docker::HostInfo { logging_driver: Some("json-file".into()), ..Default::default() };
+        assert!(limits_summary(&config, Some(&json_file)).ends_with("logs rotated at 10 MiB × 3"));
 
         let host = ferry_docker::HostInfo { cpus: Some(10), memory_bytes: Some(8_217_317_376), ..Default::default() };
         assert_eq!(docker_summary(Some("29.2.0"), Some(&host)), "29.2.0 (10 CPUs, 7.7 GiB)");
@@ -863,6 +878,10 @@ mod tests {
             ]
         );
         assert!(capacity_warnings(&big, &ferry_docker::HostInfo::default()).is_empty(), "unknown capacity");
+        let no_cfs = ferry_docker::HostInfo { cpu_cfs_quota: Some(false), ..Default::default() };
+        let warnings = capacity_warnings(&Config::default(), &no_cfs);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("no CPU CFS quota support"), "{warnings:?}");
     }
 
     #[test]

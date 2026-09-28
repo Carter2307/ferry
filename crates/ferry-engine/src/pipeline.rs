@@ -742,7 +742,7 @@ async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerIn
 /// server log) or won't protect the host.
 fn log_resources(ctx: &Ctx, svc: &Service, resources: &Resources, unit: &str) {
     ctx.log.system(format!("==> Limits: {} {unit}", resources.summary()));
-    if let Some(warning) = resources.cpu_cap_warning() {
+    for warning in resources.cpu_cap_warning().into_iter().chain(resources.cpu_unsupported_warning()) {
         warn!(service = %svc.name, deploy = %ctx.deploy_id, "{warning}");
     }
     for warning in resources.warnings() {

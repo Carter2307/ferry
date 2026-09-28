@@ -97,9 +97,12 @@ pub fn parse_memory_mb(s: &str) -> Result<u32> {
     Ok(mb as u32)
 }
 
-/// Human form of a MiB amount: `512 MiB`, `1 GiB`, `1.5 GiB`.
+/// Human form of a MiB amount: `512 MiB`, `1 GiB`, `1.5 GiB`, `1152 MiB`.
+/// GiB only for quarter-GiB multiples: exact at 2 decimals, so the text
+/// parses back to the same amount and nothing is rounded (the web client's
+/// `formatMemoryMb` must print the same).
 pub fn format_memory_mb(mb: u32) -> String {
-    if mb >= 1024 && mb.is_multiple_of(64) {
+    if mb >= 1024 && mb.is_multiple_of(256) {
         let gib = f64::from(mb) / 1024.0;
         if gib.fract() == 0.0 { format!("{gib:.0} GiB") } else { format!("{} GiB", trim_float(gib)) }
     } else {
@@ -108,7 +111,9 @@ pub fn format_memory_mb(mb: u32) -> String {
 }
 
 /// Parse a CPU amount: `0.5`, `2`, or millicores `500m`. `0` parses to 0.
-/// The result is rounded to 0.01 CPU.
+/// The result is rounded to 0.01 CPU; a non-zero amount that rounds to 0
+/// (`0.004`, `4m`) is an error, never a silent 0 (which callers read as
+/// "default" or "unlimited").
 pub fn parse_cpus(s: &str) -> Result<f64> {
     let t = s.trim().to_ascii_lowercase();
     let bad = || Error::invalid(format!("invalid CPU amount '{s}' (examples: 0.5, 2, 500m)"));
@@ -119,7 +124,14 @@ pub fn parse_cpus(s: &str) -> Result<f64> {
     if !value.is_finite() || value < 0.0 {
         return Err(bad());
     }
-    Ok(round_cpus(value))
+    let cpus = round_cpus(value);
+    if value > 0.0 && cpus == 0.0 {
+        return Err(Error::invalid(format!(
+            "CPU limit must be between {MIN_CPU_LIMIT} and {MAX_CPU_LIMIT} CPUs (got {})",
+            s.trim()
+        )));
+    }
+    Ok(cpus)
 }
 
 /// Human form of a CPU amount: `0.5 CPU`, `1 CPU`, `2 CPUs`.
@@ -153,6 +165,14 @@ mod tests {
         assert_eq!(format_memory_mb(1024), "1 GiB");
         assert_eq!(format_memory_mb(1536), "1.5 GiB");
         assert_eq!(format_memory_mb(1500), "1500 MiB");
+        // Same as the web client's formatMemoryMb: GiB only when exact at 2
+        // decimals, so it parses back (1152 MiB is 1.125 GiB, not "1.12 GiB").
+        for (mb, text) in
+            [(1088, "1088 MiB"), (1152, "1152 MiB"), (1280, "1.25 GiB"), (1664, "1664 MiB"), (1792, "1.75 GiB")]
+        {
+            assert_eq!(format_memory_mb(mb), text);
+            assert_eq!(parse_memory_mb(&format_memory_mb(mb)).unwrap(), mb);
+        }
     }
 
     #[test]
@@ -162,8 +182,16 @@ mod tests {
         assert_eq!(parse_cpus("500m").unwrap(), 0.5);
         assert_eq!(parse_cpus("1 cpu").unwrap(), 1.0);
         assert_eq!(parse_cpus("0.333").unwrap(), 0.33);
+        assert_eq!(parse_cpus("0").unwrap(), 0.0);
+        assert_eq!(parse_cpus("0m").unwrap(), 0.0);
+        assert_eq!(parse_cpus("0.005").unwrap(), 0.01);
         for bad in ["", "x", "-1", "inf", "NaN"] {
             assert!(parse_cpus(bad).is_err(), "{bad}");
+        }
+        // Rounding must not turn a tiny amount into 0 ("default" / "unlimited").
+        for tiny in ["0.004", "4m", "0.001 cpu"] {
+            let err = parse_cpus(tiny).unwrap_err().to_string();
+            assert!(err.contains("CPU limit must be between 0.01 and 512 CPUs"), "{tiny}: {err}");
         }
         assert_eq!(format_cpus(0.5), "0.5 CPU");
         assert_eq!(format_cpus(1.0), "1 CPU");

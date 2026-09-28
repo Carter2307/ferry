@@ -71,9 +71,12 @@ export function parseMemoryMb(input: string): number | null {
   return mb
 }
 
-/** `format_memory_mb`: `512 MiB`, `1 GiB`, `1.5 GiB`. */
+/**
+ * `format_memory_mb`: `512 MiB`, `1 GiB`, `1.5 GiB`, `1152 MiB`. GiB only for
+ * quarter-GiB multiples, exact at 2 decimals (so no rounding differs from Rust's).
+ */
 export function formatMemoryMb(mb: number): string {
-  if (mb >= 1024 && mb % 64 === 0) return `${trimFloat(mb / 1024)} GiB`
+  if (mb >= 1024 && mb % 256 === 0) return `${trimFloat(mb / 1024)} GiB`
   return `${mb} MiB`
 }
 

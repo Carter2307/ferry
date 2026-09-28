@@ -584,8 +584,17 @@ async fn limits_on_create() {
     assert!(memory > 64 << 20, "{host:?}");
     assert!(host.docker_root_dir.as_deref().is_some_and(|d| d.starts_with('/')), "{host:?}");
     assert!(host.operating_system.is_some(), "{host:?}");
-    let cli = Command::new("docker").args(["info", "--format", "{{.NCPU}} {{.MemTotal}}"]).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&cli.stdout).trim(), format!("{cpus} {memory}"), "same as `docker info`");
+    let cli = Command::new("docker")
+        .args(["info", "--format", "{{.NCPU}} {{.MemTotal}} {{.CPUCfsQuota}} {{.LoggingDriver}}"])
+        .output()
+        .unwrap();
+    let cfs = host.cpu_cfs_quota.expect("CPU CFS quota support");
+    let driver = host.logging_driver.as_deref().expect("log driver");
+    assert_eq!(
+        String::from_utf8_lossy(&cli.stdout).trim(),
+        format!("{cpus} {memory} {cfs} {driver}"),
+        "same as `docker info`"
+    );
 
     let spec = ContainerSpec {
         memory_limit_bytes: Some(64 << 20),

@@ -1,6 +1,8 @@
 //! Managed Postgres / Redis: one container + one named volume each. Their
 //! resource limits are set when the container is created and changed in
-//! place (`docker update`, no restart) by [`update_limits`].
+//! place (`docker update`, no restart) by [`update_limits`]; provisioning
+//! also applies them to an existing container it keeps (see
+//! [`sync_limits`]).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,7 +10,7 @@ use std::time::{Duration, Instant};
 use ferry_core::naming::{LABEL_DATASTORE, LABEL_INSTANCE};
 use ferry_core::{Datastore, DatastoreKind, DatastoreStatus, Error, LogSink, Naming, Result};
 use ferry_docker::{
-    ContainerInfo, ContainerSpec, ContainerState, PortPublish, RestartPolicy, VolumeMount, free_host_port,
+    ContainerInfo, ContainerSpec, ContainerState, HostInfo, PortPublish, RestartPolicy, VolumeMount, free_host_port,
 };
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -34,6 +36,27 @@ fn data_dir(kind: DatastoreKind) -> &'static str {
     }
 }
 
+/// Redis's entrypoint, run before the image's own: sets `maxmemory` to 3/4
+/// of the container's memory limit, read from its cgroup (v2, else v1) on
+/// every start, so a limit changed in place still holds after a restart
+/// (none when unlimited: cgroups report `max` or a 19-digit number). Over
+/// `maxmemory` Redis refuses writes instead of being killed by the kernel
+/// (and killed again replaying an append-only file that no longer fits);
+/// the rest is headroom for the AOF rewrite's fork, client buffers and
+/// fragmentation. Keep in sync with [`redis_maxmemory`].
+pub(crate) const REDIS_START: &str = r#"limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)
+case "$limit" in
+''|*[!0-9]*) ;;
+*) [ ${#limit} -le 15 ] && set -- "$@" --maxmemory $((limit / 4 * 3)) ;;
+esac
+exec docker-entrypoint.sh "$@""#;
+
+/// Redis's `maxmemory` (bytes, 0 = none) for a container memory limit, as
+/// [`REDIS_START`] computes it.
+pub(crate) fn redis_maxmemory(memory_limit_bytes: Option<i64>) -> i64 {
+    memory_limit_bytes.filter(|b| *b > 0).map_or(0, |b| b / 4 * 3)
+}
+
 /// Container spec of a datastore (`host_port` must be allocated).
 pub(crate) fn datastore_spec(
     naming: &Naming,
@@ -42,13 +65,14 @@ pub(crate) fn datastore_spec(
     host_port: u16,
     resources: &Resources,
 ) -> ContainerSpec {
-    let (env, cmd) = match ds.kind {
+    let (env, cmd, entrypoint) = match ds.kind {
         DatastoreKind::Postgres => (
             vec![
                 ("POSTGRES_USER".to_string(), ds.username.clone()),
                 ("POSTGRES_PASSWORD".to_string(), ds.password.clone()),
                 ("POSTGRES_DB".to_string(), ds.database.clone().unwrap_or_else(|| ds.username.clone())),
             ],
+            None,
             None,
         ),
         DatastoreKind::Redis => (
@@ -60,6 +84,7 @@ pub(crate) fn datastore_spec(
                 "--appendonly".to_string(),
                 "yes".to_string(),
             ]),
+            Some(vec!["/bin/sh".to_string(), "-c".to_string(), REDIS_START.to_string(), "redis-start".to_string()]),
         ),
     };
     let mut spec = ContainerSpec {
@@ -67,7 +92,7 @@ pub(crate) fn datastore_spec(
         image: ds.image(),
         env,
         cmd,
-        entrypoint: None,
+        entrypoint,
         labels: naming.datastore_labels(&ds.id),
         network: Some(naming.network()),
         network_aliases: vec![ds.name.clone()],
@@ -213,7 +238,12 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
     }
     info!(datastore = %ds.name, kind = %ds.kind, image = %ds.image(), "provisioning datastore");
 
-    check_volume_owner(inner, &ds).await?;
+    let new_volume = check_volume_owner(inner, &ds).await? == VolumeOwner::Missing;
+    // A new datastore (no volume yet): not on a full disk. Checked before the
+    // volume is created, so a retry still counts as new.
+    if new_volume {
+        limits::check_free_disk(inner).await?;
+    }
     inner.docker.ensure_volume(&naming.datastore_volume(&ds.name), &naming.datastore_labels(&ds.id)).await?;
     // An existing stopped container is started; one that can't be (its host
     // port was taken meanwhile, it is paused, dead...) is recreated with the
@@ -235,30 +265,36 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
         None => None,
     };
     let container_id = match existing {
-        Some((c, true)) => c.id,
+        Some((c, true)) => {
+            // Its limits may be older than the row's: changed while the
+            // datastore was failed (e.g. raised after an out-of-memory kill:
+            // a restarting container gets them for its next start) or by a
+            // change that raced with provisioning.
+            if let Err(e) = sync_limits(inner, &mut ds, &c.id, true).await {
+                warn!(datastore = %ds.name, "cannot apply the limits to the existing container: {}", redact(&error_message(&e), &ds));
+            }
+            c.id
+        }
         other => {
-            // A new container (and maybe an image pull): not on a full disk.
-            limits::check_free_disk(inner).await?;
             if let Some((c, _)) = other {
                 inner.docker.remove_container(&c.id, true).await?;
             }
             let image = ds.image();
+            // An image pull needs space too. Recreating the container of an
+            // existing datastore (its data is in the volume, the image is
+            // here) doesn't, and must still heal it on a full disk.
+            if !new_volume && !inner.docker.image_exists(&image).await? {
+                limits::check_free_disk(inner).await?;
+            }
             let pull_log = LogSink::noop();
             tokio::select! {
                 r = inner.docker.ensure_image(&image, &pull_log) => r?,
                 _ = cancel.cancelled() => return Err(Error::Canceled),
             }
-            let used = (ds.memory_limit_mb, ds.cpu_limit);
             let id = run_container(inner, &mut ds).await?;
             // Limits changed while the container was being created (the
             // change found no container to update): apply them now.
-            if let Some(fresh) = inner.store.find_datastore(&ds.id).await?
-                && (fresh.memory_limit_mb, fresh.cpu_limit) != used
-            {
-                ds.memory_limit_mb = fresh.memory_limit_mb;
-                ds.cpu_limit = fresh.cpu_limit;
-                apply_limits(inner, &ds, &id).await?;
-            }
+            sync_limits(inner, &mut ds, &id, true).await?;
             id
         }
     };
@@ -278,9 +314,10 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
 /// reset data directory, a manual `docker volume create`) holds data the new
 /// datastore's credentials can't open (Postgres keeps the password it was
 /// initialized with) and that must not be exposed under the new name.
-async fn check_volume_owner(inner: &Inner, ds: &Datastore) -> Result<()> {
+/// Returns whether the volume is missing (a new datastore) or its own.
+async fn check_volume_owner(inner: &Inner, ds: &Datastore) -> Result<VolumeOwner> {
     match volume_owner(inner, ds).await? {
-        VolumeOwner::Missing | VolumeOwner::Datastore => Ok(()),
+        owner @ (VolumeOwner::Missing | VolumeOwner::Datastore) => Ok(owner),
         VolumeOwner::Foreign => {
             let name = inner.naming.datastore_volume(&ds.name);
             Err(Error::conflict(format!(
@@ -354,19 +391,78 @@ async fn resources(inner: &Inner, ds: &Datastore) -> Resources {
     resources
 }
 
-/// Change the limits of the datastore's container in place.
+/// Whether container `c` already has the memory and CPU limits of
+/// `resources`. A CPU quota of every host CPU is how `docker update` spells
+/// "no CPU limit" (see [`ferry_docker::Docker::update_limits`]).
+fn has_limits(c: &ContainerInfo, resources: &Resources, host: Option<&HostInfo>) -> bool {
+    let all_cpus = host.and_then(|h| h.cpus).map(|n| i64::from(n) * 1_000_000_000);
+    let quota = |nano: Option<i64>| nano.filter(|n| Some(*n) != all_cpus);
+    c.memory_limit_bytes == resources.limits.memory_bytes() && quota(c.nano_cpus) == quota(resources.limits.nano_cpus())
+}
+
+/// Apply the row's current limits (copied into `ds`) to the datastore's
+/// container — only when they differ from the container's if
+/// `only_if_changed`. The row is read under the datastore's limit lock, so
+/// of two concurrent calls (provisioning, a limit change) the later one
+/// applies the newest limits.
+async fn sync_limits(inner: &Inner, ds: &mut Datastore, container_id: &str, only_if_changed: bool) -> Result<()> {
+    let _guard = inner.datastore_limit_locks.lock(&ds.id).await;
+    if let Some(fresh) = inner.store.find_datastore(&ds.id).await? {
+        ds.memory_limit_mb = fresh.memory_limit_mb;
+        ds.cpu_limit = fresh.cpu_limit;
+    }
+    if only_if_changed {
+        let wanted = limits::for_container(inner, ds.memory_limit_mb, ds.cpu_limit).await;
+        match inner.docker.inspect_container(container_id).await? {
+            Some(c) if has_limits(&c, &wanted, inner.host_info().await) => return Ok(()),
+            Some(_) => {}
+            None => return Err(Error::not_found("container", container_id)),
+        }
+    }
+    apply_limits(inner, ds, container_id).await
+}
+
+/// Change the limits of the datastore's container in place. Redis also gets
+/// the matching `maxmemory` now (its start script sets it on later starts).
 async fn apply_limits(inner: &Inner, ds: &Datastore, container_id: &str) -> Result<()> {
     let resources = resources(inner, ds).await;
     inner.docker.update_limits(container_id, resources.update()).await?;
+    if ds.kind == DatastoreKind::Redis {
+        set_redis_maxmemory(inner, ds, container_id, resources.limits.memory_bytes()).await;
+    }
     info!(datastore = %ds.name, limits = %resources.summary(), "applied datastore limits");
     Ok(())
 }
 
+/// `CONFIG SET maxmemory` on a running Redis (best effort: one that is not
+/// running gets it from [`REDIS_START`] when it starts).
+async fn set_redis_maxmemory(inner: &Inner, ds: &Datastore, container_id: &str, memory_limit_bytes: Option<i64>) {
+    let bytes = redis_maxmemory(memory_limit_bytes).to_string();
+    let argv = ["redis-cli", "config", "set", "maxmemory", bytes.as_str()];
+    let env = [("REDISCLI_AUTH", ds.password.as_str())];
+    match tokio::time::timeout(PROBE_TIMEOUT, inner.docker.exec_with_env(container_id, &argv, &env)).await {
+        Ok(Ok(out)) if out.exit_code == 0 && out.output.trim() == "OK" => {
+            debug!(datastore = %ds.name, maxmemory = %bytes, "set Redis maxmemory");
+        }
+        Ok(Ok(out)) => {
+            let output = redact(out.output.trim(), ds);
+            warn!(datastore = %ds.name, "cannot set Redis maxmemory to {bytes}: {output}");
+        }
+        Ok(Err(e)) => {
+            let why = redact(&error_message(&e), ds);
+            debug!(datastore = %ds.name, "Redis maxmemory not set now (it is set when Redis starts): {why}");
+        }
+        Err(_) => warn!(datastore = %ds.name, "setting Redis maxmemory timed out (it is set when Redis starts)"),
+    }
+}
+
 /// `Engine::update_datastore_limits`: apply the row's limits to the
-/// datastore's container in place (no restart). A datastore without a
-/// container yet gets them when it is created.
+/// datastore's container in place (no restart), whatever the datastore's
+/// status: a `failed` datastore's container may still be there (restarting)
+/// and provisioning keeps it. A datastore without a container yet (or with
+/// one about to be recreated) gets them when it is created.
 pub(crate) async fn update_limits(inner: &Arc<Inner>, datastore_id: &str) -> Result<()> {
-    let ds = inner.store.require_datastore(datastore_id).await?;
+    let mut ds = inner.store.require_datastore(datastore_id).await?;
     if inner.with_rt(|rt| rt.deleting_datastores.contains(&ds.id)) {
         return Err(Error::conflict(format!("datastore '{}' is being deleted", ds.name)));
     }
@@ -374,16 +470,18 @@ pub(crate) async fn update_limits(inner: &Arc<Inner>, datastore_id: &str) -> Res
     let container = match inner.docker.inspect_container(&name).await? {
         Some(c)
             if c.labels.get(LABEL_DATASTORE) == Some(&ds.id)
-                && c.labels.get(LABEL_INSTANCE).map(String::as_str) == Some(inner.naming.prefix()) =>
+                && c.labels.get(LABEL_INSTANCE).map(String::as_str) == Some(inner.naming.prefix())
+                // Docker refuses to update these; provisioning recreates them.
+                && !matches!(c.state, ContainerState::Dead | ContainerState::Removing) =>
         {
             c
         }
         _ => {
-            debug!(datastore = %ds.name, "no container yet: the limits apply when it is created");
+            debug!(datastore = %ds.name, "no container to update: the limits apply when it is created");
             return Ok(());
         }
     };
-    match apply_limits(inner, &ds, &container.id).await {
+    match sync_limits(inner, &mut ds, &container.id, false).await {
         // Removed meanwhile (being recreated): created with the new limits.
         Err(Error::NotFound(_)) => Ok(()),
         Err(e) => Err(Error::Docker(format!(
@@ -479,6 +577,7 @@ pub(crate) async fn delete(inner: &Arc<Inner>, datastore_id: &str) -> Result<()>
     }
     inner.store.delete_datastore(&ds.id).await?;
     inner.datastore_locks.forget(&ds.id);
+    inner.datastore_limit_locks.forget(&ds.id);
     inner.with_rt(|rt| rt.datastore_retries.remove(&ds.id));
     info!(datastore = %ds.name, "deleted datastore");
     Ok(())
@@ -518,7 +617,7 @@ mod tests {
         assert!(spec.env.contains(&("POSTGRES_USER".into(), "main_db".into())));
         assert!(spec.env.contains(&("POSTGRES_PASSWORD".into(), "pw".into())));
         assert!(spec.env.contains(&("POSTGRES_DB".into(), "main_db".into())));
-        assert_eq!(spec.cmd, None);
+        assert_eq!((spec.cmd, spec.entrypoint), (None, None));
         assert_eq!(spec.network_aliases, vec!["main-db"]);
         assert_eq!(
             spec.publish,
@@ -557,6 +656,13 @@ mod tests {
                 "yes".into()
             ])
         );
+        // Started through a script that sets maxmemory from the memory limit,
+        // then runs the image's own entrypoint (which drops root).
+        let entrypoint = spec.entrypoint.unwrap();
+        assert_eq!(entrypoint[..2], ["/bin/sh", "-c"]);
+        assert_eq!(entrypoint[2], REDIS_START);
+        assert!(REDIS_START.contains("--maxmemory $((limit / 4 * 3))"));
+        assert!(REDIS_START.ends_with("exec docker-entrypoint.sh \"$@\""));
         assert!(spec.env.is_empty());
         assert_eq!(spec.volumes[0].target, "/data");
         assert_eq!(spec.publish.as_ref().map(|p| p.host_ip.as_str()), Some("0.0.0.0"));
@@ -567,6 +673,45 @@ mod tests {
         assert_eq!(env, vec![("REDISCLI_AUTH", "secret".to_string())]);
         assert!(is_ready(DatastoreKind::Redis, 0, "PONG\n"));
         assert!(!is_ready(DatastoreKind::Redis, 0, "NOAUTH Authentication required."));
+    }
+
+    #[test]
+    fn redis_maxmemory_leaves_headroom_below_the_limit() {
+        assert_eq!(redis_maxmemory(Some(256 << 20)), 192 << 20);
+        assert_eq!(redis_maxmemory(Some(3 << 30)), 2_415_919_104);
+        assert_eq!(redis_maxmemory(None), 0, "unlimited");
+        assert_eq!(redis_maxmemory(Some(0)), 0);
+    }
+
+    #[test]
+    fn limits_are_compared_with_the_container() {
+        let host = HostInfo { cpus: Some(4), ..HostInfo::default() };
+        let config = ferry_core::Config::default();
+        let resources = Resources::new(&config, Some(&host), Some(64), Some(0.5));
+        let c = |memory: Option<i64>, nano: Option<i64>| ContainerInfo {
+            id: "c1".into(),
+            name: "ferry-ds-cache".into(),
+            image: "redis:7-alpine".into(),
+            state: ContainerState::Restarting,
+            exit_code: Some(137),
+            host_port: None,
+            labels: Default::default(),
+            started_at: None,
+            restart_count: Some(3),
+            oom_killed: true,
+            memory_limit_bytes: memory,
+            nano_cpus: nano,
+        };
+        assert!(has_limits(&c(Some(64 << 20), Some(500_000_000)), &resources, Some(&host)));
+        assert!(!has_limits(&c(Some(32 << 20), Some(500_000_000)), &resources, Some(&host)), "older memory limit");
+        assert!(!has_limits(&c(Some(64 << 20), None), &resources, Some(&host)), "no CPU limit yet");
+        // Unlimited: `docker update` leaves a quota of every CPU.
+        let off = ferry_core::Config { default_memory_limit_mb: 0, default_cpu_limit: 0.0, ..config };
+        let unlimited = Resources::new(&off, Some(&host), None, None);
+        assert!(has_limits(&c(None, None), &unlimited, Some(&host)));
+        assert!(has_limits(&c(None, Some(4_000_000_000)), &unlimited, Some(&host)));
+        assert!(!has_limits(&c(None, Some(4_000_000_000)), &unlimited, None), "host CPUs unknown");
+        assert!(!has_limits(&c(Some(64 << 20), None), &unlimited, Some(&host)));
     }
 
     #[test]

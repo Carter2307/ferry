@@ -55,8 +55,8 @@ export function DatastoreResourcesSection({ ds }: { ds: DatastoreView }) {
             view.status === 'available'
               ? 'The running container was updated in place, without a restart.'
               : view.status === 'creating'
-                ? 'Provisioning starts the container with these limits.'
-                : 'Saved; nothing is running to update.'
+                ? 'Applied to its container, or it is created with them.'
+                : 'Applied to its container: provisioning retries with these limits.'
           }`,
         })
       },

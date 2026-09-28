@@ -7,8 +7,12 @@
 //!
 //! A CPU limit above the Docker host's CPU count makes Docker refuse to
 //! create the container, so it is capped at the host's CPUs (the host's
-//! capacity is read once, see [`Inner::host_info`]). A memory limit above the
-//! host's memory is allowed (it just never protects anything): a warning.
+//! capacity is read once, see [`Inner::host_info`]); on a host without CPU
+//! CFS quotas Docker refuses any CPU limit, so none is set (a warning). A
+//! memory limit above the host's memory is allowed (it just never protects
+//! anything): a warning. Log rotation (`json-file`) is only set when the
+//! daemon's own log driver is `json-file`: another one (journald, a log
+//! shipper, `local`) is the operator's choice and is kept.
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +34,9 @@ pub(crate) struct Resources {
     pub log_rotation: Option<LogRotation>,
     /// The CPU limit asked for, when it was capped at the host's CPU count.
     pub cpus_capped_from: Option<f64>,
+    /// The CPU limit asked for, when the host can't enforce CPU limits (no
+    /// CPU CFS quotas: Docker would refuse the container), so none is set.
+    pub cpus_unsupported: Option<f64>,
     /// The Docker host's memory (bytes), when the memory limit exceeds it.
     pub host_memory_below_limit: Option<u64>,
 }
@@ -41,6 +48,10 @@ impl Resources {
     pub(crate) fn new(config: &Config, host: Option<&HostInfo>, memory_mb: Option<u32>, cpus: Option<f64>) -> Self {
         let mut limits = config.limits(memory_mb, cpus);
         let mut cpus_capped_from = None;
+        let mut cpus_unsupported = None;
+        if host.and_then(|h| h.cpu_cfs_quota) == Some(false) {
+            cpus_unsupported = limits.cpus.take();
+        }
         if let (Some(requested), Some(host_cpus)) = (limits.cpus, host.and_then(|h| h.cpus))
             && requested > f64::from(host_cpus)
         {
@@ -54,9 +65,10 @@ impl Resources {
         Resources {
             limits,
             pids_limit: Some(i64::from(config.pids_limit)).filter(|p| *p > 0),
-            log_rotation: (config.log_max_size_mb > 0)
+            log_rotation: (config.log_max_size_mb > 0 && rotates_json_file(host))
                 .then(|| LogRotation { max_size_mb: config.log_max_size_mb, max_files: config.log_max_files.max(1) }),
             cpus_capped_from,
+            cpus_unsupported,
             host_memory_below_limit,
         }
     }
@@ -102,6 +114,15 @@ impl Resources {
         ))
     }
 
+    /// The host can't enforce the CPU limit (for the deploy log).
+    pub(crate) fn cpu_unsupported_warning(&self) -> Option<String> {
+        let requested = self.cpus_unsupported?;
+        Some(format!(
+            "the CPU limit ({}) is not enforced: the Docker host's kernel has no CPU CFS quota support",
+            format_cpus(requested)
+        ))
+    }
+
     /// The memory limit is above the host's memory: it protects nothing.
     pub(crate) fn memory_warning(&self) -> Option<String> {
         let (host, mb) = (self.host_memory_below_limit?, self.limits.memory_mb?);
@@ -113,10 +134,18 @@ impl Resources {
         ))
     }
 
-    /// Both warnings, when they apply.
+    /// Every warning that applies.
     pub(crate) fn warnings(&self) -> Vec<String> {
-        self.cpu_cap_warning().into_iter().chain(self.memory_warning()).collect()
+        self.cpu_cap_warning().into_iter().chain(self.cpu_unsupported_warning()).chain(self.memory_warning()).collect()
     }
+}
+
+/// Whether Ferry's `json-file` log rotation applies: the daemon's default
+/// log driver is `json-file` (or unknown). Any other driver was chosen by
+/// the operator (journald, syslog, a log shipper; `local` rotates on its
+/// own) and is kept.
+pub(crate) fn rotates_json_file(host: Option<&HostInfo>) -> bool {
+    host.and_then(|h| h.logging_driver.as_deref()).is_none_or(|driver| driver == "json-file")
 }
 
 /// The resources of a container Ferry creates now (see [`Resources::new`]).
@@ -254,6 +283,8 @@ mod tests {
             memory_bytes: Some(memory_gib << 30),
             docker_root_dir: Some("/var/lib/docker".into()),
             operating_system: Some("Ubuntu 24.04 LTS".into()),
+            cpu_cfs_quota: Some(true),
+            logging_driver: Some("json-file".into()),
         }
     }
 
@@ -323,6 +354,47 @@ mod tests {
         assert_eq!(Resources::new(&config, None, None, Some(64.0)).limits.cpus, Some(64.0));
         let unknown = HostInfo::default();
         assert_eq!(Resources::new(&config, Some(&unknown), Some(1 << 20), Some(64.0)).warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn no_cpu_limit_without_cfs_quotas() {
+        let config = Config::default();
+        let mut h = host(4, 8);
+        h.cpu_cfs_quota = Some(false);
+        let r = Resources::new(&config, Some(&h), Some(256), Some(0.5));
+        assert_eq!(r.limits, Limits { memory_mb: Some(256), cpus: None }, "Docker would refuse NanoCpus");
+        assert_eq!(r.cpus_unsupported, Some(0.5));
+        assert_eq!(r.update().nano_cpus, None);
+        assert_eq!(r.summary(), "256 MiB memory, unlimited CPU");
+        assert_eq!(
+            r.warnings(),
+            vec!["the CPU limit (0.5 CPU) is not enforced: the Docker host's kernel has no CPU CFS quota support"]
+        );
+        let mut spec = ContainerSpec::default();
+        r.apply(&mut spec);
+        assert_eq!((spec.memory_limit_bytes, spec.nano_cpus), (Some(256 << 20), None));
+        // The server default too; nothing to warn about when unlimited.
+        assert_eq!(Resources::new(&config, Some(&h), None, None).cpus_unsupported, Some(1.0));
+        let off = Config { default_cpu_limit: 0.0, ..Config::default() };
+        assert!(Resources::new(&off, Some(&h), None, None).warnings().is_empty());
+        // Not reported: assumed supported.
+        h.cpu_cfs_quota = None;
+        assert_eq!(Resources::new(&config, Some(&h), None, Some(0.5)).limits.cpus, Some(0.5));
+    }
+
+    #[test]
+    fn log_rotation_only_replaces_json_file() {
+        let config = Config::default();
+        let rotation = Some(LogRotation { max_size_mb: 10, max_files: 3 });
+        let mut h = host(4, 8);
+        assert_eq!(Resources::new(&config, Some(&h), None, None).log_rotation, rotation);
+        assert_eq!(Resources::new(&config, None, None, None).log_rotation, rotation, "unknown driver");
+        for driver in ["journald", "local", "fluentd", "syslog"] {
+            h.logging_driver = Some(driver.into());
+            assert_eq!(Resources::new(&config, Some(&h), None, None).log_rotation, None, "{driver} is kept");
+        }
+        h.logging_driver = None;
+        assert!(rotates_json_file(Some(&h)));
     }
 
     #[test]

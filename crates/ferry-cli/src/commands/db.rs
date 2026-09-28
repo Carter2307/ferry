@@ -101,8 +101,9 @@ pub async fn list(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// `ferry db update NAME --memory/--cpu`: new limits, applied to the running
-/// container in place (no restart, no data loss).
+/// `ferry db update NAME --memory/--cpu`: new limits, applied to the
+/// datastore's container in place (no restart; also when it is failed or
+/// still provisioning).
 pub async fn update(ctx: &Ctx, a: DbUpdateArgs) -> Result<()> {
     let body = update_request(&a);
     let resp = match ctx.client.patch::<_, DatastoreView>(&["datastores", &a.name], &[], &body).await {
@@ -120,8 +121,8 @@ pub async fn update(ctx: &Ctx, a: DbUpdateArgs) -> Result<()> {
     outln!("Updated datastore '{}': {}", d.name, limits_summary(&a, d, defaults))?;
     match d.status {
         DatastoreStatus::Available => outln!("Applied to the running container (no restart).")?,
-        DatastoreStatus::Creating => outln!("It starts with these limits once provisioned.")?,
-        DatastoreStatus::Failed => {}
+        DatastoreStatus::Creating => outln!("Applied to its container (or it is created with them).")?,
+        DatastoreStatus::Failed => outln!("Applied to its container: provisioning retries with these limits.")?,
     }
     Ok(())
 }

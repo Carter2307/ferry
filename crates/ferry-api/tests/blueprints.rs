@@ -817,8 +817,9 @@ services:
     assert_eq!(app.store.require_service("w").await.unwrap().memory_limit_mb, Some(512));
     assert_eq!(app.store.require_datastore("db").await.unwrap().memory_limit_mb, Some(1024));
 
-    // applied: live services restart (no rebuild), the running datastore is
-    // updated in place, the one still provisioning only gets its row changed
+    // applied: live services restart (no rebuild), the datastores' containers
+    // are updated in place (also the one still provisioning: its container
+    // may exist already; the engine does nothing when it doesn't)
     let (status, res) = apply(&app, &bigger, false).await;
     assert_eq!(status, StatusCode::OK, "{res}");
     assert_eq!(res["warnings"], json!([]));
@@ -828,6 +829,7 @@ services:
         format!("restart {} restart", tick.id),
         format!("restart {} restart", w.id),
         format!("update_limits {} 4096 2", db.id),
+        format!("update_limits {} 1024 -", kv.id),
     ];
     want.sort();
     assert_eq!(calls, want);

@@ -933,6 +933,12 @@ databases:
             ("services:\n  - {type: web, name: a, cpuLimit: -1}\n", "service 'a': 'cpuLimit': invalid CPU amount '-1'"),
             ("services:\n  - {type: redis, name: kv, memoryLimit: 1X}\n", "key value 'kv': 'memoryLimit'"),
             ("databases:\n  - {name: db, cpuLimit: many}\n", "database 'db': 'cpuLimit'"),
+            // Rounds to 0 (the server default): refused, not silently reset.
+            (
+                "services:\n  - {type: web, name: a, cpuLimit: 4m}\n",
+                "service 'a': 'cpuLimit': CPU limit must be between 0.01 and 512 CPUs (got 4m)",
+            ),
+            ("databases:\n  - {name: db, cpuLimit: 0.004}\n", "database 'db': 'cpuLimit': CPU limit must be between"),
             ("services:\n  - {type: web, name: a, memoryLimit: [1]}\n", "service 'a': 'memoryLimit' must be a string"),
         ] {
             let err = parse(entry).unwrap_err().to_string();

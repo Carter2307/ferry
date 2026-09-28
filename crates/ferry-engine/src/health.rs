@@ -1,10 +1,12 @@
 //! Readiness probes: health checks of new instances and the TCP check that
 //! decides which instances receive traffic.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ferry_core::{LogSink, Service};
 use ferry_docker::{ContainerInfo, ContainerState};
+use futures::StreamExt;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
@@ -17,6 +19,8 @@ pub(crate) const PROGRESS_EVERY: Duration = Duration::from_secs(10);
 /// Looking for the exit code of a crashed instance Docker restarts.
 const EXIT_CODE_POLLS: usize = 30;
 const EXIT_CODE_POLL: Duration = Duration::from_millis(100);
+/// Bound on reading a container's past events from Docker.
+const EVENTS_TIMEOUT: Duration = Duration::from_secs(5);
 /// Workers must still be running this long after start.
 pub(crate) const WORKER_MIN_UPTIME: Duration = Duration::from_secs(5);
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -169,8 +173,12 @@ pub(crate) fn exit_message(instance: &str, code: Option<i64>, worker: bool) -> S
 /// How a container that Docker restarts (the restart policy brings crashed
 /// instances back) last exited. A running container reports exit code 0 and
 /// no OOM kill, so this waits briefly for it to be seen restarting or
-/// stopped.
-async fn last_exit(inner: &Inner, id: &str) -> LastExit {
+/// stopped. When it isn't (Docker restarts a crashed container within
+/// ~100 ms, and an app that runs a while before crashing again stays up
+/// longer than this waits), the container's Docker events since `started`
+/// (when it was started, as a time since the epoch) tell instead.
+/// `memory_limit_bytes`: its memory limit.
+async fn last_exit(inner: &Inner, id: &str, started: Duration, memory_limit_bytes: Option<i64>) -> LastExit {
     for _ in 0..EXIT_CODE_POLLS {
         let Ok(resp) = inner.docker.bollard().inspect_container(id, None).await else { break };
         let Some(state) = resp.state else { break };
@@ -185,7 +193,46 @@ async fn last_exit(inner: &Inner, id: &str) -> LastExit {
         }
         tokio::time::sleep(EXIT_CODE_POLL).await;
     }
-    LastExit::default()
+    exit_from_events(inner, id, started, memory_limit_bytes).await
+}
+
+/// How the container last exited according to its Docker events (`die`,
+/// with its exit code, and `oom`) since `since` (a time since the epoch).
+async fn exit_from_events(inner: &Inner, id: &str, since: Duration, memory_limit_bytes: Option<i64>) -> LastExit {
+    let filters: HashMap<String, Vec<String>> = HashMap::from([
+        ("type".to_string(), vec!["container".to_string()]),
+        ("container".to_string(), vec![id.to_string()]),
+        ("event".to_string(), vec!["die".to_string(), "oom".to_string()]),
+    ]);
+    let since_ns = i64::try_from(since.as_nanos()).unwrap_or(i64::MAX);
+    // With `until`, Docker sends the past events and closes the stream.
+    let options = bollard::query_parameters::EventsOptionsBuilder::default()
+        .filters(&filters)
+        .since(&crate::reconcile::events_since(since_ns))
+        .until(&crate::reconcile::events_since(crate::reconcile::now_ns()))
+        .build();
+    let mut events = inner.docker.bollard().events(Some(options));
+    let mut exit = LastExit { memory_limit_bytes, ..LastExit::default() };
+    let read = async {
+        while let Some(Ok(event)) = events.next().await {
+            let attributes = event.actor.and_then(|a| a.attributes).unwrap_or_default();
+            exit_event(&mut exit, event.action.as_deref(), &attributes);
+        }
+    };
+    if tokio::time::timeout(EVENTS_TIMEOUT, read).await.is_err() {
+        tracing::debug!(container = id, "reading the container's events timed out");
+    }
+    exit
+}
+
+/// Fold one Docker event (`action`, `attributes`) into how the container
+/// last exited: any `oom` is an OOM kill; the last `die` has the exit code.
+fn exit_event(exit: &mut LastExit, action: Option<&str>, attributes: &HashMap<String, String>) {
+    match action {
+        Some("oom") => exit.oom_killed = true,
+        Some("die") => exit.code = attributes.get("exitCode").and_then(|c| c.parse().ok()).or(exit.code),
+        _ => {}
+    }
 }
 
 /// Probe one new instance every second until it is healthy, it crashes or
@@ -205,6 +252,10 @@ pub(crate) async fn wait_healthy(
         None => format!("127.0.0.1:{host_port}"),
     };
     let mut next_progress = Instant::now() + PROGRESS_EVERY;
+    // When it was started (since the epoch, with a second's slack), for
+    // reading its Docker events.
+    let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let started_at = since_epoch.saturating_sub(started.elapsed() + Duration::from_secs(1));
     loop {
         // (reason, whether it is a connection problem the port hint explains)
         let (last, connection): (String, bool) = match inner.docker.inspect_container(&container.id).await {
@@ -219,11 +270,11 @@ pub(crate) async fn wait_healthy(
                     return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Restarting => {
-                    let exit = last_exit(inner, &container.id).await;
+                    let exit = last_exit(inner, &container.id, started_at, info.memory_limit_bytes).await;
                     return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Running if info.restart_count.unwrap_or(0) > 0 => {
-                    let exit = last_exit(inner, &container.id).await;
+                    let exit = last_exit(inner, &container.id, started_at, info.memory_limit_bytes).await;
                     return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Running => match &check.probe {
@@ -323,6 +374,28 @@ mod tests {
         let killed = LastExit { oom_killed: false, ..oom };
         assert_eq!(crash_message("abc123", killed, true), exit_message("abc123", Some(137), true));
         assert_eq!(crash_message("abc123", LastExit::default(), false), "instance abc123 crashed");
+    }
+
+    #[test]
+    fn crashes_are_read_from_docker_events() {
+        let attrs = |code: &str| HashMap::from([("exitCode".to_string(), code.to_string())]);
+        let mut exit = LastExit { memory_limit_bytes: Some(512 << 20), ..LastExit::default() };
+        exit_event(&mut exit, Some("start"), &HashMap::new());
+        assert_eq!(exit, LastExit { memory_limit_bytes: Some(512 << 20), ..LastExit::default() });
+        exit_event(&mut exit, Some("oom"), &HashMap::new());
+        exit_event(&mut exit, Some("die"), &attrs("137"));
+        assert_eq!(exit, LastExit { code: Some(137), oom_killed: true, memory_limit_bytes: Some(512 << 20) });
+        assert_eq!(
+            crash_message("ab12cd", exit, false),
+            "instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit"
+        );
+        // The last exit code wins; an unreadable one keeps the previous.
+        let mut exit = LastExit::default();
+        exit_event(&mut exit, Some("die"), &attrs("1"));
+        exit_event(&mut exit, Some("die"), &attrs("?"));
+        assert_eq!(exit, LastExit { code: Some(1), ..LastExit::default() });
+        exit_event(&mut exit, Some("die"), &attrs("2"));
+        assert_eq!(crash_message("ab12cd", exit, false), "instance ab12cd crashed (exit code 2)");
     }
 
     #[tokio::test]

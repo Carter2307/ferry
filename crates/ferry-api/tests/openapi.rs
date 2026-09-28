@@ -382,7 +382,7 @@ async fn resource_limits_are_documented() {
         patch["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/DatastoreView"
     );
-    for status in ["400", "404"] {
+    for status in ["400", "404", "409"] {
         assert!(patch["responses"].get(status).is_some(), "{status}: {patch}");
     }
     let description = patch["description"].as_str().unwrap();
