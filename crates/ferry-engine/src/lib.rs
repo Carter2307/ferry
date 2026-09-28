@@ -15,7 +15,8 @@
 //! `reconcile` (convergence, routes, route watcher), `ops`
 //! (suspend/resume/scale/delete), `jobs` (one-off jobs + cron),
 //! `datastores`, `status` (status + runtime logs), `logs` (deploy/job log
-//! hub), `images` (pull policy + retention).
+//! hub), `images` (pull policy + retention), `limits` (container resource
+//! limits, OOM messages, free-disk check).
 
 mod datastores;
 mod deploy;
@@ -23,6 +24,7 @@ mod health;
 mod images;
 mod instances;
 mod jobs;
+mod limits;
 mod logs;
 mod ops;
 mod pipeline;
@@ -70,8 +72,9 @@ impl FerryEngine {
     ///    before the proxy starts serving); the rest of the boot convergence
     ///    (stopping stale instances, starting missing ones) continues in the
     ///    background;
-    /// 4. spawn deploy workers, the reconcile loop, the route watcher, the
-    ///    cron scheduler and datastore provisioning for rows still `creating`.
+    /// 4. spawn deploy workers, the reconcile loop, the route and OOM
+    ///    watchers, the cron scheduler and datastore provisioning for rows
+    ///    still `creating`.
     ///
     /// Calling it twice is a `Conflict` error.
     pub async fn start(self: &Arc<Self>, shutdown: CancellationToken) -> Result<()> {
@@ -109,6 +112,7 @@ impl FerryEngine {
 
         inner.spawn(reconcile::run_loop(inner.clone()));
         inner.spawn(reconcile::watch_routes(inner.clone()));
+        inner.spawn(reconcile::watch_oom(inner.clone()));
         inner.spawn(jobs::run_scheduler(inner.clone()));
         inner.spawn(deploy::fail_queued_on_shutdown(inner.clone()));
         datastores::resume_provisioning(inner).await?;
@@ -227,5 +231,9 @@ impl Engine for FerryEngine {
 
     async fn delete_datastore(&self, datastore_id: &str) -> Result<()> {
         datastores::delete(&self.inner, datastore_id).await
+    }
+
+    async fn update_datastore_limits(&self, datastore_id: &str) -> Result<()> {
+        datastores::update_limits(&self.inner, datastore_id).await
     }
 }

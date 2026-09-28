@@ -81,14 +81,20 @@ _openapi:
       - content: Creates the service with its own variables and env group links, then
           queues a first deploy (trigger `create`) when it has a repository or
           an image, unless `deploy` is `false`. Services and datastores share
-          one namespace of names.
+          one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and
+          `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance
+          and job run of the service; omitted or `0` = the server default (see
+          `GET /api/v1/info`).
         heading: create-a-service
-      - content: Every field is optional; for optional string settings an empty string
+      - content: "Every field is optional; for optional string settings an empty string
           clears the value. `instances` scales, `suspended` suspends or resumes,
           `custom_domains` refreshes the routes; build settings take effect on
-          the next deploy. Switching between a git repository and an image
-          requires clearing the other source in the same request. When a side
-          effect fails after the settings were saved, the error message says so.
+          the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0`
+          = back to the server default) are only saved: they take effect with
+          the next deploy or restart, this request doesn't redeploy. Switching
+          between a git repository and an image requires clearing the other
+          source in the same request. When a side effect fails after the
+          settings were saved, the error message says so."
         heading: update-a-service
       - content: Removes its containers, routes, deploys and variables. Refused while
           other services reference it in their env (`${{service.NAME...}}`),

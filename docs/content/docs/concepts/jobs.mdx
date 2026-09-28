@@ -20,10 +20,11 @@ ferry create nightly --type cron --image busybox:stable \
 
 ```text title="Output (excerpt)"
 ==> Pinned busybox:stable as ferry/nightly:dep-4f09d911d31f407fb043
+==> Limits: 512 MiB memory, 1 CPU per run
 ==> Your cron job is live 🎉 (schedule: 0 3 * * *, UTC)
 ```
 
-A cron job builds or pulls its image like any service (from a repository, `ferry up`, or `--image`), but its deploy starts no container: it only freezes the image, environment and command that its runs will use. The **start command** is the command each run executes; without one, runs use the image's default command.
+A cron job builds or pulls its image like any service (from a repository, `ferry up`, or `--image`), but its deploy starts no container: it only freezes the image, environment, command and [resource limits](/docs/concepts/resource-limits) that its runs will use. The **start command** is the command each run executes; without one, runs use the image's default command.
 
 Cron jobs have no instances, port, health check, custom domain or disk, and can't be scaled.
 
@@ -66,7 +67,7 @@ Change a schedule with `ferry update nightly --schedule "0 4 * * *"`. It applies
 - A suspended cron job doesn't run, and neither does a cron job without a live deploy.
 - Ferry doesn't retry failed runs and doesn't limit how long a run takes. A run that hangs blocks the schedule until you [cancel it](#list-follow-and-cancel-runs).
 
-Each run is a new container: the live deploy's image, the service's environment as of that deploy (without `PORT`, since nothing listens), on the [private network](/docs/concepts/networking#private-network), with no published port and no restart. It is removed when the run ends.
+Each run is a new container: the live deploy's image, the service's environment as of that deploy (without `PORT`, since nothing listens), its memory and CPU limits, on the [private network](/docs/concepts/networking#private-network), with no published port and no restart. It is removed when the run ends.
 
 <Callout type="info" title="Changing the command">
 Runs use the command frozen at the last deploy. When you change a cron job's start command (`ferry update nightly --start-cmd …`), Ferry restarts it automatically so the next run uses the new command. Environment changes apply the same way as for other services: see [When changes apply](/docs/concepts/environment#when-changes-apply).
@@ -94,7 +95,8 @@ Job job-48dd0201159b41c3bb58 succeeded (exit code 0)
 - The command runs with `sh -c` in the container. A single argument after `--` is used as a shell line, so `'npm run a && npm run b'` and `'echo $HOME'` are interpreted by the container's shell; several arguments are quoted one by one.
 - With `--follow`, the CLI streams the output and exits with 1 if the job fails.
 - The service needs a live deploy, and it must not be suspended.
-- A one-off job runs exactly like the live deploy's instances: same image and environment, even if you changed settings or variables since. Restart first if the job needs the new values.
+- A one-off job runs exactly like the live deploy's instances: same image, environment and [resource limits](/docs/concepts/resource-limits), even if you changed settings, limits or variables since. Restart first if the job needs the new values.
+- A run that goes over its memory limit is killed and fails, without a restart: `==> Job failed: the job ran out of memory (limit 512 MiB) — raise the service's memory limit`. Raise the service's limit with `ferry update NAME --memory …`, then `ferry restart NAME`.
 - The job runs next to the service's instances, not inside them.
 
 Over the API, `POST /api/v1/services/{id}/jobs` with `{"command": "…"}` starts a run (the command is optional for cron jobs). See [Jobs](/docs/reference/api/jobs) in the API reference.

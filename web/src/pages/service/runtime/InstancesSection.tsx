@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Link } from 'react-router'
-import { Boxes, CalendarClock, Pause, Play, Rocket } from 'lucide-react'
+import { Boxes, CalendarClock, MemoryStick, Pause, Play, Rocket } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { CopyButton } from '@/components/patterns/Copy'
@@ -12,10 +12,12 @@ import { StatePill, StatusDot } from '@/components/patterns/StatusBadge'
 import type { StatusTone } from '@/components/patterns/status-tones'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Hint } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/api/client'
 import { useResumeService } from '@/lib/api/queries'
 import type { InstanceStatus, RuntimeStatus, ServiceView } from '@/lib/api/types'
 import { bytes, dateTime, logTime, percent, relativeTime } from '@/lib/format'
+import { formatCpus } from '@/lib/resources'
 import { cn } from '@/lib/utils'
 
 import { servicePath } from '../context'
@@ -107,14 +109,67 @@ function CpuBars({ samples, label }: { samples: Sample[]; label: string }) {
   )
 }
 
-function InstanceCard({ instance, samples }: { instance: InstanceStatus; samples: Sample[] }) {
+/**
+ * `OOM KILLED · EXIT 137` pill with an explanation tooltip, for instances
+ * whose last exit was the kernel's out-of-memory killer.
+ */
+export function OomBadge({ instance }: { instance: Pick<InstanceStatus, 'exit_code' | 'memory_limit_bytes'> }) {
+  const limit = instance.memory_limit_bytes
+  return (
+    <Hint
+      label={
+        <>
+          The kernel stopped this container because it used more memory than its limit
+          {limit ? ` (${bytes(limit)})` : ''}. Ferry starts it again; if it keeps happening, raise the memory limit in
+          Settings → Resources.
+        </>
+      }
+    >
+      <button
+        type="button"
+        className="w-fit cursor-help rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <StatePill
+          tone="destructive"
+          dot={false}
+          label={
+            <>
+              <MemoryStick aria-hidden="true" className="size-3" />
+              OOM killed{instance.exit_code !== null ? ` · exit ${instance.exit_code}` : ''}
+            </>
+          }
+        />
+      </button>
+    </Hint>
+  )
+}
+
+/** `limit 512 MiB` / `no limit` under a metric. */
+function LimitLine({ limit, title }: { limit: string | null; title?: string }) {
+  return (
+    <span className="truncate text-[12px] text-foreground-lighter" title={title}>
+      {limit ? `limit ${limit}` : 'no limit'}
+    </span>
+  )
+}
+
+export function InstanceCard({
+  instance,
+  samples,
+  settingsPath,
+}: {
+  instance: InstanceStatus
+  samples: Sample[]
+  /** Service settings page (the OOM notice links to its Resources section). */
+  settingsPath?: string
+}) {
   const short = instanceShortId(instance)
-  const memPct =
-    instance.memory_bytes !== null && instance.memory_limit_bytes
-      ? (instance.memory_bytes / instance.memory_limit_bytes) * 100
-      : null
+  const memoryLimit = instance.memory_limit_bytes
+  const memPct = instance.memory_bytes !== null && memoryLimit ? (instance.memory_bytes / memoryLimit) * 100 : null
   const tone = INSTANCE_STATE_TONE[instance.state] ?? 'neutral'
   const running = instance.state === 'running'
+  // An exit code says why a stopped container stopped (137 alone is not proof of OOM: `oom_killed` is).
+  const exitCode = !running && !instance.oom_killed && instance.exit_code !== null ? instance.exit_code : null
 
   return (
     <MetricCard
@@ -123,21 +178,51 @@ function InstanceCard({ instance, samples }: { instance: InstanceStatus; samples
           Instance <span className="text-foreground">{short}</span>
         </span>
       }
-      aside={<StatePill tone={tone} label={instance.state} pulse={instance.state === 'restarting'} />}
+      aside={
+        <StatePill
+          tone={tone}
+          label={exitCode !== null ? `${instance.state} · ${exitCode}` : instance.state}
+          title={exitCode !== null ? `Exit code ${exitCode}` : undefined}
+          pulse={instance.state === 'restarting'}
+        />
+      }
       className="gap-4"
     >
+      {instance.oom_killed && (
+        <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-foreground-light">
+          <OomBadge instance={instance} />
+          <span>Ran out of memory{memoryLimit ? ` (limit ${bytes(memoryLimit)})` : ''}.</span>
+          {settingsPath && (
+            <Link
+              to={`${settingsPath}#resources`}
+              className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Raise the limit
+            </Link>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div className="flex min-w-0 flex-col gap-1">
           <MonoLabel>CPU</MonoLabel>
           <span className="text-xl text-foreground tabular md:text-[22px]">
             {running ? percent(instance.cpu_percent) : '—'}
           </span>
+          <LimitLine
+            limit={instance.cpu_limit ? formatCpus(instance.cpu_limit) : null}
+            title={
+              instance.cpu_limit
+                ? `100% = one full core, so this instance tops out at ${percent(instance.cpu_limit * 100, 0)}.`
+                : '100% = one full core.'
+            }
+          />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
           <MonoLabel>Memory</MonoLabel>
           <span className="truncate text-xl text-foreground tabular md:text-[22px]">
             {running ? bytes(instance.memory_bytes) : '—'}
           </span>
+          <LimitLine limit={memoryLimit ? bytes(memoryLimit) : null} />
         </div>
       </div>
       <CpuBars samples={samples} label={`CPU of instance ${short}`} />
@@ -145,9 +230,11 @@ function InstanceCard({ instance, samples }: { instance: InstanceStatus; samples
         <div className="flex items-center justify-between gap-2">
           <LegendDot color="var(--brand)">Memory used</LegendDot>
           <span className="font-mono text-[10.5px] tracking-[0.04em] text-foreground-lighter tabular">
-            {running && memPct !== null && instance.memory_limit_bytes
-              ? `${percent(memPct)} of ${bytes(instance.memory_limit_bytes)}`
-              : 'no data'}
+            {!running || instance.memory_bytes === null
+              ? 'no data'
+              : memPct !== null && memoryLimit
+                ? `${percent(memPct)} of ${bytes(memoryLimit)}`
+                : 'no limit'}
           </span>
         </div>
         <UsageBar value={running ? memPct : 0} label={`Memory of instance ${short}`} />
@@ -338,7 +425,12 @@ export function InstancesSection({
         <Summary status={status} />
         <div className="grid gap-4 @min-[660px]:grid-cols-2 @min-[1020px]:grid-cols-3">
           {status.instances.map((inst) => (
-            <InstanceCard key={inst.container_id} instance={inst} samples={history[inst.container_id] ?? []} />
+            <InstanceCard
+              key={inst.container_id}
+              instance={inst}
+              samples={history[inst.container_id] ?? []}
+              settingsPath={servicePath(service.name, '/settings')}
+            />
           ))}
         </div>
       </div>
@@ -351,7 +443,7 @@ export function InstancesSection({
     <PageSection
       className="@container"
       title="Instances"
-      description="Live CPU and memory of each container."
+      description="Live CPU and memory of each container, against its limits."
       actions={
         <>
           {showLive && live}

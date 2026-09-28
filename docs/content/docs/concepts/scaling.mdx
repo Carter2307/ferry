@@ -30,10 +30,10 @@ ferry status api
 
 ```text title="ferry status api"
 api: live — 3/3 instance(s) running
-INSTANCE   DEPLOY     STATE     PORT    CPU    MEMORY               RESTARTS   STARTED
-6040c7     4a6f817d   running   63295   0.0%   11.9 MiB / 7.7 GiB   0          16s ago
-8cb56c     4a6f817d   running   63326   0.0%   11.9 MiB / 7.7 GiB   0          6s ago
-90f134     4a6f817d   running   63325   0.0%   11.9 MiB / 7.7 GiB   0          6s ago
+INSTANCE   DEPLOY     STATE     PORT    CPU            MEMORY                 RESTARTS   STARTED
+6040c7     4a6f817d   running   63295   0.0% / 1 CPU   11.9 MiB / 512.0 MiB   0          16s ago
+8cb56c     4a6f817d   running   63326   0.0% / 1 CPU   11.9 MiB / 512.0 MiB   0          6s ago
+90f134     4a6f817d   running   63325   0.0% / 1 CPU   11.9 MiB / 512.0 MiB   0          6s ago
 ```
 
 </Tab>
@@ -51,7 +51,7 @@ curl -X POST http://127.0.0.1:7878/api/v1/services/api/scale \
 </Tab>
 </Tabs>
 
-- Scaling starts or stops containers in place from the live deploy's snapshot: same image, environment and command. Settings or variables you changed since the last deploy don't apply to the new instances.
+- Scaling starts or stops containers in place from the live deploy's snapshot: same image, environment, command and [resource limits](/docs/concepts/resource-limits). Settings, limits or variables you changed since the last deploy don't apply to the new instances.
 - New instances receive traffic as soon as they accept connections. Removed instances get a 10-second stop grace period.
 - The proxy spreads requests over the instances of a web service or static site, round-robin. On the [private network](/docs/concepts/networking#private-network), the service's name resolves to all of its instances.
 - During a deploy, the new count is saved and applied right after the deploy finishes.
@@ -60,7 +60,7 @@ curl -X POST http://127.0.0.1:7878/api/v1/services/api/scale \
 The service state is `degraded` while fewer instances run than you asked for, for example just after a crash, and `live` again once the [reconciler](/docs/concepts/self-healing) has replaced them.
 
 <Callout type="info" title="Manual scaling only">
-Ferry doesn't autoscale, and containers run without CPU or memory limits. `ferry status` shows each instance's CPU and memory use.
+Ferry doesn't autoscale. Each instance runs with the service's memory and CPU limits (512 MiB and 1 CPU unless you set others), and `ferry status` shows its use against them. Limits are per instance: 3 instances can use 3 times the limit. See [Resource limits](/docs/concepts/resource-limits).
 </Callout>
 
 ## Persistent disks
@@ -82,12 +82,13 @@ In a blueprint, `disk: { mountPath: /data }` does the same; `name` and `sizeGB` 
 
   ```text title="Deploy log"
   ==> Mounting disk at /data
+  ==> Limits: 512 MiB memory, 1 CPU per instance
   ==> Stopping 1 old instance(s) first (services with a disk are redeployed in place)
   ==> Starting 1 instance(s)
   ```
 
 - **One-off jobs** on the service mount the same disk. See [Disk access](/docs/concepts/jobs#disk-access).
-- **Size:** Ferry doesn't limit a disk's size. It uses the server's Docker storage.
+- **Size:** Ferry doesn't limit a disk's size. It uses the server's Docker storage; the [free-disk check](/docs/concepts/resource-limits#free-disk-space) only stops new deploys when that storage is nearly full.
 - **Deletion:** the volume is deleted with the service. Removing the disk setting only stops mounting it.
 
 <Callout type="warning" title="Back up disks yourself">
@@ -118,7 +119,7 @@ Settings, variables, deploys and disk data stay. While a service is suspended, c
 ferry restart api --follow
 ```
 
-A restart is a new deploy (trigger `restart`) that reuses the live deploy's image with the service's **current** settings and environment. It's how saved changes to variables, env group links or settings reach a running service without rebuilding. It rolls out like any deploy: health check, then switch, then the old instances stop. `ferry env set` and `ferry env-group set` restart for you.
+A restart is a new deploy (trigger `restart`) that reuses the live deploy's image with the service's **current** settings and environment. It's how saved changes to variables, env group links, settings or [resource limits](/docs/concepts/resource-limits#when-a-change-applies) reach a running service without rebuilding. It rolls out like any deploy: health check, then switch, then the old instances stop. `ferry env set` and `ferry env-group set` restart for you.
 
 The service must have a live deploy. See [Deploys](/docs/concepts/deploys) for rollbacks, cancels and deploy states.
 

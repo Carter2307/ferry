@@ -4,24 +4,39 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
-use ferry_core::DatastoreStatus;
-use ferry_core::dto::{CreateDatastore, DatastoreView};
+use ferry_core::dto::{CreateDatastore, DatastoreView, UpdateDatastore};
+use ferry_core::{Datastore, DatastoreStatus};
 
-use super::{Ctx, Exit, confirm, or_dash, print_json};
-use crate::cli::DbCreateArgs;
+use super::services::{explicit_cpus, explicit_memory};
+use super::{Ctx, DefaultLimits, Exit, confirm, limit_pairs, or_dash, print_json};
+use crate::cli::{DbCreateArgs, DbUpdateArgs};
+use crate::client::is_unsupported_route;
 use crate::output::{self, Cell, Color, Table, errln, outln};
 
 /// How long `db create --wait` waits for the datastore to become available.
 const WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 
-pub async fn create(ctx: &Ctx, a: DbCreateArgs) -> Result<()> {
-    let body = CreateDatastore {
+/// Map `ferry db create` flags to the request body (`--memory default` /
+/// `--cpu 0` leave the limit to the server default).
+pub fn create_request(a: &DbCreateArgs) -> CreateDatastore {
+    CreateDatastore {
         name: a.name.clone(),
         kind: a.kind,
         version: a.version.clone(),
         database: a.database.clone(),
         username: a.username.clone(),
-    };
+        memory_limit_mb: explicit_memory(a.memory),
+        cpu_limit: explicit_cpus(a.cpu),
+    }
+}
+
+/// Map `ferry db update` flags to the request body (`default` → 0 clears).
+pub fn update_request(a: &DbUpdateArgs) -> UpdateDatastore {
+    UpdateDatastore { memory_limit_mb: a.memory, cpu_limit: a.cpu }
+}
+
+pub async fn create(ctx: &Ctx, a: DbCreateArgs) -> Result<()> {
+    let body = create_request(&a);
     let mut resp = ctx.client.post::<_, DatastoreView>(&["datastores"], &[], &body).await?;
     if a.wait && resp.data.datastore.status == DatastoreStatus::Creating {
         if !ctx.json {
@@ -86,6 +101,45 @@ pub async fn list(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// `ferry db update NAME --memory/--cpu`: new limits, applied to the
+/// datastore's container in place (no restart; also when it is failed or
+/// still provisioning).
+pub async fn update(ctx: &Ctx, a: DbUpdateArgs) -> Result<()> {
+    let body = update_request(&a);
+    let resp = match ctx.client.patch::<_, DatastoreView>(&["datastores", &a.name], &[], &body).await {
+        Ok(r) => r,
+        Err(e) if is_unsupported_route(&e) => {
+            return Err(e.context("this Ferry server can't change datastore limits: upgrade ferryd"));
+        }
+        Err(e) => return Err(e),
+    };
+    if ctx.json {
+        return print_json(&resp.raw);
+    }
+    let d = &resp.data.datastore;
+    let defaults = DefaultLimits::fetch_if_unset(ctx, d.memory_limit_mb, d.cpu_limit).await;
+    outln!("Updated datastore '{}': {}", d.name, limits_summary(&a, d, defaults))?;
+    match d.status {
+        DatastoreStatus::Available => outln!("Applied to the running container (no restart).")?,
+        DatastoreStatus::Creating => outln!("Applied to its container (or it is created with them).")?,
+        DatastoreStatus::Failed => outln!("Applied to its container: provisioning retries with these limits.")?,
+    }
+    Ok(())
+}
+
+/// `memory limit 1 GiB, CPU limit server default (1 CPU)`: the limits the
+/// command changed, as the server now has them.
+fn limits_summary(a: &DbUpdateArgs, d: &Datastore, defaults: DefaultLimits) -> String {
+    let mut parts = Vec::new();
+    if a.memory.is_some() {
+        parts.push(format!("memory limit {}", output::memory_limit(d.memory_limit_mb, defaults.memory_mb)));
+    }
+    if a.cpu.is_some() {
+        parts.push(format!("CPU limit {}", output::cpu_limit(d.cpu_limit, defaults.cpus)));
+    }
+    parts.join(", ")
+}
+
 pub async fn show(ctx: &Ctx, name: &str) -> Result<()> {
     let resp = ctx.client.get::<DatastoreView>(&["datastores", name], &[]).await?;
     if ctx.json {
@@ -110,6 +164,8 @@ pub async fn show(ctx: &Ctx, name: &str) -> Result<()> {
     pairs.push(("Internal host", Cell::new(format!("{}:{}", v.internal_host, v.internal_port))));
     pairs.push(("Internal URL", Cell::new(v.internal_url.as_str())));
     pairs.push(("External URL", Cell::new(or_dash(v.external_url.as_deref()))));
+    let defaults = DefaultLimits::fetch_if_unset(ctx, d.memory_limit_mb, d.cpu_limit).await;
+    pairs.extend(limit_pairs(d.memory_limit_mb, d.cpu_limit, defaults));
     pairs.push(("Created", Cell::new(output::relative_time(d.created_at, Utc::now()))));
     outln!("{}", output::render_kv(&pairs, output::stdout_color()).trim_end())?;
     outln!()?;
@@ -141,7 +197,48 @@ pub async fn remove(ctx: &Ctx, name: &str, yes: bool, force: bool) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferry_core::{Datastore, DatastoreKind};
+    use crate::cli::{Cli, Command, DbCommand};
+    use clap::Parser;
+    use ferry_core::DatastoreKind;
+
+    fn parse(args: &[&str]) -> DbCommand {
+        match Cli::try_parse_from(std::iter::once("ferry").chain(args.iter().copied())).unwrap().command {
+            Command::Db(c) => c,
+            other => panic!("not a db command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn limit_flags_map_to_requests() {
+        let DbCommand::Create(a) = parse(&["db", "create", "main", "--memory", "256M", "--cpu", "0.5"]) else {
+            panic!()
+        };
+        let body = create_request(&a);
+        assert_eq!((body.memory_limit_mb, body.cpu_limit), (Some(256), Some(0.5)));
+        let DbCommand::Create(a) = parse(&["db", "create", "main", "--memory", "default"]) else { panic!() };
+        assert_eq!((create_request(&a).memory_limit_mb, create_request(&a).cpu_limit), (None, None));
+
+        let DbCommand::Update(a) = parse(&["db", "update", "main", "--memory", "1G"]) else { panic!() };
+        let json = serde_json::to_value(update_request(&a)).unwrap();
+        assert_eq!(json, serde_json::json!({ "memory_limit_mb": 1024, "cpu_limit": null }));
+        let DbCommand::Update(a) = parse(&["db", "update", "main", "--memory", "default", "--cpu", "default"]) else {
+            panic!()
+        };
+        let json = serde_json::to_value(update_request(&a)).unwrap();
+        assert_eq!(json, serde_json::json!({ "memory_limit_mb": 0, "cpu_limit": 0.0 }));
+    }
+
+    #[test]
+    fn update_summary_names_what_changed() {
+        let DbCommand::Update(a) = parse(&["db", "update", "main", "--cpu", "default"]) else { panic!() };
+        let mut d = Datastore::new("main", DatastoreKind::Postgres);
+        d.memory_limit_mb = Some(1024);
+        let defaults = DefaultLimits { memory_mb: Some(512), cpus: Some(1.0) };
+        assert_eq!(limits_summary(&a, &d, defaults), "CPU limit server default (1 CPU)");
+        let DbCommand::Update(a) = parse(&["db", "update", "main", "--cpu", "2", "--memory", "1G"]) else { panic!() };
+        d.cpu_limit = Some(2.0);
+        assert_eq!(limits_summary(&a, &d, DefaultLimits::default()), "memory limit 1 GiB, CPU limit 2 CPUs");
+    }
 
     #[test]
     fn env_reference_syntax() {

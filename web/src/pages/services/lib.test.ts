@@ -25,6 +25,8 @@ function svc(patch: Partial<ServiceView>): ServiceView {
     auto_deploy: true,
     suspended: false,
     disk_mount_path: null,
+    memory_limit_mb: null,
+    cpu_limit: null,
     custom_domains: [],
     deploy_hook_key: 'k',
     live_deploy_id: null,

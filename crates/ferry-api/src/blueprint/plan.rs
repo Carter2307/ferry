@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use ferry_core::dto::BlueprintAction;
 use ferry_core::{
     Config, Datastore, DatastoreKind, DatastoreStatus, EnvGroup, EnvVar, Error, Result, Runtime, Service, ServiceType,
-    Store, git, ids, validate,
+    Store, git, ids, resources, validate,
 };
 
 use super::{Blueprint, DatastoreSpec, EnvVarSpec, RefTarget, ServiceSpec};
@@ -60,9 +60,12 @@ pub(crate) struct GroupPlan {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DatastorePlan {
-    /// The row to insert (create) or the existing row.
+    /// The row to insert (create), or the existing row with the desired
+    /// resource limits.
     pub datastore: Datastore,
     pub create: bool,
+    /// An existing datastore's resource limits change (applied in place).
+    pub limits_changed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +95,9 @@ pub(crate) struct ServicePlan {
     /// A cron job's command changed: its runs use the command of the live
     /// deploy's snapshot → restart if live (no rebuild needed).
     pub command_changed: bool,
+    /// Resource limits changed: they are captured by a deploy's launch spec
+    /// → restart if live (no rebuild needed).
+    pub limits_changed: bool,
     /// Human-readable changes (updates only).
     pub changes: Vec<String>,
 }
@@ -292,6 +298,7 @@ pub async fn plan(store: &Store, config: &Config, bp: &Blueprint) -> Result<Plan
             domains_changed: false,
             needs_deploy: false,
             command_changed: false,
+            limits_changed: false,
             changes: Vec::new(),
         };
         final_links.push(links.result);
@@ -448,6 +455,13 @@ fn plan_datastore(
         checks::pg_identifier("user", u).map_err(|e| prefix_err(&ctx, e))?;
     }
     let resource = "datastore".to_string();
+    let current_limits = |d: &Datastore| (d.memory_limit_mb, d.cpu_limit);
+    let limits_for = |current: (Option<u32>, Option<f64>)| -> Result<(Option<u32>, Option<f64>)> {
+        let (memory_mb, cpus) = spec.limits.resolve(current);
+        let cpus = cpus.map(resources::round_cpus);
+        resources::validate(memory_mb, cpus).map_err(|e| prefix_err(&ctx, e))?;
+        Ok((memory_mb, cpus))
+    };
     if let Some(existing) = store_datastores.iter().find(|d| d.name == spec.name) {
         if existing.kind != spec.kind {
             return Err(Error::conflict(format!(
@@ -474,11 +488,21 @@ fn plan_datastore(
                 existing.error.as_deref().unwrap_or("unknown error")
             ));
         }
-        let action =
-            BlueprintAction { resource, name: spec.name.clone(), action: "unchanged".into(), changes: Vec::new() };
-        return Ok((DatastorePlan { datastore: existing.clone(), create: false }, action));
+        // Resource limits are the one thing changed in place (no restart).
+        let mut datastore = existing.clone();
+        (datastore.memory_limit_mb, datastore.cpu_limit) = limits_for(current_limits(existing))?;
+        let changes = limit_changes(existing.memory_limit_mb, existing.cpu_limit, &datastore);
+        let limits_changed = !changes.is_empty();
+        let action = BlueprintAction {
+            resource,
+            name: spec.name.clone(),
+            action: if limits_changed { "update" } else { "unchanged" }.into(),
+            changes,
+        };
+        return Ok((DatastorePlan { datastore, create: false, limits_changed }, action));
     }
     let mut ds = Datastore::new(spec.name.clone(), spec.kind);
+    (ds.memory_limit_mb, ds.cpu_limit) = limits_for((None, None))?;
     if let Some(v) = &spec.version {
         ds.version = v.clone();
     }
@@ -492,7 +516,29 @@ fn plan_datastore(
         }
     }
     let action = BlueprintAction { resource, name: spec.name.clone(), action: "create".into(), changes: Vec::new() };
-    Ok((DatastorePlan { datastore: ds, create: true }, action))
+    Ok((DatastorePlan { datastore: ds, create: true, limits_changed: false }, action))
+}
+
+/// A memory limit for diffs (`None` = the server default).
+fn show_memory(mb: Option<u32>) -> String {
+    mb.map_or_else(|| "(server default)".to_string(), resources::format_memory_mb)
+}
+
+/// A CPU limit for diffs (`None` = the server default).
+fn show_cpus(cpus: Option<f64>) -> String {
+    cpus.map_or_else(|| "(server default)".to_string(), resources::format_cpus)
+}
+
+/// The human-readable limit changes from `(memory_mb, cpus)` to `new`'s.
+fn limit_changes(memory_mb: Option<u32>, cpus: Option<f64>, new: &Datastore) -> Vec<String> {
+    let mut changes = Vec::new();
+    if memory_mb != new.memory_limit_mb {
+        changes.push(format!("memory_limit: {} → {}", show_memory(memory_mb), show_memory(new.memory_limit_mb)));
+    }
+    if cpus != new.cpu_limit {
+        changes.push(format!("cpu_limit: {} → {}", show_cpus(cpus), show_cpus(new.cpu_limit)));
+    }
+    changes
 }
 
 // ---------------------------------------------------------------------------
@@ -792,10 +838,11 @@ fn plan_links(linked: &[String], declared: &[String]) -> LinkPlan {
 
 /// The desired row for `spec`: declarative for build/deploy settings (omitted
 /// keys fall back to defaults), except that an existing service keeps its
-/// current `numInstances` / `domains` when those are omitted, and keeps its
-/// current source (repo + branch, or image) when neither `repo` nor `image`
-/// is given — Render defaults `repo` to the blueprint's own repository, which
-/// Ferry doesn't know.
+/// current `numInstances` / `domains` / resource limits when those are
+/// omitted (no `plan`, `memoryLimit` or `cpuLimit`; see
+/// [`super::LimitsSpec`]), and keeps its current source (repo + branch, or
+/// image) when neither `repo` nor `image` is given — Render defaults `repo`
+/// to the blueprint's own repository, which Ferry doesn't know.
 fn desired_service(spec: &ServiceSpec, existing: Option<&Service>) -> Result<Service> {
     let mut s = match existing {
         Some(e) => e.clone(),
@@ -829,6 +876,10 @@ fn desired_service(spec: &ServiceSpec, existing: Option<&Service>) -> Result<Ser
     s.disk_mount_path = spec.disk_mount_path.clone();
     s.auto_deploy = spec.auto_deploy.unwrap_or(true);
     s.instances = spec.instances.or(existing.map(|e| e.instances)).unwrap_or(1);
+    (s.memory_limit_mb, s.cpu_limit) = spec.limits.resolve(match existing {
+        Some(e) => (e.memory_limit_mb, e.cpu_limit),
+        None => (None, None),
+    });
     match &spec.domains {
         Some(d) => {
             let mut out = Vec::new();
@@ -894,6 +945,17 @@ fn diff_service(old: &Service, sp: &mut ServicePlan) -> Vec<String> {
     field("auto_deploy", old.auto_deploy.to_string(), new.auto_deploy.to_string(), false);
     let instances_changed = old.instances != new.instances;
     let domains_changed = old.custom_domains != new.custom_domains;
+    let limits_changed = old.memory_limit_mb != new.memory_limit_mb || old.cpu_limit != new.cpu_limit;
+    if old.memory_limit_mb != new.memory_limit_mb {
+        changes.push(format!(
+            "memory_limit: {} → {}",
+            show_memory(old.memory_limit_mb),
+            show_memory(new.memory_limit_mb)
+        ));
+    }
+    if old.cpu_limit != new.cpu_limit {
+        changes.push(format!("cpu_limit: {} → {}", show_cpus(old.cpu_limit), show_cpus(new.cpu_limit)));
+    }
     if instances_changed {
         changes.push(format!("instances: {} → {}", old.instances, new.instances));
     }
@@ -906,9 +968,10 @@ fn diff_service(old: &Service, sp: &mut ServicePlan) -> Vec<String> {
     }
     sp.build_changed = build;
     sp.command_changed = cron_command;
+    sp.limits_changed = limits_changed;
     sp.instances_changed = instances_changed;
     sp.domains_changed = domains_changed;
-    sp.settings_changed = build || other || instances_changed || domains_changed;
+    sp.settings_changed = build || other || limits_changed || instances_changed || domains_changed;
     changes
 }
 

@@ -115,4 +115,13 @@ pub trait Engine: Send + Sync + 'static {
 
     /// Remove the datastore container and volume, then the store row.
     async fn delete_datastore(&self, datastore_id: &str) -> Result<()>;
+
+    /// Apply the datastore's stored resource limits (see
+    /// [`crate::Config::limits`]) to its container in place, without a
+    /// restart. Called after `PATCH /api/v1/datastores/{id}`. A datastore that
+    /// has no container yet picks its limits up when it is provisioned.
+    async fn update_datastore_limits(&self, datastore_id: &str) -> Result<()> {
+        let _ = datastore_id;
+        Err(crate::Error::invalid("changing datastore limits is not supported by this engine"))
+    }
 }

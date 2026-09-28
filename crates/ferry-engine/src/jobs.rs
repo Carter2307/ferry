@@ -34,6 +34,13 @@ const JOB_STOP_GRACE_SECS: u32 = 10;
 const OUTPUT_DRAIN: Duration = Duration::from_secs(10);
 /// How long `cancel_job`, suspend and delete wait for a job to stop.
 const STOP_WAIT: Duration = Duration::from_secs(JOB_STOP_GRACE_SECS as u64 + 20);
+/// Exit code of a process killed by SIGKILL — the kernel's OOM killer's
+/// signal.
+const SIGKILL_EXIT_CODE: i64 = 137;
+/// How long (polls × interval) a SIGKILLed job's container is watched for
+/// Docker's OOM flag, which can be recorded just after the exit.
+const OOM_FLAG_POLLS: usize = 10;
+const OOM_FLAG_POLL: Duration = Duration::from_millis(100);
 /// The error of a job a user canceled.
 const CANCELED_BY_USER: &str = "canceled by user";
 /// The error of a job stopped by the server shutting down.
@@ -181,7 +188,12 @@ async fn execute(
     if let Some(v) = &volume {
         log.system(format!("==> Mounting the service's disk at {}", v.target));
     }
-    let container_spec = ContainerSpec {
+    // The live deploy's limits (jobs count against the service's).
+    let resources = spec.resources(inner).await;
+    for warning in resources.warnings() {
+        log.system(format!("==> Warning: {warning}"));
+    }
+    let mut container_spec = ContainerSpec {
         name: container_name.clone(),
         image: image.clone(),
         env: spec.job_env(),
@@ -195,8 +207,11 @@ async fn execute(
         restart_policy: RestartPolicy::No,
         memory_limit_bytes: None,
         nano_cpus: None,
+        pids_limit: None,
+        log_rotation: None,
         working_dir: None,
     };
+    resources.apply(&mut container_spec);
     match &command {
         Some(c) => log.system(format!("==> Running `{c}`")),
         None => log.system("==> Running the image's default command"),
@@ -208,6 +223,11 @@ async fn execute(
         stopped_before_start(inner, &job.id, log, running).await;
         return;
     }
+    // A second early: Docker's event timestamps are its own clock's.
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .saturating_sub(Duration::from_secs(1));
     let info = match inner.docker.run_container(&container_spec).await {
         Ok(info) => info,
         Err(e) => {
@@ -250,7 +270,7 @@ async fn execute(
             let (status, why) = interruption(inner, running);
             (status, Some(code), Some(why))
         }
-        Ok(code) => (JobStatus::Failed, Some(code), Some(format!("exited with code {code}"))),
+        Ok(code) => (JobStatus::Failed, Some(code), Some(failure_reason(inner, &info.id, code, started).await)),
         Err(_) if interrupted => {
             let (status, why) = interruption(inner, running);
             (status, None, Some(why))
@@ -261,6 +281,41 @@ async fn execute(
     finish_job(inner, &job.id, status, code, error).await;
     if let Err(e) = inner.docker.remove_container(&info.id, true).await {
         warn!(job = %job.id, "cannot remove job container: {e}");
+    }
+}
+
+/// Why a job's container exited with a non-zero `code`: out of memory
+/// (naming the limit) or just its exit code. Only a SIGKILL can be the
+/// kernel's OOM killer, and Docker may record the OOM kill a moment after
+/// it reports the exit (seen on Linux hosts): a SIGKILLed job's container
+/// is looked at again briefly, then its Docker events since `started` (a
+/// time since the epoch) decide.
+async fn failure_reason(inner: &Inner, container_id: &str, code: i64, started: Duration) -> String {
+    let mut memory_limit_bytes = None;
+    for attempt in 0..OOM_FLAG_POLLS {
+        match inner.docker.inspect_container(container_id).await {
+            Ok(Some(c)) if c.oom_killed => return failure_text(code, true, c.memory_limit_bytes),
+            Ok(Some(c)) => memory_limit_bytes = c.memory_limit_bytes,
+            _ => break,
+        }
+        if code != SIGKILL_EXIT_CODE || attempt + 1 == OOM_FLAG_POLLS {
+            break;
+        }
+        tokio::time::sleep(OOM_FLAG_POLL).await;
+    }
+    if code == SIGKILL_EXIT_CODE
+        && crate::health::exit_from_events(inner, container_id, started, memory_limit_bytes).await.oom_killed
+    {
+        return failure_text(code, true, memory_limit_bytes);
+    }
+    failure_text(code, false, None)
+}
+
+fn failure_text(code: i64, oom_killed: bool, memory_limit_bytes: Option<i64>) -> String {
+    if oom_killed {
+        crate::limits::oom_message("the job", memory_limit_bytes, "the service's")
+    } else {
+        format!("exited with code {code}")
     }
 }
 
@@ -601,6 +656,11 @@ mod tests {
         assert_eq!(human_duration(Duration::from_secs(45)), "45s");
         assert_eq!(human_duration(Duration::from_secs(192)), "3m 12s");
         assert_eq!(human_duration(Duration::from_secs(3900)), "1h 5m");
+        assert_eq!(failure_text(3, false, None), "exited with code 3");
+        assert_eq!(
+            failure_text(137, true, Some(64 << 20)),
+            "the job ran out of memory (limit 64 MiB) — raise the service's memory limit"
+        );
         let line = skipped_run_line("3m 12s");
         assert!(line.starts_with("==> Warning:") && line.contains("cancel it"), "{line}");
     }

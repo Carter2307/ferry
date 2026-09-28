@@ -1,10 +1,10 @@
 ---
 title: "Security model"
-description: "What the API token protects, how secrets are stored and passed, data directory permissions, what the proxy exposes, and the safety rules that keep servers apart."
+description: "What the API token protects, how secrets are stored and passed, data directory permissions, what the proxy exposes, how far one misbehaving service can reach, and the safety rules that keep servers apart."
 icon: ShieldCheck
 ---
 
-Ferry is built for one team running its own server. Whoever holds the API token is an administrator: there are no users, roles or per-service permissions. The model below keeps that token and the secrets behind it on the server, keeps everything but the proxy off the network, and keeps two Ferry servers from ever damaging each other's workloads.
+Ferry is built for one team running its own server. Whoever holds the API token is an administrator: there are no users, roles or per-service permissions. The model below keeps that token and the secrets behind it on the server, keeps everything but the proxy off the network, keeps one runaway app from taking the server down, and keeps two Ferry servers from ever damaging each other's workloads.
 
 ## The API token
 
@@ -120,10 +120,32 @@ To run several servers on one Docker daemon, give each its own `--name-prefix` a
 
 The first `SIGINT` or `SIGTERM` starts a graceful shutdown: the API stops accepting requests and gets up to 10 seconds to finish those in flight, the proxy drains, and the engine stops job runs and records interrupted deploys (up to 25 seconds). Containers keep running: the next start picks them up. A second signal exits at once (exit code 130).
 
+## One misbehaving service
+
+Anyone who can deploy can run any code on the server, so Ferry can't stop a hostile app. It does keep a buggy or runaway one from taking the server down: every container it starts (service instances, one-off jobs, cron runs and datastores; not builds) runs with a memory limit, a CPU limit, a process limit and log rotation. With the default server options:
+
+| When a service… | What happens |
+|---|---|
+| Leaks memory | The kernel kills its container at its memory limit (512 MiB by default, no swap beyond it) instead of picking some other process on the host, such as `ferryd`, `dockerd` or a database. Docker restarts it, `ferryd` logs the kill in the server log, and `ferry status` and the dashboard mark the instance as OOM killed while it restarts. |
+| Spins the CPU | It is throttled at its CPU limit (1 CPU per container by default), and the other cores stay free. On a 1-CPU host the default is the whole host: lower `--default-cpu-limit` there. |
+| Forks without end | It stops at 1024 processes and threads per container: `fork` fails inside the container, and the host's process table is untouched. |
+| Logs without end | Docker's `json-file` log rotates at 10 MiB × 3 files, at most about 30 MiB per container. A Docker daemon configured with another log driver keeps it, with that driver's own limits. |
+| Deploys onto a nearly full disk | The deploy, or a new datastore, fails before building or pulling, with a message naming the path. Restarts and rollbacks still work. |
+
+The limits are caps, not reservations: nothing checks that their sum fits the host. When the host itself runs out of memory, the kernel's OOM killer picks a victim among all processes. On Linux, `ferryd` lowers its own score at startup (`--oom-score-adj`, default `-500`) so that containers go first, and never raises a lower value set by its service manager, such as systemd's `OOMScoreAdjust=`. Lowering it needs root or `CAP_SYS_RESOURCE`; without them, `ferryd` logs a warning that suggests `OOMScoreAdjust=` in its systemd unit. The processes `ferryd` starts (`git`, the `docker` CLI) are reset to 0, so a runaway `git` isn't spared at the expense of the apps and databases, and containers never inherit the score, since Docker starts them. See [Resource limits](/docs/concepts/resource-limits) for how the limits work, and [Production setup](/docs/guides/production#size-the-container-limits) for sizing them.
+
+Still **not** contained:
+
+- **Builds.** `docker build` runs in BuildKit, which has no per-build memory or CPU limit: a build can still use all of the host's memory and CPU. Only `--build-concurrency` (default 2) bounds builds, and the free-disk check runs before a build, not during it.
+- **Disks.** Volumes (datastores, service disks), containers' own filesystems, images and the build cache have no quotas: a service writing to its disk or its container's filesystem can fill the host's disk. The [free-disk check](/docs/guides/production#the-free-disk-check) only stops new deploys and new datastores; `--keep-images` bounds Ferry's own images, and pruning the rest (`docker image prune`, `docker builder prune`) is up to you.
+- **Disk and network I/O.** There are no I/O or bandwidth limits.
+- **The private network.** Every service and datastore shares one private network ([networking model](/docs/architecture/networking-model#the-private-network)): any container can reach every service and datastore by name, and datastores are protected by their passwords only.
+- **Guards turned off.** A limit of `0` (`--default-memory-limit 0`, `--default-cpu-limit 0`, `--pids-limit 0`, `--log-max-size 0`, `--min-free-disk 0`) turns that guard off.
+
 ## Known limitations
 
 - One administrator token: no users, teams, roles or audit log.
 - Secrets are stored unencrypted in `ferry.db` (see [above](#the-data-directory)).
 - No IP allow lists, and no rate limiting beyond the connection limits above.
-- App containers run without CPU or memory limits.
+- Builds have no memory or CPU limit, disks have no quotas, disk and network I/O aren't limited, and every container can reach every service and datastore on the private network (see [One misbehaving service](#one-misbehaving-service)).
 - Images must be pullable anonymously: private registry credentials are not supported.

@@ -28,7 +28,7 @@ It runs once at boot, 2 seconds later, then every 10 seconds, and right after yo
 
 - keeps the running containers of the **live deploy**, up to the number of instances you asked for;
 - removes exited or dead containers, extra instances, and containers of any other deploy. Containers of deploys that never went live (failed, canceled, interrupted) are removed at once; the others get a 10-second stop grace period;
-- starts the missing instances from the live deploy's snapshot: the same image, environment, command, port and disk as the deploy. Settings you changed since don't apply until the next deploy or restart;
+- starts the missing instances from the live deploy's snapshot: the same image, environment, command, port, disk and [resource limits](/docs/concepts/resource-limits) as the deploy. Settings you changed since don't apply until the next deploy or restart;
 - installs the proxy routes: the instances that accept TCP connections, or the `503` page for suspended services and services with no instance up.
 
 It skips a service while one of its deploys is starting and health-checking instances: that deploy is in charge.
@@ -47,6 +47,7 @@ Service containers run with Docker's `unless-stopped` restart policy.
 
 - **The process exits or crashes:** Docker restarts the container right away. It may come back on a new host port; the route watcher updates the route as soon as it accepts connections.
 - **The container disappears** (removed by hand, or its restart failed): the next reconciler pass starts a replacement, within about 10 seconds.
+- **It runs out of memory:** the kernel kills it at its memory limit, and Docker restarts it like any crash. `ferry status` marks the instance `OOM killed` while it restarts, and `ferryd` logs every kill in its server log. See [Out-of-memory kills](/docs/concepts/resource-limits#out-of-memory-kills).
 
 Meanwhile, the proxy sends traffic to the other instances. With a single instance, requests get `503` until the instance is back. `ferry status` shows the restart count of each instance, and the service state is `degraded` while fewer instances run than you asked for.
 
@@ -63,7 +64,7 @@ When `ferryd` starts, it:
 1. marks deploys that were still queued, building or deploying as `build_failed` or `deploy_failed`, with the error "interrupted by server restart", and job runs that were still going as `failed`;
 2. installs the routes of every service **before** the proxy accepts connections, so running apps are served again immediately;
 3. finishes converging in the background: removes the containers of interrupted deploys, starts missing instances, restarts datastores;
-4. starts the reconciler loop, the route watcher and the cron scheduler, and resumes provisioning of datastores that were still being created.
+4. starts the reconciler loop, the route watcher, the out-of-memory watcher and the cron scheduler, and resumes provisioning of datastores that were still being created.
 
 Interrupted deploys aren't retried. Start them again with `ferry deploy NAME`.
 

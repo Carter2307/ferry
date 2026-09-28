@@ -28,6 +28,7 @@ pub struct MockEngine {
     pub fail_provision: AtomicBool,
     pub fail_restart: AtomicBool,
     pub fail_scale: AtomicBool,
+    pub fail_update_limits: AtomicBool,
     /// Running instances `service_status` reports (default: all desired).
     pub running: Mutex<Option<u32>>,
 }
@@ -40,6 +41,7 @@ impl MockEngine {
             fail_provision: AtomicBool::new(false),
             fail_restart: AtomicBool::new(false),
             fail_scale: AtomicBool::new(false),
+            fail_update_limits: AtomicBool::new(false),
             running: Mutex::new(None),
         }
     }
@@ -183,6 +185,9 @@ impl Engine for MockEngine {
                 cpu_percent: Some(1.5),
                 memory_bytes: Some(1024),
                 memory_limit_bytes: None,
+                cpu_limit: None,
+                oom_killed: false,
+                exit_code: None,
             })
             .collect();
         Ok(RuntimeStatus {
@@ -248,6 +253,21 @@ impl Engine for MockEngine {
         self.record(format!("delete_datastore {datastore_id}"));
         self.store.delete_datastore(datastore_id).await
     }
+
+    /// Records the stored limits it would apply: `update_limits ID MEMORY CPUS`
+    /// (`-` = the server default).
+    async fn update_datastore_limits(&self, datastore_id: &str) -> Result<()> {
+        let ds = self.store.require_datastore(datastore_id).await?;
+        self.record(format!(
+            "update_limits {datastore_id} {} {}",
+            ds.memory_limit_mb.map_or_else(|| "-".to_string(), |m| m.to_string()),
+            ds.cpu_limit.map_or_else(|| "-".to_string(), |c| c.to_string()),
+        ));
+        if self.fail_update_limits.load(Ordering::SeqCst) {
+            return Err(Error::docker("docker update exploded"));
+        }
+        Ok(())
+    }
 }
 
 /// A router over an in-memory store and a mock engine.
@@ -301,6 +321,8 @@ impl TestApp {
             store: store.clone(),
             engine: engine.clone() as Arc<dyn Engine>,
             docker_version: Some("27.0.0".into()),
+            docker_cpus: Some(4),
+            docker_memory_bytes: Some(8 << 30),
             shutdown: shutdown.clone(),
         });
         TestApp { router, store, engine, config, shutdown, dir }

@@ -68,6 +68,12 @@ pub fn is_missing_route(err: &anyhow::Error) -> bool {
         .any(|a| a.status == 404 && (a.message.starts_with("no API route") || a.code == "http_404"))
 }
 
+/// True when an older ferryd doesn't have the route or method (a missing
+/// route, or 405 for a new method on an existing path).
+pub fn is_unsupported_route(err: &anyhow::Error) -> bool {
+    is_missing_route(err) || err.chain().filter_map(|e| e.downcast_ref::<ApiError>()).any(|a| a.status == 405)
+}
+
 /// A decoded JSON response plus the raw value (printed as-is by `--json`).
 #[derive(Debug, Clone)]
 pub struct Json<T> {
@@ -387,6 +393,19 @@ mod tests {
         let any: anyhow::Error = ApiError::from_body(404, b"").into();
         assert!(is_not_found(&any));
         assert!(is_not_found(&any.context("while doing x")));
+    }
+
+    #[test]
+    fn unsupported_routes() {
+        let err = |status, body: &[u8]| -> anyhow::Error { ApiError::from_body(status, body).into() };
+        let not_allowed = br#"{"error":{"code":"method_not_allowed","message":"method not allowed for this path"}}"#;
+        assert!(is_unsupported_route(&err(405, not_allowed).context("x")));
+        assert!(is_unsupported_route(&err(404, br#"{"error":{"code":"not_found","message":"no API route for /x"}}"#)));
+        assert!(!is_unsupported_route(&err(
+            404,
+            br#"{"error":{"code":"not_found","message":"datastore 'x' not found"}}"#
+        )));
+        assert!(!is_unsupported_route(&err(400, b"")));
     }
 
     #[test]

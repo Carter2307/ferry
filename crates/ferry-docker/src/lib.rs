@@ -82,6 +82,15 @@ pub struct VolumeMount {
     pub target: String,
 }
 
+/// Rotation of a container's log file (`json-file` driver).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogRotation {
+    /// Rotate when the current file reaches this size (MiB, at least 1).
+    pub max_size_mb: u32,
+    /// Files kept, the current one included (at least 1).
+    pub max_files: u32,
+}
+
 /// Everything needed to create a container.
 #[derive(Debug, Clone, Default)]
 pub struct ContainerSpec {
@@ -100,10 +109,49 @@ pub struct ContainerSpec {
     pub publish: Option<PortPublish>,
     pub volumes: Vec<VolumeMount>,
     pub restart_policy: RestartPolicy,
+    /// Hard memory limit. Swap is not allowed beyond it (`MemorySwap` =
+    /// `Memory`), so a container over its limit is OOM-killed instead of
+    /// swapping the host to a crawl.
     pub memory_limit_bytes: Option<i64>,
     /// CPU quota in units of 1e-9 CPUs.
     pub nano_cpus: Option<i64>,
+    /// Max processes + threads in the container (`--pids-limit`).
+    pub pids_limit: Option<i64>,
+    /// Log rotation; `None` = the daemon's default log configuration.
+    pub log_rotation: Option<LogRotation>,
     pub working_dir: Option<String>,
+}
+
+/// Limits changed in place on a running container (`docker update`).
+/// `None` removes the limit (see [`Docker::update_limits`] for how).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LimitsUpdate {
+    pub memory_limit_bytes: Option<i64>,
+    /// CPU quota in units of 1e-9 CPUs.
+    pub nano_cpus: Option<i64>,
+    pub pids_limit: Option<i64>,
+}
+
+/// Capacity of the Docker host (from `docker info`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HostInfo {
+    /// CPUs available to containers.
+    pub cpus: Option<u32>,
+    /// Memory available to containers (bytes).
+    pub memory_bytes: Option<u64>,
+    /// The daemon's data directory (e.g. `/var/lib/docker`). On Docker
+    /// Desktop it lives inside a VM, not on this machine's filesystem.
+    pub docker_root_dir: Option<String>,
+    /// Name of the daemon's operating system, e.g. `Docker Desktop` or
+    /// `Ubuntu 24.04 LTS`.
+    pub operating_system: Option<String>,
+    /// Whether the kernel supports CPU CFS quotas. Without them (some NAS or
+    /// ARM kernels, rootless Docker without the cgroup `cpu` controller)
+    /// Docker refuses to create or update a container with a CPU limit
+    /// (`NanoCpus`). `None` = not reported.
+    pub cpu_cfs_quota: Option<bool>,
+    /// The daemon's default log driver (`json-file`, `journald`, `local`...).
+    pub logging_driver: Option<String>,
 }
 
 /// Docker container state.
@@ -160,7 +208,7 @@ pub struct ContainerInfo {
     pub name: String,
     pub image: String,
     pub state: ContainerState,
-    /// Exit code once exited.
+    /// Exit code of the last exit (exited, dead or restarting containers).
     pub exit_code: Option<i64>,
     /// Host port bound for the container's published TCP port (if any).
     pub host_port: Option<u16>,
@@ -168,6 +216,16 @@ pub struct ContainerInfo {
     /// RFC3339 start time.
     pub started_at: Option<String>,
     pub restart_count: Option<i64>,
+    /// The kernel OOM-killed the container's process the last time it
+    /// exited (inspect only; `false` from the list API).
+    pub oom_killed: bool,
+    /// Configured memory limit (inspect only; `None` = unlimited or unknown,
+    /// including the "no limit" value [`Docker::update_limits`] sets).
+    pub memory_limit_bytes: Option<i64>,
+    /// Configured CPU quota in 1e-9 CPUs (inspect only; `None` = unlimited
+    /// or unknown). A quota of all the host's CPUs is how
+    /// [`Docker::update_limits`] removes a CPU limit.
+    pub nano_cpus: Option<i64>,
 }
 
 /// One-shot resource usage.
@@ -247,6 +305,54 @@ impl Docker {
             .version
             .filter(|v| !v.is_empty())
             .ok_or_else(|| Error::Docker("querying the Docker version: the daemon did not report one".into()))
+    }
+
+    /// CPUs, memory and data directory of the Docker host.
+    pub async fn host_info(&self) -> Result<HostInfo> {
+        let info = self.inner.info().await.map_err(|e| errors::map_docker(e, "querying Docker host information"))?;
+        Ok(HostInfo {
+            cpus: info.ncpu.and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0),
+            memory_bytes: info.mem_total.and_then(|m| u64::try_from(m).ok()).filter(|m| *m > 0),
+            docker_root_dir: info.docker_root_dir.filter(|d| !d.is_empty()),
+            operating_system: info.operating_system.filter(|o| !o.is_empty()),
+            cpu_cfs_quota: info.cpu_cfs_quota,
+            logging_driver: info.logging_driver.filter(|d| !d.is_empty()),
+        })
+    }
+
+    /// Change a running (or stopped) container's limits in place, without a
+    /// restart (`docker update`). Lowering memory below what the container
+    /// uses makes the kernel reclaim or OOM-kill it. A missing container is
+    /// `Error::NotFound`.
+    ///
+    /// Docker can't remove a memory or CPU limit, so `None` sets one nothing
+    /// reaches instead: a 4 EB memory limit (reported as `None` by
+    /// [`Docker::inspect_container`]) and a CPU quota of all the host's CPUs
+    /// (reported as is; this asks the daemon for its CPU count first). On a
+    /// host without CPU CFS quotas (see [`HostInfo::cpu_cfs_quota`]), where
+    /// Docker refuses any CPU quota, a `None` CPU limit is left out instead.
+    pub async fn update_limits(&self, id: &str, limits: LimitsUpdate) -> Result<()> {
+        errors::check_object_ref("container", id)?;
+        let context = || format!("updating the limits of container {id}");
+        let host_cpus = if limits.nano_cpus.is_some_and(|n| n > 0) {
+            None
+        } else {
+            let host = self.host_info().await.map_err(|e| Error::Docker(format!("{}: {e}", context())))?;
+            match (host.cpu_cfs_quota, host.cpus) {
+                // No CPU quotas here: none to remove.
+                (Some(false), _) => None,
+                (_, Some(cpus)) => Some(cpus),
+                (_, None) => {
+                    return Err(Error::Docker(format!("{}: the daemon did not report its CPU count", context())));
+                }
+            }
+        };
+        self.inner
+            .update_container(id, convert::update_body(&limits, host_cpus))
+            .await
+            .map_err(|e| errors::map(e, &context(), "container", id))?;
+        debug!(container = id, ?limits, "updated container limits");
+        Ok(())
     }
 
     /// Create a bridge network if it doesn't exist.
@@ -1013,5 +1119,107 @@ mod tests {
             assert!(matches!(docker.tag_image(source, &target).await, Err(Error::Invalid(_))), "{source} → {target}");
         }
         assert_eq!(daemon.requests().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn update_limits_requests_and_errors() {
+        let daemon = FakeDaemon::start(|req: &Request| match req.target.as_str() {
+            "/info" => (200, serde_json::json!({"NCPU": 6, "MemTotal": 8_000_000_000i64}).to_string()),
+            "/containers/c1/update" => (200, serde_json::json!({"Warnings": []}).to_string()),
+            "/containers/bad/update" => api_error(400, "range of CPUs is from 0.01 to 6.00"),
+            _ => api_error(404, "No such container: gone"),
+        })
+        .await;
+        let docker = &daemon.docker;
+        let set =
+            LimitsUpdate { memory_limit_bytes: Some(64 << 20), nano_cpus: Some(500_000_000), pids_limit: Some(99) };
+        docker.update_limits("c1", set).await.unwrap();
+        let requests = daemon.requests();
+        assert_eq!(requests.len(), 1, "explicit limits need no docker info: {requests:?}");
+        assert_eq!((requests[0].method.as_str(), requests[0].target.as_str()), ("POST", "/containers/c1/update"));
+        let body = requests[0].json();
+        assert_eq!(
+            (&body["Memory"], &body["MemorySwap"], &body["NanoCpus"], &body["PidsLimit"]),
+            (
+                &serde_json::json!(64 << 20),
+                &serde_json::json!(64 << 20),
+                &serde_json::json!(500_000_000),
+                &serde_json::json!(99)
+            )
+        );
+
+        // Removing the CPU limit asks the daemon for its CPU count first.
+        docker.update_limits("c1", LimitsUpdate::default()).await.unwrap();
+        let requests = daemon.requests();
+        assert_eq!(
+            requests.iter().skip(1).map(|r| r.target.as_str()).collect::<Vec<_>>(),
+            ["/info", "/containers/c1/update"]
+        );
+        let body = requests[2].json();
+        assert_eq!(body["NanoCpus"], 6_000_000_000i64);
+        assert_eq!(body["Memory"], convert::NO_MEMORY_LIMIT);
+        assert_eq!(body["PidsLimit"], -1);
+
+        let err = docker.update_limits("bad", set).await.unwrap_err();
+        let expected = "updating the limits of container bad: range of CPUs is from 0.01 to 6.00";
+        assert!(matches!(&err, Error::Docker(m) if m == expected), "{err:?}");
+        let err = docker.update_limits("gone", set).await.unwrap_err();
+        assert!(matches!(&err, Error::NotFound(m) if m == "container 'gone'"), "{err:?}");
+        assert!(matches!(docker.update_limits("../x", set).await, Err(Error::Invalid(_))));
+        assert_eq!(daemon.requests().len(), 5);
+
+        // No CPU count: the limit can't be removed.
+        let blind = FakeDaemon::start(|req: &Request| match req.target.as_str() {
+            "/info" => (200, serde_json::json!({"NCPU": 0}).to_string()),
+            _ => (200, serde_json::json!({"Warnings": []}).to_string()),
+        })
+        .await;
+        let err = blind.docker.update_limits("c1", LimitsUpdate::default()).await.unwrap_err();
+        let expected = "updating the limits of container c1: the daemon did not report its CPU count";
+        assert!(matches!(&err, Error::Docker(m) if m == expected), "{err:?}");
+        assert_eq!(blind.requests().len(), 1, "nothing is updated");
+
+        // No CPU CFS quotas on the host: Docker refuses any NanoCpus, so "no
+        // CPU limit" leaves it out (there is none to remove).
+        let no_cfs = FakeDaemon::start(|req: &Request| match req.target.as_str() {
+            "/info" => (200, serde_json::json!({"NCPU": 4, "CpuCfsQuota": false}).to_string()),
+            _ => (200, serde_json::json!({"Warnings": []}).to_string()),
+        })
+        .await;
+        let memory_only = LimitsUpdate { memory_limit_bytes: Some(64 << 20), ..LimitsUpdate::default() };
+        no_cfs.docker.update_limits("c1", memory_only).await.unwrap();
+        let requests = no_cfs.requests();
+        assert_eq!(requests.len(), 2, "{requests:?}");
+        let body = requests[1].json();
+        assert!(body.get("NanoCpus").is_none(), "{body}");
+        assert_eq!(body["Memory"], 64 << 20);
+    }
+
+    #[tokio::test]
+    async fn host_info_from_the_daemon() {
+        let daemon = FakeDaemon::start(|_: &Request| {
+            let info = serde_json::json!({
+                "NCPU": 4, "MemTotal": 8_217_317_376i64, "DockerRootDir": "/var/lib/docker",
+                "OperatingSystem": "Docker Desktop", "CpuCfsQuota": true, "LoggingDriver": "json-file"
+            });
+            (200, info.to_string())
+        })
+        .await;
+        let info = daemon.docker.host_info().await.unwrap();
+        assert_eq!(
+            info,
+            HostInfo {
+                cpus: Some(4),
+                memory_bytes: Some(8_217_317_376),
+                docker_root_dir: Some("/var/lib/docker".into()),
+                operating_system: Some("Docker Desktop".into()),
+                cpu_cfs_quota: Some(true),
+                logging_driver: Some("json-file".into()),
+            }
+        );
+        let empty =
+            FakeDaemon::start(|_: &Request| (200, serde_json::json!({"NCPU": 0, "DockerRootDir": ""}).to_string()))
+                .await;
+        assert_eq!(empty.docker.host_info().await.unwrap(), HostInfo::default());
     }
 }

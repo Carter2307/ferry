@@ -110,12 +110,16 @@ On first start, `ferryd` creates its data directory, generates an API token and 
   Dashboard + API : http://127.0.0.1:7878
   Dashboard (proxy): http://ferry.localhost:8080
   Apps            : http://<name>.localhost:8080
-  Docker          : 29.2.0
+  Docker          : 29.2.0 (8 CPUs, 7.7 GiB)
   Data            : /home/you/ferry-data
+  Limits          : 512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3
+  Free disk check : deploys need 1 GiB free
   API token       : fy_3f9c…
 
   Log in with:  ferry login --server http://127.0.0.1:7878 --token fy_3f9c…
 ```
+
+The `Docker` line shows the CPUs and memory of the Docker host (with Docker Desktop, those of its virtual machine). The `Limits` line shows the memory and CPU limits every container gets unless its service or datastore sets its own; see [Resource limits](/docs/concepts/resource-limits).
 
 Check that it answers:
 

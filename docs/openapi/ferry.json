@@ -180,7 +180,7 @@
           "datastores"
         ],
         "summary": "Create a datastore",
-        "description": "Creates the row (`creating`) and provisions the container. A failed provisioning still answers 201, with status `failed` and the reason in `error`. Datastores and services share one namespace of names.",
+        "description": "Creates the row (`creating`) and provisions the container. A failed provisioning still answers 201, with status `failed` and the reason in `error`. Datastores and services share one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit the container; omitted or `0` = the server default (see `GET /api/v1/info`).",
         "operationId": "createDatastore",
         "requestBody": {
           "content": {
@@ -204,7 +204,7 @@
             }
           },
           "400": {
-            "description": "Invalid name, version, database or username.",
+            "description": "Invalid name, version, database, username or resource limits.",
             "content": {
               "application/json": {
                 "schema": {
@@ -380,6 +380,102 @@
           },
           "409": {
             "description": "Services reference it (the message lists them).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "datastores"
+        ],
+        "summary": "Change a datastore's resource limits",
+        "description": "Every field is optional: `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01); `0` = back to the server default (see `GET /api/v1/info`). The limits are applied to the datastore's container in place, without a restart, whatever the datastore's status (a memory limit below what the datastore currently uses can fail, or get it killed for running out of memory; a `failed` datastore gets them for its next start). A datastore whose container is not created yet gets them when it is. When applying them fails after they were saved, the error message says so.",
+        "operationId": "updateDatastore",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Datastore id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDatastore"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated datastore.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatastoreView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Resource limits out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such datastore.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The datastore is being deleted (the limits may have been saved).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1498,7 +1594,7 @@
           "services"
         ],
         "summary": "Create a service",
-        "description": "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names.",
+        "description": "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance and job run of the service; omitted or `0` = the server default (see `GET /api/v1/info`).",
         "operationId": "createService",
         "requestBody": {
           "content": {
@@ -1522,7 +1618,7 @@
             }
           },
           "400": {
-            "description": "Invalid settings, name, variables or domains, or an unknown env group.",
+            "description": "Invalid settings (including resource limits out of range), name, variables or domains, or an unknown env group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1728,7 +1824,7 @@
           "services"
         ],
         "summary": "Update a service",
-        "description": "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
+        "description": "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0` = back to the server default) are only saved: they take effect with the next deploy or restart, this request doesn't redeploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
         "operationId": "updateService",
         "parameters": [
           {
@@ -1763,7 +1859,7 @@
             }
           },
           "400": {
-            "description": "Invalid settings.",
+            "description": "Invalid settings (including resource limits out of range).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4105,6 +4201,14 @@
           "kind"
         ],
         "properties": {
+          "cpu_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU limit, in CPUs. Omitted or 0 = the server default."
+          },
           "database": {
             "type": [
               "string",
@@ -4114,6 +4218,15 @@
           },
           "kind": {
             "$ref": "#/components/schemas/DatastoreKind"
+          },
+          "memory_limit_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Memory limit, in MiB. Omitted or 0 = the server default.",
+            "minimum": 0
           },
           "name": {
             "type": "string"
@@ -4178,6 +4291,14 @@
               "string",
               "null"
             ]
+          },
+          "cpu_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU limit per instance, in CPUs. Omitted or 0 = the server default."
           },
           "custom_domains": {
             "type": [
@@ -4245,6 +4366,15 @@
               "null"
             ],
             "format": "int32",
+            "minimum": 0
+          },
+          "memory_limit_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Memory limit per instance, in MiB. Omitted or 0 = the server default.",
             "minimum": 0
           },
           "name": {
@@ -4326,6 +4456,14 @@
           "updated_at"
         ],
         "properties": {
+          "cpu_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU limit of the container, in CPUs. `None` = the server default\n(`ferryd --default-cpu-limit`)."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -4357,6 +4495,15 @@
           },
           "kind": {
             "$ref": "#/components/schemas/DatastoreKind"
+          },
+          "memory_limit_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Memory limit of the container, in MiB. `None` = the server default\n(`ferryd --default-memory-limit`).",
+            "minimum": 0
           },
           "name": {
             "type": "string",
@@ -4775,6 +4922,14 @@
           "container_id": {
             "type": "string"
           },
+          "cpu_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The container's CPU limit (CPUs); `None` when unlimited."
+          },
           "cpu_percent": {
             "type": [
               "number",
@@ -4787,6 +4942,14 @@
               "string",
               "null"
             ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Exit code of the last exit, for exited / restarting containers."
           },
           "host_port": {
             "type": [
@@ -4810,10 +4973,15 @@
               "null"
             ],
             "format": "int64",
+            "description": "The container's memory limit (bytes); `None` when unlimited.",
             "minimum": 0
           },
           "name": {
             "type": "string"
+          },
+          "oom_killed": {
+            "type": "boolean",
+            "description": "The kernel killed the container's process for exceeding its memory\nlimit (the last time it exited)."
           },
           "restart_count": {
             "type": [
@@ -5111,6 +5279,35 @@
               "null"
             ]
           },
+          "default_cpu_limit": {
+            "type": "number",
+            "format": "double",
+            "description": "CPU limit (CPUs) of containers that set none. 0 = unlimited."
+          },
+          "default_memory_limit_mb": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Memory limit (MiB) of containers that set none. 0 = unlimited.",
+            "minimum": 0
+          },
+          "docker_cpus": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "CPUs of the Docker host, if known.",
+            "minimum": 0
+          },
+          "docker_memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Total memory of the Docker host (bytes), if known.",
+            "minimum": 0
+          },
           "docker_version": {
             "type": [
               "string",
@@ -5165,6 +5362,14 @@
               "null"
             ],
             "description": "Build command for native runtimes (e.g. `npm run build`)."
+          },
+          "cpu_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU limit of each instance (and of the service's jobs), in CPUs\n(`0.5` = half a core). `None` = the server default\n(`ferryd --default-cpu-limit`). Takes effect with the next deploy or\nrestart."
           },
           "created_at": {
             "type": "string",
@@ -5224,6 +5429,15 @@
               "null"
             ],
             "description": "The deploy currently live, if any."
+          },
+          "memory_limit_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Memory limit of each instance (and of the service's jobs), in MiB.\n`None` = the server default (`ferryd --default-memory-limit`). Takes\neffect with the next deploy or restart.",
+            "minimum": 0
           },
           "name": {
             "type": "string",
@@ -5411,9 +5625,33 @@
         },
         "additionalProperties": false
       },
+      "UpdateDatastore": {
+        "type": "object",
+        "description": "`PATCH /api/v1/datastores/{id}` — change resource limits. 0 clears\n(server default). Applied to the running container in place (no restart).",
+        "properties": {
+          "cpu_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU limit, in CPUs. 0 clears (server default); omitted keeps it."
+          },
+          "memory_limit_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Memory limit, in MiB. 0 clears (server default); omitted keeps it.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateService": {
         "type": "object",
-        "description": "`PATCH /api/v1/services/{id}` — every field optional. For optional string\nsettings, an empty string clears the value. Changing `instances` scales,\n`suspended` suspends/resumes, `custom_domains` refreshes routes; build\nsettings take effect on the next deploy.",
+        "description": "`PATCH /api/v1/services/{id}` — every field optional. For optional string\nsettings, an empty string clears the value. Changing `instances` scales,\n`suspended` suspends/resumes, `custom_domains` refreshes routes; build\nsettings and resource limits take effect on the next deploy.",
         "properties": {
           "auto_deploy": {
             "type": [
@@ -5432,6 +5670,14 @@
               "string",
               "null"
             ]
+          },
+          "cpu_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU limit per instance, in CPUs. 0 clears (server default). Takes\neffect with the next deploy or restart."
           },
           "custom_domains": {
             "type": [
@@ -5472,6 +5718,15 @@
               "null"
             ],
             "format": "int32",
+            "minimum": 0
+          },
+          "memory_limit_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Memory limit per instance, in MiB. 0 clears (server default). Takes\neffect with the next deploy or restart.",
             "minimum": 0
           },
           "port": {
@@ -5573,7 +5828,7 @@
     },
     {
       "name": "datastores",
-      "description": "Managed Postgres and Redis instances with their connection strings."
+      "description": "Managed Postgres and Redis instances with their connection strings and resource limits."
     },
     {
       "name": "blueprints",

@@ -3,16 +3,29 @@
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use ferry_core::dto::{CreateService, DomainRequest, RuntimeStatus, ScaleRequest, ServiceView, UpdateService};
-use ferry_core::{Deploy, Service, ServiceType, SourceKind, validate};
+use ferry_core::dto::{
+    CreateService, DomainRequest, InstanceStatus, RuntimeStatus, ScaleRequest, ServiceView, UpdateService,
+};
+use ferry_core::{Deploy, Service, ServiceType, SourceKind, resources, validate};
 
-use super::{Ctx, confirm, follow_deploy, or_dash, print_json};
+use super::{Ctx, DefaultLimits, confirm, follow_deploy, limit_pairs, or_dash, print_json};
 use crate::cli::{CreateArgs, SettingsArgs, UpdateArgs};
 use crate::output::{self, Cell, Color, Table, errln, outln};
 use crate::repo;
 
 fn opt_vec<T>(v: Vec<T>) -> Option<Vec<T>> {
     if v.is_empty() { None } else { Some(v) }
+}
+
+/// `--memory` for a new resource: `default` / `0` means "not set" (the
+/// server default), so it is left out.
+pub(super) fn explicit_memory(memory: Option<u32>) -> Option<u32> {
+    memory.filter(|m| *m > 0)
+}
+
+/// `--cpu` for a new resource (see [`explicit_memory`]).
+pub(super) fn explicit_cpus(cpus: Option<f64>) -> Option<f64> {
+    cpus.filter(|c| *c > 0.0)
 }
 
 /// A `CreateService` with the shared settings filled in.
@@ -31,6 +44,8 @@ pub(super) fn create_body(name: &str, service_type: Option<ServiceType>, s: &Set
         schedule: s.schedule.clone(),
         instances: s.instances,
         disk_mount_path: s.disk.clone(),
+        memory_limit_mb: explicit_memory(s.memory),
+        cpu_limit: explicit_cpus(s.cpu),
         custom_domains: opt_vec(s.domains.clone()),
         ..CreateService::default()
     }
@@ -50,7 +65,8 @@ pub fn create_request(a: &CreateArgs) -> CreateService {
     }
 }
 
-/// An `UpdateService` changing exactly the given settings.
+/// An `UpdateService` changing exactly the given settings. `--memory` /
+/// `--cpu default` are sent as 0, which clears the limit (server default).
 pub(super) fn settings_update(s: &SettingsArgs) -> UpdateService {
     UpdateService {
         runtime: s.runtime,
@@ -64,6 +80,8 @@ pub(super) fn settings_update(s: &SettingsArgs) -> UpdateService {
         schedule: s.schedule.clone(),
         instances: s.instances,
         disk_mount_path: s.disk.clone(),
+        memory_limit_mb: s.memory,
+        cpu_limit: s.cpu,
         custom_domains: opt_vec(s.domains.clone()),
         ..UpdateService::default()
     }
@@ -84,6 +102,8 @@ pub(super) fn settings_labels(s: &SettingsArgs) -> Vec<&'static str> {
         (s.schedule.is_some(), "schedule"),
         (s.disk.is_some(), "disk"),
         (!s.domains.is_empty(), "custom domains"),
+        (s.memory.is_some(), "memory limit"),
+        (s.cpu.is_some(), "CPU limit"),
     ]
     .into_iter()
     .filter_map(|(given, label)| given.then_some(label))
@@ -274,6 +294,8 @@ pub async fn show(ctx: &Ctx, name: &str) -> Result<()> {
     if s.is_long_running() {
         pairs.push(("Instances", Cell::new(s.instances.to_string())));
     }
+    let defaults = DefaultLimits::fetch_if_unset(ctx, s.memory_limit_mb, s.cpu_limit).await;
+    pairs.extend(limit_pairs(s.memory_limit_mb, s.cpu_limit, defaults));
     pairs.push(("Auto-deploy", Cell::new(if s.auto_deploy { "yes" } else { "no" })));
     if s.suspended {
         pairs.push(("Suspended", Cell::colored("yes", Some(Color::Yellow))));
@@ -330,6 +352,8 @@ fn needs_redeploy(a: &UpdateArgs, service_type: ServiceType) -> bool {
 }
 
 /// What to tell the user after `ferry update`: when the changes apply.
+/// Resource limits are captured when a deploy or restart starts, so a
+/// restart (which reuses the live image) is enough for them.
 fn update_hints(a: &UpdateArgs, svc: &Service) -> Vec<String> {
     let mut hints = Vec::new();
     if svc.service_type == ServiceType::CronJob && a.settings.start_cmd.is_some() {
@@ -338,8 +362,20 @@ fn update_hints(a: &UpdateArgs, svc: &Service) -> Vec<String> {
             svc.name
         ));
     }
+    let limits = a.settings.memory.is_some() || a.settings.cpu.is_some();
+    let name = &svc.name;
     if needs_redeploy(a, svc.service_type) {
-        hints.push(format!("Build/deploy settings apply to the next deploy: ferry deploy {}", svc.name));
+        let what =
+            if limits { "Build/deploy settings and resource limits apply" } else { "Build/deploy settings apply" };
+        hints.push(format!("{what} to the next deploy: ferry deploy {name}"));
+    } else if limits {
+        hints.push(if svc.live_deploy_id.is_none() {
+            format!("Resource limits apply to the next deploy: ferry deploy {name}")
+        } else if svc.suspended {
+            format!("Resource limits apply to the next deploy or restart (after: ferry resume {name})")
+        } else {
+            format!("Resource limits apply to the next deploy or restart: ferry restart {name}")
+        });
     }
     hints
 }
@@ -437,6 +473,11 @@ pub async fn status(ctx: &Ctx, name: &str) -> Result<()> {
             "restarting" | "created" => Some(Color::Yellow),
             _ => Some(Color::Red),
         };
+        let cpu = match (i.cpu_percent, i.cpu_limit) {
+            (Some(c), Some(l)) if l > 0.0 => format!("{c:.1}% / {}", resources::format_cpus(l)),
+            (Some(c), _) => format!("{c:.1}%"),
+            _ => "-".to_string(),
+        };
         let memory = match (i.memory_bytes, i.memory_limit_bytes) {
             (Some(m), Some(l)) if l > 0 => format!("{} / {}", output::human_bytes(m), output::human_bytes(l)),
             (Some(m), _) => output::human_bytes(m),
@@ -453,16 +494,57 @@ pub async fn status(ctx: &Ctx, name: &str) -> Result<()> {
         t.row(vec![
             Cell::new(instance_label(&i.name)),
             Cell::new(i.deploy_id.as_deref().map(ferry_core::ids::short).unwrap_or("-")),
-            Cell::colored(i.state.clone(), state_color),
+            Cell::colored(instance_state(i), state_color),
             Cell::new(i.host_port.map(|p| p.to_string()).unwrap_or_else(|| "-".into())),
-            Cell::new(i.cpu_percent.map(|c| format!("{c:.1}%")).unwrap_or_else(|| "-".into())),
+            Cell::new(cpu),
             Cell::new(memory),
             Cell::new(i.restart_count.map(|r| r.to_string()).unwrap_or_else(|| "-".into())),
             Cell::new(started),
         ]);
     }
     outln!("{}", t.render(output::stdout_color()).trim_end())?;
+    if let Some(note) = oom_note(name, &st.instances) {
+        errln!("{note}");
+    }
     Ok(())
+}
+
+/// Killed by the kernel for exceeding its memory limit, last time it
+/// exited. Only meaningful for a container that isn't running (again).
+fn was_oom_killed(i: &InstanceStatus) -> bool {
+    i.oom_killed && i.state != "running"
+}
+
+/// The STATE cell: Docker's state, plus why an exited / restarting
+/// container stopped (`exited (OOM killed, exit code 137)`).
+fn instance_state(i: &InstanceStatus) -> String {
+    if i.state == "running" {
+        return i.state.clone();
+    }
+    let code = i.exit_code.filter(|c| *c != 0).map(|c| format!("exit code {c}"));
+    match (was_oom_killed(i), code) {
+        (true, Some(code)) => format!("{} (OOM killed, {code})", i.state),
+        (true, None) => format!("{} (OOM killed)", i.state),
+        (false, Some(code)) => format!("{} ({code})", i.state),
+        (false, None) => i.state.clone(),
+    }
+}
+
+/// How to fix instances that ran out of memory, if any did.
+fn oom_note(service: &str, instances: &[InstanceStatus]) -> Option<String> {
+    let killed: Vec<&InstanceStatus> = instances.iter().filter(|i| was_oom_killed(i)).collect();
+    let first = killed.first()?;
+    let labels: Vec<String> = killed.iter().map(|i| instance_label(&i.name)).collect();
+    let who = match labels.as_slice() {
+        [one] => format!("instance {one} was"),
+        many => format!("instances {} were", many.join(", ")),
+    };
+    let limit =
+        first.memory_limit_bytes.map(|l| format!(" (limit {})", output::memory_limit_bytes(l))).unwrap_or_default();
+    Some(format!(
+        "note: {who} killed for running out of memory{limit}. Raise the limit with \
+         'ferry update {service} --memory <SIZE>', then 'ferry restart {service}'."
+    ))
 }
 
 /// Instance id as shown in runtime logs: the last 6 characters of the container name.
@@ -702,6 +784,95 @@ mod tests {
         assert_eq!(update_hints(&a, &web), vec!["Build/deploy settings apply to the next deploy: ferry deploy web"]);
         let Command::Update(a) = parse(&["update", "nightly", "--schedule", "@daily"]) else { panic!() };
         assert!(update_hints(&a, &cron).is_empty());
+    }
+
+    #[test]
+    fn limits_map_to_requests() {
+        // Create: explicit limits are sent; `default` / 0 are left out.
+        let Command::Create(a) = parse(&["create", "api", "--memory", "1.5G", "--cpu", "500m"]) else { panic!() };
+        let body = create_request(&a);
+        assert_eq!((body.memory_limit_mb, body.cpu_limit), (Some(1536), Some(0.5)));
+        let Command::Create(a) = parse(&["create", "api", "--memory", "default", "--cpu", "0"]) else { panic!() };
+        let json = serde_json::to_value(create_request(&a)).unwrap();
+        assert!(json["memory_limit_mb"].is_null() && json["cpu_limit"].is_null(), "{json}");
+        let Command::Create(a) = parse(&["create", "api"]) else { panic!() };
+        assert_eq!((create_request(&a).memory_limit_mb, create_request(&a).cpu_limit), (None, None));
+
+        // Update: `default` / 0 are sent as 0 (clear → server default).
+        let Command::Update(a) = parse(&["update", "api", "--memory", "512", "--cpu", "2"]) else { panic!() };
+        let body = update_request(&a);
+        assert_eq!((body.memory_limit_mb, body.cpu_limit), (Some(512), Some(2.0)));
+        assert_eq!(settings_labels(&a.settings), vec!["memory limit", "CPU limit"]);
+        assert!(!needs_redeploy(&a, ServiceType::WebService), "a restart is enough");
+        let Command::Update(a) = parse(&["update", "api", "--memory", "DEFAULT", "--cpu", "default"]) else { panic!() };
+        let json = serde_json::to_value(update_request(&a)).unwrap();
+        assert_eq!((json["memory_limit_mb"].clone(), json["cpu_limit"].clone()), (0.into(), 0.0.into()));
+        let Command::Update(a) = parse(&["update", "api", "--cpu", "0"]) else { panic!() };
+        assert_eq!((update_request(&a).memory_limit_mb, update_request(&a).cpu_limit), (None, Some(0.0)));
+    }
+
+    #[test]
+    fn limit_changes_apply_with_the_next_deploy_or_restart() {
+        let mut web = Service::new("web", ServiceType::WebService);
+        let Command::Update(a) = parse(&["update", "web", "--memory", "1G"]) else { panic!() };
+        // Never deployed: the first deploy uses them.
+        assert_eq!(update_hints(&a, &web), vec!["Resource limits apply to the next deploy: ferry deploy web"]);
+        web.live_deploy_id = Some("dep-1".into());
+        assert_eq!(
+            update_hints(&a, &web),
+            vec!["Resource limits apply to the next deploy or restart: ferry restart web"]
+        );
+        web.suspended = true;
+        assert!(update_hints(&a, &web)[0].contains("after: ferry resume web"), "{:?}", update_hints(&a, &web));
+        web.suspended = false;
+        // With build settings: one deploy applies both.
+        let Command::Update(a) = parse(&["update", "web", "--cpu", "default", "--build-cmd", "make"]) else { panic!() };
+        assert_eq!(
+            update_hints(&a, &web),
+            vec!["Build/deploy settings and resource limits apply to the next deploy: ferry deploy web"]
+        );
+    }
+
+    fn instance(state: &str, oom_killed: bool, exit_code: Option<i64>) -> InstanceStatus {
+        InstanceStatus {
+            container_id: "c".into(),
+            name: "/ferry-web-cdefghij-a1b2c3".into(),
+            deploy_id: None,
+            state: state.into(),
+            host_port: None,
+            started_at: None,
+            restart_count: None,
+            cpu_percent: None,
+            memory_bytes: None,
+            memory_limit_bytes: Some(256 * 1024 * 1024),
+            cpu_limit: None,
+            oom_killed,
+            exit_code,
+        }
+    }
+
+    #[test]
+    fn oom_killed_instances_are_marked() {
+        assert_eq!(instance_state(&instance("exited", true, Some(137))), "exited (OOM killed, exit code 137)");
+        assert_eq!(instance_state(&instance("restarting", true, None)), "restarting (OOM killed)");
+        assert_eq!(instance_state(&instance("exited", false, Some(1))), "exited (exit code 1)");
+        assert_eq!(instance_state(&instance("exited", false, Some(0))), "exited");
+        // Exit code 137 alone is a SIGKILL, not proof of OOM.
+        assert_eq!(instance_state(&instance("exited", false, Some(137))), "exited (exit code 137)");
+        // Running again: the flag describes an older exit.
+        assert_eq!(instance_state(&instance("running", true, Some(137))), "running");
+
+        assert_eq!(oom_note("web", &[instance("running", true, None), instance("exited", false, Some(1))]), None);
+        let note = oom_note("web", &[instance("exited", true, Some(137))]).unwrap();
+        assert_eq!(
+            note,
+            "note: instance a1b2c3 was killed for running out of memory (limit 256 MiB). Raise the limit with \
+             'ferry update web --memory <SIZE>', then 'ferry restart web'."
+        );
+        let mut other = instance("restarting", true, None);
+        other.name = "/ferry-web-cdefghij-d4e5f6".into();
+        let note = oom_note("web", &[instance("exited", true, None), other]).unwrap();
+        assert!(note.starts_with("note: instances a1b2c3, d4e5f6 were killed"), "{note}");
     }
 
     #[test]

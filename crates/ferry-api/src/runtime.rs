@@ -136,6 +136,9 @@ mod tests {
             cpu_percent: None,
             memory_bytes: None,
             memory_limit_bytes: None,
+            cpu_limit: None,
+            oom_killed: false,
+            exit_code: None,
         }
     }
 

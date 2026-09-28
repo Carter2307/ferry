@@ -49,6 +49,7 @@ Every command talks to a Ferry server. `ferry login --server URL --token TOKEN` 
 * [`ferry db create`](#ferry-db-create)
 * [`ferry db ls`](#ferry-db-ls)
 * [`ferry db show`](#ferry-db-show)
+* [`ferry db update`](#ferry-db-update)
 * [`ferry db rm`](#ferry-db-rm)
 * [`ferry env-group`](#ferry-env-group)
 * [`ferry env-group create`](#ferry-env-group-create)
@@ -184,6 +185,8 @@ ferry create [OPTIONS] <NAME>
 | `--schedule <CRON>` | Cron schedule (cron jobs), e.g. "*/5 * * * *" |
 | `--disk <MOUNT>` | Mount a persistent disk at this path (limits the service to 1 instance) |
 | `--domain <DOMAIN>` | Custom domain (repeatable) |
+| `--memory <SIZE>` | Memory limit of each instance and job run, e.g. 512M or 1G (a plain number is MiB; 'default' = the server's default) |
+| `--cpu <CPUS>` | CPU limit of each instance and job run, e.g. 0.5, 2 or 500m ('default' = the server's default) |
 | `-e`, `--env <KEY=VALUE>` | Environment variable (repeatable) |
 | `--env-group <GROUP>` | Link an environment group (repeatable) |
 | `--no-auto-deploy` | Don't redeploy on git push |
@@ -216,7 +219,7 @@ Change a service's settings
 ferry update [OPTIONS] <NAME>
 ```
 
-Clearing settings: pass an empty value to a text setting (--start-cmd "", --health "", ...) and --port 0 to clear the port setting (Ferry then detects the port again). Build & deploy settings apply to the next deploy; the start command of a cron job applies from its next run.
+Clearing settings: pass an empty value to a text setting (--start-cmd "", --health "", ...), --port 0 to clear the port setting (Ferry then detects the port again), and --memory default / --cpu default to go back to the server's default limits. Build & deploy settings apply to the next deploy; resource limits to the next deploy or restart ('ferry restart NAME'); the start command of a cron job applies from its next run.
 
 **Arguments**
 
@@ -243,6 +246,8 @@ Clearing settings: pass an empty value to a text setting (--start-cmd "", --heal
 | `--schedule <CRON>` | Cron schedule (cron jobs), e.g. "*/5 * * * *" |
 | `--disk <MOUNT>` | Mount a persistent disk at this path (limits the service to 1 instance) |
 | `--domain <DOMAIN>` | Custom domain (repeatable) |
+| `--memory <SIZE>` | Memory limit of each instance and job run, e.g. 512M or 1G (a plain number is MiB; 'default' = the server's default) |
+| `--cpu <CPUS>` | CPU limit of each instance and job run, e.g. 0.5, 2 or 500m ('default' = the server's default) |
 | `--auto-deploy` | Redeploy on git push |
 | `--no-auto-deploy` | Don't redeploy on git push |
 
@@ -331,6 +336,8 @@ If the service doesn't exist, it is created with these flags. If it exists, the 
 | `--schedule <CRON>` | Cron schedule (cron jobs), e.g. "*/5 * * * *" |  |
 | `--disk <MOUNT>` | Mount a persistent disk at this path (limits the service to 1 instance) |  |
 | `--domain <DOMAIN>` | Custom domain (repeatable) |  |
+| `--memory <SIZE>` | Memory limit of each instance and job run, e.g. 512M or 1G (a plain number is MiB; 'default' = the server's default) |  |
+| `--cpu <CPUS>` | CPU limit of each instance and job run, e.g. 0.5, 2 or 500m ('default' = the server's default) |  |
 | `-e`, `--env <KEY=VALUE>` | Environment variable, set before deploying (repeatable) |  |
 | `--env-group <GROUP>` | Link an environment group before deploying (repeatable) |  |
 | `--clear-cache` | Build without the Docker layer cache |  |
@@ -793,6 +800,7 @@ ferry db <COMMAND>
 * `create` — Create a datastore
 * `ls` — List datastores
 * `show` — Show a datastore with its connection URLs
+* `update` — Change a datastore's memory / CPU limits (applied to the running container, no restart)
 * `rm` — Delete a datastore and its data
 
 ## `ferry db create`
@@ -819,6 +827,8 @@ ferry db create [OPTIONS] <NAME>
 | `--version <V>` | Major version (default: 16 for postgres, 7 for redis) |  |
 | `--database <NAME>` | Postgres database name |  |
 | `--user <USER>` | Postgres user |  |
+| `--memory <SIZE>` | Memory limit, e.g. 256M or 1G (a plain number is MiB; default: the server's) |  |
+| `--cpu <CPUS>` | CPU limit, e.g. 0.5, 2 or 500m (default: the server's) |  |
 | `-w`, `--wait` | Wait until the datastore is available |  |
 
 ## `ferry db ls`
@@ -848,6 +858,29 @@ ferry db show <NAME>
 | Argument | Description |
 |---|---|
 | `<NAME>` | Datastore name or id |
+
+## `ferry db update`
+
+Change a datastore's memory / CPU limits (applied to the running container, no restart)
+
+**Usage**
+
+```text
+ferry db update <--memory <SIZE>|--cpu <CPUS>> <NAME>
+```
+
+**Arguments**
+
+| Argument | Description |
+|---|---|
+| `<NAME>` | Datastore name or id |
+
+**Options**
+
+| Option | Description |
+|---|---|
+| `--memory <SIZE>` | Memory limit, e.g. 256M or 1G (a plain number is MiB; 'default' = the server's default) |
+| `--cpu <CPUS>` | CPU limit, e.g. 0.5, 2 or 500m ('default' = the server's default) |
 
 ## `ferry db rm`
 

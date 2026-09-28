@@ -1,5 +1,5 @@
 //! Everything needed to run a service instance: environment, port, command,
-//! disk, the container spec, plus small container helpers.
+//! disk, resources, the container spec, plus small container helpers.
 
 use std::time::Duration;
 
@@ -11,6 +11,7 @@ use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::limits::Resources;
 use crate::state::Inner;
 
 /// Grace period when stopping old / surplus instances.
@@ -163,11 +164,13 @@ pub(crate) struct Plan {
     pub env: Vec<(String, String)>,
     pub cmd: Option<Vec<String>>,
     pub volume: Option<VolumeMount>,
+    /// Memory / CPU limits, pids limit and log rotation.
+    pub resources: Resources,
 }
 
 /// Container spec of one instance.
 pub(crate) fn service_spec(naming: &Naming, svc: &Service, deploy_id: &str, plan: &Plan) -> ContainerSpec {
-    ContainerSpec {
+    let mut spec = ContainerSpec {
         name: naming.service_container(&svc.name, deploy_id, &ids::random_secret(6)),
         image: plan.image.clone(),
         env: plan.env.clone(),
@@ -185,8 +188,12 @@ pub(crate) fn service_spec(naming: &Naming, svc: &Service, deploy_id: &str, plan
         restart_policy: RestartPolicy::UnlessStopped,
         memory_limit_bytes: None,
         nano_cpus: None,
+        pids_limit: None,
+        log_rotation: None,
         working_dir: None,
-    }
+    };
+    plan.resources.apply(&mut spec);
+    spec
 }
 
 /// Containers of a service (role `service`), optionally including stopped ones.
@@ -304,6 +311,7 @@ mod tests {
             env: vec![("PORT".into(), "8000".into())],
             cmd: Some(sh_c("python app.py")),
             volume: Some(VolumeMount { volume: "ferry-svc-x-disk".into(), target: "/data".into() }),
+            resources: Resources::new(&ferry_core::Config::default(), None, Some(256), Some(0.25)),
         };
         let spec = service_spec(&naming, &svc, deploy_id, &plan);
         assert!(spec.name.starts_with("ferry-web-cdef4567-"), "{}", spec.name);
@@ -321,6 +329,11 @@ mod tests {
         assert_eq!(spec.labels["ferry.role"], "service");
         assert_eq!(spec.volumes.len(), 1);
         assert_eq!(spec.cmd, plan.cmd);
+        // Limits, pids limit and log rotation.
+        assert_eq!(spec.memory_limit_bytes, Some(256 << 20));
+        assert_eq!(spec.nano_cpus, Some(250_000_000));
+        assert_eq!(spec.pids_limit, Some(1024));
+        assert_eq!(spec.log_rotation, Some(ferry_docker::LogRotation { max_size_mb: 10, max_files: 3 }));
 
         // Workers don't publish anything even if a port is known.
         let mut worker = web();

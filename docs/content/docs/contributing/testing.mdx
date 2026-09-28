@@ -39,11 +39,11 @@ FERRY_E2E=1 cargo test --workspace
 
 | Suite | Covers |
 |---|---|
-| `ferry-docker` · `docker_e2e` | The Docker wrapper against the daemon: container lifecycle and logs, exit codes, images, tags, volumes and exec |
+| `ferry-docker` · `docker_e2e` | The Docker wrapper against the daemon: container lifecycle and logs, exit codes, images, tags, volumes and exec; resource limits set at creation (with the pids limit and log rotation) and changed in place, and OOM kills told apart from a plain `SIGKILL` |
 | `ferry-build` · `build_e2e` and the regression suites | Real builds of the example apps |
 | `ferry-proxy` · `e2e_docker` | Containers published on `127.0.0.1:<random port>` behind the proxy |
 | `ferry-tls` · `pebble_e2e` | Certificates from Pebble, Let's Encrypt's test ACME server (image `ghcr.io/letsencrypt/pebble:latest`) |
-| `ferry-engine` · `e2e` | The whole stack in-process: store, Docker, builder, engine and proxy, deploying the examples |
+| `ferry-engine` · `e2e` | The whole stack in-process: store, Docker, builder, engine and proxy, deploying the examples; also the resource limits of instances, jobs and datastores, out-of-memory kills in deploys, jobs and status, and the free-disk check |
 | `ferry-cli` · `e2e` | A real `ferryd` driven by the `ferry` CLI |
 
 The CLI suite looks for `ferryd` in `FERRY_E2E_FERRYD`, else next to the test binary (`target/debug/ferryd` for a debug test run), hence the `cargo build -p ferryd` first. Run one suite with its crate and test name:
@@ -86,13 +86,13 @@ Both must pass. See the [coding rules](/docs/contributing/development#coding-rul
 
 ```bash title="Terminal"
 cd web
-npm test              # Vitest: SSE parser, change feed, log helpers, formatting, .env parsing
+npm test              # Vitest: SSE parser, change feed, log helpers, formatting, .env parsing, resource limits
 npm run typecheck
 npm run lint
 npm run build
 ```
 
-The tests live next to the code as `src/**/*.test.ts`. See [Web client](/docs/contributing/web-client).
+The tests live next to the code as `src/**/*.test.ts` and `src/**/*.test.tsx`. See [Web client](/docs/contributing/web-client).
 
 ## Docs site
 

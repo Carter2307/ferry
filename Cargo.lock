@@ -946,6 +946,7 @@ dependencies = [
  "ferry-docker",
  "ferry-proxy",
  "futures",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

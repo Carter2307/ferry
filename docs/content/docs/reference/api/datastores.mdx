@@ -1,6 +1,6 @@
 ---
 title: "Datastores"
-description: "Managed Postgres and Redis instances with their connection strings."
+description: "Managed Postgres and Redis instances with their connection strings and resource limits."
 full: true
 _openapi:
   preload:
@@ -16,6 +16,9 @@ _openapi:
       title: Get a datastore
       url: '#get-a-datastore'
     - depth: 2
+      title: Change a datastore's resource limits
+      url: '#change-a-datastores-resource-limits'
+    - depth: 2
       title: Delete a datastore
       url: '#delete-a-datastore'
   structuredData:
@@ -26,13 +29,28 @@ _openapi:
         id: create-a-datastore
       - content: Get a datastore
         id: get-a-datastore
+      - content: Change a datastore's resource limits
+        id: change-a-datastores-resource-limits
       - content: Delete a datastore
         id: delete-a-datastore
     contents:
       - content: Creates the row (`creating`) and provisions the container. A failed
           provisioning still answers 201, with status `failed` and the reason in
           `error`. Datastores and services share one namespace of names.
+          `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01
+          to 512, rounded to 0.01) limit the container; omitted or `0` = the
+          server default (see `GET /api/v1/info`).
         heading: create-a-datastore
+      - content: "Every field is optional: `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and
+          `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01); `0` = back to the
+          server default (see `GET /api/v1/info`). The limits are applied to the
+          datastore's container in place, without a restart, whatever the
+          datastore's status (a memory limit below what the datastore currently
+          uses can fail, or get it killed for running out of memory; a `failed`
+          datastore gets them for its next start). A datastore whose container
+          is not created yet gets them when it is. When applying them fails
+          after they were saved, the error message says so."
+        heading: change-a-datastores-resource-limits
       - content: Removes its container **and its data volume**. Refused while services
           reference it in their env (`${{datastore.NAME...}}`), unless
           `force=true`.
@@ -46,7 +64,7 @@ export default function Layout(props) {
   return (
     <>
       {props.children}
-      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/datastores","method":"get"},{"path":"/api/v1/datastores","method":"post"},{"path":"/api/v1/datastores/{id}","method":"get"},{"path":"/api/v1/datastores/{id}","method":"delete"}]} showTitle showDescription />
+      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/datastores","method":"get"},{"path":"/api/v1/datastores","method":"post"},{"path":"/api/v1/datastores/{id}","method":"get"},{"path":"/api/v1/datastores/{id}","method":"patch"},{"path":"/api/v1/datastores/{id}","method":"delete"}]} showTitle showDescription />
     </>
   );
 }

@@ -48,5 +48,12 @@ ferryd [OPTIONS]
 | `--docker-bin <DOCKER_BIN>`<br />`FERRY_DOCKER_BIN` | docker CLI used for builds | `docker` |
 | `--health-check-timeout <HEALTH_CHECK_TIMEOUT>`<br />`FERRY_HEALTH_TIMEOUT` | Seconds a new deploy has to pass its health check | `120` |
 | `--advertise-host <ADVERTISE_HOST>`<br />`FERRY_ADVERTISE_HOST` | Host name printed in external datastore connection strings | `127.0.0.1` |
+| `--default-memory-limit <SIZE>`<br />`FERRY_DEFAULT_MEMORY_LIMIT` | Memory limit of each service, job and datastore container that sets none of its own (e.g. 512M, 1G; 0 = unlimited) | `512M` |
+| `--default-cpu-limit <CPUS>`<br />`FERRY_DEFAULT_CPU_LIMIT` | CPU limit of each service, job and datastore container that sets none of its own (e.g. 0.5, 2, 500m; 0 = unlimited) | `1` |
+| `--pids-limit <N>`<br />`FERRY_PIDS_LIMIT` | Max processes + threads per container, a fork-bomb guard (0 = unlimited) | `1024` |
+| `--log-max-size <SIZE>`<br />`FERRY_LOG_MAX_SIZE` | Rotate each container's Docker log at this size, with the json-file driver (e.g. 10M; 0 = keep the Docker daemon's log configuration). A daemon whose default log driver isn't json-file keeps its driver | `10M` |
+| `--log-max-files <N>`<br />`FERRY_LOG_MAX_FILES` | Log files kept per container when rotating (current one included) | `3` |
+| `--min-free-disk <SIZE>`<br />`FERRY_MIN_FREE_DISK` | Deploys and new datastores fail early when less disk than this is free on the data directory's (or the local Docker root's) filesystem (e.g. 1G; 0 = no check). Recreating an existing datastore's container isn't blocked | `1G` |
+| `--oom-score-adj <N>`<br />`FERRY_OOM_SCORE_ADJ` | Linux: OOM-killer score adjustment of ferryd itself, -1000..=1000 (negative = killed after the containers when the host runs out of memory; 0 = leave unchanged). Lowering it needs root or CAP_SYS_RESOURCE (or OOMScoreAdjust= in a systemd unit) | `-500` |
 | `--take-over` | Take ownership of Docker resources (with this name prefix) that another Ferry data directory owns — e.g. after restoring a backup into a new data directory or losing the old one (moving a data directory keeps ownership) |  |
 

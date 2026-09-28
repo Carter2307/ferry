@@ -192,3 +192,19 @@ async fn services_and_datastores_share_one_namespace_under_concurrency() {
         assert_eq!(services + datastores, 1, "round {round}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn parallel_datastore_limit_patches_are_all_kept() {
+    let app = Arc::new(TestApp::new().await);
+    app.post("/api/v1/datastores", json!({"name": "db", "kind": "postgres"})).await;
+    for n in 1..=10u32 {
+        let reqs = vec![
+            (Method::PATCH, "/api/v1/datastores/db".to_string(), json!({"memory_limit_mb": 100 + n})),
+            (Method::PATCH, "/api/v1/datastores/db".to_string(), json!({"cpu_limit": f64::from(n) / 10.0})),
+        ];
+        let statuses = concurrently(&app, reqs).await;
+        assert!(statuses.iter().all(|s| *s == StatusCode::OK), "{statuses:?}");
+        let ds = app.store.require_datastore("db").await.unwrap();
+        assert_eq!((ds.memory_limit_mb, ds.cpu_limit), (Some(100 + n), Some(f64::from(n) / 10.0)), "round {n}");
+    }
+}

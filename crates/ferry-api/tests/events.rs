@@ -123,6 +123,8 @@ async fn api_writes_are_reported_as_changes() {
     // datastores
     let ds = app.post("/api/v1/datastores", json!({"name": "cache", "kind": "redis"})).await.json();
     feed.until("datastore", &id(&ds), "created").await;
+    app.patch("/api/v1/datastores/cache", json!({"memory_limit_mb": 256})).await;
+    feed.until("datastore", &id(&ds), "updated").await;
 
     // deploy status changes, jobs
     app.post(&format!("/api/v1/deploys/{deploy_id}/cancel"), json!({})).await;

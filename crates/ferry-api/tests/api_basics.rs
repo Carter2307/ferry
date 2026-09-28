@@ -196,9 +196,30 @@ async fn server_info() {
     assert_eq!(v["dashboard_url"], "http://ferry.localhost:8080");
     assert_eq!(v["github_webhook_enabled"], true);
     assert_eq!(v["docker_version"], "27.0.0");
+    // resource limits: the server defaults and the Docker host's capacity
+    assert_eq!(v["default_memory_limit_mb"], 512);
+    assert_eq!(v["default_cpu_limit"], 1.0);
+    assert_eq!(v["docker_cpus"], 4);
+    assert_eq!(v["docker_memory_bytes"], 8u64 << 30);
 
     let app = TestApp::new().await;
     assert_eq!(app.get("/api/v1/info").await.json()["github_webhook_enabled"], false);
+
+    // 0 = unlimited
+    let app = TestApp::with_config(|c| {
+        c.default_memory_limit_mb = 0;
+        c.default_cpu_limit = 0.0;
+    })
+    .await;
+    let v = app.get("/api/v1/info").await.json();
+    assert_eq!((v["default_memory_limit_mb"].clone(), v["default_cpu_limit"].clone()), (json!(0), json!(0.0)));
+    let app = TestApp::with_config(|c| {
+        c.default_memory_limit_mb = 2048;
+        c.default_cpu_limit = 0.5;
+    })
+    .await;
+    let v = app.get("/api/v1/info").await.json();
+    assert_eq!((v["default_memory_limit_mb"].clone(), v["default_cpu_limit"].clone()), (json!(2048), json!(0.5)));
 }
 
 #[tokio::test]
