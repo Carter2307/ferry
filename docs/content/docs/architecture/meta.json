@@ -1,0 +1,11 @@
+{
+  "title": "Architecture",
+  "icon": "Network",
+  "pages": [
+    "overview",
+    "deploy-pipeline",
+    "reconciler",
+    "networking-model",
+    "security"
+  ]
+}

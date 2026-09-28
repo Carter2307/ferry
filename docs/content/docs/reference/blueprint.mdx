@@ -1,0 +1,487 @@
+---
+title: "Blueprint spec"
+description: "The ferry.yaml and render.yaml format: every supported key, how it maps to Ferry settings, and what an apply creates, updates and deploys."
+icon: FileCode
+---
+
+A blueprint describes your env groups, Postgres databases, Redis (Key Value) instances and services in one YAML file. Ferry reads Render's `render.yaml` schema (camelCase keys) and supports a practical subset of it: keys it doesn't support are ignored with a warning, never an error, so an existing `render.yaml` applies as is.
+
+Applying a blueprint creates what is missing and updates what changed. It never deletes anything, and applying the same file twice changes nothing.
+
+<Tabs items={['CLI', 'API', 'Dashboard']} groupId="interface" persist>
+<Tab value="CLI">
+
+```bash title="Terminal"
+ferry blueprint apply --dry-run   # show what would change
+ferry blueprint apply             # apply ./ferry.yaml, else ./render.yaml
+ferry blueprint apply infra/render.yaml
+```
+
+Without a `FILE`, the CLI looks for `./ferry.yaml`, then `./render.yaml`. See [`ferry blueprint apply`](/docs/reference/cli#ferry-blueprint-apply).
+
+</Tab>
+<Tab value="API">
+
+Send the YAML itself with a YAML content type, and `?dry_run=true` for a dry run:
+
+```bash title="Terminal"
+curl -X POST "http://127.0.0.1:7878/api/v1/blueprints/apply?dry_run=true" \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H "Content-Type: application/yaml" \
+  --data-binary @ferry.yaml
+```
+
+Or send JSON: `{"yaml": "<the file>", "dry_run": true}`. See [Apply a blueprint](/docs/reference/api/blueprints#apply-a-blueprint).
+
+</Tab>
+<Tab value="Dashboard">
+
+Open **Blueprints** in the dashboard, paste the YAML, run a dry run to review the planned actions, then apply.
+
+</Tab>
+</Tabs>
+
+## Example
+
+This is `examples/blueprint/ferry.yaml` from the repository: an env group, a Postgres database, a Redis instance, a web service with two instances wired to both, and a cron job.
+
+```yaml title="ferry.yaml" lineNumbers
+# A Ferry blueprint (render.yaml-compatible). Apply with:
+#   ferry blueprint apply examples/blueprint/ferry.yaml
+envVarGroups:
+  - name: shared-settings
+    envVars:
+      - key: APP_ENV
+        value: production
+
+databases:
+  - name: app-db
+    postgresMajorVersion: "16"
+    databaseName: app
+    user: app
+
+services:
+  - type: redis
+    name: cache
+
+  - type: web
+    name: hello
+    runtime: image
+    image:
+      url: nginx:alpine
+    port: 80
+    healthCheckPath: /
+    numInstances: 2
+    envVars:
+      - fromGroup: shared-settings
+      - key: DATABASE_URL
+        fromDatabase:
+          name: app-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: cache
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+
+  - type: cron
+    name: nightly
+    runtime: image
+    image:
+      url: busybox:stable
+    schedule: "0 3 * * *"
+    startCommand: echo "nightly job ran at $(date)"
+```
+
+The first apply creates everything and queues a `blueprint` deploy for each service that has a source:
+
+```text title="ferry blueprint apply examples/blueprint/ferry.yaml" noCopy
+Applied blueprint examples/blueprint/ferry.yaml
+
+Created:
+  + env group shared-settings
+  + datastore app-db
+  + datastore cache
+  + service hello
+  + service nightly
+
+Queued deploys:
+  dep-3271cdfd1415400d9a5e  hello (blueprint, queued)
+  dep-0fe672f0b3a4486991a9  nightly (blueprint, queued)
+
+Follow a deploy with: ferry logs --deploy <id> -f
+```
+
+## File structure
+
+| Top-level key | Contains |
+|---|---|
+| `envVarGroups` | [Env groups](#envvargroups): shared sets of variables that services link to. |
+| `databases` | [Postgres databases](#databases). |
+| `services` | [Services](#services) of every type, plus Redis instances (`type: redis` or `keyvalue`). |
+| `projects` | Render projects: their `environments[].services`, `databases` and `envVarGroups` are all applied to this server, with a warning (Ferry has no projects or environments). |
+
+Any other top-level key is ignored with a warning. That includes `x-` keys used to hold YAML anchors, which still work:
+
+```yaml title="ferry.yaml"
+x-defaults: &defaults
+  autoDeploy: false
+
+services:
+  - <<: *defaults # [!code highlight]
+    type: worker
+    name: queue
+    repo: https://github.com/acme/queue
+```
+
+A few parsing rules apply everywhere:
+
+- **Scalars are kept as written.** `value: 3.10` stays `3.10` (not `3.1`), `0123` stays `0123` and `True` stays `True`. Quote nothing unless YAML syntax requires it.
+- **Booleans** accept `true`, `false`, `yes`, `no`, `on`, `off`, `1` and `0` (any case).
+- **Duplicate keys** in one mapping are an error. An empty file is accepted with the warning `the blueprint is empty`.
+
+## services
+
+Every entry needs a `type` and a `name`. The other keys are optional.
+
+### Identity and source
+
+| Key | Type | Default | Maps to and notes |
+|---|---|---|---|
+| `type` | string | required | `web`, `pserv`, `worker`, `cron` or `static` (Ferry's own names `web_service`, `private_service`, `background_worker`, `cron_job` and `static_site` work too). `redis` and `keyvalue` create a [Redis datastore](#redis-and-key-value-services) instead of a service. |
+| `name` | string | required | Service name: 1 to 40 lowercase letters, digits or `-`, starting with a letter. Unique across services and datastores. It is also the hostname on the private network and the start of the default URL. |
+| `runtime` | string | see notes | `docker`, `image`, `node`, `python`, `go`, `rust`, `ruby` or `static` (aliases: `nodejs`, `javascript`, `bun`, `python3`, `golang`). Default: `image` when `image` is set, `static` for static sites, otherwise auto-detection. The legacy key `env` is accepted. |
+| `repo` | string | none | Git repository: `https://`, `ssh://`, `git://`, `file://`, `git@host:path`, or an absolute path on the server. Maps to `repo_url`. |
+| `branch` | string | `main` | Branch to build and to watch for auto-deploys. |
+| `image` | string or mapping | none | Prebuilt image to run, as `image: nginx:alpine` or `image: { url: nginx:alpine }`. Set `repo` or `image`, not both. |
+
+Notes on sources:
+
+- `type: web` with `runtime: static` becomes a static site, like on Render.
+- A runtime Ferry doesn't build natively (for example `elixir`) falls back to auto-detection with a warning: add a `Dockerfile` to the repository.
+- With an `image`, `runtime` is ignored with a warning, and `image.creds` is ignored with a warning: images must be pullable anonymously.
+- The CLI rewrites a relative local `repo` path (`./api`, `../shared`) into an absolute path when that directory exists next to the blueprint file, and prints a `note:` line for each rewrite. The server itself only accepts absolute local paths.
+
+### Build
+
+| Key | Type | Default | Maps to and notes |
+|---|---|---|---|
+| `rootDir` | string | repository root | `root_dir`: the directory the build runs in (the Docker build context). A relative path inside the repository. |
+| `dockerContext` | string | none | Used as `root_dir` when `rootDir` is not set; `dockerfilePath` is then made relative to it. Ignored with a warning when `rootDir` is set. |
+| `dockerfilePath` | string | `Dockerfile` | `dockerfile_path`, relative to the root directory. It may use `..` as long as it stays inside the repository. With auto-detection, a custom path means the service builds with Docker. |
+| `buildCommand` | string | none | `build_command` for native runtimes. |
+| `startCommand` | string | none | `start_command`. For `docker` and `image` runtimes it runs as `/bin/sh -c <command>`. |
+| `dockerCommand` | string | none | Alias of `startCommand`. When both are set and differ, `startCommand` wins with a warning. |
+| `staticPublishPath` | string | none | `publish_dir`: the directory a static site serves. |
+
+### Runtime and deploys
+
+| Key | Type | Default | Maps to and notes |
+|---|---|---|---|
+| `port` | integer | detected | `port` (a Ferry extension): the port the app listens on, 1 to 65535. When unset, Ferry uses `PORT` from the environment, the build's hint, the image's single exposed port, then the server's `--default-port`. |
+| `healthCheckPath` | string | TCP check | `health_check_path`: an HTTP path that must answer below 400 before a deploy goes live. Only for services that listen on a port. |
+| `numInstances` | integer | `1` | `instances`, 1 to 50. When omitted, an existing service keeps its current count. Ignored with a warning on cron jobs. |
+| `autoDeploy` | boolean | `true` | `auto_deploy`: deploy on every push to `branch` (see [GitHub auto-deploy](/docs/guides/github-auto-deploy)). |
+| `autoDeployTrigger` | string | none | Render's newer key: `commit` turns auto-deploy on, `off` turns it off, `checksPass` turns it on with a warning (Ferry doesn't wait for checks). It wins over `autoDeploy`. |
+| `schedule` | string | required for cron | `schedule`: a 5-field cron expression evaluated in UTC, such as `"*/15 * * * *"` or `@hourly`. Only cron jobs can have one. |
+| `disk` | mapping | none | `{ mountPath, name, sizeGB }`. `mountPath` (required) becomes `disk_mount_path`: an absolute path other than `/`. `name` and `sizeGB` are accepted and ignored. Web services, private services and workers only, with 1 instance. |
+| `domains` | list of strings | none | `custom_domains`, for web services and static sites. When omitted, an existing service keeps its current domains. |
+| `envVars` | list | none | The service's own variables and linked env groups: see [envVars entries](#envvars-entries). |
+
+<Callout type="warning" title="Build and deploy settings are declarative">
+For an existing service, a key you remove from the file is reset to its default on the next apply: `buildCommand` becomes unset, `autoDeploy` becomes `true`, and so on. Three things are kept when omitted: `numInstances`, `domains`, and the source (`repo` with its `branch`, or `image`) when neither `repo` nor `image` is given.
+</Callout>
+
+Keys Ferry doesn't support, such as `plan`, `region`, `scaling`, `previews` or `preDeployCommand`, are ignored with a warning like `service 'api': ignoring unsupported key 'plan'`.
+
+### Redis and Key Value services
+
+`type: redis` (or `keyvalue`) creates a Redis datastore named after `name`, running `redis:7-alpine` with a generated password and append-only persistence. Only `type` and `name` are read; every other key (`ipAllowList`, `maxmemoryPolicy`, `plan`…) is ignored with a warning. Reference it with `fromService` and `type: redis` or `keyvalue`, as in the example above.
+
+## databases
+
+Each entry creates a Postgres datastore.
+
+| Key | Type | Default | Maps to and notes |
+|---|---|---|---|
+| `name` | string | required | Datastore name, with the same rules as service names (the two share one namespace). It is the hostname on the private network. |
+| `databaseName` | string | `name` with `-` replaced by `_` | The database to create. 1 to 63 letters, digits or `_`, not starting with a digit. |
+| `user` | string | `databaseName` | The Postgres user. Same character rules as `databaseName`. |
+| `postgresMajorVersion` | string | `16` | The image tag: `postgres:<version>-alpine`. Digits and dots only. |
+
+Other keys (`plan`, `region`, `ipAllowList`, `diskSizeGB`…) are ignored with a warning. See [Datastores](/docs/concepts/datastores) for how Ferry runs them.
+
+<Callout title="Existing datastores are never changed">
+Once a datastore exists, a blueprint leaves it alone. If `postgresMajorVersion`, `databaseName` or `user` differ from the existing datastore, the apply warns (`datastores are not changed in place (ignored)`) and continues. A datastore of the other kind with the same name is a conflict (409).
+</Callout>
+
+## envVarGroups
+
+| Key | Type | Default | Maps to and notes |
+|---|---|---|---|
+| `name` | string | required | Env group name: 1 to 64 letters, digits, `-`, `_` or `.`. |
+| `envVars` | list | none | The group's variables, in the same forms as a service's, except `fromGroup`. |
+
+Services link to a group with `fromGroup`. A service's own variables win over those of its groups, and a group linked later wins over one linked earlier. See [Environment and env groups](/docs/concepts/environment).
+
+## envVars entries
+
+Each entry of `envVars` takes exactly one of these forms:
+
+| Form | Result |
+|---|---|
+| `{ key, value }` | A literal value. A null value becomes an empty string. |
+| `{ key, generateValue: true }` | A random 64-character hex secret (256 bits), generated only when the variable doesn't exist yet: re-applying never rotates it. |
+| `{ key, sync: false }` | Nothing is set. Until you set the variable yourself, the apply warns: ``env var 'KEY' is marked sync: false; set it with `ferry env set NAME KEY=...` ``. |
+| `{ key, fromDatabase: { name, property } }` | An [env var reference](/docs/reference/env-references) to a Postgres database: `${{datastore.NAME.PROPERTY}}`. |
+| `{ key, fromService: { type, name, property } }` | A reference to a service (`${{service.NAME.PROPERTY}}`) or, with `type: redis` or `keyvalue`, to a Redis datastore. |
+| `{ key, fromService: { type, name, envVarKey } }` | A copy of another service's variable, made at apply time. |
+| `{ fromGroup: NAME }` | Links the env group `NAME` to the service (services only). |
+
+Setting two sources on one entry (for example `value` and `generateValue`) is an error. When a key appears twice, the last entry wins with a warning. Render-only keys such as `previewValue` are ignored with a warning.
+
+### Reference properties
+
+`fromDatabase`, and `fromService` with `type: redis` or `keyvalue`, accept these properties:
+
+| Property | Resolves to |
+|---|---|
+| `connectionString` | The private-network URL, such as `postgresql://app:…@app-db:5432/app` or `redis://default:…@cache:6379` |
+| `externalConnectionString` | The same URL through the port published on the server, for tools running outside Docker |
+| `host`, `port`, `hostport` | `app-db`, `5432` and `app-db:5432` |
+| `user`, `password` | The credentials |
+| `database` | The Postgres database name (not available for Redis) |
+
+`fromService` with a service type accepts `host`, `port`, `hostport`, `internalUrl` and `url`:
+
+- `url` (the public URL) only exists for web services and static sites.
+- `port`, `hostport` and `internalUrl` only exist for services that listen on a port: web services, private services and static sites.
+
+Without a `type`, `fromService` resolves `name` among services and datastores. `hostport` for a datastore compiles to `${{datastore.NAME.host}}:${{datastore.NAME.port}}`. The [env references page](/docs/reference/env-references) lists every property with its aliases.
+
+### Copies with envVarKey
+
+`envVarKey` copies the current value of another service's variable into this one at apply time: it is a copy, not a reference, so a later change to the source variable only reaches this one at the next apply. The value comes from the blueprint itself when the other service declares that key, otherwise from the stored environment of the existing service. If neither has it, the apply warns (`env var 'KEY' not copied: service 'api' has no variable 'TOKEN' yet`) and leaves the variable unset. Circular copies are skipped with a warning. `envVarKey` only works with services, not datastores.
+
+## How an apply works
+
+<Steps>
+<Step>
+
+### Parse
+
+The YAML is read into services, datastores and env groups. Structural problems, such as a missing `name`, an unknown service `type` or an env var with no value source, stop the apply with a 400 error that names the entry, for example `service 'a': envVars[0] (A): needs a value, generateValue: true, fromDatabase, fromService or sync: false`. Unsupported keys only add warnings.
+
+</Step>
+<Step>
+
+### Plan
+
+Every entry is validated against the server's current state before anything is written: names, service settings (the same rules as `ferry create`), custom domains, references and the size limits of every environment. Then each resource gets an action: `create`, `update` (with a list of changes) or `unchanged`. If any entry is invalid, the whole apply fails and nothing is written.
+
+</Step>
+<Step>
+
+### Write
+
+Resources are written in dependency order: env groups, then datastores (created and provisioned), then services with their variables and env group links.
+
+</Step>
+<Step>
+
+### Deploy
+
+Ferry then queues what the changes require:
+
+| Change | What happens |
+|---|---|
+| New service with a `repo` or an `image` | A deploy with trigger `blueprint`. |
+| New service with neither | No deploy, and a warning: ``service 'NAME' has no repo or image: deploy it with `ferry up NAME` ``. |
+| Build or deploy setting changed | A `blueprint` deploy. These settings are the type, source, branch, runtime, root directory, Dockerfile path, build and start commands, publish directory, port, health check path and disk. |
+| Only variables or env group links changed | A restart (trigger `env_change`) when the service is live and its effective environment really changed. |
+| A cron job's `startCommand` changed | A restart: runs use the command of the live deploy, so no rebuild is needed. |
+| `numInstances` changed | The service is scaled; no deploy. |
+| `domains` changed | The routes are refreshed; no deploy. |
+| `schedule` or `autoDeploy` changed | Stored; no deploy. |
+| An existing service with a source that never deployed | Its first deploy. |
+
+Services outside the blueprint that are linked to an env group the apply changed are restarted too. A suspended service is not deployed; the apply warns you to resume it. Failures at this stage (a deploy that can't be queued, a datastore that fails to provision) are reported as warnings, because the writes are already done.
+
+</Step>
+</Steps>
+
+### Guarantees
+
+- **Nothing is ever deleted.** Removing a resource from the file leaves it on the server. Variables missing from the file are kept, and env groups linked to a service but not declared stay linked. Delete resources with the CLI, the API or the dashboard.
+- **Idempotent.** Applying an unchanged file reports every resource as `unchanged` and queues nothing. Generated secrets are kept.
+- **All or nothing before writing.** Validation errors leave the server untouched. Applies are serialized, and an apply runs to completion even if the client disconnects.
+
+A second apply of the example changes nothing:
+
+```text title="ferry blueprint apply examples/blueprint/ferry.yaml" noCopy
+Applied blueprint examples/blueprint/ferry.yaml
+
+Unchanged:
+  = env group shared-settings
+  = datastore app-db
+  = datastore cache
+  = service hello
+  = service nightly
+```
+
+## Dry run
+
+A dry run computes exactly the same plan, with the same validation and warnings, and writes nothing. Use it before every apply to a server that runs real workloads.
+
+```diff title="ferry.yaml (edited)"
+ envVarGroups:
+   - name: shared-settings
+     envVars:
+       - key: APP_ENV
+-        value: production
++        value: staging
+ …
+-    numInstances: 2
++    numInstances: 1
+```
+
+```text title="ferry blueprint apply ferry.yaml --dry-run" noCopy
+Blueprint ferry.yaml — dry run, nothing was changed
+
+Would update:
+  ~ env group shared-settings
+      - env APP_ENV: updated
+  ~ service hello
+      - instances: 2 → 1
+
+Unchanged:
+  = datastore app-db
+  = datastore cache
+  = service nightly
+
+Run without --dry-run to apply.
+```
+
+Applied for real, this scales `hello` to one instance and restarts it (trigger `env_change`) because the group's variable changed.
+
+## Result
+
+The API returns a `BlueprintResult`; the CLI prints it as above, and `ferry --json blueprint apply` prints the raw JSON.
+
+<TypeTable
+  type={{
+    dry_run: { type: 'boolean', description: 'Whether this was a dry run.' },
+    actions: {
+      type: 'BlueprintAction[]',
+      description: 'Every resource of the blueprint in apply order: resource (service, datastore or env_group), name, action (create, update or unchanged) and changes (human-readable, for updates).',
+    },
+    deploys: { type: 'Deploy[]', description: 'The deploys and restarts the apply queued. Empty for a dry run.' },
+    warnings: { type: 'string[]', description: 'Ignored keys, unsynced variables, services without a source, failed side effects.' },
+  }}
+/>
+
+```json title="Response (dry run)"
+{
+  "dry_run": true,
+  "actions": [
+    { "resource": "datastore", "name": "sessions", "action": "create", "changes": [] },
+    { "resource": "service", "name": "queue", "action": "create", "changes": [] }
+  ],
+  "deploys": [],
+  "warnings": [
+    "blueprint: ignoring unsupported key 'x-defaults'",
+    "service 'queue': runtime 'elixir' is not supported natively; using auto-detection (add a Dockerfile)",
+    "service 'queue': ignoring unsupported key 'plan'",
+    "key value 'sessions': ignoring unsupported key 'ipAllowList'"
+  ]
+}
+```
+
+## Errors and warnings
+
+Errors stop the apply before anything is written. The message always names the entry.
+
+| Status | Example message | Cause |
+|---|---|---|
+| 400 | `invalid blueprint YAML: …` | The file is not valid YAML, or a mapping repeats a key. |
+| 400 | `service 'x': unsupported service type 'nope' (expected web, pserv, worker, cron, static, redis or keyvalue)` | Unknown `type`. |
+| 400 | `services[0]: 'name' is required` | Missing `name` or `type`. |
+| 400 | `service 'api': env var 'DB': references unknown database 'nope'` | A reference to a datastore or service that neither exists nor is in the file. |
+| 400 | `service 'w': env var 'U': service 'w2' is a private service (pserv) and has no public URL …` | A property the target can't provide. |
+| 400 | `service 'api': fromGroup references unknown env group 'shared'` | `fromGroup` names a group that doesn't exist. |
+| 400 | `name 'api' is used by more than one blueprint entry` | Two entries share a name. |
+| 409 | `service 'cache': the name is already used by a datastore` | A name already taken by the other kind of resource. |
+| 409 | `service 'web': domain 'app.example.com' is already used by service 'old-web'` | A custom domain claimed by a service outside the blueprint. (The same clash between two entries of the file is a 400.) |
+
+Warnings never stop the apply:
+
+| Warning | Meaning |
+|---|---|
+| `…: ignoring unsupported key 'plan'` | A key Ferry doesn't support. |
+| `projects/environments are not supported: …` | `projects` were flattened onto this server. |
+| `…: runtime 'elixir' is not supported natively; using auto-detection (add a Dockerfile)` | A runtime Ferry can't build natively. |
+| `…: registry credentials are not supported; …` | `image.creds` is ignored. |
+| ``env var 'KEY' is marked sync: false; set it with `ferry env set …` `` | A variable you still have to set. |
+| ``service 'NAME' has no repo or image: deploy it with `ferry up NAME` `` | A service without a source, created but not deployed. |
+| `…: datastores are not changed in place (ignored)` | An existing datastore differs from the file. |
+| `service 'NAME' is suspended: resume it and deploy to apply the changes` | Settings changed on a suspended service. |
+
+## Coming from Render
+
+Most `render.yaml` files apply unchanged. This one, written for Render, applies with warnings for what Ferry doesn't use:
+
+```yaml title="render.yaml"
+services:
+  - type: web
+    name: api
+    runtime: node
+    repo: https://github.com/render-examples/express-hello-world
+    branch: main
+    plan: starter # [!code --]
+    region: oregon # [!code --]
+    buildCommand: npm ci
+    startCommand: node app.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: STRIPE_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: app-db
+          property: connectionString
+databases:
+  - name: app-db
+    plan: basic-256mb # [!code --]
+    ipAllowList: [] # [!code --]
+```
+
+```text title="ferry blueprint apply render.yaml --dry-run" noCopy
+Blueprint render.yaml — dry run, nothing was changed
+
+Would create:
+  + datastore app-db
+  + service api
+
+Warnings:
+  ! database 'app-db': ignoring unsupported key 'plan'
+  ! database 'app-db': ignoring unsupported key 'ipAllowList'
+  ! service 'api': ignoring unsupported key 'plan'
+  ! service 'api': ignoring unsupported key 'region'
+  ! service 'api': env var 'STRIPE_KEY' is marked sync: false; set it with `ferry env set api STRIPE_KEY=...`
+
+Run without --dry-run to apply.
+```
+
+The differences to know about:
+
+- `plan`, `region`, `scaling`, `previews`, `ipAllowList` and other hosting options have no equivalent and are ignored.
+- `repo` has no default: Render uses the blueprint's own repository, Ferry doesn't know it. Set `repo` on each service, or deploy local code with `ferry up NAME`.
+- `image.creds` is ignored: private registries are not supported.
+- Secret files are not supported; use environment variables.
+- `port` is a Ferry extension; Render has no such key.
+
+The [Render migration guide](/docs/guides/migrate-from-render) walks through a full migration.

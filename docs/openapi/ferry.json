@@ -1,0 +1,5591 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Ferry API",
+    "description": "The HTTP API of [Ferry](https://github.com/Carter2307/ferry), a self-hosted Render alternative. The `ferry` CLI and the web dashboard use exactly this API.\n\n**Authentication.** Every `/api/v1` route needs the server's API token (printed by `ferryd` on first start, stored in `<data-dir>/api_token`) as `Authorization: Bearer <token>`; use the **Authorize** button to set it here. `GET` requests may pass it as `?access_token=<token>` instead, because browsers' `EventSource` can't set headers (prefer the header: query strings end up in logs). Webhooks (`/hooks/...`) authenticate with their own secrets, and `/healthz`, this document and Swagger UI need no token.\n\n**Conventions.** JSON bodies with snake_case fields; request bodies reject unknown fields and an empty body counts as `{}`. `{id}` path segments accept a resource id **or** its name. Errors are `ApiErrorBody` documents (`{\"error\": {\"code\", \"message\"}}`) with the matching HTTP status; unknown `/api` routes are JSON 404s. Boolean query flags accept `true/false`, `1/0`, `yes/no`, `on/off`, and an empty value means `true` (`?follow`).\n\n**Streams.** Logs and the change feed are Server-Sent Events (`text/event-stream`): see the `logs` operations and `GET /api/v1/events`. Idle streams get a `: keep-alive` comment every 15 s, and every stream ends when the server shuts down.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/openapi.json": {
+      "get": {
+        "tags": [
+          "info"
+        ],
+        "summary": "This OpenAPI document",
+        "description": "The OpenAPI 3.1 document of this API, as JSON. No token needed; Swagger UI at `/api/docs` renders it.",
+        "operationId": "getOpenApi",
+        "responses": {
+          "200": {
+            "description": "This OpenAPI 3.1 document (no token needed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/blueprints/apply": {
+      "post": {
+        "tags": [
+          "blueprints"
+        ],
+        "summary": "Apply a blueprint",
+        "description": "Creates or updates the services, datastores and env groups a `ferry.yaml` / `render.yaml` describes (nothing is deleted) and queues the deploys that follow. Send the JSON `ApplyBlueprint` request, or the YAML itself with a YAML content type (`application/yaml`, `text/yaml`) and `?dry_run=`. A dry run only reports the planned actions.",
+        "operationId": "applyBlueprint",
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "description": "Only report what would be done (for raw YAML bodies; JSON bodies can also set `dry_run`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The blueprint: a JSON `ApplyBlueprint` request, or raw YAML.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyBlueprint"
+              }
+            },
+            "application/yaml": {
+              "schema": {
+                "type": "string"
+              },
+              "example": "services:\n  - type: web\n    name: web\n    image: nginx:alpine\n"
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What was (or, with `dry_run`, would be) done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or blueprint (the message points at the problem).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource conflicts with an existing one (e.g. a name used by another kind of resource).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/datastores": {
+      "get": {
+        "tags": [
+          "datastores"
+        ],
+        "summary": "List datastores",
+        "operationId": "listDatastores",
+        "responses": {
+          "200": {
+            "description": "All datastores with their connection info.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DatastoreView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "datastores"
+        ],
+        "summary": "Create a datastore",
+        "description": "Creates the row (`creating`) and provisions the container. A failed provisioning still answers 201, with status `failed` and the reason in `error`. Datastores and services share one namespace of names.",
+        "operationId": "createDatastore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDatastore"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new datastore.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatastoreView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name, version, database or username.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/datastores/{id}": {
+      "get": {
+        "tags": [
+          "datastores"
+        ],
+        "summary": "Get a datastore",
+        "operationId": "getDatastore",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Datastore id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The datastore with its connection info.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatastoreView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such datastore.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "datastores"
+        ],
+        "summary": "Delete a datastore",
+        "description": "Removes its container **and its data volume**. Refused while services reference it in their env (`${{datastore.NAME...}}`), unless `force=true`.",
+        "operationId": "deleteDatastore",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Datastore id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Delete even though services reference it (they will fail to deploy or restart).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such datastore.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Services reference it (the message lists them).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/deploys/{deploy_id}": {
+      "get": {
+        "tags": [
+          "deploys"
+        ],
+        "summary": "Get a deploy",
+        "operationId": "getDeploy",
+        "parameters": [
+          {
+            "name": "deploy_id",
+            "in": "path",
+            "description": "Deploy id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/deploys/{deploy_id}/cancel": {
+      "post": {
+        "tags": [
+          "deploys"
+        ],
+        "summary": "Cancel a deploy",
+        "description": "Stops a queued or running deploy (status `canceled`); the live deploy keeps serving.",
+        "operationId": "cancelDeploy",
+        "parameters": [
+          {
+            "name": "deploy_id",
+            "in": "path",
+            "description": "Deploy id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The canceled deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The deploy already finished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/deploys/{deploy_id}/logs": {
+      "get": {
+        "tags": [
+          "deploys"
+        ],
+        "summary": "Build and deploy logs (SSE)",
+        "operationId": "streamDeployLogs",
+        "parameters": [
+          {
+            "name": "deploy_id",
+            "in": "path",
+            "description": "Deploy id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "description": "Keep streaming new lines until the deploy or job finishes (instead of only the stored log).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events. Every line is an `event: log` whose `data` is a `LogLine` JSON object (see the `LogLine` schema). The stream always ends with `event: end` (empty `data`): once the stored log is replayed, or with `follow=true` once the deploy or job finishes. `: keep-alive` comments every 15 s while idle.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: log\ndata: {\"ts\":\"2026-01-01T12:00:00Z\",\"stream\":\"system\",\"line\":\"==> Build succeeded\"}\n\nevent: end\ndata: \n\n"
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/env-groups": {
+      "get": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "List env groups",
+        "operationId": "listEnvGroups",
+        "responses": {
+          "200": {
+            "description": "All env groups with their variables and linked services.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EnvGroupView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "Create an env group",
+        "operationId": "createEnvGroup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEnvGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvGroupView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name or variables.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/env-groups/{id}": {
+      "get": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "Get an env group",
+        "operationId": "getEnvGroup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Env group id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvGroupView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "Delete an env group",
+        "description": "Refused while services are linked to it (they would lose its variables at their next restart), unless `force=true`; `restart=true` then restarts the linked live services so they drop the variables now.",
+        "operationId": "deleteEnvGroup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Env group id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Delete even though services are linked to it.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "restart",
+            "in": "query",
+            "description": "With `force`: restart the linked live services whose environment changes.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Services are linked to it (the message lists them).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/env-groups/{id}/env": {
+      "put": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "Replace an env group's variables",
+        "description": "The group's variables become exactly `vars`, validated alone and in the combined environment of every linked service.",
+        "operationId": "replaceEnvGroupEnv",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Env group id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "restart",
+            "in": "query",
+            "description": "Then restart the affected live services whose effective environment changed (the variables are saved\neither way; a failed restart is reported as the error).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceEnv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvGroupView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid variables, alone or for a linked service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "Set and unset an env group's variables",
+        "description": "Upserts `set` and deletes `unset`; the other variables stay.",
+        "operationId": "patchEnvGroupEnv",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Env group id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "restart",
+            "in": "query",
+            "description": "Then restart the affected live services whose effective environment changed (the variables are saved\neither way; a failed restart is reported as the error).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchEnv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvGroupView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid variables, alone or for a linked service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Change feed (SSE)",
+        "description": "Tells a client what changed so it refetches only that: API writes are reported at once, the engine's own changes (deploy progress, datastore provisioning, cron runs) within about a second.",
+        "operationId": "streamEvents",
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events. First `event: ready` (`data: {}`) once the feed watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: `kind` is `service`, `deploy`, `datastore`, `env_group` or `job`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts down.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: ready\ndata: {}\n\nevent: change\ndata: {\"kind\":\"deploy\",\"id\":\"dep-01j9\",\"service_id\":\"srv-01j8\",\"action\":\"updated\"}\n\n"
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/info": {
+      "get": {
+        "tags": [
+          "info"
+        ],
+        "summary": "Server info",
+        "description": "Version, base domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
+        "operationId": "getServerInfo",
+        "responses": {
+          "200": {
+            "description": "Server info.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get a job run",
+        "operationId": "getJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Job run id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancel a job run",
+        "description": "Stops a pending or running job (status `canceled`).",
+        "operationId": "cancelJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Job run id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The canceled job run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The job already finished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/logs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Job logs (SSE)",
+        "operationId": "streamJobLogs",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Job run id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "description": "Keep streaming new lines until the deploy or job finishes (instead of only the stored log).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events. Every line is an `event: log` whose `data` is a `LogLine` JSON object (see the `LogLine` schema). The stream always ends with `event: end` (empty `data`): once the stored log is replayed, or with `follow=true` once the deploy or job finishes. `: keep-alive` comments every 15 s while idle.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: log\ndata: {\"ts\":\"2026-01-01T12:00:00Z\",\"stream\":\"system\",\"line\":\"==> Build succeeded\"}\n\nevent: end\ndata: \n\n"
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "List services",
+        "description": "Every service with its computed fields. The `state` of live services reflects their running instances (`degraded` when some are down), from counts refreshed at most every few seconds.",
+        "operationId": "listServices",
+        "responses": {
+          "200": {
+            "description": "All services.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ServiceView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Create a service",
+        "description": "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names.",
+        "operationId": "createService",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateService"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid settings, name, variables or domains, or an unknown env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name, its default host or a custom domain is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Get a service",
+        "operationId": "getService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Delete a service",
+        "description": "Removes its containers, routes, deploys and variables. Refused while other services reference it in their env (`${{service.NAME...}}`), unless `force=true`.",
+        "operationId": "deleteService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Delete even though other services reference it (they will fail to deploy or restart).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Other services reference it (the message lists them).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Update a service",
+        "description": "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
+        "operationId": "updateService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateService"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A source switch that doesn't clear the old source, or a custom domain another service uses.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/deploy-hook/rotate": {
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Rotate the deploy hook key",
+        "description": "Replaces the secret of the service's deploy hook URL: the old URL stops working, the new one is the returned `deploy_hook_path`.",
+        "operationId": "rotateDeployHook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The service with its new `deploy_hook_path`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/deploys": {
+      "get": {
+        "tags": [
+          "deploys"
+        ],
+        "summary": "List a service's deploys",
+        "description": "Newest first.",
+        "operationId": "listDeploys",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of entries (default 20, clamped to 1..=500).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deploys, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Deploy"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "deploys"
+        ],
+        "summary": "Deploy a service",
+        "description": "Queues a manual deploy of the configured source: the branch head (or `commit`) of the repository, or the image. An empty body deploys with the defaults.",
+        "operationId": "triggerDeploy",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerDeploy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The deploy, queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid commit, a commit for a service that doesn't deploy from git, or no source to deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The service is suspended or being deleted, or the server is shutting down.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/deploys/upload": {
+      "post": {
+        "tags": [
+          "deploys"
+        ],
+        "summary": "Deploy uploaded source code",
+        "description": "Deploys a `.tar.gz` of the source tree (what `ferry up` sends) to a service without a repository or image; the deploy has trigger `upload` and an `archive` source.",
+        "operationId": "uploadDeploy",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clear_cache",
+            "in": "query",
+            "description": "Build without the build cache.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The raw gzip-compressed tar archive (at most 512 MiB).",
+          "content": {
+            "application/gzip": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "description": "A gzip-compressed tar archive of the source tree (`.tar.gz`, at most 512 MiB).",
+                "contentMediaType": "application/gzip"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The deploy, queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body isn't a gzip archive.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The service deploys from a repository or an image: clear its source first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The archive exceeds 512 MiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/domains": {
+      "get": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "List custom domains",
+        "operationId": "listDomains",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The service's custom domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Add a custom domain",
+        "description": "Web services and static sites only. The domain is normalized (lowercase, no trailing dot) and must not be used by another service or be a default host.",
+        "operationId": "addDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The service's custom domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid domain, or the service type has no public HTTP.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The domain is already added, or another service uses it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/domains/{domain}": {
+      "delete": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Remove a custom domain",
+        "operationId": "removeDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "The custom domain.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The service's remaining custom domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service, or the domain isn't one of its custom domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/env": {
+      "get": {
+        "tags": [
+          "env"
+        ],
+        "summary": "List a service's variables",
+        "description": "The service's own variables (not those of its env groups).",
+        "operationId": "listServiceEnv",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The variables.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EnvVar"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "env"
+        ],
+        "summary": "Replace a service's variables",
+        "description": "The service's own variables become exactly `vars`. They are validated alone and merged with the linked env groups (size limits, `${{...}}` references).",
+        "operationId": "replaceServiceEnv",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "restart",
+            "in": "query",
+            "description": "Then restart the affected live services whose effective environment changed (the variables are saved\neither way; a failed restart is reported as the error).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceEnv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The service's variables.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EnvVar"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid variables (keys, duplicates, sizes, references).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "env"
+        ],
+        "summary": "Set and unset variables",
+        "description": "Upserts `set` and deletes `unset`; the other variables stay.",
+        "operationId": "patchServiceEnv",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "restart",
+            "in": "query",
+            "description": "Then restart the affected live services whose effective environment changed (the variables are saved\neither way; a failed restart is reported as the error).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchEnv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The service's variables.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EnvVar"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid variables (keys, duplicates, sizes, references).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/env-groups": {
+      "post": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "Link an env group to a service",
+        "description": "The group's variables apply from the service's next deploy or restart (its own variables win). Linking an already linked group is a no-op.",
+        "operationId": "linkEnvGroup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkEnvGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The service with its `env_groups`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The combined environment would be invalid (sizes).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service or env group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/env-groups/{group}": {
+      "delete": {
+        "tags": [
+          "env-groups"
+        ],
+        "summary": "Unlink an env group from a service",
+        "operationId": "unlinkEnvGroup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "path",
+            "description": "Env group id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The service with its `env_groups`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service or env group, or the group isn't linked to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/jobs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "List a service's job runs",
+        "description": "Cron runs and one-off jobs, newest first.",
+        "operationId": "listJobs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of entries (default 20, clamped to 1..=500).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job runs, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobRun"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Run a job",
+        "description": "Runs a one-off command (`sh -c`) in a new container from the service's live image. Cron jobs run their own command when `command` is omitted.",
+        "operationId": "runJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The job run, started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No command for a service that isn't a cron job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The service has no live deploy to run from, is suspended or being deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/logs": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Runtime logs (SSE)",
+        "description": "The merged output of the service's current containers (`instance` names the container). Cron jobs have no long-running containers: their stream is a few `system` lines pointing at the job logs.",
+        "operationId": "streamServiceLogs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "description": "Keep the stream open and send new lines as they are written.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "tail",
+            "in": "query",
+            "description": "Start with at most this many recent lines per container.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events. Every line is an `event: log` whose `data` is a `LogLine` JSON object (see the `LogLine` schema). Without `follow` the stream ends with `event: end` (empty `data`) after the recent lines; with `follow=true` it stays open and never sends `end`. `: keep-alive` comments every 15 s while idle.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: log\ndata: {\"ts\":\"2026-01-01T12:00:00Z\",\"stream\":\"system\",\"line\":\"==> Build succeeded\"}\n\nevent: end\ndata: \n\n"
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/restart": {
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Restart a service",
+        "description": "Rolls out the live deploy's image again (a new deploy with trigger `restart`), picking up changed variables.",
+        "operationId": "restartService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The restart deploy, queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The service has no live deploy yet, or it is suspended or being deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/resume": {
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Resume a service",
+        "description": "Starts the live deploy's containers again.",
+        "operationId": "resumeService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resumed service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/rollback": {
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Roll back to an earlier deploy",
+        "description": "Queues a deploy (trigger `rollback`) reusing the image of an earlier deploy of this service that went live.",
+        "operationId": "rollbackService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The rollback deploy, queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The deploy belongs to another service, never went live or has no image.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service or deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The service is suspended or being deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/scale": {
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Scale a service",
+        "description": "Sets the number of instances. Cron jobs can't be scaled, and services with a disk run 1 instance.",
+        "operationId": "scaleService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScaleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The scaled service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid instance count for this service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/status": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Runtime status",
+        "description": "The live state of each container: Docker state, host port, restarts, CPU and memory.",
+        "operationId": "getServiceStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runtime status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/services/{id}/suspend": {
+      "post": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Suspend a service",
+        "description": "Stops its containers; settings, variables and deploys stay until it is resumed.",
+        "operationId": "suspendService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Service id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The suspended service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "info"
+        ],
+        "summary": "Liveness probe",
+        "description": "Answers `ok` while the server runs. No token needed.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "The server is up.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "ok"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hooks/deploy/{service_id}": {
+      "get": {
+        "tags": [
+          "hooks"
+        ],
+        "summary": "Deploy hook (GET)",
+        "description": "Same as `POST`, for tools that can only send `GET` requests.",
+        "operationId": "deployHookGet",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "description": "The service's **id** (names are not accepted: they are guessable).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "description": "The service's deploy hook key (part of its `deploy_hook_path`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A deploy (trigger `deploy_hook`) was queued; credentials are redacted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The service has no source to deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unknown service or wrong key (the same answer for both).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The service is suspended or being deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "hooks"
+        ],
+        "summary": "Deploy hook",
+        "description": "Queues a deploy of the service's configured source. The URL (`deploy_hook_path` of the service) is the secret: no token needed. Rotate it with `POST /api/v1/services/{id}/deploy-hook/rotate`.",
+        "operationId": "deployHook",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "description": "The service's **id** (names are not accepted: they are guessable).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "description": "The service's deploy hook key (part of its `deploy_hook_path`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A deploy (trigger `deploy_hook`) was queued; credentials are redacted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deploy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The service has no source to deploy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unknown service or wrong key (the same answer for both).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The service is suspended or being deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hooks/github": {
+      "post": {
+        "tags": [
+          "hooks"
+        ],
+        "summary": "GitHub webhook",
+        "description": "Set it up in GitHub with the server's webhook secret (`github_webhook_secret`). A `push` deploys (trigger `webhook`, commit = `after`) every auto-deploy service whose repository and branch match; `ping` answers `{\"ok\": true}`; other events are ignored. Replayed deliveries (same body or delivery id) are ignored too.",
+        "operationId": "githubWebhook",
+        "parameters": [
+          {
+            "name": "X-Hub-Signature-256",
+            "in": "header",
+            "description": "`sha256=<hex HMAC-SHA256 of the raw body>` with the webhook secret.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-GitHub-Event",
+            "in": "header",
+            "description": "`push`, `ping`, ...",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-GitHub-Delivery",
+            "in": "header",
+            "description": "Delivery id (used to ignore redeliveries).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The event payload: JSON, or form-encoded with the JSON in a `payload` field (GitHub's default content type). At most 25 MiB.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/x-www-form-urlencoded": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Processed (see which fields are set).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubHookResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid signature.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "GitHub webhooks are not enabled (no webhook secret configured).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The payload exceeds 25 MiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorBody": {
+        "type": "object",
+        "description": "Error body: `{\"error\": {\"code\": \"not_found\", \"message\": \"service 'x' not found\"}}`.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ApiErrorDetail"
+          }
+        }
+      },
+      "ApiErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ApplyBlueprint": {
+        "type": "object",
+        "description": "`POST /api/v1/blueprints/apply` (JSON body) — or send the raw YAML with\n`Content-Type: application/yaml` and `?dry_run=true`.",
+        "required": [
+          "yaml"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "yaml": {
+            "type": "string",
+            "description": "Contents of `ferry.yaml` / `render.yaml`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlueprintAction": {
+        "type": "object",
+        "description": "One planned/performed change of a blueprint apply.",
+        "required": [
+          "resource",
+          "name",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`create` | `update` | `unchanged`"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Human-readable list of changed fields."
+          },
+          "name": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string",
+            "description": "`service` | `datastore` | `env_group`"
+          }
+        }
+      },
+      "BlueprintResult": {
+        "type": "object",
+        "description": "Result of a blueprint apply.",
+        "required": [
+          "dry_run",
+          "actions",
+          "deploys"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlueprintAction"
+            }
+          },
+          "deploys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Deploy"
+            },
+            "description": "Deploys queued by the apply."
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Non-fatal problems (unsupported keys ignored, etc.)."
+          }
+        }
+      },
+      "ChangeAction": {
+        "type": "string",
+        "description": "What happened (`resync`: refetch everything).",
+        "enum": [
+          "created",
+          "updated",
+          "deleted",
+          "resync"
+        ]
+      },
+      "ChangeEvent": {
+        "type": "object",
+        "description": "One change: the `data` of an `event: change` frame.",
+        "required": [
+          "kind",
+          "id",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ChangeAction"
+          },
+          "id": {
+            "type": "string",
+            "description": "Id of the changed resource (`*` with `resync`)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChangeKind"
+          },
+          "service_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set for services (their own id), deploys and jobs (their service); `null` otherwise."
+          }
+        },
+        "example": {
+          "action": "updated",
+          "id": "dep-01j9",
+          "kind": "deploy",
+          "service_id": "srv-01j8"
+        }
+      },
+      "ChangeKind": {
+        "type": "string",
+        "description": "What a change event is about (`all` only with `resync`).",
+        "enum": [
+          "service",
+          "deploy",
+          "datastore",
+          "env_group",
+          "job",
+          "all"
+        ]
+      },
+      "CreateDatastore": {
+        "type": "object",
+        "description": "`POST /api/v1/datastores`",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "database": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres database name (default: name with `-` → `_`)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DatastoreKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres user (default: same as database)."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres major (default \"16\") / Redis major (default \"7\")."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateEnvGroup": {
+        "type": "object",
+        "description": "`POST /api/v1/env-groups`",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "vars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateService": {
+        "type": "object",
+        "description": "`POST /api/v1/services`",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "auto_deploy": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "build_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "custom_domains": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "deploy": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Queue a first deploy (default: true when repo_url or image is set)."
+          },
+          "disk_mount_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dockerfile_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "env": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            },
+            "description": "Initial service env vars."
+          },
+          "env_groups": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Env groups to link (ids or names)."
+          },
+          "health_check_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instances": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "publish_dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root_dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Runtime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ServiceType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Datastore": {
+        "type": "object",
+        "description": "A managed Postgres or Redis instance (one container + one volume).",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "version",
+          "status",
+          "username",
+          "password",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "database": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres database name (redis: None)."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Port published on the host for external access (bound to 127.0.0.1).",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DatastoreKind"
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique DNS-label name; also the private-network hostname."
+          },
+          "password": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DatastoreStatus"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "username": {
+            "type": "string",
+            "description": "Postgres user (redis: always \"default\")."
+          },
+          "version": {
+            "type": "string",
+            "description": "Major version / image tag, e.g. \"16\" (postgres) or \"7\" (redis)."
+          }
+        }
+      },
+      "DatastoreKind": {
+        "type": "string",
+        "enum": [
+          "postgres",
+          "redis"
+        ]
+      },
+      "DatastoreStatus": {
+        "type": "string",
+        "enum": [
+          "creating",
+          "available",
+          "failed"
+        ]
+      },
+      "DatastoreView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Datastore"
+          },
+          {
+            "type": "object",
+            "required": [
+              "internal_host",
+              "internal_port",
+              "internal_url"
+            ],
+            "properties": {
+              "external_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Connection string from the Ferry host (published on 127.0.0.1)."
+              },
+              "internal_host": {
+                "type": "string"
+              },
+              "internal_port": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "internal_url": {
+                "type": "string",
+                "description": "Connection string on the private network (use from services)."
+              }
+            }
+          }
+        ],
+        "description": "A datastore with its connection info."
+      },
+      "Deploy": {
+        "type": "object",
+        "description": "One attempt to ship a version of a service.",
+        "required": [
+          "id",
+          "service_id",
+          "status",
+          "trigger",
+          "source",
+          "created_at"
+        ],
+        "properties": {
+          "commit_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable failure reason."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image that was built / pulled / reused. Set once the build succeeds."
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Container port this deploy's instances listen on (chosen at deploy time\nvia `env::choose_port`; None for workers / cron jobs).",
+            "minimum": 0
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DeploySource"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeployStatus"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/DeployTrigger"
+          }
+        }
+      },
+      "DeploySource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Clone `repo_url` at `branch` (or the exact `commit`) and build.",
+            "required": [
+              "repo_url",
+              "branch",
+              "kind"
+            ],
+            "properties": {
+              "branch": {
+                "type": "string"
+              },
+              "commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "git"
+                ]
+              },
+              "repo_url": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Build from an uploaded `.tar.gz` stored at `path` on the server.",
+            "required": [
+              "path",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "archive"
+                ]
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pull and run a prebuilt image.",
+            "required": [
+              "image",
+              "kind"
+            ],
+            "properties": {
+              "image": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "image"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Reuse an already-built local image (rollback / restart / env change).",
+            "required": [
+              "image",
+              "kind"
+            ],
+            "properties": {
+              "from_deploy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "image": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "reuse"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where a deploy's code / image comes from."
+      },
+      "DeployStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "building",
+          "deploying",
+          "live",
+          "deactivated",
+          "build_failed",
+          "deploy_failed",
+          "canceled"
+        ]
+      },
+      "DeployTrigger": {
+        "type": "string",
+        "enum": [
+          "create",
+          "manual",
+          "webhook",
+          "deploy_hook",
+          "blueprint",
+          "rollback",
+          "restart",
+          "env_change",
+          "upload"
+        ]
+      },
+      "DomainRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/services/{id}/domains`",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EnvGroup": {
+        "type": "object",
+        "description": "A named, reusable set of environment variables linked to services.",
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "EnvGroupView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EnvGroup"
+          },
+          {
+            "type": "object",
+            "required": [
+              "vars",
+              "services"
+            ],
+            "properties": {
+              "services": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Names of linked services."
+              },
+              "vars": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EnvVar"
+                }
+              }
+            }
+          }
+        ],
+        "description": "An env group with its variables and linked services."
+      },
+      "EnvVar": {
+        "type": "object",
+        "description": "A plain environment variable. Values may contain references such as\n`${{datastore.db.connectionString}}` (see [`crate::env`]).",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubHookResponse": {
+        "type": "object",
+        "description": "Response of `POST /hooks/github`: `{\"deploys\": [...]}` for a push,\n`{\"deploys\": [], \"ignored\": true, \"reason\": \"...\"}` for an already\nprocessed delivery, `{\"ok\": true}` for `ping` and `{\"ignored\": true}` for\nother events.",
+        "properties": {
+          "deploys": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Deploy"
+            },
+            "description": "Deploys queued by a push (credentials redacted)."
+          },
+          "ignored": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The delivery wasn't acted on (not a push, or a replayed push)."
+          },
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Answer to `ping`."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a push was ignored."
+          }
+        }
+      },
+      "InstanceStatus": {
+        "type": "object",
+        "description": "Live container state of one instance.",
+        "required": [
+          "container_id",
+          "name",
+          "state"
+        ],
+        "properties": {
+          "container_id": {
+            "type": "string"
+          },
+          "cpu_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "deploy_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_limit_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "restart_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "Docker state: created, running, restarting, exited, dead..."
+          }
+        }
+      },
+      "JobRun": {
+        "type": "object",
+        "description": "A cron-job run or one-off job (`ferry run`).",
+        "required": [
+          "id",
+          "service_id",
+          "trigger",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Command override (`sh -c`), else the service start command / image CMD."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/JobTrigger"
+          }
+        }
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "canceled"
+        ]
+      },
+      "JobTrigger": {
+        "type": "string",
+        "enum": [
+          "schedule",
+          "manual"
+        ]
+      },
+      "LinkEnvGroup": {
+        "type": "object",
+        "description": "`POST /api/v1/services/{id}/env-groups`",
+        "required": [
+          "group"
+        ],
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": "Env group id or name."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LogLine": {
+        "type": "object",
+        "description": "One line of output.",
+        "required": [
+          "ts",
+          "stream",
+          "line"
+        ],
+        "properties": {
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short container/instance identifier for runtime logs (None for build logs)."
+          },
+          "line": {
+            "type": "string"
+          },
+          "stream": {
+            "$ref": "#/components/schemas/LogStreamKind"
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LogStreamKind": {
+        "type": "string",
+        "description": "Which output a line came from.",
+        "enum": [
+          "stdout",
+          "stderr",
+          "system"
+        ]
+      },
+      "PatchEnv": {
+        "type": "object",
+        "description": "`PATCH /api/v1/services/{id}/env` (and env groups): upsert `set`, delete `unset`.",
+        "properties": {
+          "set": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            }
+          },
+          "unset": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReplaceEnv": {
+        "type": "object",
+        "description": "`PUT /api/v1/services/{id}/env` (replace all) and env group equivalent.",
+        "required": [
+          "vars"
+        ],
+        "properties": {
+          "vars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "RollbackRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/services/{id}/rollback`",
+        "required": [
+          "deploy_id"
+        ],
+        "properties": {
+          "deploy_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunJobRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/services/{id}/jobs`",
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shell command (`sh -c`). Required for non-cron services."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Runtime": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "docker",
+          "image",
+          "node",
+          "python",
+          "go",
+          "rust",
+          "ruby",
+          "static"
+        ]
+      },
+      "RuntimeStatus": {
+        "type": "object",
+        "description": "`GET /api/v1/services/{id}/status`",
+        "required": [
+          "service_id",
+          "state",
+          "desired_instances",
+          "instances"
+        ],
+        "properties": {
+          "desired_instances": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "instances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceStatus"
+            }
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ServiceState"
+          }
+        }
+      },
+      "ScaleRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/services/{id}/scale`",
+        "required": [
+          "instances"
+        ],
+        "properties": {
+          "instances": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServerInfo": {
+        "type": "object",
+        "description": "`GET /api/v1/info`",
+        "required": [
+          "version",
+          "base_domain",
+          "proxy_url",
+          "tls_enabled",
+          "github_webhook_enabled"
+        ],
+        "properties": {
+          "base_domain": {
+            "type": "string"
+          },
+          "dashboard_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "docker_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Docker server version, if reachable."
+          },
+          "github_webhook_enabled": {
+            "type": "boolean"
+          },
+          "proxy_url": {
+            "type": "string",
+            "description": "e.g. `http://localhost:8080` — where the proxy listens."
+          },
+          "tls_enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Service": {
+        "type": "object",
+        "description": "A deployable workload.",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "branch",
+          "runtime",
+          "instances",
+          "auto_deploy",
+          "suspended",
+          "custom_domains",
+          "deploy_hook_key",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "auto_deploy": {
+            "type": "boolean",
+            "description": "Redeploy automatically on git push to `branch`."
+          },
+          "branch": {
+            "type": "string",
+            "description": "Branch to build and to watch for auto-deploys."
+          },
+          "build_command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Build command for native runtimes (e.g. `npm run build`)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "custom_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra hostnames routed to this service (web services and static sites)."
+          },
+          "deploy_hook_key": {
+            "type": "string",
+            "description": "Secret for `POST /hooks/deploy/{service_id}?key=...`."
+          },
+          "disk_mount_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Persistent volume mount path. A service with a disk uses recreate\n(stop-then-start) deploys and is limited to one instance."
+          },
+          "dockerfile_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Dockerfile path relative to `root_dir` (default `Dockerfile`)."
+          },
+          "health_check_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HTTP path that must answer 2xx/3xx before a new deploy receives traffic."
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Prebuilt image reference (`runtime` = image)."
+          },
+          "instances": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Desired number of containers (web/private/worker).",
+            "minimum": 0
+          },
+          "live_deploy_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The deploy currently live, if any."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique DNS-label name; also the private-network hostname."
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Container port the app listens on. `None` = auto (see `env::choose_port`).",
+            "minimum": 0
+          },
+          "publish_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Directory of built files to serve (static sites)."
+          },
+          "repo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Git URL (https, ssh, or local path / file://). Mutually exclusive with `image`."
+          },
+          "root_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subdirectory of the repo used as build context (monorepos)."
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "5-field cron expression (cron jobs only), evaluated in UTC."
+          },
+          "start_command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Start command; overrides the image CMD (run via `sh -c`)."
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ServiceType"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ServiceState": {
+        "type": "string",
+        "enum": [
+          "not_deployed",
+          "deploying",
+          "live",
+          "failed",
+          "suspended",
+          "degraded"
+        ]
+      },
+      "ServiceType": {
+        "type": "string",
+        "enum": [
+          "web_service",
+          "private_service",
+          "background_worker",
+          "cron_job",
+          "static_site"
+        ]
+      },
+      "ServiceView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Service"
+          },
+          {
+            "type": "object",
+            "required": [
+              "state",
+              "hosts",
+              "internal_host",
+              "env_groups",
+              "deploy_hook_path"
+            ],
+            "properties": {
+              "deploy_hook_path": {
+                "type": "string",
+                "description": "`POST` here (no auth header needed) to trigger a deploy."
+              },
+              "env_groups": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Names of linked env groups, in link order."
+              },
+              "hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "All hostnames routed to the service."
+              },
+              "internal_host": {
+                "type": "string",
+                "description": "Hostname on the private network (= name)."
+              },
+              "internal_port": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "Port of the live deploy (private network), if known.",
+                "minimum": 0
+              },
+              "latest_deploy": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Deploy"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "$ref": "#/components/schemas/ServiceState"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Public URL (web services and static sites)."
+              }
+            }
+          }
+        ],
+        "description": "A service as returned by the API (the stored row plus computed fields)."
+      },
+      "SourceArchive": {
+        "type": "string",
+        "format": "binary",
+        "description": "A gzip-compressed tar archive of the source tree (`.tar.gz`, at most 512 MiB).",
+        "contentMediaType": "application/gzip"
+      },
+      "SourceKind": {
+        "type": "string",
+        "description": "Where a service's code comes from (derived from its fields).",
+        "enum": [
+          "git",
+          "image",
+          "upload"
+        ]
+      },
+      "TriggerDeploy": {
+        "type": "object",
+        "description": "`POST /api/v1/services/{id}/deploys`",
+        "properties": {
+          "clear_cache": {
+            "type": "boolean"
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateService": {
+        "type": "object",
+        "description": "`PATCH /api/v1/services/{id}` — every field optional. For optional string\nsettings, an empty string clears the value. Changing `instances` scales,\n`suspended` suspends/resumes, `custom_domains` refreshes routes; build\nsettings take effect on the next deploy.",
+        "properties": {
+          "auto_deploy": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "build_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "custom_domains": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "disk_mount_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dockerfile_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "health_check_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instances": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "0 clears (auto).",
+            "minimum": 0
+          },
+          "publish_dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root_dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Runtime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suspended": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API token",
+        "description": "The server's API token (`ferryd` prints it on first start; it is stored in `<data-dir>/api_token`). `GET` requests may send it as `?access_token=` instead."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "info",
+      "description": "Server info, liveness and this document."
+    },
+    {
+      "name": "services",
+      "description": "Web services, private services, background workers, static sites and cron jobs: CRUD, lifecycle actions (restart, suspend, resume, scale, rollback), status and runtime logs."
+    },
+    {
+      "name": "deploys",
+      "description": "Deploy history, manual deploys, source uploads (`ferry up`), cancellation and build logs."
+    },
+    {
+      "name": "env",
+      "description": "A service's own environment variables. `?restart=true` restarts the live service when its effective environment changed."
+    },
+    {
+      "name": "env-groups",
+      "description": "Shared variable sets linked to services (a service's own variables win over its groups'), and linking / unlinking them."
+    },
+    {
+      "name": "domains",
+      "description": "Custom domains of web services and static sites (unique across services)."
+    },
+    {
+      "name": "jobs",
+      "description": "Job runs: cron runs and one-off commands, with their logs."
+    },
+    {
+      "name": "datastores",
+      "description": "Managed Postgres and Redis instances with their connection strings."
+    },
+    {
+      "name": "blueprints",
+      "description": "Infrastructure as code: apply a `ferry.yaml` / `render.yaml` (idempotent, with a dry run)."
+    },
+    {
+      "name": "events",
+      "description": "The change feed (Server-Sent Events) the web client uses to stay current without polling."
+    },
+    {
+      "name": "hooks",
+      "description": "Webhooks: secret deploy hook URLs and GitHub push events. They authenticate with their own secrets, never the API token."
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+---
+title: "Host these docs on Ferry"
+description: "Deploy this documentation site as a Ferry static site, either by uploading the static export or by letting Ferry build it from git."
+icon: BookOpen
+---
+
+import { FileCode, GitBranch, Globe } from 'lucide-react';
+
+This site is a static export: `npm run build` in `docs/` writes plain HTML, the search index and the Open Graph images to `docs/out/`. Any static host can serve it, and so can Ferry, as a [static site](/docs/guides/language-guides#static-sites) served by nginx.
+
+You can upload the export you built on your machine, or let Ferry clone the repository and build the site itself, which also lets GitHub pushes redeploy it.
+
+## Upload the built site
+
+<Steps>
+<Step>
+
+### Build the static export
+
+```bash title="Terminal"
+cd docs
+npm ci
+DOCS_SITE_URL=http://ferry-docs.localhost:8080 npm run build
+```
+
+`npm run build` exports the site to `out/` and then checks every internal link. Three build-time variables adjust the output:
+
+| Variable | Default | Used for |
+|---|---|---|
+| `DOCS_SITE_URL` | `http://localhost:3000` | The public URL of the site: canonical and Open Graph URLs. Set it to where the site will live. |
+| `FERRY_DOCS_SERVER_URL` | `http://127.0.0.1:7878` | The header's "Dashboard" link and the server URL in the API examples. |
+| `DOCS_GIT_BRANCH` | `dev` | The branch the "Edit on GitHub" links point at. It must contain `docs/`. |
+
+<Callout type="warning" title="Set FERRY_DOCS_SERVER_URL for a public site">
+With the default, the "Dashboard" link and the API examples point at `http://127.0.0.1:7878`, which only works on the reader's own machine. For a site other people read, set it to your server's public dashboard URL, for example `https://ferry.example.com` when `ferryd` runs with `--dashboard-host ferry.example.com` and HTTPS.
+</Callout>
+
+</Step>
+<Step>
+
+### Deploy the export
+
+```bash title="Terminal"
+ferry up ferry-docs --dir out --type static --follow
+```
+
+`out/` has an `index.html` at its root and no `package.json`, so Ferry skips the build step and serves the files as they are. The site is live at `http://ferry-docs.localhost:8080`.
+
+</Step>
+<Step>
+
+### Check it
+
+- Pages live at URLs with a trailing slash: `/docs/concepts/deploys/` is `out/docs/concepts/deploys/index.html`. A request without the slash gets a `301` redirect to it.
+- Unknown paths get the site's `404.html`.
+- Search, the Open Graph images and the `llms.txt` files are static files too: they work without a server-side runtime.
+
+</Step>
+</Steps>
+
+To publish an update, run the same two commands again: `npm run build`, then `ferry up`. Each upload is a new deploy, so `ferry rollback ferry-docs DEPLOY_ID` brings back an earlier version, as long as its image is still kept (the last 5 per service by default, `ferryd --keep-images`).
+
+## Build from git
+
+Ferry can clone the repository and build the site on the server:
+
+```bash title="Terminal"
+ferry create ferry-docs --type static \
+  --repo https://github.com/Carter2307/ferry --branch dev \
+  --build-cmd "cd docs && npm ci --include=dev && npm run build" \
+  --publish-dir docs/out \
+  -e DOCS_SITE_URL=https://docs.example.com \
+  --domain docs.example.com \
+  --follow
+```
+
+Why each setting:
+
+- **`--branch dev`:** the `docs/` folder is on the `dev` branch, where new work lands first. Switch to `main` (`ferry update ferry-docs --branch main`) once `docs/` is merged there.
+- **The build runs from the repository root**, not from `docs/`: the site imports the design tokens from `../web/src/styles/tokens.css`, so the build needs the whole repository. Hence `cd docs` in the build command, and the publish directory `docs/out`.
+- **`--include=dev`:** the repository root has no `package.json`, so Ferry runs the build command in a plain `node:22-alpine` image with `NODE_ENV=production` already set. Without the flag, `npm ci` would skip the devDependencies, which include the build tools.
+- **`-e DOCS_SITE_URL=…`:** your service's variables are available to the build command, so the export gets the right public URL.
+- **`--domain`:** serve the site on your own domain, with a certificate when the server has [automatic HTTPS](/docs/concepts/networking#automatic-https). See [Custom domains & HTTPS](/docs/guides/custom-domains-https).
+
+The service tracks `dev` with auto-deploy on. Add the GitHub webhook described in [Auto-deploy from GitHub](/docs/guides/github-auto-deploy) and every push to `dev` rebuilds and redeploys the docs. Deploy by hand with `ferry deploy ferry-docs --follow`.
+
+<Callout type="info" title="Deploys are atomic">
+The new version only receives traffic once its build succeeded and nginx answers. A failed build leaves the current version online.
+</Callout>
+
+<Cards cols={3}>
+  <Card icon={<FileCode />} title="Language guides" href="/docs/guides/language-guides#static-sites" description="How Ferry builds and serves static sites." />
+  <Card icon={<GitBranch />} title="Auto-deploy from GitHub" href="/docs/guides/github-auto-deploy" description="Rebuild the docs on every push." />
+  <Card icon={<Globe />} title="Docs site internals" href="/docs/contributing/docs-site" description="How this site is built and generated." />
+</Cards>

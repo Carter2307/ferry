@@ -1,0 +1,260 @@
+---
+title: "API overview"
+description: "Base URL, authentication, request and error conventions, Server-Sent Events streams and webhooks of the Ferry HTTP API."
+icon: Plug
+---
+
+import { Braces, FileJson } from 'lucide-react';
+
+Everything the dashboard and the `ferry` CLI do goes through one JSON REST API served by `ferryd`. This page covers the conventions shared by every endpoint; the [API reference](/docs/reference/api) documents each one.
+
+```bash title="Terminal"
+export FERRY_TOKEN="$(cat ferry-data/api_token)"
+curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/info
+```
+
+```json title="Response"
+{
+  "version": "0.1.0",
+  "base_domain": "localhost",
+  "proxy_url": "http://localhost:8080",
+  "tls_enabled": false,
+  "dashboard_url": "http://ferry.localhost:8080",
+  "github_webhook_enabled": false,
+  "docker_version": "29.2.0"
+}
+```
+
+## Base URL
+
+The API listens on `ferryd --api-addr`, `http://127.0.0.1:7878` by default, and every resource lives under `/api/v1`. When the dashboard host is enabled (by default `ferry.localhost` for a local base domain), the same API is also reachable through the public proxy, for example `http://ferry.localhost:8080/api/v1`. See [server options](/docs/reference/server-options) and [Security model](/docs/architecture/security) before exposing it.
+
+| Path | What it is | Token |
+|---|---|---|
+| `/api/v1/…` | The REST API | required |
+| `/api/openapi.json` | The OpenAPI 3.1 document | none |
+| `/api/docs` | Swagger UI for your server | none (its **Authorize** button takes the token) |
+| `/hooks/deploy/{service_id}` | [Deploy hooks](#deploy-hooks) | the hook's key |
+| `/hooks/github` | [GitHub webhook](#github-webhook) | the webhook signature |
+| `/healthz` | Liveness probe, answers `ok` | none |
+| anything else | The web dashboard | none (it asks for the token) |
+
+## Authentication
+
+Send the server's API token as a bearer token on every `/api/v1` request:
+
+```bash title="Terminal"
+curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/services
+```
+
+`ferryd` prints the token at startup and stores it in `<data-dir>/api_token` (mode `0600`). It generates one on first start, or uses `--api-token` / `FERRY_API_TOKEN` when set. There is one token per server, with full access: Ferry has no users or roles.
+
+`GET` requests may pass the token as `?access_token=<token>` instead, because the browser's `EventSource` can't set headers. Other methods only accept the header. Prefer the header whenever you can: URLs end up in browser history and in the logs of any proxy in front of the server.
+
+| Response | Message |
+|---|---|
+| 401 `unauthorized` | `missing API token (use 'Authorization: Bearer <token>')` |
+| 401 `unauthorized` | `invalid API token` |
+
+The token check runs before routing, so an unknown path under `/api` answers 401 without a token and 404 with one.
+
+## Requests
+
+- **JSON bodies.** Send JSON; the `Content-Type` header is not enforced, and an empty body counts as `{}`. Two endpoints take other bodies: a [source upload](/docs/reference/api/deploys#deploy-uploaded-source-code) takes `application/gzip` (a `.tar.gz`, at most 512 MiB), and [blueprint apply](/docs/reference/api/blueprints#apply-a-blueprint) also accepts raw YAML (`application/yaml`).
+- **Unknown fields are rejected.** A typo in a field name is a 400, not a silent no-op: `invalid JSON body: unknown field 'nope', expected one of 'name', 'type', 'repo_url', …`.
+- **Ids or names in paths.** Services, datastores and env groups accept their id or their name wherever the path says `{id}`: `/api/v1/services/api` and `/api/v1/services/srv-60f5973b037e4478ae7b` are the same. Deploys (`dep-…`) and job runs (`job-…`) are addressed by id only, and deploy hooks by service id only. Ids are a prefix (`srv`, `dep`, `job`, `dbs`, `evg`) and 20 hex characters; names that look like ids are refused, so a lookup is never ambiguous.
+- **Boolean query flags** accept `true`, `1`, `yes`, `on`, `y` and `false`, `0`, `no`, `off`, `n`; a bare flag (`?follow`) means true.
+- **Size limits.** Request bodies are limited to 2 MiB (413 `payload_too_large` above), except uploads (512 MiB) and GitHub deliveries (25 MiB). A variable's value is limited to 32 KiB, and a service's merged environment to 256 KiB.
+
+## Responses
+
+- Bodies are JSON with `snake_case` fields; timestamps are RFC 3339 in UTC (`2026-09-27T07:38:34.231568Z`).
+- Create endpoints answer `201`, endpoints that queue work (deploys, restarts, rollbacks, jobs) answer `202` with the queued deploy or job, and deletions answer `204` with no body.
+- Lists are plain JSON arrays without pagination. Deploy and job-run lists are newest first and take `?limit=` (default 20, between 1 and 500).
+- Writes to one service are serialized, so two concurrent requests on the same service never interleave.
+
+## Errors
+
+Every error has the same body:
+
+```json title="404 Not Found"
+{ "error": { "code": "not_found", "message": "service 'ghost' not found" } }
+```
+
+`code` is stable and meant for programs; `message` is for humans and names what went wrong.
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_request` | Malformed JSON, unknown field, invalid query string, failed validation (`invalid name 'Bad_Name': use 1-40 lowercase letters, digits or '-', starting with a letter`). |
+| 401 | `unauthorized` | Missing or wrong token, wrong deploy hook key, bad webhook signature. |
+| 404 | `not_found` | No such resource, or no such route (`no API route for /api/v1/nope`). |
+| 405 | `method_not_allowed` | The path exists but not with this method. |
+| 409 | `conflict`, `canceled` | The request conflicts with the current state: a name already in use, a deploy that is already finished (`deploy dep-… is already deactivated`), a suspended service, a resource still referenced by others (retry with `force=true`). |
+| 413 | `payload_too_large` | The body exceeds the endpoint's limit. |
+| 500 | `database_error`, `io_error`, `build_failed`, `internal_error` | A server-side failure; details are in the `ferryd` log. |
+| 502 | `docker_error` | The Docker daemon failed or is unreachable. |
+
+A 409 caused by references lists what would break:
+
+```json title="DELETE /api/v1/datastores/app-db → 409"
+{
+  "error": {
+    "code": "conflict",
+    "message": "datastore 'app-db' is referenced by service 'hello' (DATABASE_URL, EXT, PGHOST); they would fail to deploy or restart without it. Remove the references first, or delete with force=true"
+  }
+}
+```
+
+## Server-Sent Events
+
+Logs and change notifications are streamed as [Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html) over plain HTTP responses with `Content-Type: text/event-stream`, `Cache-Control: no-cache` and `X-Accel-Buffering: no` (so proxies such as nginx don't buffer them).
+
+| Endpoint | Stream | Ends |
+|---|---|---|
+| `GET /api/v1/deploys/{deploy_id}/logs?follow=` | Build and deploy log of one deploy | After the stored lines; with `follow=true`, when the deploy finishes |
+| `GET /api/v1/jobs/{job_id}/logs?follow=` | Output of one job run | After the stored lines; with `follow=true`, when the job finishes |
+| `GET /api/v1/services/{id}/logs?follow=&tail=` | Runtime output of the service's current containers | Without `follow`, after the recent lines; with `follow=true`, never |
+| `GET /api/v1/events` | The [change feed](#change-feed) | Never |
+
+All streams send a `: keep-alive` comment every 15 seconds while idle, and all of them close when the server shuts down.
+
+### Log streams
+
+Each line is an `event: log` whose `data` is a `LogLine` object. A finite stream ends with `event: end` and an empty `data:` line (so `EventSource` dispatches it):
+
+```bash title="Terminal"
+curl -N -H "Authorization: Bearer $FERRY_TOKEN" 'http://127.0.0.1:7878/api/v1/deploys/dep-3271cdfd1415400d9a5e/logs?follow=true'
+```
+
+```text title="Output" noCopy
+event: log
+data: {"ts":"2026-09-27T07:38:59.562702Z","stream":"system","line":"==> Health check passed"}
+
+event: log
+data: {"ts":"2026-09-27T07:38:59.563675Z","stream":"system","line":"==> Your service is live 🎉"}
+
+event: end
+data: 
+```
+
+<TypeTable
+  type={{
+    ts: { type: 'string', description: 'When the line was written (RFC 3339, UTC).', required: true },
+    stream: { type: '"stdout" | "stderr" | "system"', description: 'system lines are written by Ferry and start with ==>.', required: true },
+    instance: { type: 'string', description: 'The last 6 characters of the container name, on lines written by an app container. Omitted otherwise.' },
+    line: { type: 'string', description: 'The text of the line.', required: true },
+  }}
+/>
+
+A stream that stops without `event: end` was cut (for example by a server shutdown): the log you have is incomplete. Reconnecting to a deploy or job log replays it from the start; for runtime logs, use `tail` to limit what is replayed. Cron jobs have no runtime logs: their runtime stream is a few `system` lines pointing at the [job logs](/docs/reference/api/jobs#job-logs-sse).
+
+### Change feed
+
+`GET /api/v1/events` tells a client what changed, so it can refetch only that instead of polling:
+
+```bash title="Terminal"
+curl -N -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/events
+```
+
+```text title="Output" noCopy
+event: ready
+data: {}
+
+event: change
+data: {"kind":"env_group","id":"evg-c15c37b6f91044ff920b","service_id":null,"action":"created"}
+
+event: change
+data: {"kind":"env_group","id":"evg-c15c37b6f91044ff920b","service_id":null,"action":"updated"}
+
+event: change
+data: {"kind":"env_group","id":"evg-c15c37b6f91044ff920b","service_id":null,"action":"deleted"}
+```
+
+- `ready` comes first, once the feed watches the store. Every change after it is reported, so fetch (or refetch) your data **after** `ready`.
+- Each `change` carries a `ChangeEvent`:
+
+<TypeTable
+  type={{
+    kind: { type: '"service" | "deploy" | "datastore" | "env_group" | "job" | "all"', description: 'What changed.', required: true },
+    id: { type: 'string', description: 'The id of the changed resource (* with resync).', required: true },
+    service_id: { type: 'string | null', description: 'Set for services (their own id), deploys and jobs (their service); null otherwise.', required: true },
+    action: { type: '"created" | "updated" | "deleted" | "resync"', description: 'What happened to it.', required: true },
+  }}
+/>
+
+- A subscriber that falls too far behind (more than 1024 pending changes) gets `{"kind":"all","id":"*","service_id":null,"action":"resync"}`: refetch everything.
+- API writes are reported at once. Changes made by the engine itself (deploy progress, datastore provisioning, cron runs) are detected by comparing the store every second while at least one client listens, so they arrive within about a second.
+
+### Reconnecting
+
+The streams send no event ids, so there is nothing to resume from: after a reconnect, wait for `ready` and refetch, or replay the log. The web dashboard reconnects with an exponential backoff from 1 to 15 seconds, and falls back to polling while the feed is down.
+
+In a browser, `EventSource` reconnects on its own and needs the token in the URL:
+
+```js title="events.js"
+const events = new EventSource(`/api/v1/events?access_token=${encodeURIComponent(token)}`);
+events.addEventListener('ready', () => refetchEverything());
+events.addEventListener('change', (e) => {
+  const change = JSON.parse(e.data);
+  if (change.action === 'resync') refetchEverything();
+  else invalidate(change.kind, change.id, change.service_id);
+});
+```
+
+`ferryd` sends no CORS headers, so a page can only call the API from the server's own origin (the dashboard does, and reads streams with `fetch()` to keep the token in a header). From other origins, go through a same-origin proxy or call the API from a backend.
+
+## Webhooks
+
+Webhooks live outside `/api` and never take the API token: each one checks its own secret.
+
+### Deploy hooks
+
+Every service has a secret deploy hook URL, `deploy_hook_path` in the service, that queues a deploy of its configured source (trigger `deploy_hook`). `ferry deploy-hook show NAME` prints the full URL.
+
+```bash title="Terminal"
+curl -X POST "http://127.0.0.1:7878/hooks/deploy/srv-60f5973b037e4478ae7b?key=<key>"
+```
+
+| Status | Meaning |
+|---|---|
+| 202 | A deploy was queued. The body is the deploy, with credentials in the repository URL redacted. |
+| 400 | The service has no source to deploy. |
+| 401 | Unknown service id or wrong key: the same answer for both, so the hook can't be used to discover services. |
+| 409 | The service is suspended or being deleted. |
+
+`GET` works too, for tools that can only send `GET`. The path takes the service **id** only, since names are guessable. Rotate the key with `ferry deploy-hook rotate NAME` (or [`POST /api/v1/services/{id}/deploy-hook/rotate`](/docs/reference/api/services#rotate-the-deploy-hook-key)); the old URL stops working at once.
+
+### GitHub webhook
+
+`POST /hooks/github` receives GitHub push events. It is off (404) until `ferryd` runs with `--github-webhook-secret`. In the repository's webhook settings, set the payload URL to `https://<dashboard host or tunnel>/hooks/github`, the content type to `application/json` (the form-encoded default works too) and the same secret. The [GitHub auto-deploy guide](/docs/guides/github-auto-deploy) walks through it.
+
+Each delivery must carry `X-Hub-Signature-256: sha256=<hex>`, the HMAC-SHA256 of the raw body with the secret, compared in constant time. To test by hand:
+
+```bash title="Terminal"
+BODY='{"zen":"Keep it logically awesome."}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+curl -X POST http://127.0.0.1:7878/hooks/github \
+  -H 'X-GitHub-Event: ping' -H "X-Hub-Signature-256: sha256=$SIG" \
+  -H 'Content-Type: application/json' -d "$BODY"
+# → {"ok":true}
+```
+
+| Event | Response |
+|---|---|
+| `ping` | `{"ok": true}` |
+| `push` to a branch | A deploy (trigger `webhook`, at the pushed commit) of every service with auto-deploy on whose repository and branch match; `{"deploys": [...]}`. Suspended services are skipped. |
+| `push` that deletes a branch, or to a tag | `{"deploys": []}` |
+| A delivery already processed | `{"deploys": [], "ignored": true, "reason": "this push was already processed (duplicate or replayed delivery)"}` |
+| Any other event | `{"ignored": true}` |
+| Missing or wrong signature | 401 `invalid or missing X-Hub-Signature-256` |
+
+Repositories match whatever URL form the service uses: the push's `clone_url`, `ssh_url`, `git_url`, `html_url` and `url` are all compared after normalization. A delivery counts as already processed when its exact body or its `X-GitHub-Delivery` id was seen before (the last 256 of each are remembered), which protects against replays since GitHub's signature has no timestamp.
+
+## Reference
+
+<Cards>
+  <Card icon={<Braces />} title="API reference" href="/docs/reference/api" description="Every endpoint with its parameters, bodies and responses, generated from the OpenAPI document." />
+  <Card icon={<FileJson />} title="OpenAPI and Swagger UI" description="Your server serves the OpenAPI 3.1 document at /api/openapi.json and an interactive Swagger UI at /api/docs." />
+</Cards>
+
+The reference pages have no "try it" button, because `ferryd` sends no CORS headers. To send requests from a browser, open `http://127.0.0.1:7878/api/docs` on your server and paste the token under **Authorize**.

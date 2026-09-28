@@ -28,7 +28,7 @@ ferry up                      # deploy the current directory → http://my-app.l
 
 ## Quick start
 
-Requirements: Docker (Docker Desktop on macOS works), Rust 1.85+ and Node.js 20+ to build.
+Requirements: Docker (Docker Desktop on macOS works), Rust 1.89+ and Node.js 20+ to build.
 
 ```bash
 (cd web && npm ci && npm run build)     # the web dashboard (embedded into ferryd at compile time)
