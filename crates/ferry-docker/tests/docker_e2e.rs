@@ -750,7 +750,16 @@ async fn oom_kills_are_reported() {
         .expect("the container is OOM-killed quickly")
         .unwrap();
     assert_eq!(code, 137);
-    let dead = docker.inspect_container(&info.id).await.unwrap().unwrap();
+    // Docker can record the OOM kill a moment after it reports the exit
+    // (seen on Linux hosts): the flag gets a few seconds to show up.
+    let mut dead = docker.inspect_container(&info.id).await.unwrap().unwrap();
+    for _ in 0..50 {
+        if dead.oom_killed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        dead = docker.inspect_container(&info.id).await.unwrap().unwrap();
+    }
     assert_eq!(dead.state, ContainerState::Exited);
     assert_eq!(dead.exit_code, Some(137));
     assert!(dead.oom_killed, "{dead:?}");

@@ -19,6 +19,7 @@ use futures::StreamExt;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+use crate::health::SIGKILL_EXIT_CODE;
 use crate::images;
 use crate::instances;
 use crate::logs::{LogHandle, LogKind};
@@ -34,9 +35,6 @@ const JOB_STOP_GRACE_SECS: u32 = 10;
 const OUTPUT_DRAIN: Duration = Duration::from_secs(10);
 /// How long `cancel_job`, suspend and delete wait for a job to stop.
 const STOP_WAIT: Duration = Duration::from_secs(JOB_STOP_GRACE_SECS as u64 + 20);
-/// Exit code of a process killed by SIGKILL — the kernel's OOM killer's
-/// signal.
-const SIGKILL_EXIT_CODE: i64 = 137;
 /// How long (polls × interval) a SIGKILLed job's container is watched for
 /// Docker's OOM flag, which can be recorded just after the exit.
 const OOM_FLAG_POLLS: usize = 10;

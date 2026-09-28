@@ -21,6 +21,13 @@ const EXIT_CODE_POLLS: usize = 30;
 const EXIT_CODE_POLL: Duration = Duration::from_millis(100);
 /// Bound on reading a container's past events from Docker.
 const EVENTS_TIMEOUT: Duration = Duration::from_secs(5);
+/// Exit code of a process killed by SIGKILL — the kernel's OOM killer's
+/// signal.
+pub(crate) const SIGKILL_EXIT_CODE: i64 = 137;
+/// How long (polls × interval) a SIGKILLed instance's Docker events are
+/// watched for an `oom`, which Docker can record just after the exit.
+const OOM_EVENT_POLLS: usize = 10;
+const OOM_EVENT_POLL: Duration = Duration::from_millis(200);
 /// Workers must still be running this long after start.
 pub(crate) const WORKER_MIN_UPTIME: Duration = Duration::from_secs(5);
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -230,6 +237,26 @@ pub(crate) async fn exit_from_events(
     exit
 }
 
+/// `exit`, or an OOM kill Docker recorded late. Only a SIGKILL can be the
+/// kernel's OOM killer, and Docker may record the OOM kill a moment after it
+/// reports the exit (seen on Linux hosts): an instance SIGKILLed with no OOM
+/// kill on record is looked up in its Docker events since `since` (a time
+/// since the epoch) a while longer.
+async fn with_late_oom(inner: &Inner, id: &str, since: Duration, exit: LastExit) -> LastExit {
+    if exit.oom_killed || exit.code != Some(SIGKILL_EXIT_CODE) {
+        return exit;
+    }
+    for attempt in 0..OOM_EVENT_POLLS {
+        if exit_from_events(inner, id, since, exit.memory_limit_bytes).await.oom_killed {
+            return LastExit { oom_killed: true, ..exit };
+        }
+        if attempt + 1 < OOM_EVENT_POLLS {
+            tokio::time::sleep(OOM_EVENT_POLL).await;
+        }
+    }
+    exit
+}
+
 /// Fold one Docker event (`action`, `attributes`) into how the container
 /// last exited: any `oom` is an OOM kill; the last `die` has the exit code.
 fn exit_event(exit: &mut LastExit, action: Option<&str>, attributes: &HashMap<String, String>) {
@@ -272,14 +299,17 @@ pub(crate) async fn wait_healthy(
                         oom_killed: info.oom_killed,
                         memory_limit_bytes: info.memory_limit_bytes,
                     };
+                    let exit = with_late_oom(inner, &container.id, started_at, exit).await;
                     return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Restarting => {
                     let exit = last_exit(inner, &container.id, started_at, info.memory_limit_bytes).await;
+                    let exit = with_late_oom(inner, &container.id, started_at, exit).await;
                     return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Running if info.restart_count.unwrap_or(0) > 0 => {
                     let exit = last_exit(inner, &container.id, started_at, info.memory_limit_bytes).await;
+                    let exit = with_late_oom(inner, &container.id, started_at, exit).await;
                     return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Running => match &check.probe {
