@@ -45,7 +45,7 @@ The home screen lists every service as a card: name, source (repository and bran
 1. **Service type:** web service, private service, background worker, cron job or static site (see [Services](/docs/concepts/services)).
 2. **General:** the name, with a preview of the public URL it will get.
 3. **Source:** a **Git repository** (URL, branch and auto-deploy), a **Docker image**, or **Upload later** to create the service now and push code with `ferry up`.
-4. **Build & deploy:** runtime (auto-detect or a specific one), build command, start command (or the command and schedule of a cron job, or the publish directory of a static site), port and instances. **Advanced** adds the root directory and Dockerfile path for monorepos, the health check path and a persistent disk.
+4. **Build & deploy:** runtime (auto-detect or a specific one), build command, start command (or the command and schedule of a cron job, or the publish directory of a static site), port and instances. **Advanced** adds the root directory and Dockerfile path for monorepos, the health check path, a persistent disk, and the memory and CPU limits of each instance (see [Resource limits](/docs/concepts/resource-limits)).
 5. **Custom domains**, **Environment** variables (add them one by one, import a `.env` file, or insert a datastore reference) and **Env groups** to link.
 
 **Create and deploy** creates the service and queues its first deploy when it has a source.
@@ -58,7 +58,7 @@ Opening a service shows its name, state, type and URL in the header, with **Open
 
 - **Info tiles:** status, running instances, private address (`name:port`), source, latest deploy, runtime, domains and creation date.
 - **Dependencies:** a small graph of the env groups linked to the service and the datastores and services its variables reference, such as `app-db` "via `DATABASE_URL`".
-- **Instances:** live CPU and memory of each container, with a **Scale** button.
+- **Instances:** live CPU and memory of each container against its limits, with a **Scale** button. An instance the kernel killed for going over its memory limit gets an **OOM killed** badge with its exit code, and a **Raise the limit** link to **Settings** → **Resources**.
 - **Service availability:** manual deploy (with a **Clear build cache** option), restart, scale, run a one-off job, and suspend or resume.
 
 ### Deploys
@@ -92,6 +92,7 @@ See [Environment & env groups](/docs/concepts/environment).
 | Build & deploy | Source (git, image or upload), runtime, root directory, Dockerfile path, build command, start command, publish directory, port, health check path, auto-deploy. Applies on the next deploy. |
 | Cron schedule | The schedule of a cron job, with common presets |
 | Scaling | Instances (applied immediately, no deploy) and the disk mount path |
+| Resources | Memory limit and CPU limit of each instance (of each run, for a cron job) and of the service's jobs: **Server default**, a preset or **Custom…**. Applies on the next deploy or restart; on a live service, **Restart now** in the confirmation applies it right away. |
 | Custom domains | Add or remove domains; lists every host routed to the service |
 | Deploy hook | Copy the secret deploy URL, or regenerate it (the old URL stops working) |
 | Danger zone | Suspend or resume, and delete the service |
@@ -100,11 +101,12 @@ If a setting changes elsewhere while you are editing the form, a **These setting
 
 ## Datastores
 
-Managed PostgreSQL and Redis instances, as cards with their version, private address, status and the host port they are published on. Filter by **Type** or search, and create one with **New datastore** (name, kind, version, and for Postgres an optional database name and user).
+Managed PostgreSQL and Redis instances, as cards with their version, private address, status and the host port they are published on. Filter by **Type** or search, and create one with **New datastore** (name, kind, version, for Postgres an optional database name and user, and optional memory and CPU limits).
 
 A datastore's page shows:
 
 - **Connection:** status, internal address, internal and external connection strings, username, password and database, each with a copy button.
+- **Resources:** the memory and CPU limits of its container. **Apply limits** changes the running container right away, without a restart.
 - **Use in a service:** the reference to paste into an environment, for example `DATABASE_URL=${{datastore.app-db.connectionString}}`, and a table of every property you can reference.
 - **Referenced by:** the services whose environment (or linked env group) uses the datastore.
 - **Danger zone:** delete the datastore and its volume. Its data can't be recovered.
@@ -121,7 +123,7 @@ Paste or open a `ferry.yaml` or `render.yaml` (or start from **Example**), click
 
 ## Server
 
-- **General:** Ferry and Docker versions, base domain, proxy URL, whether TLS is enabled, the dashboard URL, whether the GitHub webhook is enabled, the state of live updates, and the theme.
+- **General:** Ferry and Docker versions, the default container limits with the Docker host's CPUs and memory, base domain, proxy URL, whether TLS is enabled, the dashboard URL, whether the GitHub webhook is enabled, the state of live updates, and the theme.
 - **Connections:** the `ferry login` command and the `FERRY_SERVER` / `FERRY_TOKEN` variables for CI, the GitHub webhook settings to paste into GitHub (payload URL, content type, events), and a pointer to per-service deploy hooks.
 - **API:** the base URL, how to authenticate, an example request, links to the Swagger UI at `/api/docs` and the OpenAPI document, and the server-sent event streams.
 

@@ -38,10 +38,11 @@ Ferry covers the building blocks of Render on a single server you run yourself.
 | Persistent disks | Yes: a named volume; a service with a disk runs 1 instance and its deploys stop the old instance first |
 | Custom domains, free TLS | Yes: Let's Encrypt (ACME HTTP-01) |
 | Manual scaling | Yes: instances behind round-robin load balancing in the proxy |
+| Instance types (`plan`) | Yes: [memory and CPU limits](/docs/concepts/resource-limits) per service and datastore (server defaults 512 MiB and 1 CPU per container); a blueprint's `plan` becomes limits |
 | Suspend, resume, restart | Yes |
 | One-off jobs | Yes (`ferry run`) |
 | Blueprints (`render.yaml`) | Yes: `ferry blueprint apply`, same schema (a subset) |
-| Logs (build and runtime, live tail), basic metrics | Yes: Server-Sent Events streams, CPU and memory per instance |
+| Logs (build and runtime, live tail), basic metrics | Yes: Server-Sent Events streams, CPU and memory per instance against its limits, out-of-memory kills flagged |
 | Dashboard, CLI, REST API | Yes |
 | — | Ferry extra: `ferry up` deploys a local directory without git |
 

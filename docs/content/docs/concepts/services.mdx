@@ -174,12 +174,14 @@ These settings live on the service. They take effect with the next deploy, excep
 | Instances | `--instances` | `instances` | `1` |
 | Cron schedule | `--schedule` | `schedule` | required for cron jobs |
 | Disk mount path | `--disk` | `disk_mount_path` | none |
+| Memory limit (each instance and job run) | `--memory` | `memory_limit_mb` | the server's, 512 MiB by default |
+| CPU limit (each instance and job run) | `--cpu` | `cpu_limit` | the server's, 1 CPU by default |
 | Custom domains | `--domain` (repeatable) | `custom_domains` | none |
 | Auto-deploy | `--no-auto-deploy`, `--auto-deploy` | `auto_deploy` | on |
 
-Change them with `ferry update`, on the service's **Settings** page, or with `PATCH /api/v1/services/{id}`. To clear a text setting, pass an empty value (`--start-cmd ""`); `--port 0` clears the port so Ferry detects it again.
+Change them with `ferry update`, on the service's **Settings** page, or with `PATCH /api/v1/services/{id}`. To clear a text setting, pass an empty value (`--start-cmd ""`); `--port 0` clears the port so Ferry detects it again, and `--memory default` / `--cpu default` go back to the server's limits. Resource limits apply with the next deploy or restart (`ferry restart` is enough).
 
-How the runtime, commands, root directory and publish directory are used is described in [Builds & runtimes](/docs/concepts/builds). The port and the health check are covered in [Deploys](/docs/concepts/deploys#health-checks), instances and disks in [Disks, scaling & suspend](/docs/concepts/scaling).
+How the runtime, commands, root directory and publish directory are used is described in [Builds & runtimes](/docs/concepts/builds). The port and the health check are covered in [Deploys](/docs/concepts/deploys#health-checks), instances and disks in [Disks, scaling & suspend](/docs/concepts/scaling), memory and CPU limits in [Resource limits](/docs/concepts/resource-limits).
 
 ## Names
 

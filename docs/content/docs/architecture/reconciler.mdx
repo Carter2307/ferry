@@ -16,6 +16,8 @@ The store says what should run: which deploy is live for each service, how many 
 
 Next to the passes, a **route watcher** lists the running instances every second. When Docker restarts a crashed container on a new host port, the watcher refreshes that service's routes as soon as the new instance accepts connections, without waiting for the next pass.
 
+An **OOM watcher** follows Docker's `oom` events for this server's containers and logs a server-log warning for each kill, naming the service or datastore and the memory limit it hit: `instance a1b2c3 of service 'web' ran out of memory (limit 512 MiB) — raise the service's memory limit`. Docker restarts such a container on its own and clears its out-of-memory flag once it runs again, so without the watcher a container crash-looping on its memory limit would go unnoticed.
+
 Passes never overlap, and each one runs in its own task: a failure is logged and the next pass starts on time.
 
 ## One pass
@@ -44,7 +46,7 @@ Then it sorts the service's containers:
 - **Kept:** running (or restarting) containers of the live deploy, up to the desired instance count, running ones first.
 - **Removed:** exited, dead or never-started containers, containers of any other deploy, and instances beyond the desired count.
 
-Routes are updated before anything is removed, so traffic never goes to an instance that is about to stop. Missing instances are then started, always from the **live deploy's launch spec**: the image, resolved environment, command, port and disk saved when that deploy went live, never the current settings (see [Deploy pipeline](/docs/architecture/deploy-pipeline#settings-take-effect-through-deploys)). If that image no longer exists, the reconciler logs a warning and starts nothing: deploy again.
+Routes are updated before anything is removed, so traffic never goes to an instance that is about to stop. Missing instances are then started, always from the **live deploy's launch spec**: the image, resolved environment, command, port, disk and resource limits saved when that deploy went live (the server's default limits when the spec has none), never the current settings (see [Deploy pipeline](/docs/architecture/deploy-pipeline#settings-take-effect-through-deploys)). If that image no longer exists, the reconciler logs a warning and starts nothing: deploy again.
 
 Stale containers from deploys that never went live (failed, canceled, interrupted) are removed at once. The others, such as a previous deploy's leftovers or surplus instances after scaling down, get a 10-second stop grace period.
 
@@ -68,6 +70,8 @@ The dashboard's own route (`ferry.<base-domain>`, when enabled) is installed by 
 
 Every datastore marked `available` must have a running container. A missing, stopped, paused or dead one is provisioned again with the same volume, so its data survives. A datastore whose provisioning `failed` is retried with a backoff that starts at 60 seconds and doubles up to 30 minutes.
 
+Provisioning that keeps an existing container applies the datastore's current limits to it when they differ, for example limits raised while the datastore was `failed` after running out of memory. A container the kernel killed for going over its memory limit fails provisioning at once, with `the redis container ran out of memory (limit 256 MiB) — raise the datastore's memory limit`. The free-disk check (`--min-free-disk`) never blocks recreating an existing datastore's container whose image is still there, so a datastore heals on a nearly full disk too.
+
 ### Orphans
 
 A container with this server's prefix whose service or datastore no longer exists in the store is removed, and so is the container of a job run that has finished or is unknown. The container list is taken before the store is read, so a resource created during the pass is never mistaken for an orphan. Containers with an unknown `ferry.role` are left alone.
@@ -86,5 +90,6 @@ Then the boot pass installs the routes of every live deploy and brings back the 
 
 - It never changes settings, variables or instance counts: it only makes Docker match them.
 - It never starts instances from anything but a live deploy's launch spec.
+- It never changes the limits of a running container: a service's limits change with its next deploy or restart, a datastore's in place through `PATCH /api/v1/datastores/{id}` (`ferry db update`). Only a datastore it provisions again gets its current limits, as described above.
 - It never deletes volumes. Datastore volumes and service disks are only removed when you delete the datastore or the service.
 - It never touches containers of another prefix: see [one server per data directory and prefix](/docs/architecture/security#one-server-per-data-directory-and-prefix).

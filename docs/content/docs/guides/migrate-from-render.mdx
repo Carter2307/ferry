@@ -38,15 +38,12 @@ Would create:
 
 Warnings:
   ! blueprint: ignoring unsupported key 'previews'
-  ! database 'shop-db': ignoring unsupported key 'plan'
   ! database 'shop-db': ignoring unsupported key 'region'
   ! database 'shop-db': ignoring unsupported key 'ipAllowList'
   ! service 'shop-web': autoDeployTrigger 'checksPass' is not supported; deploying on every commit
-  ! service 'shop-web': ignoring unsupported key 'plan'
   ! service 'shop-web': ignoring unsupported key 'region'
   ! service 'shop-web': ignoring unsupported key 'preDeployCommand'
   ! service 'shop-web': ignoring unsupported key 'scaling'
-  ! key value 'shop-cache': ignoring unsupported key 'plan'
   ! key value 'shop-cache': ignoring unsupported key 'ipAllowList'
   ! key value 'shop-cache': ignoring unsupported key 'maxmemoryPolicy'
   ! service 'shop-worker': registry credentials are not supported; the image must be pullable anonymously
@@ -55,7 +52,7 @@ Warnings:
 Run without --dry-run to apply.
 ```
 
-Read every warning: each one is a Render feature your app won't get on Ferry. The [support matrix](#support-matrix) below explains them.
+Read every warning: each one is a Render feature your app won't get on Ferry. The [support matrix](#support-matrix) below explains them. Plans don't appear in the list: each `plan` becomes the resource limits of its service or datastore (see [Plans](#plans)). Only a plan Ferry doesn't know produces a warning (`ignoring unknown plan …`), and it sets nothing.
 
 </Step>
 <Step>
@@ -67,6 +64,8 @@ ferry blueprint apply render.yaml
 ```
 
 Ferry creates env groups first, then datastores (their provisioning starts in the background), then services. New services with a repository or an image get a first deploy (trigger `blueprint`). Follow them with `ferry deploys NAME` and `ferry logs --deploy ID -f`, and check the datastores with `ferry db ls`. If a first deploy fails because its database wasn't available yet, run `ferry deploy NAME` again.
+
+`ferry show NAME` and `ferry db show NAME` print the `Memory limit` and `CPU limit` of a service or datastore, so you can check what its plan gave it.
 
 </Step>
 <Step>
@@ -134,7 +133,7 @@ Services with `autoDeploy` (on by default) redeploy on push once GitHub sends we
 | `worker` | Background worker. |
 | `cron` | Cron job. |
 | `static` | Static site. |
-| `redis`, `keyvalue` | A Redis datastore. Only `name` is used; every other key is ignored with a warning. |
+| `redis`, `keyvalue` | A Redis datastore. Only `name` and `plan` are used (and Ferry's `memoryLimit` / `cpuLimit`); every other key, such as `ipAllowList` or `maxmemoryPolicy`, is ignored with a warning. |
 
 ### Service keys
 
@@ -148,8 +147,10 @@ Services with `autoDeploy` (on by default) redeploy on push once GitHub sends we
 | `autoDeployTrigger` | `commit` → auto-deploy on; `off` → off; `checksPass` → deploys on every commit, with a warning. |
 | `disk` | `mountPath` is used; `name` and `sizeGB` are accepted and ignored (disks have no size limit). |
 | `numInstances` on a cron job | Ignored with a warning. |
+| `plan` | The memory and CPU limits of each instance and job run: see [Plans](#plans). Ignored on static sites, which have no plans on Render. |
 | `port` | A Ferry extension: the port your app listens on. |
-| anything else (`plan`, `region`, `scaling`, `preDeployCommand`, `buildFilter`, `headers`, `routes`, …) | Ignored with a warning. |
+| `memoryLimit`, `cpuLimit` | Ferry extensions: set the limits directly, overriding the plan's. |
+| anything else (`region`, `scaling`, `preDeployCommand`, `buildFilter`, `headers`, `routes`, …) | Ignored with a warning. |
 
 ### Environment variables
 
@@ -173,7 +174,15 @@ Properties for `fromDatabase` and key value stores: `connectionString`, `host`, 
 | `name` | Supported. |
 | `postgresMajorVersion` | The Postgres version (`postgres:<version>-alpine`); default `16`. |
 | `databaseName`, `user` | Supported. |
-| anything else (`plan`, `region`, `ipAllowList`, `readReplicas`, …) | Ignored with a warning. |
+| `plan` | The memory limit of the container: see [Plans](#plans). |
+| `memoryLimit`, `cpuLimit` | Ferry extensions: set the limits directly, overriding the plan's. |
+| anything else (`region`, `ipAllowList`, `readReplicas`, …) | Ignored with a warning. |
+
+### Plans
+
+Ferry has no instance types: a `plan` becomes the memory and CPU limits of the containers. Services get the plan's memory and CPU (`starter` → 512 MiB and 0.5 CPU, `standard` → 2 GiB and 1 CPU, `pro` → 4 GiB and 2 CPUs, and so on), except `free`, which gets 0.5 CPU instead of Render's 0.1. Postgres and Key Value plans set the memory only (`basic-1gb` → 1 GiB, Key Value `starter` → 256 MiB).
+
+A resource without a plan or limit keys gets the server defaults: 512 MiB and 1 CPU per container, unless the server was started with other `--default-memory-limit` / `--default-cpu-limit` values. The [blueprint reference](/docs/reference/blueprint#plans) lists every plan, and the `memoryLimit` / `cpuLimit` keys that override them.
 
 ## How re-applying works
 
@@ -181,9 +190,10 @@ You can apply the same file again after editing it:
 
 - Nothing is ever deleted. A resource you remove from the file stays on the server.
 - Existing services are updated in place; the result lists `create`, `update` (with the changes) and `unchanged`.
-- A service whose build or deploy settings changed is deployed again; a service whose only changes are variables is restarted, if it is live.
-- Existing datastores are never changed: a different version, database name or user in the file only produces a warning.
-- `--dry-run` shows all of this without changing anything.
+- A service whose build or deploy settings changed is deployed again. A service whose only changes are its resource limits (a new `plan`, `memoryLimit` or `cpuLimit`) or its variables is restarted, if it is live: nothing is rebuilt.
+- Limits the file doesn't set (no `plan`, `memoryLimit` or `cpuLimit`) are kept, like `numInstances`: changes you made with `ferry update --memory` or in the dashboard stay.
+- Existing datastores keep their version, database name and user: a different value in the file only produces a warning. Their limits do change, in place and without a restart.
+- `--dry-run` shows all of this without changing anything, including limit changes such as `memory_limit: 512 MiB → 2 GiB`.
 
 The [blueprint reference](/docs/reference/blueprint) documents every key, including Ferry's own `ferry.yaml` usage.
 
@@ -191,7 +201,8 @@ The [blueprint reference](/docs/reference/blueprint) documents every key, includ
 
 - **Language versions** come from your project files, not from variables: `engines.node` in `package.json`, `.python-version` or `runtime.txt`, the `go` line of `go.mod`, `.ruby-version` or the `Gemfile`. `NODE_VERSION` or `PYTHON_VERSION` variables are passed to your app like any other variable. See [Language guides](/docs/guides/language-guides).
 - **Pre-deploy commands** don't exist. Run migrations with a one-off job: `ferry run NAME -- npm run migrate`. See [Deploy an app with Postgres](/docs/guides/postgres-app#run-migrations-on-every-deploy).
-- **Plans and regions** don't apply: everything runs on your server, without CPU or memory limits.
+- **Plans are limits, not machines**, and regions don't apply: everything runs on your server. A plan's limits are caps, not reservations: nothing checks that they fit the server, and a CPU limit above its CPU count is capped at it. Size the server for what you run; see [Resource limits](/docs/concepts/resource-limits).
+- **Key value stores** ignore `maxmemoryPolicy`: Ferry sets Redis's `maxmemory` to 3/4 of the store's memory limit, and a full Redis refuses writes. Give a cache enough memory with its `plan` or `memoryLimit`.
 - **The port** works like Render: Ferry injects `PORT` (default `10000`) and routes to it.
 - **Static sites** are served by nginx with `try_files $uri $uri/ $uri.html` and your `404.html`. Render's `routes` (redirects and rewrites) and `headers` aren't supported.
 - **Also not in Ferry:** pull request previews, autoscaling, private registry credentials, secret files and IP allow lists.

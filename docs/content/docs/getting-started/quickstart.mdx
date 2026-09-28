@@ -79,6 +79,7 @@ Deploy dep-3493c505ea9b4415b359 queued (upload), streaming logs…
 …
 09:36:21 ==> Build successful 🎉
 09:36:21 ==> Using port 10000 (default port)
+09:36:21 ==> Limits: 512 MiB memory, 1 CPU per instance
 09:36:21 ==> Starting 1 instance(s)
 09:36:21 ==> Started instance 82e2be (port 10000, published on 127.0.0.1:62694)
 09:36:21 ==> Waiting for 1 instance(s) to become healthy: the port must accept TCP connections (timeout 120s)
@@ -96,6 +97,7 @@ Here is what happened:
 
 - There is no Dockerfile, so Ferry **detected the runtime** from `package.json` and generated a Dockerfile for Node.js (`node:22-alpine`, `npm install`, then `npm start`). See [Builds & runtimes](/docs/concepts/builds).
 - The app doesn't set a port, so Ferry picked the **default port 10000** and passed it in the `PORT` variable, which `server.js` reads.
+- The container got the server's default **resource limits**: 512 MiB of memory and 1 CPU (the `Limits` line). See [Resource limits](/docs/concepts/resource-limits).
 - Ferry started the new container, waited until its port accepted connections, then **routed traffic** to it. See [Deploys](/docs/concepts/deploys).
 
 The first deploy takes longer: Docker downloads the `node:22-alpine` base image once.
@@ -133,15 +135,15 @@ NAME         TYPE   STATE   INSTANCES   URL                                LAST 
 node-hello   web    live    1           http://node-hello.localhost:8080   live · 8s ago
 
 node-hello: live — 1/1 instance(s) running
-INSTANCE   DEPLOY     STATE     PORT    CPU    MEMORY               RESTARTS   STARTED
-82e2be     4415b359   running   62694   4.7%   24.2 MiB / 7.7 GiB   0          8s ago
+INSTANCE   DEPLOY     STATE     PORT    CPU            MEMORY                 RESTARTS   STARTED
+82e2be     4415b359   running   62694   4.7% / 1 CPU   24.2 MiB / 512.0 MiB   0          8s ago
 
 09:36:21 [82e2be] > node-hello@1.0.0 start
 09:36:21 [82e2be] > node server.js
 09:36:22 [82e2be] node-hello listening on :10000
 ```
 
-Add `-f` to `ferry logs` to keep streaming new lines; press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop. Each line shows the time and the instance it came from.
+`ferry status` shows each instance's CPU and memory use next to its limits (`4.7% / 1 CPU`). Add `-f` to `ferry logs` to keep streaming new lines; press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop. Each line shows the time and the instance it came from.
 
 The same service is on the dashboard at http://127.0.0.1:7878: sign in with the API token, then open **node-hello**. See the [Dashboard tour](/docs/getting-started/dashboard).
 </Step>
@@ -212,6 +214,7 @@ Deploy dep-16d99450e6984bb18843 queued (rollback), streaming logs…
 09:36:49 ==> Rolling back to deploy dep-3493c505ea9b4415b359 (deploy dep-16d99450e6984bb18843)
 09:36:49 ==> Reusing image ferry/node-hello:dep-3493c505ea9b4415b359 of deploy dep-3493c505ea9b4415b359
 09:36:49 ==> Using port 10000 (default port)
+09:36:49 ==> Limits: 512 MiB memory, 1 CPU per instance
 09:36:49 ==> Starting 1 instance(s)
 …
 09:36:51 ==> Health check passed

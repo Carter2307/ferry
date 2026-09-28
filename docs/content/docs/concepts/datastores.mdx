@@ -1,12 +1,12 @@
 ---
 title: "Datastores"
-description: "Managed Postgres and Redis: one container and one volume each, with internal and external connection strings."
+description: "Managed Postgres and Redis: one container and one volume each, with internal and external connection strings and memory and CPU limits you can change without a restart."
 icon: Database
 ---
 
 import { Braces, BookOpen, Network } from 'lucide-react';
 
-A datastore is a Postgres or Redis server that Ferry runs for you: one container from the official Alpine image, with its data on a Docker volume. Services connect to it over the private network by name, and you can connect to it from the server itself.
+A datastore is a Postgres or Redis server that Ferry runs for you: one container from the official Alpine image, with its data on a Docker volume and its own memory and CPU limits. Services connect to it over the private network by name, and you can connect to it from the server itself.
 
 ## Create a datastore
 
@@ -17,6 +17,7 @@ A datastore is a Postgres or Redis server that Ferry runs for you: one container
 ferry db create app-db --wait                  # Postgres 16
 ferry db create cache --kind redis --wait      # Redis 7
 ferry db create reports --version 17 --database reports --user analyst
+ferry db create big-db --memory 2G --cpu 2     # own resource limits
 ```
 
 ```text title="Output"
@@ -37,7 +38,7 @@ curl -X POST http://127.0.0.1:7878/api/v1/datastores \
   -d '{"name": "app-db", "kind": "postgres", "version": "16"}'
 ```
 
-The response is `201` with the datastore, even when provisioning fails: then `status` is `failed` and `error` says why. See [Datastores](/docs/reference/api/datastores) in the API reference.
+Add `memory_limit_mb` (MiB) and `cpu_limit` (CPUs) to set its [resource limits](#resource-limits). The response is `201` with the datastore, even when provisioning fails: then `status` is `failed` and `error` says why. See [Datastores](/docs/reference/api/datastores) in the API reference.
 
 </Tab>
 <Tab value="Blueprint">
@@ -48,10 +49,14 @@ databases:
     postgresMajorVersion: "16"
     databaseName: app
     user: app
+    plan: basic-1gb    # memory limit 1 GiB
 services:
   - type: redis        # or keyvalue
     name: cache
+    memoryLimit: 256M
 ```
+
+A Render `plan` sets the memory limit; `memoryLimit` and `cpuLimit` override it. See [Blueprints and Render plans](/docs/concepts/resource-limits#blueprints-and-render-plans).
 
 </Tab>
 </Tabs>
@@ -63,6 +68,8 @@ services:
 | Database (`--database`) | Default: the name with `-` replaced by `_` (`app-db` → `app_db`). Also becomes the default user. | not supported |
 | User (`--user`) | Default: the database name. | always `default` |
 | Password | 32 random hex characters, generated | same |
+| Memory limit (`--memory`) | Default: the server's (`--default-memory-limit`, 512 MiB). See [Resource limits](#resource-limits). | same |
+| CPU limit (`--cpu`) | Default: the server's (`--default-cpu-limit`, 1 CPU) | same |
 
 Versions are digits and dots only (`16`, `7.2`): Ferry pulls the matching official image tag.
 
@@ -86,6 +93,8 @@ Password:       6dd99f93338045919b9e682913c3c6a4
 Internal host:  app-db:5432
 Internal URL:   postgresql://app_db:6dd99f93338045919b9e682913c3c6a4@app-db:5432/app_db
 External URL:   postgresql://app_db:6dd99f93338045919b9e682913c3c6a4@127.0.0.1:62975/app_db
+Memory limit:   server default (512 MiB)
+CPU limit:      server default (1 CPU)
 Created:        just now
 ```
 
@@ -118,9 +127,32 @@ The volume outlives the container: restarts of the server, crash replacements an
 
 Ferry never gives a new datastore a volume it didn't create for it. If a volume with the same name already exists (left by an earlier datastore, another server or a manual `docker volume create`), provisioning fails with a message that tells you to remove it (`docker volume rm …`) or pick another name.
 
+## Resource limits
+
+Each datastore's container runs with a memory limit and a CPU limit: its own, or the server defaults (512 MiB and 1 CPU unless `ferryd` sets others). Unlike a service's limits, you can change them at any time **without a restart**:
+
+```bash title="Terminal"
+ferry db update app-db --memory 2G
+ferry db update cache --cpu default     # back to the server default
+```
+
+```text title="ferry db update app-db --memory 2G"
+Updated datastore 'app-db': memory limit 2 GiB
+Applied to the running container (no restart).
+```
+
+The dashboard does the same from the **Resources** section of the datastore's page, and the API with `PATCH /api/v1/datastores/{id}` (see [Change a datastore's resource limits](/docs/reference/api/datastores#change-a-datastores-resource-limits)).
+
+- **In place, whatever the status.** The running container gets the new limits right away. A `failed` datastore keeps them for its next start, which is how you recover one that ran out of memory while provisioning (`the postgres container ran out of memory (limit 512 MiB) — raise the datastore's memory limit`): raise the limit, and the next retry uses it.
+- **Careful when lowering.** A memory limit below what the datastore uses right now can fail to apply, or get it killed for running out of memory. When applying fails, the new limits are saved anyway and the error says so; running the update again retries.
+- **Redis** gets a `maxmemory` of 3/4 of its memory limit, so when it's full it refuses writes instead of being killed. Redis keeps every key in memory: keep the limit well above your data size.
+- **Out-of-memory kills** of a running datastore are logged by `ferryd` (`datastore 'app-db' ran out of memory (limit 1 GiB) — raise the datastore's memory limit`). If the datastore stops, Docker restarts it.
+
+See [Resource limits](/docs/concepts/resource-limits) for the defaults and the other guards.
+
 ## Self-healing
 
-The [reconciler](/docs/concepts/self-healing) checks datastores every 10 seconds: an available datastore whose container stopped or vanished is started or recreated with its volume. A datastore that failed to provision is retried after 1 minute, then with a growing delay up to 30 minutes.
+The [reconciler](/docs/concepts/self-healing) checks datastores every 10 seconds: an available datastore whose container stopped or vanished is started or recreated with its volume and its current limits. A datastore that failed to provision is retried after 1 minute, then with a growing delay up to 30 minutes.
 
 ## Delete a datastore
 
@@ -151,8 +183,8 @@ See [Production setup](/docs/guides/production#back-up-your-data) for what else 
 ## Limitations
 
 - One container per datastore: no replicas, no high availability, no connection pooler.
-- No resource limits: a datastore uses whatever CPU and memory it needs on the server.
-- A datastore can't be changed after creation: no version upgrade, no new password, no renaming. To upgrade Postgres, create a new datastore and move the data with `pg_dump` and `psql`. A blueprint that lists different settings for an existing datastore only warns.
+- Apart from its [resource limits](#resource-limits), a datastore can't be changed after creation: no version upgrade, no new password, no renaming. To upgrade Postgres, create a new datastore and move the data with `pg_dump` and `psql`. A blueprint that lists a different version, database or user for an existing datastore only warns (it does change the limits).
+- No disk quota: a datastore's volume can grow until the server's disk is full.
 - Only Postgres and Redis. Run anything else as a [private service](/docs/concepts/services) with a [disk](/docs/concepts/scaling#persistent-disks).
 
 <Cards cols={3}>

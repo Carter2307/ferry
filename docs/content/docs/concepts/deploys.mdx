@@ -111,13 +111,13 @@ flowchart TB
 ```
 
 1. **Queue.** Each service has its own queue and deploys one version at a time, in order; different services deploy in parallel. When a new deploy is queued, older deploys of the same service that are still waiting are canceled ("superseded by dep-…"), so only the newest one runs. Builds are limited server-wide by `--build-concurrency` (2 by default); a deploy waiting for a slot says so in its log.
-2. **Build.** Ferry fetches the source and builds an image named `<prefix>/<service>:<deploy-id>`, or pulls the image of an image service, or reuses an existing image for restarts and rollbacks. See [Builds & runtimes](/docs/concepts/builds). A cron job's deploy stops here: it is marked live and its schedule uses the new image.
-3. **Start.** Ferry picks the container port, resolves the environment (including `${{…}}` references) and starts as many new containers as the service has instances, while the old ones keep serving.
+2. **Build.** Ferry fetches the source and builds an image named `<prefix>/<service>:<deploy-id>`, or pulls the image of an image service, or reuses an existing image for restarts and rollbacks. Before building or pulling, it checks that the server has enough [free disk space](/docs/concepts/resource-limits#free-disk-space) (`--min-free-disk`, 1 GiB by default). See [Builds & runtimes](/docs/concepts/builds). A cron job's deploy stops here: it is marked live and its schedule uses the new image.
+3. **Start.** Ferry picks the container port, resolves the environment (including `${{…}}` references) and starts as many new containers as the service has instances, each with the service's [memory and CPU limits](/docs/concepts/resource-limits), while the old ones keep serving.
 4. **Health check.** Every new instance must pass the [health check](#health-checks). While Ferry waits, their output is copied into the deploy log.
 5. **Switch.** Web services and static sites: the proxy routes to the new instances in one step. The deploy is marked `live` right away, and the previous live deploy becomes `deactivated`.
 6. **Drain.** Ferry stops the old instances, giving each 10 seconds to exit after the stop signal, and removes them. For web services and static sites, it first waits about two seconds so that requests already in flight can finish.
 
-If the build fails, an instance crashes or the health check times out, Ferry removes the new instances and marks the deploy `build_failed` or `deploy_failed`. The old instances were never touched: the live deploy keeps serving. The engine side of this pipeline (workers, locks, snapshots) is described in [Deploy pipeline](/docs/architecture/deploy-pipeline).
+If the build fails, an instance crashes (or runs out of memory: `instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit`) or the health check times out, Ferry removes the new instances and marks the deploy `build_failed` or `deploy_failed`. The old instances were never touched: the live deploy keeps serving. The engine side of this pipeline (workers, locks, snapshots) is described in [Deploy pipeline](/docs/architecture/deploy-pipeline).
 
 <Callout type="warning" title="Services with a disk are redeployed in place">
 A service with a persistent disk runs a single instance, and two containers can't share its volume safely. Its deploys stop the old instance **before** starting the new one, so the service is briefly unavailable during each deploy. See [Disks, scaling & suspend](/docs/concepts/scaling).
@@ -130,6 +130,7 @@ This is what a redeploy of a web service looks like in its log:
 …
 ==> Build successful 🎉
 ==> Using port 10000 (default port)
+==> Limits: 512 MiB memory, 1 CPU per instance
 ==> Starting 1 instance(s)
 ==> Started instance e5725a (port 10000, published on 127.0.0.1:62742)
 ==> Waiting for 1 instance(s) to become healthy: the port must accept TCP connections (timeout 120s)
@@ -180,7 +181,7 @@ Ferry passes the chosen port to the app in the `PORT` variable and logs its choi
 
 ## What a deploy freezes
 
-When a deploy goes live, Ferry stores exactly what its instances run: the image, the environment with every reference resolved, the command, the port and the disk mount. Everything that later starts containers for that deploy uses this snapshot, never the service's current settings:
+When a deploy goes live, Ferry stores exactly what its instances run: the image, the environment with every reference resolved, the command, the port, the disk mount and the resource limits. Everything that later starts containers for that deploy uses this snapshot, never the service's current settings:
 
 - the reconciler replacing a crashed instance;
 - scaling up, and resuming a suspended service;
@@ -192,6 +193,7 @@ In practice:
 
 - `ferry env set` and `ferry env unset` restart the service by default, so the new values apply at once. With `--no-restart` they are only saved.
 - Build and deploy settings (`ferry update`, the **Settings** page) apply with the next deploy: run `ferry deploy`, or `ferry restart` if nothing needs to be rebuilt.
+- Resource limits (`ferry update --memory` / `--cpu`, **Settings** → **Resources**) apply with the next deploy or restart; `ferry restart` is enough. See [When a change applies](/docs/concepts/resource-limits#when-a-change-applies).
 - References are resolved when a deploy starts its containers, so when the value behind a reference changes, a restart is enough. For example, a datastore you deleted with `--force` and created again under the same name has a new password: `ferry restart` gives the service the new connection string.
 - The instance count is the exception: `ferry scale` applies right away, with the live snapshot.
 - Changing the start command of a cron job restarts it automatically, so its next run uses the new command.

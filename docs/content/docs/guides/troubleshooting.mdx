@@ -152,6 +152,16 @@ the docker CLI ('docker') was not found: install Docker on the Ferry server
 
 **Fix:** install the Docker CLI, or pass its full path with `--docker-bin`.
 
+### The disk is nearly full
+
+```text title="Deploy log" noCopy
+==> Build failed: not enough free disk space on /var/lib/ferry: 812 MiB free, Ferry needs at least 1 GiB (free some space, e.g. remove unused Docker images with `docker image prune`, or change the threshold with `ferryd --min-free-disk`, 0 = off)
+```
+
+**Cause:** the filesystem of the data directory, or of Docker's root directory, has less free space than `--min-free-disk` (1 GiB by default). Ferry checks it before a deploy builds or pulls, and before it creates a new datastore, which then fails with the same message. Restarts and rollbacks aren't checked.
+
+**Fix:** free some space: `docker image prune` removes unused images, and `docker builder prune` the build cache. See [Free disk space](/docs/concepts/resource-limits#free-disk-space).
+
 ## Deploys
 
 A deploy that fails ends as `deploy_failed`, and the previous deploy keeps serving. See [Deploys](/docs/concepts/deploys#health-checks) for how health checks work.
@@ -185,6 +195,23 @@ A deploy that fails ends as `deploy_failed`, and the previous deploy keeps servi
 **Cause:** the app exited while Ferry waited for its health check. Some exit codes add a hint, such as `127: command not found, check the start command`.
 
 **Fix:** read the instance's last lines of output, which Ferry copies into the deploy log just above.
+
+### The app runs out of memory
+
+```text title="Deploy log" noCopy
+==> Deploy failed: instance d1c6b8 ran out of memory (limit 512 MiB) — raise the service's memory limit
+```
+
+**Cause:** the new instance used more memory than its limit (the server's default, 512 MiB, unless the service sets its own), and the kernel killed it. Once a deploy is live, the same kill makes Docker restart the instance: `ferry status NAME` shows it as `restarting (OOM killed, exit code 137)`, and `ferryd` logs it.
+
+**Fix:** raise the limit, then deploy again (`ferry up NAME` for local code):
+
+```bash title="Terminal"
+ferry update NAME --memory 1G
+ferry deploy NAME
+```
+
+When it's the live instances that keep getting killed, `ferry restart NAME` gives them the new limit without a rebuild. See [Out-of-memory kills](/docs/concepts/resource-limits#out-of-memory-kills).
 
 ## Reaching your app
 

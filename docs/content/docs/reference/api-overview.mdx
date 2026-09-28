@@ -21,7 +21,11 @@ curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/info
   "tls_enabled": false,
   "dashboard_url": "http://ferry.localhost:8080",
   "github_webhook_enabled": false,
-  "docker_version": "29.2.0"
+  "docker_version": "29.2.0",
+  "default_memory_limit_mb": 512,
+  "default_cpu_limit": 1.0,
+  "docker_cpus": 8,
+  "docker_memory_bytes": 8217030656
 }
 ```
 

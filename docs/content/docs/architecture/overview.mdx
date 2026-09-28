@@ -40,12 +40,12 @@ flowchart TB
 
 ## Crates
 
-- **`ferry-core`** (library). The shared vocabulary: domain models, API request and response types, configuration, the SQLite `Store`, env var merging and [reference resolution](/docs/reference/env-references), validation, cron schedules, Docker naming, and the `Engine` and `TlsHooks` traits that decouple the other crates.
+- **`ferry-core`** (library). The shared vocabulary: domain models, API request and response types, configuration, the SQLite `Store`, env var merging and [reference resolution](/docs/reference/env-references), validation, resource limit ranges and parsing, cron schedules, Docker naming, and the `Engine` and `TlsHooks` traits that decouple the other crates.
 - **`ferry-docker`** (library). A typed wrapper over the Docker Engine API (through `bollard`): containers, images, volumes, networks, logs, stats and exec. It knows nothing about services or deploys.
 - **`ferry-build`** (library). Turns source into an image: git fetch or archive extraction, runtime detection, Dockerfile generation for native runtimes, and `docker build` with BuildKit, streamed into the deploy log.
 - **`ferry-proxy`** (library). The public edge: the `RouteTable`, the HTTP/1.1 and HTTP/2 reverse proxy with round-robin load balancing, websockets, error pages, TLS termination and connection limits.
 - **`ferry-tls`** (library). Automatic HTTPS: ACME HTTP-01 certificates (Let's Encrypt by default), storage and renewal, SNI resolution for the proxy.
-- **`ferry-engine`** (library). The brain: the deploy queue and pipeline, the reconciler, the cron scheduler and one-off jobs, datastores, and log storage. It implements `ferry_core::Engine`.
+- **`ferry-engine`** (library). The brain: the deploy queue and pipeline, the reconciler, the cron scheduler and one-off jobs, datastores, container resource limits and the free-disk check, and log storage. It implements `ferry_core::Engine`.
 - **`ferry-api`** (library). The axum router: REST, Server-Sent Events, webhooks, blueprints, the OpenAPI document and Swagger UI, and the embedded web client from `web/dist`.
 - **`ferry-cli`** (binary `ferry`). The command-line client. It talks only to the REST API.
 - **`ferryd`** (binary). The wiring: parses the [server options](/docs/reference/server-options), locks the data directory, claims the Docker name prefix, then starts the engine, the proxy and the API.
@@ -117,6 +117,7 @@ After every write, the API nudges the [change feed](/docs/reference/api-overview
 | Deploy workers | One per service with queued deploys | Run that service's deploys one at a time, in order. A server-wide limit (`--build-concurrency`, default 2) bounds concurrent builds. See [Deploy pipeline](/docs/architecture/deploy-pipeline). |
 | Reconciler | At boot, every 10 seconds, and after scale, suspend and resume | Converges containers and routes to the store. See [Reconciler](/docs/architecture/reconciler). |
 | Route watcher | Every second | Follows the host ports of running instances, so routes follow a container Docker restarted on a new port. |
+| OOM watcher | On each Docker `oom` event | Logs every container of this server that the kernel killed for going over its memory limit. See [Reconciler](/docs/architecture/reconciler#when-it-runs). |
 | Cron scheduler | About every 15 seconds | Starts the runs of cron jobs whose schedule fired (UTC). Runs missed while the server was down are skipped. |
 | Change-feed detector | Every second, only while a client listens | Compares the store and broadcasts what changed. |
 | TLS manager | With `--https-addr` and `--acme-email` | Requests certificates for public hosts and renews those that expire within 30 days. |
