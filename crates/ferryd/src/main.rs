@@ -399,6 +399,9 @@ async fn main() -> anyhow::Result<()> {
         store,
         engine: engine.clone() as Arc<dyn Engine>,
         docker_version: docker_version.clone(),
+        // TODO(resource-limits): from docker.host_info().
+        docker_cpus: None,
+        docker_memory_bytes: None,
         shutdown: shutdown.clone(),
     });
     let listener = tokio::net::TcpListener::bind(config.api_addr)

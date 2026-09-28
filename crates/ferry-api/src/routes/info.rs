@@ -43,8 +43,8 @@ pub async fn info(State(st): State<AppState>) -> Json<ServerInfo> {
         docker_version: st.docker_version.clone(),
         default_memory_limit_mb: cfg.default_memory_limit_mb,
         default_cpu_limit: cfg.default_cpu_limit,
-        docker_cpus: None,
-        docker_memory_bytes: None,
+        docker_cpus: st.docker_cpus,
+        docker_memory_bytes: st.docker_memory_bytes,
     })
 }
 

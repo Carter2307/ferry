@@ -53,6 +53,10 @@ pub struct AppState {
     pub engine: Arc<dyn Engine>,
     /// Docker server version (for `/api/v1/info`).
     pub docker_version: Option<String>,
+    /// CPUs of the Docker host (for `/api/v1/info`).
+    pub docker_cpus: Option<u32>,
+    /// Total memory of the Docker host in bytes (for `/api/v1/info`).
+    pub docker_memory_bytes: Option<u64>,
     /// Cancelled when the server shuts down: open SSE log streams end so the
     /// HTTP server's graceful shutdown can complete.
     pub shutdown: CancellationToken,

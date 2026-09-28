@@ -304,6 +304,8 @@ impl TestApp {
             store: store.clone(),
             engine: engine.clone() as Arc<dyn Engine>,
             docker_version: Some("27.0.0".into()),
+            docker_cpus: Some(4),
+            docker_memory_bytes: Some(8 << 30),
             shutdown: shutdown.clone(),
         });
         TestApp { router, store, engine, config, shutdown, dir }
