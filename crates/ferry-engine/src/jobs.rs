@@ -181,7 +181,12 @@ async fn execute(
     if let Some(v) = &volume {
         log.system(format!("==> Mounting the service's disk at {}", v.target));
     }
-    let container_spec = ContainerSpec {
+    // The live deploy's limits (jobs count against the service's).
+    let resources = spec.resources(inner).await;
+    for warning in resources.warnings() {
+        log.system(format!("==> Warning: {warning}"));
+    }
+    let mut container_spec = ContainerSpec {
         name: container_name.clone(),
         image: image.clone(),
         env: spec.job_env(),
@@ -199,6 +204,7 @@ async fn execute(
         log_rotation: None,
         working_dir: None,
     };
+    resources.apply(&mut container_spec);
     match &command {
         Some(c) => log.system(format!("==> Running `{c}`")),
         None => log.system("==> Running the image's default command"),
@@ -252,7 +258,7 @@ async fn execute(
             let (status, why) = interruption(inner, running);
             (status, Some(code), Some(why))
         }
-        Ok(code) => (JobStatus::Failed, Some(code), Some(format!("exited with code {code}"))),
+        Ok(code) => (JobStatus::Failed, Some(code), Some(failure_reason(inner, &info.id, code).await)),
         Err(_) if interrupted => {
             let (status, why) = interruption(inner, running);
             (status, None, Some(why))
@@ -263,6 +269,23 @@ async fn execute(
     finish_job(inner, &job.id, status, code, error).await;
     if let Err(e) = inner.docker.remove_container(&info.id, true).await {
         warn!(job = %job.id, "cannot remove job container: {e}");
+    }
+}
+
+/// Why a job's container exited with a non-zero `code`: out of memory
+/// (naming the limit) or just its exit code.
+async fn failure_reason(inner: &Inner, container_id: &str, code: i64) -> String {
+    match inner.docker.inspect_container(container_id).await {
+        Ok(Some(c)) if c.oom_killed => failure_text(code, true, c.memory_limit_bytes),
+        _ => failure_text(code, false, None),
+    }
+}
+
+fn failure_text(code: i64, oom_killed: bool, memory_limit_bytes: Option<i64>) -> String {
+    if oom_killed {
+        crate::limits::oom_message("the job", memory_limit_bytes, "the service's")
+    } else {
+        format!("exited with code {code}")
     }
 }
 
@@ -603,6 +626,11 @@ mod tests {
         assert_eq!(human_duration(Duration::from_secs(45)), "45s");
         assert_eq!(human_duration(Duration::from_secs(192)), "3m 12s");
         assert_eq!(human_duration(Duration::from_secs(3900)), "1h 5m");
+        assert_eq!(failure_text(3, false, None), "exited with code 3");
+        assert_eq!(
+            failure_text(137, true, Some(64 << 20)),
+            "the job ran out of memory (limit 64 MiB) — raise the service's memory limit"
+        );
         let line = skipped_run_line("3m 12s");
         assert!(line.starts_with("==> Warning:") && line.contains("cancel it"), "{line}");
     }

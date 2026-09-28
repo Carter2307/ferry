@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { endpoints } from '../endpoints'
 import { usePollInterval } from '../events'
 import { keys } from '../keys'
-import type { CreateDatastore, DatastoreView } from '../types'
+import type { CreateDatastore, DatastoreView, UpdateDatastore } from '../types'
 
 /** `GET /api/v1/datastores` */
 export function useDatastores() {
@@ -38,6 +38,24 @@ export function useCreateDatastore() {
       qc.setQueryData(keys.datastore(ds.name), ds)
       void qc.invalidateQueries({ queryKey: keys.datastoreList() })
     },
+  })
+}
+
+/** `PATCH /api/v1/datastores/{ref}` — resource limits, applied to the running container in place. */
+export function useUpdateDatastore(ref: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: UpdateDatastore) => endpoints.updateDatastore(ref, body),
+    onSuccess: (ds) => {
+      qc.setQueryData(keys.datastore(ref), ds)
+      if (ref !== ds.name) qc.setQueryData(keys.datastore(ds.name), ds)
+      qc.setQueryData<DatastoreView[]>(keys.datastoreList(), (list) =>
+        list ? list.map((d) => (d.id === ds.id ? ds : d)) : list,
+      )
+      void qc.invalidateQueries({ queryKey: keys.datastores() })
+    },
+    // The limits may be saved even when applying them to the container failed.
+    onError: () => void qc.invalidateQueries({ queryKey: keys.datastores() }),
   })
 }
 

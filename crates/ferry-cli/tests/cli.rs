@@ -1303,3 +1303,310 @@ async fn update_help_says_how_to_clear_the_port() {
     assert!(out.stdout.contains("--port 0 clears the port setting"), "{}", out.stdout);
     assert!(out.stdout.contains("--port 0 to clear the port setting"), "{}", out.stdout);
 }
+
+/// The value of a `Key:  value` line of a detail view.
+fn kv<'a>(stdout: &'a str, key: &str) -> Option<&'a str> {
+    stdout.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(':')).map(str::trim)
+}
+
+fn info_json(extra: Value) -> Value {
+    let mut info = json!({
+        "version": "0.1.0", "base_domain": "localhost", "proxy_url": "http://localhost:8080",
+        "tls_enabled": false, "dashboard_url": "http://ferry.localhost:8080",
+        "github_webhook_enabled": false, "docker_version": "27.3.1"
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        info[k] = v.clone();
+    }
+    info
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_limits_are_sent_and_explained() {
+    let (fake, url) = Fake::start().await;
+    let mut created = service_view("api", ServiceType::WebService);
+    created.state = ServiceState::NotDeployed;
+    created.service.memory_limit_mb = Some(512);
+    created.service.cpu_limit = Some(0.5);
+    fake.on("POST", "/api/v1/services", Reply::json(201, to_json(&created)));
+    let mut live = service_view("web", ServiceType::WebService);
+    live.service.live_deploy_id = Some("dep-1".into());
+    live.service.memory_limit_mb = Some(1024);
+    fake.on("PATCH", "/api/v1/services/web", Reply::ok(to_json(&live)));
+    let h = home();
+
+    let out = ferry(&url, h.path(), &["create", "api", "--memory", "512M", "--cpu", "500m", "--no-deploy"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let body = fake.find("POST", "/api/v1/services")[0].json();
+    assert_eq!((body["memory_limit_mb"].clone(), body["cpu_limit"].clone()), (json!(512), json!(0.5)));
+    // `default` on create: nothing sent, the server default applies.
+    let out = ferry(&url, h.path(), &["create", "api", "--memory", "default", "--no-deploy"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let body = fake.find("POST", "/api/v1/services")[1].json();
+    assert!(body["memory_limit_mb"].is_null() && body["cpu_limit"].is_null(), "{body}");
+
+    // Update: `default` is sent as 0 (clears); a restart applies the limits.
+    let out = ferry(&url, h.path(), &["update", "web", "--memory", "1G", "--cpu", "default"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(out.stdout, "Updated 'web'\nResource limits apply to the next deploy or restart: ferry restart web\n");
+    let body = fake.find("PATCH", "/api/v1/services/web")[0].json();
+    assert_eq!((body["memory_limit_mb"].clone(), body["cpu_limit"].clone()), (json!(1024), json!(0.0)));
+    assert!(body["start_command"].is_null() && body["instances"].is_null(), "{body}");
+    // --json passes the server's answer through.
+    let out = ferry(&url, h.path(), &["update", "web", "--memory", "1G", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()["memory_limit_mb"], 1024);
+
+    // Invalid values never reach the server.
+    let before = fake.requests().len();
+    let out = ferry(&url, h.path(), &["update", "web", "--memory", "4M"]).await;
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("memory limit must be between 16 MiB"), "{}", out.stderr);
+    let out = ferry(&url, h.path(), &["create", "x", "--cpu", "lots"]).await;
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("invalid CPU amount 'lots'"), "{}", out.stderr);
+    assert_eq!(fake.requests().len(), before);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn up_applies_limits_to_an_existing_service() {
+    let (fake, url) = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), "hi").unwrap();
+    let view = service_view("site", ServiceType::WebService);
+    fake.on("GET", "/api/v1/services/site", Reply::ok(to_json(&view)));
+    fake.on("PATCH", "/api/v1/services/srv-site", Reply::ok(to_json(&view)));
+    fake.on(
+        "POST",
+        "/api/v1/services/srv-site/deploys/upload",
+        Reply::json(202, to_json(&deploy("d", "srv-site", DeployStatus::Queued))),
+    );
+    let h = home();
+    let dir_arg = dir.path().to_str().unwrap();
+    let out = ferry(&url, h.path(), &["up", "site", "--dir", dir_arg, "--memory", "2G", "--cpu", "1"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains("Updated 'site': memory limit; CPU limit"), "{}", out.stderr);
+    let patch = fake.find("PATCH", "/api/v1/services/srv-site")[0].json();
+    assert_eq!((patch["memory_limit_mb"].clone(), patch["cpu_limit"].clone()), (json!(2048), json!(1.0)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn show_prints_limits_and_the_server_defaults() {
+    let (fake, url) = Fake::start().await;
+    let mut web = service_view("web", ServiceType::WebService);
+    web.service.memory_limit_mb = Some(1024);
+    fake.on("GET", "/api/v1/services/web", Reply::ok(to_json(&web)));
+    fake.on(
+        "GET",
+        "/api/v1/info",
+        Reply::ok(info_json(json!({ "default_memory_limit_mb": 512, "default_cpu_limit": 0.0 }))),
+    );
+    let h = home();
+
+    let out = ferry(&url, h.path(), &["show", "web"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(kv(&out.stdout, "Memory limit"), Some("1 GiB"), "{}", out.stdout);
+    assert_eq!(kv(&out.stdout, "CPU limit"), Some("unlimited (server default)"), "{}", out.stdout);
+    assert_eq!(fake.find("GET", "/api/v1/info").len(), 1);
+
+    // Both limits set: no need to ask for the defaults.
+    let mut both = service_view("both", ServiceType::BackgroundWorker);
+    both.service.memory_limit_mb = Some(256);
+    both.service.cpu_limit = Some(2.0);
+    fake.on("GET", "/api/v1/services/both", Reply::ok(to_json(&both)));
+    let out = ferry(&url, h.path(), &["show", "both"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!((kv(&out.stdout, "Memory limit"), kv(&out.stdout, "CPU limit")), (Some("256 MiB"), Some("2 CPUs")));
+    assert_eq!(fake.find("GET", "/api/v1/info").len(), 1, "no extra request");
+
+    // An older server (no defaults in /info), or /info failing: still works.
+    let (old, old_url) = Fake::start().await;
+    old.on("GET", "/api/v1/services/web", Reply::ok(to_json(&service_view("web", ServiceType::WebService))));
+    old.on("GET", "/api/v1/info", Reply::ok(info_json(json!({}))));
+    let out = ferry(&old_url, h.path(), &["show", "web"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(
+        (kv(&out.stdout, "Memory limit"), kv(&out.stdout, "CPU limit")),
+        (Some("server default"), Some("server default"))
+    );
+    let (broken, broken_url) = Fake::start().await;
+    broken.on("GET", "/api/v1/services/web", Reply::ok(to_json(&service_view("web", ServiceType::WebService))));
+    let out = ferry(&broken_url, h.path(), &["show", "web"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(kv(&out.stdout, "Memory limit"), Some("server default"));
+
+    // --json: the raw service, one request.
+    let before = fake.requests().len();
+    let out = ferry(&url, h.path(), &["show", "web", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()["memory_limit_mb"], 1024);
+    assert_eq!(fake.requests().len(), before + 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_shows_limits_and_oom_kills() {
+    let (fake, url) = Fake::start().await;
+    let inst = |name: &str, state: &str, oom_killed: bool, exit_code: Option<i64>| InstanceStatus {
+        container_id: "c".into(),
+        name: name.into(),
+        deploy_id: Some("dep-0123456789abcdefghij".into()),
+        state: state.into(),
+        host_port: Some(54321),
+        started_at: None,
+        restart_count: Some(2),
+        cpu_percent: (state == "running").then_some(12.5),
+        memory_bytes: (state == "running").then_some(12 * 1024 * 1024),
+        memory_limit_bytes: Some(256 * 1024 * 1024),
+        cpu_limit: Some(0.5),
+        oom_killed,
+        exit_code,
+    };
+    let status = RuntimeStatus {
+        service_id: "srv-web".into(),
+        state: ServiceState::Degraded,
+        desired_instances: 2,
+        instances: vec![
+            inst("/ferry-web-cdefghij-a1b2c3", "running", false, None),
+            inst("/ferry-web-cdefghij-d4e5f6", "restarting", true, Some(137)),
+        ],
+    };
+    fake.on("GET", "/api/v1/services/web/status", Reply::ok(to_json(&status)));
+    let h = home();
+    let out = ferry(&url, h.path(), &["status", "web"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    // Cells are separated by 3+ spaces (column padding).
+    let cells = |line: &str| -> Vec<String> {
+        line.split("   ").map(str::trim).filter(|c| !c.is_empty()).map(str::to_string).collect()
+    };
+    let lines: Vec<&str> = out.stdout.lines().collect();
+    assert_eq!(
+        cells(lines[2]),
+        vec!["a1b2c3", "cdefghij", "running", "54321", "12.5% / 0.5 CPU", "12.0 MiB / 256.0 MiB", "2", "-"],
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        cells(lines[3]),
+        vec!["d4e5f6", "cdefghij", "restarting (OOM killed, exit code 137)", "54321", "-", "-", "2", "-"],
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.contains("note: instance d4e5f6 was killed for running out of memory (limit 256 MiB)")
+            && out.stderr.contains("'ferry update web --memory <SIZE>', then 'ferry restart web'"),
+        "{}",
+        out.stderr
+    );
+    // --json passes the fields through unchanged, with no note.
+    let out = ferry(&url, h.path(), &["status", "web", "--json"]).await;
+    let printed: Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(printed, to_json(&status));
+    assert_eq!(
+        (printed["instances"][1]["oom_killed"].clone(), printed["instances"][1]["exit_code"].clone()),
+        (json!(true), json!(137))
+    );
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+fn datastore_view(ds: Datastore) -> DatastoreView {
+    DatastoreView {
+        internal_host: ds.name.clone(),
+        internal_port: 5432,
+        internal_url: ds.internal_url(),
+        external_url: None,
+        datastore: ds,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn db_limits_on_create_update_and_show() {
+    let (fake, url) = Fake::start().await;
+    let mut ds = Datastore::new("main", DatastoreKind::Postgres);
+    ds.id = "dbs-main".into();
+    ds.status = DatastoreStatus::Available;
+    ds.memory_limit_mb = Some(256);
+    fake.on("POST", "/api/v1/datastores", Reply::json(201, to_json(&datastore_view(ds.clone()))));
+    let mut updated = ds.clone();
+    updated.memory_limit_mb = Some(1024);
+    fake.on("PATCH", "/api/v1/datastores/main", Reply::ok(to_json(&datastore_view(updated.clone()))));
+    fake.on("GET", "/api/v1/datastores/main", Reply::ok(to_json(&datastore_view(updated.clone()))));
+    fake.on(
+        "GET",
+        "/api/v1/info",
+        Reply::ok(info_json(json!({ "default_memory_limit_mb": 512, "default_cpu_limit": 1.0 }))),
+    );
+    let h = home();
+
+    let out = ferry(&url, h.path(), &["db", "create", "main", "--memory", "256M", "--cpu", "default"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let body = fake.find("POST", "/api/v1/datastores")[0].json();
+    assert_eq!((body["memory_limit_mb"].clone(), body["cpu_limit"].clone()), (json!(256), Value::Null));
+
+    let out = ferry(&url, h.path(), &["db", "update", "main", "--memory", "1G"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(
+        out.stdout,
+        "Updated datastore 'main': memory limit 1 GiB\nApplied to the running container (no restart).\n"
+    );
+    let out = ferry(&url, h.path(), &["db", "update", "main", "--cpu", "default"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.starts_with("Updated datastore 'main': CPU limit server default (1 CPU)\n"), "{}", out.stdout);
+    let patches = fake.find("PATCH", "/api/v1/datastores/main");
+    assert_eq!(patches[0].json(), json!({ "memory_limit_mb": 1024, "cpu_limit": null }));
+    assert_eq!(patches[1].json(), json!({ "memory_limit_mb": null, "cpu_limit": 0.0 }));
+    let out = ferry(&url, h.path(), &["db", "update", "main", "--memory", "1G", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()["memory_limit_mb"], 1024);
+    // Nothing to change: refused locally.
+    let out = ferry(&url, h.path(), &["db", "update", "main"]).await;
+    assert_eq!(out.code, 2, "{out:?}");
+    assert_eq!(fake.find("PATCH", "/api/v1/datastores/main").len(), 3);
+
+    let out = ferry(&url, h.path(), &["db", "show", "main"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(kv(&out.stdout, "Memory limit"), Some("1 GiB"), "{}", out.stdout);
+    assert_eq!(kv(&out.stdout, "CPU limit"), Some("server default (1 CPU)"), "{}", out.stdout);
+
+    // A datastore still being created starts with the new limits.
+    let mut creating = updated.clone();
+    creating.status = DatastoreStatus::Creating;
+    fake.on("PATCH", "/api/v1/datastores/new", Reply::ok(to_json(&datastore_view(creating))));
+    let out = ferry(&url, h.path(), &["db", "update", "new", "--memory", "1G"]).await;
+    assert!(out.stdout.ends_with("It starts with these limits once provisioned.\n"), "{}", out.stdout);
+
+    // An older server: PATCH isn't allowed there.
+    fake.on(
+        "PATCH",
+        "/api/v1/datastores/old",
+        Reply::error(405, "method_not_allowed", "method not allowed for this path"),
+    );
+    let out = ferry(&url, h.path(), &["db", "update", "old", "--memory", "1G"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("this Ferry server can't change datastore limits: upgrade ferryd"), "{}", out.stderr);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn info_and_login_show_default_limits_and_host_capacity() {
+    let (fake, url) = Fake::start().await;
+    let info = info_json(json!({
+        "default_memory_limit_mb": 512, "default_cpu_limit": 1.0,
+        "docker_cpus": 8, "docker_memory_bytes": 8_u64 * 1024 * 1024 * 1024
+    }));
+    fake.on("GET", "/api/v1/info", Reply::ok(info.clone()));
+    let h = home();
+    let out = ferry(&url, h.path(), &["info"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(kv(&out.stdout, "Default limits"), Some("512 MiB memory, 1 CPU per container"), "{}", out.stdout);
+    assert_eq!(kv(&out.stdout, "Docker host"), Some("8 CPUs, 8.0 GiB memory"), "{}", out.stdout);
+    let out = ferry(&url, h.path(), &["info", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap(), info);
+
+    let out = ferry_in(None, h.path(), None, None, &["login", "--server", &url, "--token", TOKEN]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(kv(&out.stdout, "Default limits"), Some("512 MiB memory, 1 CPU per container"), "{}", out.stdout);
+    assert_eq!(kv(&out.stdout, "Docker host"), Some("8 CPUs, 8.0 GiB memory"), "{}", out.stdout);
+
+    // An older server says nothing about limits (not "unlimited").
+    let (old, old_url) = Fake::start().await;
+    old.on("GET", "/api/v1/info", Reply::ok(info_json(json!({}))));
+    let out = ferry(&old_url, h.path(), &["info"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(!out.stdout.contains("Default limits") && !out.stdout.contains("Docker host"), "{}", out.stdout);
+}

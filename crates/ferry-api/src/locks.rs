@@ -1,9 +1,9 @@
 //! Request serialization and cancellation safety.
 //!
 //! * Handlers that read a row, change it and write it back hold the lock of
-//!   the row's **owner** (a service or env group id) for the whole
-//!   read-modify-write, so two concurrent requests can't silently overwrite
-//!   each other's acknowledged changes.
+//!   the row's **owner** (a service, env group or datastore id) for the
+//!   whole read-modify-write, so two concurrent requests can't silently
+//!   overwrite each other's acknowledged changes.
 //! * Custom-domain / default-host uniqueness is a check-then-write across all
 //!   services, so it runs under one global **domain** lock.
 //! * Services and datastores share one namespace (their names are hostnames
@@ -37,7 +37,7 @@ static DOMAIN_LOCK: Mutex<()> = Mutex::const_new(());
 
 static NAMES_LOCK: Mutex<()> = Mutex::const_new(());
 
-/// Lock the rows of one owner (service or env group id).
+/// Lock the rows of one owner (service, env group or datastore id).
 pub async fn owner(id: &str) -> OwnedMutexGuard<()> {
     let lock = {
         // A poisoned map is still a valid map (no invariant spans the panic).

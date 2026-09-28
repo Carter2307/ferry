@@ -25,6 +25,7 @@ use tracing::{debug, info, warn};
 use crate::health::{HealthCheck, Probe, wait_healthy};
 use crate::images;
 use crate::instances::{self, BuildInfo, STOP_GRACE_SECS};
+use crate::limits::{self, Resources};
 use crate::logs::LogHandle;
 use crate::spec::{self, LaunchSpec};
 use crate::state::{ActiveDeploy, DeployOptions, Inner, SetGuard, deploying_set};
@@ -164,6 +165,7 @@ async fn execute(
         let user_env = spec::resolve_user_env(inner, &svc).await.map_err(Failure::deploy)?;
         let deploy = inner.store.require_deploy(&ctx.deploy_id).await.map_err(Failure::deploy)?;
         let spec = LaunchSpec::new(&svc, &deploy, built.image, None, built.info.runtime, user_env, &inner.config);
+        log_resources(ctx, &svc, &spec.resources(inner).await, "per run");
         mark_live(ctx, &spec).await.map_err(Failure::deploy)?;
         announce_live(ctx, None).await;
         return Ok(());
@@ -201,6 +203,11 @@ async fn current_service(ctx: &Ctx, stage: Stage) -> Result<Service, Failure> {
 
 async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOptions) -> Result<Built, Failure> {
     let inner = &ctx.inner;
+    // Builds and pulls fill the disk: fail early (with a clear message) when
+    // it is nearly full. Reusing an image (restart, rollback) needs no space.
+    if !matches!(deploy.source, DeploySource::Reuse { .. }) {
+        limits::check_free_disk(inner).await.map_err(Failure::build)?;
+    }
     match &deploy.source {
         DeploySource::Git { repo_url, branch, commit } => {
             let source =
@@ -615,6 +622,7 @@ async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerIn
     if let Some(v) = &plan.volume {
         ctx.log.system(format!("==> Mounting disk at {}", v.target));
     }
+    log_resources(ctx, &svc, &plan.resources, "per instance");
 
     let mut old: Vec<ContainerInfo> = instances::service_containers(inner, &svc.id, true)
         .await
@@ -727,6 +735,19 @@ async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerIn
     }
     announce_live(ctx, port).await;
     Ok(())
+}
+
+/// The effective limits in the deploy log (`==> Limits: 512 MiB memory,
+/// 1 CPU per instance`), with a warning when they were capped (also in the
+/// server log) or won't protect the host.
+fn log_resources(ctx: &Ctx, svc: &Service, resources: &Resources, unit: &str) {
+    ctx.log.system(format!("==> Limits: {} {unit}", resources.summary()));
+    if let Some(warning) = resources.cpu_cap_warning() {
+        warn!(service = %svc.name, deploy = %ctx.deploy_id, "{warning}");
+    }
+    for warning in resources.warnings() {
+        ctx.log.system(format!("==> Warning: {warning}"));
+    }
 }
 
 /// Mark the deploy live (storing its launch spec first), the previous live

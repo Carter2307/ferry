@@ -12,12 +12,13 @@
 use std::fmt;
 use std::str::FromStr;
 
-use ferry_core::{DatastoreKind, Error, Result, Runtime, ServiceType};
+use ferry_core::{DatastoreKind, Error, Result, Runtime, ServiceType, resources};
 use serde::Deserialize;
 use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_yaml::{Mapping, Sequence, Value};
 
-use super::{Blueprint, DatastoreSpec, EnvGroupSpec, EnvVarSpec, RefTarget, ServiceSpec};
+use super::plans::{self, PlanTable};
+use super::{Blueprint, DatastoreSpec, EnvGroupSpec, EnvVarSpec, LimitsSpec, RefTarget, ServiceSpec};
 
 /// Parse a `ferry.yaml` / `render.yaml` document.
 pub fn parse(yaml: &str) -> Result<Blueprint> {
@@ -405,6 +406,42 @@ impl<'a> Entry<'a> {
         Ok(Some(out))
     }
 
+    /// `plan` (looked up in `table`; `None` = the entry has no plans and the
+    /// key is ignored), overridden by `memoryLimit` / `cpuLimit`. An unknown
+    /// plan is a warning; a malformed limit is an error.
+    fn limits(&mut self, table: Option<&PlanTable>, warnings: &mut Vec<String>) -> Result<LimitsSpec> {
+        let ctx = self.ctx.clone();
+        let mut out = LimitsSpec::default();
+        match table {
+            Some(table) => {
+                if let Some(plan) = opt_trim(self.string("plan")?) {
+                    match table.limits(&plan) {
+                        Some(l) => {
+                            out.memory_mb = Some(l.memory_mb);
+                            out.cpus = l.cpus;
+                        }
+                        None => warnings.push(format!(
+                            "{ctx}: ignoring unknown plan '{plan}' (known plans: {}); set memoryLimit / cpuLimit instead",
+                            table.known
+                        )),
+                    }
+                }
+            }
+            None => self.skip("plan"),
+        }
+        let invalid = |key: &str, e: Error| match e {
+            Error::Invalid(m) => Error::Invalid(format!("{ctx}: '{key}': {m}")),
+            other => other,
+        };
+        if let Some(raw) = opt_trim(self.string("memoryLimit")?) {
+            out.memory_mb = Some(resources::parse_memory_mb(&raw).map_err(|e| invalid("memoryLimit", e))?);
+        }
+        if let Some(raw) = opt_trim(self.string("cpuLimit")?) {
+            out.cpus = Some(resources::parse_cpus(&raw).map_err(|e| invalid("cpuLimit", e))?);
+        }
+        Ok(out)
+    }
+
     /// Report every key that wasn't read.
     fn finish(self, warnings: &mut Vec<String>) {
         for k in self.map.keys() {
@@ -557,8 +594,9 @@ fn parse_database(v: &Value, idx: usize, warnings: &mut Vec<String>) -> Result<D
     let version = e.string("postgresMajorVersion")?.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let database = e.string("databaseName")?.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let user = e.string("user")?.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let limits = e.limits(Some(&plans::POSTGRES), warnings)?;
     e.finish(warnings);
-    Ok(DatastoreSpec { name, kind: DatastoreKind::Postgres, version, database, user })
+    Ok(DatastoreSpec { name, kind: DatastoreKind::Postgres, version, database, user, limits })
 }
 
 enum Parsed {
@@ -589,6 +627,7 @@ fn parse_service(v: &Value, idx: usize, warnings: &mut Vec<String>) -> Result<Pa
 
     if matches!(ty_lower.as_str(), "redis" | "keyvalue" | "key_value") {
         e.ctx = format!("key value '{name}'");
+        let limits = e.limits(Some(&plans::KEY_VALUE), warnings)?;
         e.finish(warnings);
         return Ok(Parsed::Datastore(DatastoreSpec {
             name,
@@ -596,6 +635,7 @@ fn parse_service(v: &Value, idx: usize, warnings: &mut Vec<String>) -> Result<Pa
             version: None,
             database: None,
             user: None,
+            limits,
         }));
     }
     let mut service_type = ServiceType::from_str(&ty_lower).map_err(|_| {
@@ -749,6 +789,10 @@ fn parse_service(v: &Value, idx: usize, warnings: &mut Vec<String>) -> Result<Pa
     spec.domains = e
         .string_list("domains")?
         .map(|v| v.into_iter().map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect());
+    // Static sites have no plans on Render; their containers still take
+    // memoryLimit / cpuLimit.
+    let plan_table = (service_type != ServiceType::StaticSite).then_some(&plans::SERVICES);
+    spec.limits = e.limits(plan_table, warnings)?;
 
     let list = e.seq("envVars")?;
     let (vars, groups) = parse_env_vars(list, &ctx, true, warnings)?;
@@ -812,8 +856,87 @@ mod tests {
         assert_eq!(s.dockerfile_path.as_deref(), Some("./Dockerfile.prod"));
         assert_eq!(s.auto_deploy, Some(false));
         assert_eq!(s.image.as_deref(), Some("nginx:1"));
-        for key in ["x-common", "plan", "region"] {
+        assert_eq!(s.limits, LimitsSpec { memory_mb: Some(512), cpus: Some(0.5) });
+        for key in ["x-common", "region"] {
             assert!(bp.warnings.iter().any(|w| w.contains(&format!("'{key}'"))), "{key}: {:?}", bp.warnings);
+        }
+        assert!(!bp.warnings.iter().any(|w| w.contains("plan")), "{:?}", bp.warnings);
+    }
+
+    #[test]
+    fn plans_and_limit_keys() {
+        let bp = parse(
+            r#"
+services:
+  - {type: web, name: none}
+  - {type: web, name: std, plan: standard}
+  - {type: worker, name: big, plan: Pro_Plus}
+  - {type: cron, name: tick, schedule: "* * * * *", plan: pro, memoryLimit: 1G}
+  - {type: pserv, name: own, plan: starter, memoryLimit: 768, cpuLimit: 250m}
+  - {type: web, name: plain, memoryLimit: 1.5G, cpuLimit: 2}
+  - {type: web, name: reset, plan: pro, memoryLimit: 0, cpuLimit: 0}
+  - {type: static, name: site, plan: starter}
+  - {type: web, name: site2, runtime: static, plan: free, memoryLimit: 64M}
+  - {type: web, name: odd, plan: gigantic}
+  - {type: redis, name: kv, plan: pro}
+  - {type: keyvalue, name: kv2, plan: pro plus, cpuLimit: 0.5, maxmemoryPolicy: noeviction}
+  - {type: keyvalue, name: kv3, plan: accelerated-16gb}
+databases:
+  - {name: db, plan: basic-1gb}
+  - {name: legacy, plan: starter, cpuLimit: 1}
+  - {name: huge, plan: accelerated-64gb, memoryLimit: 8G}
+  - {name: plain-db}
+"#,
+        )
+        .unwrap();
+        let svc = |n: &str| bp.services.iter().find(|s| s.name == n).unwrap().limits;
+        let ds = |n: &str| bp.datastores.iter().find(|d| d.name == n).unwrap().limits;
+        let l = |m: Option<u32>, c: Option<f64>| LimitsSpec { memory_mb: m, cpus: c };
+        assert_eq!(svc("none"), l(None, None));
+        assert_eq!(svc("std"), l(Some(2048), Some(1.0)));
+        assert_eq!(svc("big"), l(Some(8192), Some(4.0)));
+        // the extension keys override the plan, key by key
+        assert_eq!(svc("tick"), l(Some(1024), Some(2.0)));
+        assert_eq!(svc("own"), l(Some(768), Some(0.25)));
+        assert_eq!(svc("plain"), l(Some(1536), Some(2.0)));
+        assert_eq!(svc("reset"), l(Some(0), Some(0.0)));
+        // static sites: no plans, but the limit keys apply
+        assert_eq!(svc("site"), l(None, None));
+        assert_eq!(svc("site2"), l(Some(64), None));
+        assert_eq!(svc("odd"), l(None, None));
+        // datastores: memory from the plan, CPU only from cpuLimit
+        assert_eq!(ds("kv"), l(Some(5120), None));
+        assert_eq!(ds("kv2"), l(Some(10240), Some(0.5)));
+        assert_eq!(ds("kv3"), l(None, None));
+        assert_eq!(ds("db"), l(Some(1024), None));
+        assert_eq!(ds("legacy"), l(Some(256), Some(1.0)));
+        assert_eq!(ds("huge"), l(Some(8192), None));
+        assert_eq!(ds("plain-db"), l(None, None));
+
+        let unknown: Vec<&String> = bp.warnings.iter().filter(|w| w.contains("unknown plan")).collect();
+        assert_eq!(unknown.len(), 2, "{:?}", bp.warnings);
+        assert!(unknown[0].starts_with("service 'odd': ignoring unknown plan 'gigantic'"), "{unknown:?}");
+        assert!(unknown[0].contains("pro ultra") && unknown[0].contains("memoryLimit"), "{unknown:?}");
+        assert!(unknown[1].starts_with("key value 'kv3': ignoring unknown plan 'accelerated-16gb'"), "{unknown:?}");
+        // no "unsupported key" warnings for plan, memoryLimit or cpuLimit
+        assert_eq!(bp.warnings.len(), 3, "{:?}", bp.warnings);
+        assert!(bp.warnings.iter().any(|w| w.contains("'maxmemoryPolicy'")), "{:?}", bp.warnings);
+    }
+
+    #[test]
+    fn malformed_limits_are_errors_naming_the_entry() {
+        for (entry, want) in [
+            (
+                "services:\n  - {type: web, name: a, memoryLimit: lots}\n",
+                "service 'a': 'memoryLimit': invalid memory size 'lots'",
+            ),
+            ("services:\n  - {type: web, name: a, cpuLimit: -1}\n", "service 'a': 'cpuLimit': invalid CPU amount '-1'"),
+            ("services:\n  - {type: redis, name: kv, memoryLimit: 1X}\n", "key value 'kv': 'memoryLimit'"),
+            ("databases:\n  - {name: db, cpuLimit: many}\n", "database 'db': 'cpuLimit'"),
+            ("services:\n  - {type: web, name: a, memoryLimit: [1]}\n", "service 'a': 'memoryLimit' must be a string"),
+        ] {
+            let err = parse(entry).unwrap_err().to_string();
+            assert!(err.contains(want), "{entry}: {err}");
         }
     }
 

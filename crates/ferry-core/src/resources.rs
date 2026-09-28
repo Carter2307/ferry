@@ -99,7 +99,7 @@ pub fn parse_memory_mb(s: &str) -> Result<u32> {
 
 /// Human form of a MiB amount: `512 MiB`, `1 GiB`, `1.5 GiB`.
 pub fn format_memory_mb(mb: u32) -> String {
-    if mb >= 1024 && mb % 64 == 0 {
+    if mb >= 1024 && mb.is_multiple_of(64) {
         let gib = f64::from(mb) / 1024.0;
         if gib.fract() == 0.0 { format!("{gib:.0} GiB") } else { format!("{} GiB", trim_float(gib)) }
     } else {

@@ -28,6 +28,7 @@ pub struct MockEngine {
     pub fail_provision: AtomicBool,
     pub fail_restart: AtomicBool,
     pub fail_scale: AtomicBool,
+    pub fail_update_limits: AtomicBool,
     /// Running instances `service_status` reports (default: all desired).
     pub running: Mutex<Option<u32>>,
 }
@@ -40,6 +41,7 @@ impl MockEngine {
             fail_provision: AtomicBool::new(false),
             fail_restart: AtomicBool::new(false),
             fail_scale: AtomicBool::new(false),
+            fail_update_limits: AtomicBool::new(false),
             running: Mutex::new(None),
         }
     }
@@ -250,6 +252,21 @@ impl Engine for MockEngine {
     async fn delete_datastore(&self, datastore_id: &str) -> Result<()> {
         self.record(format!("delete_datastore {datastore_id}"));
         self.store.delete_datastore(datastore_id).await
+    }
+
+    /// Records the stored limits it would apply: `update_limits ID MEMORY CPUS`
+    /// (`-` = the server default).
+    async fn update_datastore_limits(&self, datastore_id: &str) -> Result<()> {
+        let ds = self.store.require_datastore(datastore_id).await?;
+        self.record(format!(
+            "update_limits {datastore_id} {} {}",
+            ds.memory_limit_mb.map_or_else(|| "-".to_string(), |m| m.to_string()),
+            ds.cpu_limit.map_or_else(|| "-".to_string(), |c| c.to_string()),
+        ));
+        if self.fail_update_limits.load(Ordering::SeqCst) {
+            return Err(Error::docker("docker update exploded"));
+        }
+        Ok(())
     }
 }
 

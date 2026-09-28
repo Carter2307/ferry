@@ -5,21 +5,24 @@
 //! (never deleting anything), then queue deploys for new or changed services.
 //!
 //! * [`parse`] is lenient about the schema: unknown or unsupported keys
-//!   (`plan`, `region`, `scaling`, `previews`, …) become warnings, never
-//!   errors, so real Render `render.yaml` files are accepted. Structural
-//!   problems (missing `name`, unknown service `type`, malformed env vars)
-//!   are errors naming the entry.
+//!   (`region`, `scaling`, `previews`, …) become warnings, never errors, so
+//!   real Render `render.yaml` files are accepted. Structural problems
+//!   (missing `name`, unknown service `type`, malformed env vars) are errors
+//!   naming the entry. Render's `plan` becomes resource limits ([`plans`]),
+//!   overridden by the Ferry keys `memoryLimit` / `cpuLimit`.
 //! * [`plan`] validates every entry against the current state (names,
 //!   service settings, custom domains, env var references) and computes the
 //!   `create` / `update` / `unchanged` actions without writing anything.
 //! * [`apply`] runs the plan (unless `dry_run`): env groups → datastores
 //!   (create + provision) → services, then queues `blueprint` deploys for new
 //!   services with a source and for services whose build/deploy settings
-//!   changed, and restarts live services whose only changes are env vars.
+//!   changed, restarts live services whose only changes are env vars or
+//!   resource limits, and applies datastores' new limits in place.
 
 mod apply;
 mod parse;
 mod plan;
+pub mod plans;
 
 use ferry_core::{DatastoreKind, Runtime, ServiceType};
 
@@ -58,6 +61,42 @@ pub struct DatastoreSpec {
     pub database: Option<String>,
     /// `user`.
     pub user: Option<String>,
+    /// `plan`, `memoryLimit`, `cpuLimit`.
+    pub limits: LimitsSpec,
+}
+
+/// Resource limits declared by a blueprint entry: its `plan` (see
+/// [`plans`]), overridden key by key by the Ferry extension keys
+/// `memoryLimit` (a size like `1G`, or a number of MiB) and `cpuLimit` (CPUs,
+/// or millicores like `500m`).
+///
+/// `None` = not declared: a new resource gets the server default, and an
+/// existing one keeps its current limit (like `numInstances`: limits are
+/// often tuned outside the blueprint, and re-applying one without a `plan`
+/// must not silently reset them). `Some(0)` / `Some(0.0)` (`memoryLimit: 0`)
+/// = explicitly the server default, like `0` in the API.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LimitsSpec {
+    /// Memory limit, MiB.
+    pub memory_mb: Option<u32>,
+    /// CPU limit, CPUs.
+    pub cpus: Option<f64>,
+}
+
+impl LimitsSpec {
+    /// The limits after applying this spec to `current` (`None` = the server
+    /// default).
+    pub fn resolve(&self, current: (Option<u32>, Option<f64>)) -> (Option<u32>, Option<f64>) {
+        let memory = match self.memory_mb {
+            Some(m) => (m != 0).then_some(m),
+            None => current.0,
+        };
+        let cpus = match self.cpus {
+            Some(c) => (c != 0.0).then_some(c),
+            None => current.1,
+        };
+        (memory, cpus)
+    }
 }
 
 /// A service entry (everything but `redis` / `keyvalue`).
@@ -96,6 +135,9 @@ pub struct ServiceSpec {
     pub disk_mount_path: Option<String>,
     /// `domains` (`None` keeps the current custom domains of an existing service).
     pub domains: Option<Vec<String>>,
+    /// `plan`, `memoryLimit`, `cpuLimit` (undeclared limits keep the current
+    /// ones of an existing service).
+    pub limits: LimitsSpec,
     pub env_vars: Vec<EnvVarSpec>,
     /// `fromGroup` entries, in order.
     pub env_groups: Vec<String>,
@@ -123,6 +165,7 @@ impl ServiceSpec {
             schedule: None,
             disk_mount_path: None,
             domains: None,
+            limits: LimitsSpec::default(),
             env_vars: Vec::new(),
             env_groups: Vec::new(),
         }
@@ -176,5 +219,25 @@ impl EnvVarSpec {
             | EnvVarSpec::Reference { key, .. }
             | EnvVarSpec::CopyFrom { key, .. } => key,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limits_specs_resolve_against_the_current_limits() {
+        let spec = |memory_mb, cpus| LimitsSpec { memory_mb, cpus };
+        let current = (Some(1024), Some(2.0));
+        // not declared: keep
+        assert_eq!(spec(None, None).resolve(current), current);
+        assert_eq!(spec(None, None).resolve((None, None)), (None, None));
+        // declared: replace, key by key
+        assert_eq!(spec(Some(512), None).resolve(current), (Some(512), Some(2.0)));
+        assert_eq!(spec(None, Some(0.5)).resolve(current), (Some(1024), Some(0.5)));
+        // 0: back to the server default
+        assert_eq!(spec(Some(0), Some(0.0)).resolve(current), (None, None));
+        assert_eq!(spec(Some(0), Some(1.0)).resolve((None, None)), (None, Some(1.0)));
     }
 }

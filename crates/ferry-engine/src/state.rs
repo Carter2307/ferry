@@ -7,15 +7,18 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use ferry_build::Builder;
-use ferry_core::{CancellationToken, Config, Naming, Store};
-use ferry_docker::Docker;
+use ferry_core::{CancellationToken, Config, Error, Naming, Store};
+use ferry_docker::{Docker, HostInfo};
 use ferry_proxy::RouteTable;
-use tokio::sync::{Mutex as AsyncMutex, Notify, Semaphore, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, OnceCell, Semaphore, watch};
 use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 
 use crate::logs::LogHub;
 use crate::util::{KeyedLocks, lock};
+
+/// Bound on reading the Docker host's capacity.
+const HOST_INFO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Everything the engine's tasks share. Always behind an `Arc`.
 pub(crate) struct Inner {
@@ -50,6 +53,9 @@ pub(crate) struct Inner {
     pub started: AtomicBool,
     pub worker_generation: AtomicU64,
     pub rt: StdMutex<Runtime>,
+    /// CPUs / memory / data directory of the Docker host, read once (see
+    /// [`Inner::host_info`]).
+    host: OnceCell<HostInfo>,
 }
 
 /// In-memory bookkeeping (never held across an `.await`).
@@ -238,6 +244,29 @@ impl Inner {
             started: AtomicBool::new(false),
             worker_generation: AtomicU64::new(1),
             rt: StdMutex::new(Runtime::default()),
+            host: OnceCell::new(),
+        }
+    }
+
+    /// The Docker host's capacity (CPU limits are capped at its CPU count),
+    /// read on first use and cached. `None` while it can't be read (then
+    /// nothing is capped; it is read again next time).
+    pub async fn host_info(&self) -> Option<&HostInfo> {
+        let read = self
+            .host
+            .get_or_try_init(|| async {
+                match tokio::time::timeout(HOST_INFO_TIMEOUT, self.docker.host_info()).await {
+                    Ok(r) => r,
+                    Err(_) => Err(Error::Docker("querying Docker host information timed out".into())),
+                }
+            })
+            .await;
+        match read {
+            Ok(host) => Some(host),
+            Err(e) => {
+                tracing::debug!("cannot read the Docker host's capacity (CPU limits are not capped): {e}");
+                None
+            }
         }
     }
 

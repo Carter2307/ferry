@@ -1,4 +1,6 @@
-//! Managed Postgres / Redis: one container + one named volume each.
+//! Managed Postgres / Redis: one container + one named volume each. Their
+//! resource limits are set when the container is created and changed in
+//! place (`docker update`, no restart) by [`update_limits`].
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::instances::{self, STOP_GRACE_SECS};
+use crate::limits::{self, Resources};
 use crate::state::{Inner, SetGuard, deleting_datastores_set};
 use crate::util::{error_message, panic_message};
 
@@ -32,7 +35,13 @@ fn data_dir(kind: DatastoreKind) -> &'static str {
 }
 
 /// Container spec of a datastore (`host_port` must be allocated).
-pub(crate) fn datastore_spec(naming: &Naming, ds: &Datastore, bind_ip: &str, host_port: u16) -> ContainerSpec {
+pub(crate) fn datastore_spec(
+    naming: &Naming,
+    ds: &Datastore,
+    bind_ip: &str,
+    host_port: u16,
+    resources: &Resources,
+) -> ContainerSpec {
     let (env, cmd) = match ds.kind {
         DatastoreKind::Postgres => (
             vec![
@@ -53,7 +62,7 @@ pub(crate) fn datastore_spec(naming: &Naming, ds: &Datastore, bind_ip: &str, hos
             ]),
         ),
     };
-    ContainerSpec {
+    let mut spec = ContainerSpec {
         name: naming.datastore_container(&ds.name),
         image: ds.image(),
         env,
@@ -74,7 +83,9 @@ pub(crate) fn datastore_spec(naming: &Naming, ds: &Datastore, bind_ip: &str, hos
         pids_limit: None,
         log_rotation: None,
         working_dir: None,
-    }
+    };
+    resources.apply(&mut spec);
+    spec
 }
 
 /// The readiness command and the environment it runs with. Credentials go
@@ -226,6 +237,8 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
     let container_id = match existing {
         Some((c, true)) => c.id,
         other => {
+            // A new container (and maybe an image pull): not on a full disk.
+            limits::check_free_disk(inner).await?;
             if let Some((c, _)) = other {
                 inner.docker.remove_container(&c.id, true).await?;
             }
@@ -235,7 +248,18 @@ async fn provision_task(inner: &Arc<Inner>, id: &str, cancel: &CancellationToken
                 r = inner.docker.ensure_image(&image, &pull_log) => r?,
                 _ = cancel.cancelled() => return Err(Error::Canceled),
             }
-            run_container(inner, &mut ds).await?
+            let used = (ds.memory_limit_mb, ds.cpu_limit);
+            let id = run_container(inner, &mut ds).await?;
+            // Limits changed while the container was being created (the
+            // change found no container to update): apply them now.
+            if let Some(fresh) = inner.store.find_datastore(&ds.id).await?
+                && (fresh.memory_limit_mb, fresh.cpu_limit) != used
+            {
+                ds.memory_limit_mb = fresh.memory_limit_mb;
+                ds.cpu_limit = fresh.cpu_limit;
+                apply_limits(inner, &ds, &id).await?;
+            }
+            id
         }
     };
 
@@ -299,22 +323,75 @@ async fn volume_owner(inner: &Inner, ds: &Datastore) -> Result<VolumeOwner> {
     })
 }
 
-/// Create the container; if the stored host port was taken meanwhile,
-/// allocate a new one once.
+/// Create the container (with the row's limits); if the stored host port
+/// was taken meanwhile, allocate a new one once.
 async fn run_container(inner: &Inner, ds: &mut Datastore) -> Result<String> {
     let bind_ip = inner.config.datastore_bind_ip.clone();
     let port = ds.host_port.ok_or_else(|| Error::internal("datastore host port not allocated"))?;
-    match inner.docker.run_container(&datastore_spec(&inner.naming, ds, &bind_ip, port)).await {
+    let resources = resources(inner, ds).await;
+    match inner.docker.run_container(&datastore_spec(&inner.naming, ds, &bind_ip, port, &resources)).await {
         Ok(info) => Ok(info.id),
         Err(e) if is_port_conflict(&e) => {
             let new_port = free_host_port()?;
             warn!(datastore = %ds.name, old = port, new = new_port, "host port taken: allocating another one");
             ds.host_port = Some(new_port);
             *ds = inner.store.update_datastore(ds).await?;
-            let info = inner.docker.run_container(&datastore_spec(&inner.naming, ds, &bind_ip, new_port)).await?;
+            let spec = datastore_spec(&inner.naming, ds, &bind_ip, new_port, &resources);
+            let info = inner.docker.run_container(&spec).await?;
             Ok(info.id)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// The datastore's resources (its limits, else the server defaults), with
+/// a server-log warning when they were capped or exceed the host.
+async fn resources(inner: &Inner, ds: &Datastore) -> Resources {
+    let resources = limits::for_container(inner, ds.memory_limit_mb, ds.cpu_limit).await;
+    for warning in resources.warnings() {
+        warn!(datastore = %ds.name, "{warning}");
+    }
+    resources
+}
+
+/// Change the limits of the datastore's container in place.
+async fn apply_limits(inner: &Inner, ds: &Datastore, container_id: &str) -> Result<()> {
+    let resources = resources(inner, ds).await;
+    inner.docker.update_limits(container_id, resources.update()).await?;
+    info!(datastore = %ds.name, limits = %resources.summary(), "applied datastore limits");
+    Ok(())
+}
+
+/// `Engine::update_datastore_limits`: apply the row's limits to the
+/// datastore's container in place (no restart). A datastore without a
+/// container yet gets them when it is created.
+pub(crate) async fn update_limits(inner: &Arc<Inner>, datastore_id: &str) -> Result<()> {
+    let ds = inner.store.require_datastore(datastore_id).await?;
+    if inner.with_rt(|rt| rt.deleting_datastores.contains(&ds.id)) {
+        return Err(Error::conflict(format!("datastore '{}' is being deleted", ds.name)));
+    }
+    let name = inner.naming.datastore_container(&ds.name);
+    let container = match inner.docker.inspect_container(&name).await? {
+        Some(c)
+            if c.labels.get(LABEL_DATASTORE) == Some(&ds.id)
+                && c.labels.get(LABEL_INSTANCE).map(String::as_str) == Some(inner.naming.prefix()) =>
+        {
+            c
+        }
+        _ => {
+            debug!(datastore = %ds.name, "no container yet: the limits apply when it is created");
+            return Ok(());
+        }
+    };
+    match apply_limits(inner, &ds, &container.id).await {
+        // Removed meanwhile (being recreated): created with the new limits.
+        Err(Error::NotFound(_)) => Ok(()),
+        Err(e) => Err(Error::Docker(format!(
+            "changing the limits of the {} container failed: {}",
+            ds.kind,
+            redact(&error_message(&e), &ds)
+        ))),
+        Ok(()) => Ok(()),
     }
 }
 
@@ -335,6 +412,11 @@ async fn wait_ready(inner: &Inner, ds: &Datastore, container_id: &str, cancel: &
         }
         let last: String = match inner.docker.inspect_container(container_id).await? {
             None => return Err(Error::Docker(format!("the {} container disappeared", ds.kind))),
+            // Exited (or restarting) after the kernel killed it.
+            Some(c) if c.oom_killed => {
+                let subject = format!("the {} container", ds.kind);
+                return Err(Error::Docker(limits::oom_message(&subject, c.memory_limit_bytes, "the datastore's")));
+            }
             Some(c) if matches!(c.state, ContainerState::Exited | ContainerState::Dead) => {
                 let tail: Vec<String> =
                     inner.docker.logs(container_id, false, Some(5)).map(|l| l.line).collect::<Vec<_>>().await;
@@ -423,8 +505,15 @@ mod tests {
         let naming = Naming::new("ferry");
         let mut ds = Datastore::new("main-db", DatastoreKind::Postgres);
         ds.password = "pw".into();
-        let spec = datastore_spec(&naming, &ds, "127.0.0.1", 15432);
+        ds.memory_limit_mb = Some(1024);
+        let resources = Resources::new(&ferry_core::Config::default(), None, ds.memory_limit_mb, ds.cpu_limit);
+        let spec = datastore_spec(&naming, &ds, "127.0.0.1", 15432, &resources);
         assert_eq!(spec.name, "ferry-ds-main-db");
+        // Its own memory limit, the default CPU limit, pids limit, log rotation.
+        assert_eq!(spec.memory_limit_bytes, Some(1 << 30));
+        assert_eq!(spec.nano_cpus, Some(1_000_000_000));
+        assert_eq!(spec.pids_limit, Some(1024));
+        assert_eq!(spec.log_rotation, Some(ferry_docker::LogRotation { max_size_mb: 10, max_files: 3 }));
         assert_eq!(spec.image, "postgres:16-alpine");
         assert!(spec.env.contains(&("POSTGRES_USER".into(), "main_db".into())));
         assert!(spec.env.contains(&("POSTGRES_PASSWORD".into(), "pw".into())));
@@ -455,7 +544,8 @@ mod tests {
         let naming = Naming::new("ferry");
         let mut ds = Datastore::new("cache", DatastoreKind::Redis);
         ds.password = "secret".into();
-        let spec = datastore_spec(&naming, &ds, "0.0.0.0", 16379);
+        let spec = datastore_spec(&naming, &ds, "0.0.0.0", 16379, &Resources::default());
+        assert_eq!((spec.memory_limit_bytes, spec.nano_cpus, spec.pids_limit), (None, None, None));
         assert_eq!(spec.image, "redis:7-alpine");
         assert_eq!(
             spec.cmd,

@@ -3,7 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use ferry_core::dto::BlueprintResult;
-use ferry_core::{Config, DeployRequest, DeployTrigger, Engine, EnvGroup, Error, Result, Store};
+use ferry_core::{
+    Config, Datastore, DatastoreStatus, DeployRequest, DeployTrigger, Engine, EnvGroup, Error, Result, Store,
+};
 
 use super::{Blueprint, plan};
 use crate::{locks, ops};
@@ -14,10 +16,10 @@ use crate::{locks, ops};
 /// provisioning) are reported as warnings.
 ///
 /// Planning and writing run under the names lock, the domain lock and the
-/// row locks of every existing resource the blueprint names (see
-/// [`crate::locks`]), so API requests can't create a clashing service or
-/// datastore, or change those resources, between the checks and the writes.
-/// Callers must not hold any of those locks.
+/// row locks of every existing resource the blueprint names (services, env
+/// groups, datastores; see [`crate::locks`]), so API requests can't create a
+/// clashing service or datastore, or change those resources, between the
+/// checks and the writes. Callers must not hold any of those locks.
 pub async fn apply(
     store: &Store,
     config: &Config,
@@ -36,6 +38,7 @@ pub async fn apply(
     let domains_guard = locks::domains().await;
     let service_names: HashSet<&str> = bp.services.iter().map(|s| s.name.as_str()).collect();
     let group_names: HashSet<&str> = bp.env_groups.iter().map(|g| g.name.as_str()).collect();
+    let datastore_names: HashSet<&str> = bp.datastores.iter().map(|d| d.name.as_str()).collect();
     let mut owners: Vec<String> = store
         .list_services()
         .await?
@@ -45,6 +48,9 @@ pub async fn apply(
         .collect();
     owners.extend(
         store.list_env_groups().await?.into_iter().filter(|g| group_names.contains(g.name.as_str())).map(|g| g.id),
+    );
+    owners.extend(
+        store.list_datastores().await?.into_iter().filter(|d| datastore_names.contains(d.name.as_str())).map(|d| d.id),
     );
     let row_guards = locks::owners(owners).await;
 
@@ -88,12 +94,22 @@ pub async fn apply(
         group_ids.insert(gp.name.clone(), id);
     }
 
-    // 2. datastores (create + provision)
+    // 2. datastores (create + provision; new limits of existing ones)
+    let mut resized: Vec<&Datastore> = Vec::new();
     for dp in &plan.datastores {
+        let ds = &dp.datastore;
         if !dp.create {
+            if dp.limits_changed {
+                let saved = store.set_datastore_limits(&ds.id, ds.memory_limit_mb, ds.cpu_limit).await?;
+                tracing::info!(datastore = %ds.name, "blueprint: changed datastore limits");
+                // Provisioning reads the row: only a running container needs
+                // the update (below, once the locks are released).
+                if saved.status == DatastoreStatus::Available {
+                    resized.push(ds);
+                }
+            }
             continue;
         }
-        let ds = &dp.datastore;
         store.create_datastore(ds).await?;
         tracing::info!(datastore = %ds.name, kind = %ds.kind, "blueprint: created datastore");
         if let Err(e) = engine.provision_datastore(&ds.id).await {
@@ -147,7 +163,13 @@ pub async fn apply(
     drop(domains_guard);
     drop(names_guard);
 
-    // 4. deploys, restarts, scaling, routes
+    // 4. datastore limits, deploys, restarts, scaling, routes
+    for ds in resized {
+        if let Err(e) = engine.update_datastore_limits(&ds.id).await {
+            warnings
+                .push(format!("datastore '{}': limits saved, but applying them to its container failed: {e}", ds.name));
+        }
+    }
     let mut group_members: HashSet<String> = HashSet::new();
     for g in &changed_groups {
         group_members.extend(store.env_group_services(g).await?.into_iter().map(|s| s.id));
@@ -183,16 +205,22 @@ pub async fn apply(
                 Ok(d) => deploys.push(d),
                 Err(e) => warnings.push(format!("service '{name}': queuing a deploy failed: {e}")),
             }
-        } else if sp.command_changed {
-            // Also applies env changes, if any.
+        } else if sp.command_changed || sp.limits_changed {
+            // Both only apply through a deploy's launch spec; the restart
+            // also applies env changes, if any.
+            let what = match (sp.command_changed, sp.limits_changed) {
+                (true, true) => "command and resource limits",
+                (true, false) => "command",
+                _ => "resource limits",
+            };
             if current.suspended && current.live_deploy_id.is_some() {
-                warnings.push(format!("service '{name}' is suspended: resume and restart it to apply the new command"));
+                warnings.push(format!("service '{name}' is suspended: resume and restart it to apply the new {what}"));
                 continue;
             }
             match ops::restart_if_deployed(store, engine, &current, DeployTrigger::Restart).await {
                 Ok(Some(d)) => deploys.push(d),
                 Ok(None) => {}
-                Err(e) => warnings.push(format!("service '{name}': restart for the new command failed: {e}")),
+                Err(e) => warnings.push(format!("service '{name}': restart for the new {what} failed: {e}")),
             }
         } else if (sp.env_changed || group_members.contains(id)) && env_before.changed(store, id).await.unwrap_or(true)
         {

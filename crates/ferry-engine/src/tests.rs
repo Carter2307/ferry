@@ -344,6 +344,36 @@ async fn datastore_provisioning_failure_is_recorded() {
 }
 
 #[tokio::test]
+async fn datastore_limits_need_an_existing_datastore() {
+    let f = fixture(2).await;
+    assert!(matches!(f.engine.update_datastore_limits("dbs-missing").await, Err(Error::NotFound(_))));
+    // Docker is unreachable: the container can't be looked up.
+    let ds = Datastore::new("db", DatastoreKind::Redis);
+    f.store.create_datastore(&ds).await.unwrap();
+    assert!(f.engine.update_datastore_limits(&ds.id).await.is_err());
+}
+
+#[tokio::test]
+async fn deploys_fail_early_when_the_disk_is_nearly_full() {
+    if !cfg!(unix) {
+        return;
+    }
+    // Nobody has a pebibyte free.
+    let f = fixture_config("docker", |c| c.min_free_disk_mb = 1 << 30).await;
+    let svc = service(&f.store, "web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let lines = log_lines(&f.engine, &d.id).await;
+    let d = wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
+    assert_eq!(d.status, DeployStatus::BuildFailed, "{lines:?}");
+    let error = d.error.unwrap_or_default();
+    assert!(error.starts_with("not enough free disk space on "), "{error}");
+    assert!(error.contains("at least 1048576 GiB") && error.contains("`ferryd --min-free-disk`"), "{error}");
+    // Before anything is pulled or built.
+    assert!(!lines.iter().any(|l| l.contains("Pulling")), "{lines:?}");
+    assert!(lines.last().is_some_and(|l| l.starts_with("==> Build failed: not enough free disk space")), "{lines:?}");
+}
+
+#[tokio::test]
 async fn start_twice_is_a_conflict_and_needs_docker() {
     let f = fixture(2).await;
     let shutdown = ferry_core::CancellationToken::new();

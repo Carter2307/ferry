@@ -16,14 +16,14 @@ use std::io::IsTerminal;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use ferry_core::dto::ServiceView;
+use ferry_core::dto::{ServerInfo, ServiceView};
 use ferry_core::{Deploy, DeployStatus, JobRun, JobStatus, LogLine};
 use serde_json::Value;
 
 use crate::cli::{Cli, Command};
-use crate::client::{ApiError, Client, IdleTimeout};
+use crate::client::{ApiError, Client, IdleTimeout, Json};
 use crate::config::Settings;
-use crate::output::{self, Color, errln, outln};
+use crate::output::{self, Cell, Color, errln, outln};
 
 /// Everything a command needs.
 pub struct Ctx {
@@ -103,6 +103,7 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
             DbCommand::Create(a) => db::create(ctx, a).await,
             DbCommand::Ls => db::list(ctx).await,
             DbCommand::Show(a) => db::show(ctx, &a.name).await,
+            DbCommand::Update(a) => db::update(ctx, a).await,
             DbCommand::Rm(a) => db::remove(ctx, &a.name, a.yes, a.force).await,
         },
         Command::EnvGroup(c) => match c {
@@ -409,6 +410,52 @@ pub fn or_dash(v: Option<&str>) -> String {
     }
 }
 
+/// The server's default container limits, from `/api/v1/info`. Each is
+/// `None` when the server doesn't report it (an older ferryd, or the request
+/// failed); 0 means unlimited.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct DefaultLimits {
+    pub memory_mb: Option<u32>,
+    pub cpus: Option<f64>,
+}
+
+impl DefaultLimits {
+    /// Read an `/api/v1/info` answer. A field missing from the raw JSON is
+    /// unknown (its serde default, 0, would read as "unlimited").
+    pub fn from_info(info: &Json<ServerInfo>) -> Self {
+        let has = |key: &str| info.raw.get(key).is_some_and(|v| !v.is_null());
+        DefaultLimits {
+            memory_mb: has("default_memory_limit_mb").then_some(info.data.default_memory_limit_mb),
+            cpus: has("default_cpu_limit").then_some(info.data.default_cpu_limit),
+        }
+    }
+
+    /// Ask the server for its defaults, but only when a limit is unset (the
+    /// defaults don't matter otherwise). Best effort: unknown on any error.
+    pub async fn fetch_if_unset(ctx: &Ctx, memory_mb: Option<u32>, cpus: Option<f64>) -> Self {
+        let unset = memory_mb.is_none_or(|m| m == 0) || cpus.is_none_or(|c| c <= 0.0);
+        if !unset {
+            return Self::default();
+        }
+        match ctx.client.get::<ServerInfo>(&["info"], &[]).await {
+            Ok(info) => Self::from_info(&info),
+            Err(_) => Self::default(),
+        }
+    }
+}
+
+/// The "Memory limit" / "CPU limit" lines of a detail view.
+pub(crate) fn limit_pairs(
+    memory_mb: Option<u32>,
+    cpus: Option<f64>,
+    defaults: DefaultLimits,
+) -> [(&'static str, Cell); 2] {
+    [
+        ("Memory limit", Cell::new(output::memory_limit(memory_mb, defaults.memory_mb))),
+        ("CPU limit", Cell::new(output::cpu_limit(cpus, defaults.cpus))),
+    ]
+}
+
 /// Query for delete endpoints that refuse (409) while a resource is still
 /// referenced or linked, unless forced.
 pub(crate) fn force_query(force: bool, restart: bool) -> Vec<(&'static str, String)> {
@@ -436,6 +483,25 @@ mod tests {
     fn capitalize_first_letter() {
         assert_eq!(capitalize("delete service 'web'"), "Delete service 'web'");
         assert_eq!(capitalize(""), "");
+    }
+
+    #[test]
+    fn default_limits_come_from_the_raw_info() {
+        let info = |raw: Value| Json { data: serde_json::from_value::<ServerInfo>(raw.clone()).unwrap(), raw };
+        let base = serde_json::json!({
+            "version": "0.1.0", "base_domain": "localhost", "proxy_url": "http://localhost:8080",
+            "tls_enabled": false, "dashboard_url": null, "github_webhook_enabled": false, "docker_version": null
+        });
+        // An older server: unknown, not "unlimited".
+        assert_eq!(DefaultLimits::from_info(&info(base.clone())), DefaultLimits::default());
+        let mut new = base;
+        new["default_memory_limit_mb"] = 512.into();
+        new["default_cpu_limit"] = 0.0.into();
+        assert_eq!(DefaultLimits::from_info(&info(new)), DefaultLimits { memory_mb: Some(512), cpus: Some(0.0) });
+        let [(mem_key, mem), (cpu_key, cpu)] =
+            limit_pairs(Some(1024), None, DefaultLimits { memory_mb: Some(512), cpus: Some(1.0) });
+        assert_eq!((mem_key, cpu_key), ("Memory limit", "CPU limit"));
+        assert_eq!((mem, cpu), (Cell::new("1 GiB"), Cell::new("server default (1 CPU)")));
     }
 
     #[test]

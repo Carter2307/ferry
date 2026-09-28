@@ -105,6 +105,9 @@ fn new_service(req: &CreateService) -> Result<Service, Error> {
     svc.instances = req.instances.unwrap_or(1);
     svc.auto_deploy = req.auto_deploy.unwrap_or(true);
     svc.disk_mount_path = req.disk_mount_path.clone();
+    // 0 = the server default, as in PATCH.
+    svc.memory_limit_mb = req.memory_limit_mb.filter(|m| *m != 0);
+    svc.cpu_limit = req.cpu_limit.filter(|c| *c != 0.0);
     svc.custom_domains = validated_domains(req.custom_domains.as_deref().unwrap_or_default())?;
     validate::normalize_service(&mut svc);
     validate::service(&svc)?;
@@ -119,11 +122,11 @@ fn new_service(req: &CreateService) -> Result<Service, Error> {
     tag = "services",
     operation_id = "createService",
     summary = "Create a service",
-    description = "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names.",
+    description = "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance and job run of the service; omitted or `0` = the server default (see `GET /api/v1/info`).",
     request_body = CreateService,
     responses(
         (status = 201, description = "The new service.", body = ServiceView),
-        (status = 400, description = "Invalid settings, name, variables or domains, or an unknown env group.", body = ApiErrorBody),
+        (status = 400, description = "Invalid settings (including resource limits out of range), name, variables or domains, or an unknown env group.", body = ApiErrorBody),
         (status = 409, description = "The name, its default host or a custom domain is already taken.", body = ApiErrorBody),
     ),
 )]
@@ -244,6 +247,14 @@ fn apply_update(next: &mut Service, req: &UpdateService) -> Result<(), Error> {
     if let Some(s) = req.suspended {
         next.suspended = s;
     }
+    // Limits: 0 clears (server default). Saved only: they apply with the
+    // next deploy or restart, which captures them in its launch spec.
+    if let Some(m) = req.memory_limit_mb {
+        next.memory_limit_mb = (m != 0).then_some(m);
+    }
+    if let Some(c) = req.cpu_limit {
+        next.cpu_limit = (c != 0.0).then_some(c);
+    }
     if let Some(d) = &req.custom_domains {
         next.custom_domains = validated_domains(d)?;
     }
@@ -301,12 +312,12 @@ fn row_changed(a: &Service, b: &Service) -> bool {
     tag = "services",
     operation_id = "updateService",
     summary = "Update a service",
-    description = "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
+    description = "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0` = back to the server default) are only saved: they take effect with the next deploy or restart, this request doesn't redeploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
     params(("id" = String, Path, description = "Service id or name.")),
     request_body = UpdateService,
     responses(
         (status = 200, description = "The updated service.", body = ServiceView),
-        (status = 400, description = "Invalid settings.", body = ApiErrorBody),
+        (status = 400, description = "Invalid settings (including resource limits out of range).", body = ApiErrorBody),
         (status = 404, description = "No such service.", body = ApiErrorBody),
         (status = 409, description = "A source switch that doesn't clear the old source, or a custom domain another service uses.", body = ApiErrorBody),
     ),

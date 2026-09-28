@@ -62,19 +62,45 @@ fn log_config(rotation: &LogRotation) -> HostConfigLogConfig {
     }
 }
 
+/// The memory limit `docker update` sets to mean "no limit" (4 EB — see
+/// [`update_body`]). A round decimal that a float represents exactly, so
+/// API proxies that pass the JSON through doubles (Docker Desktop's does)
+/// keep it intact.
+pub(crate) const NO_MEMORY_LIMIT: i64 = 4_000_000_000_000_000_000;
+
+/// Configured memory limits from this size (1 EiB) up are reported as "no
+/// limit": [`NO_MEMORY_LIMIT`] or anything else no host could reach.
+const UNLIMITED_MEMORY_FROM: i64 = 1 << 60;
+const _: () = assert!(NO_MEMORY_LIMIT >= UNLIMITED_MEMORY_FROM);
+
 /// The body of `POST /containers/{id}/update`. Every limit is sent, so the
-/// container ends up with exactly `limits`: Docker reads an absent/0 memory
-/// as "leave unchanged", so "no limit" is spelled -1 for memory, swap and
-/// pids, and 0 for `NanoCpus` (no quota).
-pub(crate) fn update_body(limits: &LimitsUpdate) -> ContainerUpdateBody {
-    let memory = limits.memory_limit_bytes.filter(|m| *m > 0);
+/// container ends up with exactly `limits`. `host_cpus` (the daemon's CPU
+/// count) is only used when `limits.nano_cpus` is `None`.
+///
+/// Docker cannot *remove* a memory or CPU limit (verified against Docker
+/// 29.2 / API 1.53, cgroup v2): `Memory` or `NanoCpus` 0 means "leave
+/// unchanged", `Memory: -1` is rejected ("Minimum memory limit allowed is
+/// 6MB") and so is a negative `NanoCpus` ("range of CPUs is from 0.01 to
+/// N"). So "no limit" is spelled as a limit nothing reaches:
+/// * memory (and swap): [`NO_MEMORY_LIMIT`]. `i64::MAX` works on Linux
+///   (`memory.max` reads `max`), but Docker Desktop's API proxy turns it into
+///   a float that no longer fits an int64, and the container can't be
+///   started again after a stop;
+/// * CPU: a quota of every CPU of the host (the largest `NanoCpus` Docker
+///   accepts; `cpu.max` = all CPUs). Docker checks quotas against its CPU
+///   count, so a host that later loses CPUs may refuse to start the
+///   container until its limit is updated.
+///
+/// `PidsLimit` -1 (or 0) does remove the pids limit (inspect then reports 0).
+pub(crate) fn update_body(limits: &LimitsUpdate, host_cpus: Option<u32>) -> ContainerUpdateBody {
+    let memory = limits.memory_limit_bytes.filter(|m| *m > 0).unwrap_or(NO_MEMORY_LIMIT);
+    let all_cpus = host_cpus.filter(|n| *n > 0).map(|n| i64::from(n) * 1_000_000_000);
     ContainerUpdateBody {
-        // -1 = unlimited for both; swap must be raised together with memory.
-        memory: Some(memory.unwrap_or(-1)),
-        memory_swap: Some(memory.unwrap_or(-1)),
-        // NanoCpus 0 = no quota.
-        nano_cpus: Some(limits.nano_cpus.filter(|n| *n > 0).unwrap_or(0)),
-        // PidsLimit 0 or -1 = unlimited.
+        memory: Some(memory),
+        // No swap beyond the limit; swap must move together with memory.
+        memory_swap: Some(memory),
+        // Absent = unchanged (only when the host's CPU count is unknown).
+        nano_cpus: limits.nano_cpus.filter(|n| *n > 0).or(all_cpus),
         pids_limit: Some(limits.pids_limit.filter(|p| *p > 0).unwrap_or(-1)),
         ..Default::default()
     }
@@ -209,7 +235,9 @@ pub(crate) fn info_from_inspect(resp: ContainerInspectResponse) -> ContainerInfo
     let api_state = resp.state.as_ref();
     let state = api_state.map_or(ContainerState::Unknown, state_from_inspect);
     let config = resp.config.as_ref();
-    let exited = matches!(state, ContainerState::Exited | ContainerState::Dead);
+    // A restarting container reports how its process last ended (e.g. 137
+    // with `OOMKilled` after an OOM kill) until it runs again.
+    let exited = matches!(state, ContainerState::Exited | ContainerState::Dead | ContainerState::Restarting);
     ContainerInfo {
         id: resp.id.clone().unwrap_or_default(),
         name: resp.name.as_deref().map(|n| n.trim_start_matches('/').to_string()).unwrap_or_default(),
@@ -226,7 +254,11 @@ pub(crate) fn info_from_inspect(resp: ContainerInspectResponse) -> ContainerInfo
         },
         restart_count: resp.restart_count,
         oom_killed: api_state.and_then(|s| s.oom_killed).unwrap_or(false),
-        memory_limit_bytes: resp.host_config.as_ref().and_then(|h| h.memory).filter(|m| *m > 0),
+        memory_limit_bytes: resp
+            .host_config
+            .as_ref()
+            .and_then(|h| h.memory)
+            .filter(|m| (1..UNLIMITED_MEMORY_FROM).contains(m)),
         nano_cpus: resp.host_config.as_ref().and_then(|h| h.nano_cpus).filter(|n| *n > 0),
     }
 }
@@ -332,16 +364,28 @@ mod tests {
     fn update_body_json() {
         let set =
             LimitsUpdate { memory_limit_bytes: Some(256 << 20), nano_cpus: Some(1_500_000_000), pids_limit: Some(512) };
-        let body = serde_json::to_value(update_body(&set)).unwrap();
-        assert_eq!(body["Memory"], 256 << 20);
-        assert_eq!(body["MemorySwap"], 256 << 20);
-        assert_eq!(body["NanoCpus"], 1_500_000_000i64);
-        assert_eq!(body["PidsLimit"], 512);
-        let cleared = serde_json::to_value(update_body(&LimitsUpdate::default())).unwrap();
-        assert_eq!(cleared["Memory"], -1);
-        assert_eq!(cleared["MemorySwap"], -1);
-        assert_eq!(cleared["NanoCpus"], 0);
+        for host_cpus in [Some(8), None] {
+            let body = serde_json::to_value(update_body(&set, host_cpus)).unwrap();
+            assert_eq!(body["Memory"], 256 << 20);
+            assert_eq!(body["MemorySwap"], 256 << 20);
+            assert_eq!(body["NanoCpus"], 1_500_000_000i64);
+            assert_eq!(body["PidsLimit"], 512);
+        }
+
+        // Docker rejects -1 and ignores 0: "no limit" is a limit nothing reaches.
+        let cleared = serde_json::to_value(update_body(&LimitsUpdate::default(), Some(8))).unwrap();
+        assert_eq!(cleared["Memory"], NO_MEMORY_LIMIT);
+        assert_eq!(cleared["MemorySwap"], NO_MEMORY_LIMIT);
+        assert_eq!(cleared["NanoCpus"], 8_000_000_000i64);
         assert_eq!(cleared["PidsLimit"], -1);
+        let zeros = LimitsUpdate { memory_limit_bytes: Some(0), nano_cpus: Some(0), pids_limit: Some(0) };
+        assert_eq!(serde_json::to_value(update_body(&zeros, Some(8))).unwrap(), cleared, "0 = no limit");
+        // Unknown host CPU count: the CPU limit is left as it is.
+        let unknown = serde_json::to_value(update_body(&LimitsUpdate::default(), None)).unwrap();
+        assert!(unknown.get("NanoCpus").is_none(), "{unknown}");
+
+        // The sentinel survives a trip through a double (Docker Desktop's proxy).
+        assert_eq!(NO_MEMORY_LIMIT as f64 as i64, NO_MEMORY_LIMIT);
     }
 
     #[test]
@@ -415,6 +459,7 @@ mod tests {
             "RestartCount": 2,
             "State": {"Status": "running", "Running": true, "ExitCode": 0, "StartedAt": "2026-09-25T10:00:00.1Z"},
             "Config": {"Image": "busybox:stable", "Labels": {"a": "b"}},
+            "HostConfig": {"Memory": 67108864, "MemorySwap": 67108864, "NanoCpus": 500000000, "PidsLimit": 1024},
             "NetworkSettings": {"Ports": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "49153"}]}}
         }))
         .unwrap();
@@ -428,6 +473,9 @@ mod tests {
         assert_eq!(info.labels, BTreeMap::from([("a".to_string(), "b".to_string())]));
         assert_eq!(info.started_at.as_deref(), Some("2026-09-25T10:00:00.1Z"));
         assert_eq!(info.restart_count, Some(2));
+        assert!(!info.oom_killed);
+        assert_eq!(info.memory_limit_bytes, Some(64 << 20));
+        assert_eq!(info.nano_cpus, Some(500_000_000));
 
         let exited = ContainerInspectResponse {
             id: Some("x".into()),
@@ -435,20 +483,42 @@ mod tests {
             image: Some("sha256:1".into()),
             state: Some(bollard::models::ContainerState {
                 status: Some(ContainerStateStatusEnum::EXITED),
-                exit_code: Some(3),
+                exit_code: Some(137),
+                oom_killed: Some(true),
                 started_at: Some("2026-09-25T10:00:00Z".into()),
                 ..Default::default()
             }),
             config: Some(ContainerConfig::default()),
+            // What `update_limits` leaves behind when it removes the limits.
+            host_config: Some(HostConfig {
+                memory: Some(NO_MEMORY_LIMIT),
+                memory_swap: Some(NO_MEMORY_LIMIT),
+                nano_cpus: Some(0),
+                ..Default::default()
+            }),
             network_settings: Some(NetworkSettings { ports: Some(HashMap::new()), ..Default::default() }),
             ..Default::default()
         };
         let info = info_from_inspect(exited);
         assert_eq!(info.state, ContainerState::Exited);
-        assert_eq!(info.exit_code, Some(3));
+        assert_eq!(info.exit_code, Some(137));
+        assert!(info.oom_killed);
+        assert_eq!(info.memory_limit_bytes, None, "the no-limit sentinel is no limit");
+        assert_eq!(info.nano_cpus, None);
         assert_eq!(info.image, "sha256:1", "falls back to the image id");
         assert_eq!(info.started_at, None, "only running containers report started_at");
         assert_eq!(info.host_port, None);
+
+        let restarting: ContainerInspectResponse = serde_json::from_value(json!({
+            "Id": "r",
+            "State": {"Status": "restarting", "Restarting": true, "ExitCode": 137, "OOMKilled": true},
+            "HostConfig": {"Memory": 33554432}
+        }))
+        .unwrap();
+        let info = info_from_inspect(restarting);
+        assert_eq!(info.state, ContainerState::Restarting);
+        assert_eq!(info.exit_code, Some(137), "a restarting container reports its last exit");
+        assert!(info.oom_killed);
 
         let flags_only = bollard::models::ContainerState { running: Some(true), ..Default::default() };
         assert_eq!(state_from_inspect(&flags_only), ContainerState::Running);

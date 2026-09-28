@@ -2,13 +2,13 @@
 
 use axum::Json;
 use axum::extract::State;
-use ferry_core::dto::{ApiErrorBody, CreateDatastore, DatastoreView};
-use ferry_core::{Datastore, DatastoreKind, Error, validate};
+use ferry_core::dto::{ApiErrorBody, CreateDatastore, DatastoreView, UpdateDatastore};
+use ferry_core::{Datastore, DatastoreKind, DatastoreStatus, Error, resources, validate};
 use http::StatusCode;
 
 use crate::AppState;
 use crate::checks::{self, RefKind};
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery, DeleteQuery};
 use crate::locks;
 use crate::ops;
@@ -61,7 +61,19 @@ fn new_datastore(req: &CreateDatastore) -> Result<Datastore, Error> {
             }
         }
     }
+    // 0 = the server default, as in PATCH.
+    (ds.memory_limit_mb, ds.cpu_limit) = checked_limits(req.memory_limit_mb, req.cpu_limit)?;
     Ok(ds)
+}
+
+/// Explicit limits of a request (`None` = the server default, and so is 0),
+/// with the CPU limit rounded to 0.01 like services' (see
+/// `validate::normalize_service`), checked.
+fn checked_limits(memory_mb: Option<u32>, cpus: Option<f64>) -> Result<(Option<u32>, Option<f64>), Error> {
+    let memory_mb = memory_mb.filter(|m| *m != 0);
+    let cpus = cpus.filter(|c| *c != 0.0).map(resources::round_cpus);
+    resources::validate(memory_mb, cpus)?;
+    Ok((memory_mb, cpus))
 }
 
 /// `POST /api/v1/datastores`
@@ -71,11 +83,11 @@ fn new_datastore(req: &CreateDatastore) -> Result<Datastore, Error> {
     tag = "datastores",
     operation_id = "createDatastore",
     summary = "Create a datastore",
-    description = "Creates the row (`creating`) and provisions the container. A failed provisioning still answers 201, with status `failed` and the reason in `error`. Datastores and services share one namespace of names.",
+    description = "Creates the row (`creating`) and provisions the container. A failed provisioning still answers 201, with status `failed` and the reason in `error`. Datastores and services share one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit the container; omitted or `0` = the server default (see `GET /api/v1/info`).",
     request_body = CreateDatastore,
     responses(
         (status = 201, description = "The new datastore.", body = DatastoreView),
-        (status = 400, description = "Invalid name, version, database or username.", body = ApiErrorBody),
+        (status = 400, description = "Invalid name, version, database, username or resource limits.", body = ApiErrorBody),
         (status = 409, description = "The name is already taken.", body = ApiErrorBody),
     ),
 )]
@@ -123,6 +135,68 @@ pub async fn create(
 )]
 pub async fn get(State(st): State<AppState>, ApiPath(id): ApiPath<String>) -> ApiResult<Json<DatastoreView>> {
     let ds = st.store.require_datastore(&id).await?;
+    Ok(Json(datastore_view(&st.config, ds)))
+}
+
+/// `PATCH /api/v1/datastores/{id}` — resource limits.
+///
+/// The new limits are stored, then applied to the running container in
+/// place (no restart). A datastore still `creating` only gets the row
+/// updated: provisioning creates the container with the stored limits. A
+/// `failed` one has nothing running to update.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/datastores/{id}",
+    tag = "datastores",
+    operation_id = "updateDatastore",
+    summary = "Change a datastore's resource limits",
+    description = "Every field is optional: `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01); `0` = back to the server default (see `GET /api/v1/info`). The limits are applied to the running container in place, without a restart (a memory limit below what the datastore currently uses can fail, or get it killed for running out of memory). A datastore that is still `creating` gets them when its container is created. When applying them fails after they were saved, the error message says so.",
+    params(("id" = String, Path, description = "Datastore id or name.")),
+    request_body = UpdateDatastore,
+    responses(
+        (status = 200, description = "The updated datastore.", body = DatastoreView),
+        (status = 400, description = "Resource limits out of range.", body = ApiErrorBody),
+        (status = 404, description = "No such datastore.", body = ApiErrorBody),
+    ),
+)]
+pub async fn update(
+    State(st): State<AppState>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(req): ApiJson<UpdateDatastore>,
+) -> ApiResult<Json<DatastoreView>> {
+    // Row + container update: a client disconnect must not stop in between.
+    locks::detached(update_datastore(st, id, req)).await
+}
+
+async fn update_datastore(st: AppState, id: String, req: UpdateDatastore) -> ApiResult<Json<DatastoreView>> {
+    let datastore_id = st.store.require_datastore(&id).await?.id;
+    // Read under the lock: requests changing one field keep the other.
+    let _row_guard = locks::owner(&datastore_id).await;
+    let current = st.store.require_datastore(&datastore_id).await?;
+    let memory_mb = req.memory_limit_mb.or(current.memory_limit_mb);
+    let cpus = req.cpu_limit.or(current.cpu_limit);
+    let (memory_mb, cpus) = checked_limits(memory_mb, cpus)?;
+    let ds = if (memory_mb, cpus) != (current.memory_limit_mb, current.cpu_limit) {
+        let ds = st.store.set_datastore_limits(&datastore_id, memory_mb, cpus).await?;
+        let limits = st.config.limits(memory_mb, cpus);
+        tracing::info!(
+            datastore = %ds.name,
+            memory = %limits.memory_mb.map_or_else(|| "unlimited".to_string(), resources::format_memory_mb),
+            cpus = %limits.cpus.map_or_else(|| "unlimited".to_string(), resources::format_cpus),
+            "changed datastore limits"
+        );
+        ds
+    } else {
+        current
+    };
+    // Also when nothing changed: re-sending the limits retries applying
+    // them after a failure.
+    if ds.status == DatastoreStatus::Available {
+        st.engine.update_datastore_limits(&ds.id).await.map_err(|e| {
+            ApiError::from(e)
+                .prefixed(format!("limits of '{}' saved, but applying them to its container failed: ", ds.name))
+        })?;
+    }
     Ok(Json(datastore_view(&st.config, ds)))
 }
 

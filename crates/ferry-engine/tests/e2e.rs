@@ -1408,3 +1408,192 @@ async fn cron_restarts_snapshot_the_current_settings() {
     let lines = job_lines(&h, &job.id, true).await;
     assert!(lines.iter().any(|l| l == "second command"), "{lines:?}");
 }
+
+// ---------------------------------------------------------------------------
+// resource limits
+
+/// The one running container of a service (by label).
+fn service_container(h: &Harness, service_id: &str) -> String {
+    let ids = h.containers(&format!("ferry.service={service_id}"));
+    assert_eq!(ids.len(), 1, "expected one container of {service_id}: {ids:?}");
+    ids[0].clone()
+}
+
+/// A container's (Memory, MemorySwap, NanoCpus, PidsLimit) as Docker reports them.
+fn host_limits(container: &str) -> (String, String, String, String) {
+    let out = inspect(
+        container,
+        "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}}",
+    );
+    let parts: Vec<String> = out.split_whitespace().map(str::to_string).collect();
+    assert_eq!(parts.len(), 4, "{out}");
+    (parts[0].clone(), parts[1].clone(), parts[2].clone(), parts[3].clone())
+}
+
+fn mib(n: i64) -> String {
+    (n << 20).to_string()
+}
+
+/// Service instances, their jobs and datastores get memory / CPU limits (the
+/// service's, captured by the deploy, else the server defaults), the pids
+/// limit and log rotation; CPU limits are capped at the host's CPUs;
+/// datastore limits change in place.
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_limits_apply_to_instances_jobs_and_datastores() {
+    require_e2e!();
+    let h = harness(|c| {
+        c.pids_limit = 512;
+        c.log_max_size_mb = 5;
+        c.log_max_files = 2;
+    })
+    .await;
+    let svc = h
+        .create_service("web", ServiceType::WebService, |s| {
+            s.image = Some("nginx:alpine".into());
+            s.memory_limit_mb = Some(128);
+            s.cpu_limit = Some(0.5);
+        })
+        .await;
+    let d1 = h.deploy_live(&svc, DeployRequest::new(DeployTrigger::Create)).await;
+    let log = h.deploy_log(&d1.id).await;
+    assert!(log.contains("==> Limits: 128 MiB memory, 0.5 CPU per instance"), "{log}");
+    let c1 = service_container(&h, &svc.id);
+    assert_eq!(host_limits(&c1), (mib(128), mib(128), "500000000".into(), "512".into()), "no swap beyond the limit");
+    let log_config: serde_json::Value = serde_json::from_str(&inspect(&c1, "{{json .HostConfig.LogConfig}}")).unwrap();
+    assert_eq!(log_config, serde_json::json!({"Type": "json-file", "Config": {"max-size": "5m", "max-file": "2"}}));
+    let st = h.engine.service_status(&svc.id).await.unwrap();
+    assert_eq!(st.instances[0].memory_limit_bytes, Some(128 << 20), "the configured limit, not the host's memory");
+    assert_eq!(st.instances[0].cpu_limit, Some(0.5));
+    assert!(!st.instances[0].oom_killed);
+
+    // Jobs run with the live deploy's limits.
+    let cgroup = "cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/cpu.max /sys/fs/cgroup/pids.max";
+    let job = h.engine.run_job(&svc.id, Some(cgroup.into()), JobTrigger::Manual).await.unwrap();
+    assert_eq!(h.wait_job(&job.id).await.status, JobStatus::Succeeded);
+    let lines = job_lines(&h, &job.id, true).await;
+    for expected in [mib(128), "50000 100000".to_string(), "512".to_string()] {
+        assert!(lines.contains(&expected), "missing {expected} in {lines:?}");
+    }
+
+    // Changed on the service: not applied until the next deploy or restart
+    // (a replacement instance still gets the live deploy's limits)...
+    let mut changed = h.store.require_service(&svc.id).await.unwrap();
+    changed.memory_limit_mb = Some(256);
+    changed.cpu_limit = None;
+    h.store.update_service(&changed).await.unwrap();
+    assert!(docker_cli(&["rm", "-f", &c1]).0);
+    h.wait_until("a replacement instance", Duration::from_secs(60), || async {
+        h.containers(&format!("ferry.service={}", svc.id)).len() == 1
+    })
+    .await;
+    assert_eq!(host_limits(&service_container(&h, &svc.id)).0, mib(128));
+    // ... then a restart applies them (no CPU limit = the server default).
+    let d2 = h.engine.restart(&svc.id, DeployTrigger::Restart).await.unwrap();
+    let d2 = h.expect(&d2, DeployStatus::Live).await;
+    assert!(h.deploy_log(&d2.id).await.contains("==> Limits: 256 MiB memory, 1 CPU per instance"));
+    let c2 = service_container(&h, &svc.id);
+    assert_eq!(host_limits(&c2), (mib(256), mib(256), "1000000000".into(), "512".into()));
+    let job = h.engine.run_job(&svc.id, Some(cgroup.into()), JobTrigger::Manual).await.unwrap();
+    assert_eq!(h.wait_job(&job.id).await.status, JobStatus::Succeeded);
+    let lines = job_lines(&h, &job.id, true).await;
+    assert!(lines.contains(&mib(256)) && lines.contains(&"100000 100000".to_string()), "{lines:?}");
+
+    // More CPUs than the host has: capped (Docker would refuse the container).
+    let host_cpus: u32 = docker_cli(&["info", "--format", "{{.NCPU}}"]).1.parse().unwrap();
+    let big = h
+        .create_service("big", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("sleep 3600".into());
+            s.cpu_limit = Some(512.0);
+        })
+        .await;
+    let d = h.deploy_live(&big, DeployRequest::new(DeployTrigger::Create)).await;
+    let log = h.deploy_log(&d.id).await;
+    let unit = if host_cpus > 1 { "CPUs" } else { "CPU" };
+    assert!(log.contains(&format!("capped at {host_cpus} {unit}")), "{log}");
+    assert!(log.contains(&format!("==> Limits: 512 MiB memory, {host_cpus} {unit} per instance")), "{log}");
+    let (_, _, nano, _) = host_limits(&service_container(&h, &big.id));
+    assert_eq!(nano, (i64::from(host_cpus) * 1_000_000_000).to_string());
+
+    // Datastores: created with their limits, changed in place (no restart).
+    let mut cache = Datastore::new("cache", DatastoreKind::Redis);
+    cache.memory_limit_mb = Some(64);
+    h.store.create_datastore(&cache).await.unwrap();
+    h.engine.provision_datastore(&cache.id).await.unwrap();
+    h.wait_datastore(&cache.id, Duration::from_secs(120)).await;
+    let container = format!("{}-ds-cache", h.prefix);
+    assert_eq!(host_limits(&container), (mib(64), mib(64), "1000000000".into(), "512".into()));
+    let started = inspect(&container, "{{.State.StartedAt}}");
+    h.store.set_datastore_limits(&cache.id, Some(96), Some(0.25)).await.unwrap();
+    h.engine.update_datastore_limits(&cache.id).await.unwrap();
+    let (memory, _, nano, pids) = host_limits(&container);
+    assert_eq!((memory, nano, pids), (mib(96), "250000000".into(), "512".into()));
+    assert_eq!(inspect(&container, "{{.State.StartedAt}}"), started, "changed without a restart");
+    assert_eq!(inspect(&container, "{{.State.Running}}"), "true");
+    // Cleared: back to the server defaults.
+    h.store.set_datastore_limits(&cache.id, None, None).await.unwrap();
+    h.engine.update_datastore_limits(&cache.id).await.unwrap();
+    let (memory, _, nano, _) = host_limits(&container);
+    assert_eq!((memory, nano), (mib(512), "1000000000".into()));
+    // No container yet: just stored (provisioning reads the row).
+    let mut later = Datastore::new("later", DatastoreKind::Redis);
+    later.memory_limit_mb = Some(48);
+    h.store.create_datastore(&later).await.unwrap();
+    h.engine.update_datastore_limits(&later.id).await.unwrap();
+}
+
+/// A deploy whose new instance runs out of memory fails naming the limit; so
+/// does a job; a live instance that keeps running out of memory shows it in
+/// the service status.
+#[tokio::test(flavor = "multi_thread")]
+async fn out_of_memory_kills_are_reported() {
+    require_e2e!();
+    let h = harness(|_| {}).await;
+    let hog = h
+        .create_service("hog", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("tail /dev/zero".into());
+            s.memory_limit_mb = Some(32);
+        })
+        .await;
+    let d = h.engine.deploy(&hog.id, DeployRequest::new(DeployTrigger::Create)).await.unwrap();
+    let d = h.expect(&d, DeployStatus::DeployFailed).await;
+    let error = d.error.unwrap_or_default();
+    assert!(error.ends_with("ran out of memory (limit 32 MiB) — raise the service's memory limit"), "{error}");
+    assert!(error.starts_with("instance "), "{error}");
+
+    let calm = h
+        .create_service("calm", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("sleep 3600".into());
+            s.memory_limit_mb = Some(32);
+        })
+        .await;
+    h.deploy_live(&calm, DeployRequest::new(DeployTrigger::Create)).await;
+    let job = h.engine.run_job(&calm.id, Some("tail /dev/zero".into()), JobTrigger::Manual).await.unwrap();
+    let job = h.wait_job(&job.id).await;
+    assert_eq!(job.status, JobStatus::Failed);
+    assert_eq!(job.exit_code, Some(137));
+    assert_eq!(
+        job.error.as_deref(),
+        Some("the job ran out of memory (limit 32 MiB) — raise the service's memory limit")
+    );
+    let lines = job_lines(&h, &job.id, true).await;
+    assert!(lines.last().is_some_and(|l| l.contains("ran out of memory")), "{lines:?}");
+
+    // Live, then out of memory over and over (Docker restarts it): the status
+    // says so while it is down.
+    let leaky = h
+        .create_service("leaky", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("sleep 6; tail /dev/zero".into());
+            s.memory_limit_mb = Some(32);
+        })
+        .await;
+    h.deploy_live(&leaky, DeployRequest::new(DeployTrigger::Create)).await;
+    h.wait_until("an OOM-killed instance in the status", Duration::from_secs(120), || async {
+        let st = h.engine.service_status(&leaky.id).await.unwrap();
+        st.instances.iter().any(|i| i.oom_killed && i.state == "restarting" && i.exit_code == Some(137))
+    })
+    .await;
+}

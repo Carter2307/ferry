@@ -78,9 +78,9 @@ pub struct CreateService {
     pub instances: Option<u32>,
     pub auto_deploy: Option<bool>,
     pub disk_mount_path: Option<String>,
-    /// Memory limit per instance, in MiB (default: the server default).
+    /// Memory limit per instance, in MiB. Omitted or 0 = the server default.
     pub memory_limit_mb: Option<u32>,
-    /// CPU limit per instance, in CPUs (default: the server default).
+    /// CPU limit per instance, in CPUs. Omitted or 0 = the server default.
     pub cpu_limit: Option<f64>,
     pub custom_domains: Option<Vec<String>>,
     /// Initial service env vars.
@@ -235,9 +235,9 @@ pub struct CreateDatastore {
     pub database: Option<String>,
     /// Postgres user (default: same as database).
     pub username: Option<String>,
-    /// Memory limit, in MiB (default: the server default).
+    /// Memory limit, in MiB. Omitted or 0 = the server default.
     pub memory_limit_mb: Option<u32>,
-    /// CPU limit, in CPUs (default: the server default).
+    /// CPU limit, in CPUs. Omitted or 0 = the server default.
     pub cpu_limit: Option<f64>,
 }
 
@@ -246,7 +246,9 @@ pub struct CreateDatastore {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateDatastore {
+    /// Memory limit, in MiB. 0 clears (server default); omitted keeps it.
     pub memory_limit_mb: Option<u32>,
+    /// CPU limit, in CPUs. 0 clears (server default); omitted keeps it.
     pub cpu_limit: Option<f64>,
 }
 

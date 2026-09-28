@@ -14,6 +14,7 @@ import {
   type Runtime,
   type ServiceType,
 } from '@/lib/api/types'
+import { DEFAULT_LIMIT, limitError, limitValue, type LimitField } from '@/lib/resources'
 
 export type SourceMode = 'git' | 'image' | 'upload'
 
@@ -41,6 +42,10 @@ export interface NewServiceForm {
   domainDraft: string
   envGroups: string[]
   autoDeploy: boolean
+  /** Memory limit per instance / job run (Advanced; default = the server default). */
+  memoryLimit: LimitField
+  /** CPU limit per instance / job run (Advanced; default = the server default). */
+  cpuLimit: LimitField
 }
 
 export type FieldKey = keyof NewServiceForm | 'env'
@@ -68,6 +73,8 @@ export const INITIAL_FORM: NewServiceForm = {
   domainDraft: '',
   envGroups: [],
   autoDeploy: true,
+  memoryLimit: DEFAULT_LIMIT,
+  cpuLimit: DEFAULT_LIMIT,
 }
 
 export const MAX_INSTANCES = 50
@@ -93,6 +100,8 @@ export function visibleFields(f: Pick<NewServiceForm, 'type' | 'source' | 'runti
     disk: f.type === 'web_service' || f.type === 'private_service' || f.type === 'background_worker',
     domains: isPublicHttp(f.type),
     autoDeploy: f.source === 'git',
+    /** Every type runs containers (static sites too), so every type has limits. */
+    limits: true,
   }
 }
 
@@ -269,10 +278,14 @@ export function parseDomains(text: string): { domains: string[] } | { error: str
   return { domains }
 }
 
-/** Every field error for the current state (only fields that apply). */
+/**
+ * Every field error for the current state (only fields that apply).
+ * `hostCpus` (Docker host CPUs, from `/api/v1/info`) caps the CPU limit.
+ */
 export function validateForm(
   f: NewServiceForm,
   taken: { services: string[]; datastores: string[] },
+  hostCpus?: number | null,
 ): FieldErrors {
   const v = visibleFields(f)
   const errors: FieldErrors = {}
@@ -293,6 +306,10 @@ export function validateForm(
   if (v.disk) set('diskMountPath', validateMountPath(f.diskMountPath))
   if (v.instances) set('instances', validateInstances(f.instances, v.disk && f.diskMountPath.trim() !== ''))
   if (v.schedule) set('schedule', validateSchedule(f.schedule))
+  if (v.limits) {
+    set('memoryLimit', limitError('memory', f.memoryLimit))
+    set('cpuLimit', limitError('cpu', f.cpuLimit, hostCpus))
+  }
   if (v.domains && f.domainDraft.trim()) {
     const parsed = parseDomains(f.domainDraft)
     if ('error' in parsed) set('domains', parsed.error)
@@ -319,6 +336,8 @@ export const FIELD_ORDER: FieldKey[] = [
   'dockerfilePath',
   'healthCheckPath',
   'diskMountPath',
+  'memoryLimit',
+  'cpuLimit',
   'domains',
   'env',
   'envGroups',
@@ -350,6 +369,12 @@ export function toCreateRequest(f: NewServiceForm, env: EnvVar[]): CreateService
   if (v.instances) body.instances = Number(f.instances.trim())
   if (v.schedule) body.schedule = f.schedule.trim()
   if (v.disk) body.disk_mount_path = opt(f.diskMountPath)
+  if (v.limits) {
+    const memory = limitValue('memory', f.memoryLimit)
+    const cpu = limitValue('cpu', f.cpuLimit)
+    if (memory !== null) body.memory_limit_mb = memory
+    if (cpu !== null) body.cpu_limit = cpu
+  }
   if (v.domains) {
     const draft = parseDomains(f.domainDraft)
     const domains = [...f.domains, ...('domains' in draft ? draft.domains.filter((d) => !f.domains.includes(d)) : [])]
@@ -367,6 +392,8 @@ export function toCreateRequest(f: NewServiceForm, env: EnvVar[]): CreateService
 export function fieldForServerError(message: string): FieldKey | null {
   const m = message.toLowerCase()
   const rules: [RegExp, FieldKey][] = [
+    [/memory limit/, 'memoryLimit'],
+    [/cpu limit|range of cpus/, 'cpuLimit'],
     [/env group/, 'envGroups'],
     [/environment variable|variables total|value of /, 'env'],
     [/domain '/, 'domains'],

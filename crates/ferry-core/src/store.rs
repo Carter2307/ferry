@@ -182,7 +182,9 @@ impl Store {
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(10));
-        let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await?;
+        // Lazy: the first connection is the one `migrate` holds, so every
+        // other connection is opened after the migrations (see `migrate`).
+        let pool = SqlitePoolOptions::new().max_connections(8).connect_lazy_with(opts);
         let store = Store { pool };
         store.migrate().await?;
         Ok(store)
@@ -203,10 +205,16 @@ impl Store {
         Ok(store)
     }
 
+    /// Every migration runs on one connection: a connection that loaded the
+    /// schema between two migrations would prepare `SELECT *` statements with
+    /// the old column list, which sqlx caches (it then fails on rows with the
+    /// new columns).
     async fn migrate(&self) -> Result<()> {
-        let version: i64 = sqlx::query_scalar("PRAGMA user_version").fetch_one(&self.pool).await?;
+        use sqlx::Connection;
+        let mut conn = self.pool.acquire().await?;
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version").fetch_one(&mut *conn).await?;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(version.max(0) as usize) {
-            let mut tx = self.pool.begin().await?;
+            let mut tx = conn.begin().await?;
             sqlx::raw_sql(sql).execute(&mut *tx).await?;
             sqlx::query(&format!("PRAGMA user_version = {}", i + 1)).execute(&mut *tx).await?;
             tx.commit().await?;
@@ -1117,6 +1125,26 @@ mod tests {
         changed.cpu_limit = Some(0.25);
         let saved = store.update_service(&changed).await.unwrap();
         assert_eq!((saved.memory_limit_mb, saved.cpu_limit), (None, Some(0.25)));
+    }
+
+    /// Every pooled connection of a freshly migrated database file sees the
+    /// final schema (a connection opened between two migrations used to
+    /// prepare `SELECT *` with the old column list).
+    #[tokio::test]
+    async fn fresh_database_connections_see_every_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("ferry.db")).await.unwrap();
+        assert!(store.get_service("nope").await.unwrap().is_none());
+        let mut svc = Service::new("web", ServiceType::WebService);
+        svc.memory_limit_mb = Some(256);
+        store.create_service(&svc).await.unwrap();
+        for _ in 0..4 {
+            assert_eq!(store.get_service(&svc.id).await.unwrap().unwrap().memory_limit_mb, Some(256));
+        }
+        let reads = (0..16).map(|_| store.require_service(&svc.id));
+        for got in futures::future::join_all(reads).await {
+            assert_eq!(got.unwrap().memory_limit_mb, Some(256));
+        }
     }
 
     #[tokio::test]

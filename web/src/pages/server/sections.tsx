@@ -16,6 +16,8 @@ import { errorMessage, request } from '@/lib/api/client'
 import { useLive, type LiveMode } from '@/lib/api/events'
 import { useOpenApiSpec, useServerInfo } from '@/lib/api/queries'
 import type { ServerInfo } from '@/lib/api/types'
+import { bytes } from '@/lib/format'
+import { defaultCpuText, defaultMemoryText, formatCpus } from '@/lib/resources'
 import { useAuth } from '@/stores/auth'
 
 import { MaskedCommand, OnOffPill, RowValue, ThemePicker } from './parts'
@@ -80,6 +82,30 @@ function ServerInfoCard({ info }: { info: ServerInfo }) {
             <StatePill tone="destructive" label="Unreachable" />
             <span className="text-[13px] text-foreground-light">ferryd can’t reach the Docker daemon.</span>
           </RowValue>
+        )}
+      </FormRow>
+      <FormRow
+        label="Default container limits"
+        description={
+          <>
+            Memory and CPU of services, jobs and datastores that set no limits of their own. Set with{' '}
+            <code className="font-mono text-[12.5px]">--default-memory-limit</code> and{' '}
+            <code className="font-mono text-[12.5px]">--default-cpu-limit</code> (0 = unlimited).
+          </>
+        }
+      >
+        <RowValue>
+          <span>
+            {defaultMemoryText(info)} memory · {info.default_cpu_limit > 0 ? defaultCpuText(info) : 'unlimited CPU'}
+          </span>
+        </RowValue>
+        {Boolean(info.docker_cpus || info.docker_memory_bytes) && (
+          <p className="text-[12.5px] text-foreground-lighter">
+            Docker host:{' '}
+            {[info.docker_cpus ? formatCpus(info.docker_cpus) : null, info.docker_memory_bytes ? `${bytes(info.docker_memory_bytes)} memory` : null]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
         )}
       </FormRow>
       <FormRow

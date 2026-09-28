@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args, Parser, Subcommand};
-use ferry_core::{DatastoreKind, EnvVar, Runtime, ServiceType, validate};
+use ferry_core::{DatastoreKind, EnvVar, Runtime, ServiceType, resources, validate};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -100,9 +100,11 @@ pub enum Command {
 }
 
 const UPDATE_AFTER_HELP: &str = "\
-Clearing settings: pass an empty value to a text setting (--start-cmd \"\", --health \"\", ...) and \
---port 0 to clear the port setting (Ferry then detects the port again). Build & deploy settings apply \
-to the next deploy; the start command of a cron job applies from its next run.";
+Clearing settings: pass an empty value to a text setting (--start-cmd \"\", --health \"\", ...), \
+--port 0 to clear the port setting (Ferry then detects the port again), and --memory default / \
+--cpu default to go back to the server's default limits. Build & deploy settings apply to the next \
+deploy; resource limits to the next deploy or restart ('ferry restart NAME'); the start command of a \
+cron job applies from its next run.";
 
 const UP_AFTER_HELP: &str = "\
 If the service doesn't exist, it is created with these flags. If it exists, the build & deploy \
@@ -164,6 +166,14 @@ pub struct SettingsArgs {
     /// Custom domain (repeatable)
     #[arg(long = "domain", value_name = "DOMAIN")]
     pub domains: Vec<String>,
+    /// Memory limit of each instance and job run, e.g. 512M or 1G (a plain
+    /// number is MiB; 'default' = the server's default)
+    #[arg(long, value_name = "SIZE", value_parser = parse_memory_limit)]
+    pub memory: Option<u32>,
+    /// CPU limit of each instance and job run, e.g. 0.5, 2 or 500m
+    /// ('default' = the server's default)
+    #[arg(long, value_name = "CPUS", value_parser = parse_cpu_limit)]
+    pub cpu: Option<f64>,
 }
 
 impl SettingsArgs {
@@ -180,6 +190,8 @@ impl SettingsArgs {
             && self.schedule.is_none()
             && self.disk.is_none()
             && self.domains.is_empty()
+            && self.memory.is_none()
+            && self.cpu.is_none()
     }
 }
 
@@ -495,6 +507,9 @@ pub enum DbCommand {
     Ls,
     /// Show a datastore with its connection URLs
     Show(DbNameArg),
+    /// Change a datastore's memory / CPU limits (applied to the running
+    /// container, no restart)
+    Update(DbUpdateArgs),
     /// Delete a datastore and its data
     #[command(visible_alias = "delete")]
     Rm(DbRmArgs),
@@ -516,9 +531,28 @@ pub struct DbCreateArgs {
     /// Postgres user
     #[arg(long = "user", value_name = "USER")]
     pub username: Option<String>,
+    /// Memory limit, e.g. 256M or 1G (a plain number is MiB; default: the server's)
+    #[arg(long, value_name = "SIZE", value_parser = parse_memory_limit)]
+    pub memory: Option<u32>,
+    /// CPU limit, e.g. 0.5, 2 or 500m (default: the server's)
+    #[arg(long, value_name = "CPUS", value_parser = parse_cpu_limit)]
+    pub cpu: Option<f64>,
     /// Wait until the datastore is available
     #[arg(short, long)]
     pub wait: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(group(ArgGroup::new("limits").required(true).multiple(true).args(["memory", "cpu"])))]
+pub struct DbUpdateArgs {
+    /// Datastore name or id
+    pub name: String,
+    /// Memory limit, e.g. 256M or 1G (a plain number is MiB; 'default' = the server's default)
+    #[arg(long, value_name = "SIZE", value_parser = parse_memory_limit)]
+    pub memory: Option<u32>,
+    /// CPU limit, e.g. 0.5, 2 or 500m ('default' = the server's default)
+    #[arg(long, value_name = "CPUS", value_parser = parse_cpu_limit)]
+    pub cpu: Option<f64>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -683,6 +717,39 @@ pub fn parse_env_pair(s: &str) -> Result<EnvVar, String> {
 pub fn parse_env_key(s: &str) -> Result<String, String> {
     validate::env_key(s).map_err(|e| e.to_string())?;
     Ok(s.to_string())
+}
+
+/// `default` (any case) selects the server's default limit.
+fn is_default_limit(s: &str) -> bool {
+    s.trim().eq_ignore_ascii_case("default")
+}
+
+/// `--memory`: a size in MiB (`512`, `512M`, `1.5G`, ...), checked against
+/// the accepted range. `default` and `0` give 0, which the API reads as
+/// "clear: use the server default" (and a create simply omits).
+pub fn parse_memory_limit(s: &str) -> Result<u32, String> {
+    if is_default_limit(s) {
+        return Ok(0);
+    }
+    let mb = resources::parse_memory_mb(s).map_err(|e| format!("{e}, or 'default' for the server's default"))?;
+    if mb > 0 {
+        resources::validate_memory_mb(mb).map_err(|e| e.to_string())?;
+    }
+    Ok(mb)
+}
+
+/// `--cpu`: a number of CPUs (`0.5`, `2`, `500m`), checked against the
+/// accepted range. `default` and `0` give 0 (see [`parse_memory_limit`]).
+pub fn parse_cpu_limit(s: &str) -> Result<f64, String> {
+    if is_default_limit(s) {
+        return Ok(0.0);
+    }
+    let cpus = resources::parse_cpus(s).map_err(|e| format!("{e}, or 'default' for the server's default"))?;
+    // A tiny amount rounds to 0: refuse it rather than silently clearing.
+    if cpus > 0.0 || s.chars().any(|c| matches!(c, '1'..='9')) {
+        resources::validate_cpus(cpus).map_err(|e| e.to_string())?;
+    }
+    Ok(cpus)
 }
 
 #[cfg(test)]
@@ -1006,6 +1073,56 @@ mod tests {
         assert!(help.contains("--port 0 to clear the port setting"), "{help}");
         assert!(help.contains("--start-cmd \"\""), "{help}");
         assert!(help.contains("the start command of a cron job applies from its next run"), "{help}");
+        assert!(help.contains("--memory default") && help.contains("ferry restart NAME"), "{help}");
+    }
+
+    #[test]
+    fn limit_flags() {
+        let Command::Create(a) = parse(&["create", "x", "--memory", "1G", "--cpu", "500m"]).command else { panic!() };
+        assert_eq!((a.settings.memory, a.settings.cpu), (Some(1024), Some(0.5)));
+        let Command::Update(a) = parse(&["update", "x", "--memory", "default", "--cpu", "Default"]).command else {
+            panic!()
+        };
+        assert_eq!((a.settings.memory, a.settings.cpu), (Some(0), Some(0.0)));
+        assert!(!a.settings.is_empty());
+        let Command::Up(a) = parse(&["up", "--memory", "768", "--cpu", "2"]).command else { panic!() };
+        assert_eq!((a.settings.memory, a.settings.cpu), (Some(768), Some(2.0)));
+        let Command::Db(DbCommand::Create(a)) = parse(&["db", "create", "m", "--memory", "256M"]).command else {
+            panic!()
+        };
+        assert_eq!((a.memory, a.cpu), (Some(256), None));
+        let Command::Db(DbCommand::Update(a)) = parse(&["db", "update", "m", "--cpu", "0.25"]).command else {
+            panic!()
+        };
+        assert_eq!((a.name.as_str(), a.memory, a.cpu), ("m", None, Some(0.25)));
+
+        // Refused before anything is sent.
+        let err = fails(&["create", "x", "--memory", "lots"]).to_string();
+        assert!(err.contains("invalid memory size 'lots'") && err.contains("'default'"), "{err}");
+        let err = fails(&["update", "x", "--memory", "8M"]).to_string();
+        assert!(err.contains("memory limit must be between 16 MiB"), "{err}");
+        let err = fails(&["update", "x", "--cpu", "1000"]).to_string();
+        assert!(err.contains("CPU limit must be between"), "{err}");
+        // A tiny amount would round to 0 (= default): refused, not cleared.
+        assert!(fails(&["update", "x", "--cpu", "0.001"]).to_string().contains("CPU limit must be between"));
+        assert!(fails(&["update", "x", "--cpu", "half"]).to_string().contains("invalid CPU amount 'half'"));
+        // `db update` needs something to change.
+        assert!(fails(&["db", "update", "m"]).to_string().contains("--memory"));
+    }
+
+    #[test]
+    fn limit_values() {
+        assert_eq!(parse_memory_limit("512"), Ok(512));
+        assert_eq!(parse_memory_limit("1.5G"), Ok(1536));
+        assert_eq!(parse_memory_limit(" default "), Ok(0));
+        assert_eq!(parse_memory_limit("0"), Ok(0));
+        assert!(parse_memory_limit("2T").is_err(), "over 1 TiB");
+        assert_eq!(parse_cpu_limit("0.5"), Ok(0.5));
+        assert_eq!(parse_cpu_limit("1500m"), Ok(1.5));
+        assert_eq!(parse_cpu_limit("DEFAULT"), Ok(0.0));
+        assert_eq!(parse_cpu_limit("0"), Ok(0.0));
+        assert_eq!(parse_cpu_limit("0m"), Ok(0.0));
+        assert!(parse_cpu_limit("-1").is_err());
     }
 
     #[test]

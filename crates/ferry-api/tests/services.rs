@@ -827,3 +827,79 @@ async fn views_report_degraded_when_live_instances_are_down() {
     assert_eq!(list.as_array().unwrap().len(), 2);
     assert!(app.engine.calls_with("service_status").is_empty());
 }
+
+#[tokio::test]
+async fn resource_limits_on_create() {
+    let app = TestApp::new().await;
+    // defaults: nothing stored (the server default applies)
+    let v = app.create_service(json!({"name": "plain", "image": "nginx"})).await;
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (Value::Null, Value::Null));
+    // explicit limits (the CPU rounded to 0.01), and 0 = the server default
+    let v = app.create_service(json!({"name": "sized", "memory_limit_mb": 768, "cpu_limit": 0.333})).await;
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (json!(768), json!(0.33)));
+    let svc = app.store.require_service("sized").await.unwrap();
+    assert_eq!((svc.memory_limit_mb, svc.cpu_limit), (Some(768), Some(0.33)));
+    let v = app.create_service(json!({"name": "zeros", "memory_limit_mb": 0, "cpu_limit": 0})).await;
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (Value::Null, Value::Null));
+
+    for (body, needle) in [
+        (json!({"name": "a", "memory_limit_mb": 8}), "memory limit must be between 16 MiB and 1024 GiB (got 8 MiB)"),
+        (json!({"name": "a", "memory_limit_mb": 2_000_000}), "memory limit must be between"),
+        (json!({"name": "a", "cpu_limit": 1000}), "CPU limit must be between 0.01 and 512 CPUs"),
+        (json!({"name": "a", "cpu_limit": -1}), "CPU limit must be between"),
+        (json!({"name": "a", "cpu_limit": 0.001}), "CPU limit must be between"),
+    ] {
+        let r = app.post("/api/v1/services", body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}: {}", r.text());
+        assert!(r.json()["error"]["message"].as_str().unwrap().contains(needle), "{body}: {}", r.text());
+    }
+    // wrong JSON types are 400s too
+    let r = app.post("/api/v1/services", json!({"name": "a", "memory_limit_mb": "1G"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    assert!(app.store.find_service("a").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn resource_limits_are_patched_without_redeploying() {
+    let app = TestApp::new().await;
+    let v = app.create_service(json!({"name": "web", "image": "nginx", "memory_limit_mb": 512})).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    app.make_live("web", Some(80)).await;
+    app.engine.clear();
+
+    // stored only: the next deploy or restart applies them
+    let v = app.patch("/api/v1/services/web", json!({"memory_limit_mb": 2048, "cpu_limit": 1.5})).await.json();
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (json!(2048), json!(1.5)));
+    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+    let svc = app.store.require_service(&id).await.unwrap();
+    assert_eq!((svc.memory_limit_mb, svc.cpu_limit), (Some(2048), Some(1.5)));
+    assert!(svc.live_deploy_id.is_some());
+
+    // one field at a time; other settings keep the limits
+    let v = app.patch("/api/v1/services/web", json!({"cpu_limit": 0.255})).await.json();
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (json!(2048), json!(0.26)));
+    let v = app.patch("/api/v1/services/web", json!({"health_check_path": "/h"})).await.json();
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (json!(2048), json!(0.26)));
+
+    // 0 clears (back to the server default)
+    let v = app.patch("/api/v1/services/web", json!({"memory_limit_mb": 0})).await.json();
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (Value::Null, json!(0.26)));
+    let v = app.patch("/api/v1/services/web", json!({"cpu_limit": 0})).await.json();
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (Value::Null, Value::Null));
+    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+
+    // invalid values change nothing
+    app.patch("/api/v1/services/web", json!({"memory_limit_mb": 1024})).await;
+    for body in [json!({"memory_limit_mb": 15}), json!({"cpu_limit": 513}), json!({"cpu_limit": -0.5, "port": 81})] {
+        let r = app.patch("/api/v1/services/web", body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}: {}", r.text());
+        assert!(r.json()["error"]["message"].as_str().unwrap().contains("limit must be between"), "{}", r.text());
+    }
+    let svc = app.store.require_service(&id).await.unwrap();
+    assert_eq!((svc.memory_limit_mb, svc.cpu_limit, svc.port), (Some(1024), None, None));
+
+    // cron jobs take limits too (they apply to every run)
+    app.create_service(json!({"name": "tick", "image": "busybox", "type": "cron", "schedule": "* * * * *"})).await;
+    let v = app.patch("/api/v1/services/tick", json!({"memory_limit_mb": 64, "cpu_limit": 0.1})).await.json();
+    assert_eq!((v["memory_limit_mb"].clone(), v["cpu_limit"].clone()), (json!(64), json!(0.1)));
+}

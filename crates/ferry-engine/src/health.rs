@@ -124,14 +124,35 @@ pub(crate) struct HealthCheck {
     pub progress: LogSink,
 }
 
-/// What an instance's exit code usually means.
+/// What an instance's exit code usually means. (137 = SIGKILL: an OOM kill
+/// is recognized by Docker's `OOMKilled` flag instead, see [`crash_message`].)
 fn exit_code_hint(code: i64) -> &'static str {
     match code {
         126 => ": the command is not executable",
         127 => ": command not found, check the start command",
-        137 => ": killed (out of memory?)",
+        137 => ": killed by SIGKILL",
         139 => ": segmentation fault",
         _ => "",
+    }
+}
+
+/// How a crashed instance's process last ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LastExit {
+    pub code: Option<i64>,
+    /// The kernel killed it for exceeding its memory limit.
+    pub oom_killed: bool,
+    /// The container's memory limit (bytes), if any.
+    pub memory_limit_bytes: Option<i64>,
+}
+
+/// The message for a crashed instance: out of memory (naming the limit), or
+/// its exit code.
+pub(crate) fn crash_message(instance: &str, exit: LastExit, worker: bool) -> String {
+    if exit.oom_killed {
+        crate::limits::oom_message(&format!("instance {instance}"), exit.memory_limit_bytes, "the service's")
+    } else {
+        exit_message(instance, exit.code, worker)
     }
 }
 
@@ -145,20 +166,26 @@ pub(crate) fn exit_message(instance: &str, code: Option<i64>, worker: bool) -> S
     }
 }
 
-/// The last exit code of a container that Docker restarts (the restart
-/// policy brings crashed instances back). A running container reports 0, so
-/// this waits briefly for it to be seen restarting or stopped.
-async fn last_exit_code(inner: &Inner, id: &str) -> Option<i64> {
+/// How a container that Docker restarts (the restart policy brings crashed
+/// instances back) last exited. A running container reports exit code 0 and
+/// no OOM kill, so this waits briefly for it to be seen restarting or
+/// stopped.
+async fn last_exit(inner: &Inner, id: &str) -> LastExit {
     for _ in 0..EXIT_CODE_POLLS {
-        let state = inner.docker.bollard().inspect_container(id, None).await.ok()?.state?;
+        let Ok(resp) = inner.docker.bollard().inspect_container(id, None).await else { break };
+        let Some(state) = resp.state else { break };
         let restarting = state.restarting == Some(true);
         let stopped = matches!(state.status.map(|s| s.to_string()).as_deref(), Some("exited" | "dead" | "restarting"));
         if restarting || stopped {
-            return state.exit_code;
+            return LastExit {
+                code: state.exit_code,
+                oom_killed: state.oom_killed.unwrap_or(false),
+                memory_limit_bytes: resp.host_config.and_then(|h| h.memory).filter(|m| *m > 0),
+            };
         }
         tokio::time::sleep(EXIT_CODE_POLL).await;
     }
-    None
+    LastExit::default()
 }
 
 /// Probe one new instance every second until it is healthy, it crashes or
@@ -184,15 +211,20 @@ pub(crate) async fn wait_healthy(
             Ok(None) => return Err(fail(format!("instance {instance} was removed"), false)),
             Ok(Some(info)) => match info.state {
                 ContainerState::Exited | ContainerState::Dead => {
-                    return Err(fail(exit_message(&instance, info.exit_code, check.worker), true));
+                    let exit = LastExit {
+                        code: info.exit_code,
+                        oom_killed: info.oom_killed,
+                        memory_limit_bytes: info.memory_limit_bytes,
+                    };
+                    return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Restarting => {
-                    let code = last_exit_code(inner, &container.id).await;
-                    return Err(fail(exit_message(&instance, code, check.worker), true));
+                    let exit = last_exit(inner, &container.id).await;
+                    return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Running if info.restart_count.unwrap_or(0) > 0 => {
-                    let code = last_exit_code(inner, &container.id).await;
-                    return Err(fail(exit_message(&instance, code, check.worker), true));
+                    let exit = last_exit(inner, &container.id).await;
+                    return Err(fail(crash_message(&instance, exit, check.worker), true));
                 }
                 ContainerState::Running => match &check.probe {
                     Probe::Uptime => {
@@ -274,6 +306,23 @@ mod tests {
         );
         assert_eq!(exit_message("abc123", Some(3), false), "instance abc123 crashed (exit code 3)");
         assert_eq!(exit_message("abc123", None, false), "instance abc123 crashed");
+        // 137 alone is a SIGKILL, not proof of an OOM kill.
+        assert_eq!(
+            exit_message("abc123", Some(137), false),
+            "instance abc123 crashed (exit code 137: killed by SIGKILL)"
+        );
+    }
+
+    #[test]
+    fn oom_kills_name_the_memory_limit() {
+        let oom = LastExit { code: Some(137), oom_killed: true, memory_limit_bytes: Some(32 << 20) };
+        assert_eq!(
+            crash_message("abc123", oom, false),
+            "instance abc123 ran out of memory (limit 32 MiB) — raise the service's memory limit"
+        );
+        let killed = LastExit { oom_killed: false, ..oom };
+        assert_eq!(crash_message("abc123", killed, true), exit_message("abc123", Some(137), true));
+        assert_eq!(crash_message("abc123", LastExit::default(), false), "instance abc123 crashed");
     }
 
     #[tokio::test]
