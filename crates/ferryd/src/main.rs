@@ -266,6 +266,8 @@ fn build_config(args: Args) -> anyhow::Result<Config> {
         health_check_timeout_secs: args.health_check_timeout.max(5),
         datastore_bind_ip: "127.0.0.1".to_string(),
         advertise_host: args.advertise_host,
+        // TODO(resource-limits): wire the ferryd flags.
+        ..Config::default()
     };
     for dir in [config.logs_dir(), config.builds_dir(), config.repos_dir(), config.uploads_dir(), config.certs_dir()] {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;

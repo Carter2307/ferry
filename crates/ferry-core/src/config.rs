@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::models::Service;
 use crate::naming::Naming;
+use crate::resources::Limits;
 
 /// Runtime configuration of a Ferry server.
 #[derive(Debug, Clone)]
@@ -53,6 +54,24 @@ pub struct Config {
     pub datastore_bind_ip: String,
     /// Host name printed in external datastore URLs.
     pub advertise_host: String,
+    /// Memory limit (MiB) of service, job and datastore containers that set
+    /// none of their own. 0 = unlimited.
+    pub default_memory_limit_mb: u32,
+    /// CPU limit (CPUs) of service, job and datastore containers that set
+    /// none of their own. 0 = unlimited.
+    pub default_cpu_limit: f64,
+    /// Max processes + threads per container (fork-bomb guard). 0 = unlimited.
+    pub pids_limit: u32,
+    /// Rotate each container's Docker log (`json-file` driver) when it
+    /// reaches this size, in MiB. 0 = leave the daemon's log configuration
+    /// alone (no rotation unless the daemon configures it).
+    pub log_max_size_mb: u32,
+    /// Log files kept per container when rotating (current one included).
+    pub log_max_files: u32,
+    /// Deploys fail early when less than this much disk (MiB) is free on the
+    /// data directory's filesystem (or on the Docker root's, when it is
+    /// local). 0 = no check.
+    pub min_free_disk_mb: u64,
 }
 
 impl Default for Config {
@@ -78,6 +97,12 @@ impl Default for Config {
             health_check_timeout_secs: 120,
             datastore_bind_ip: "127.0.0.1".to_string(),
             advertise_host: "127.0.0.1".to_string(),
+            default_memory_limit_mb: 512,
+            default_cpu_limit: 1.0,
+            pids_limit: 1024,
+            log_max_size_mb: 10,
+            log_max_files: 3,
+            min_free_disk_mb: 1024,
         }
     }
 }
@@ -86,6 +111,18 @@ impl Config {
     /// TLS is on when an ACME email and an HTTPS address are configured.
     pub fn tls_enabled(&self) -> bool {
         self.acme_email.is_some() && self.proxy_https_addr.is_some()
+    }
+
+    /// Effective limits of a container whose service or datastore sets
+    /// `memory_mb` / `cpus` (`None` = use the server defaults; a default of 0
+    /// = unlimited).
+    pub fn limits(&self, memory_mb: Option<u32>, cpus: Option<f64>) -> Limits {
+        Limits {
+            memory_mb: memory_mb.filter(|m| *m > 0).or(Some(self.default_memory_limit_mb).filter(|m| *m > 0)),
+            cpus: cpus
+                .filter(|c| c.is_finite() && *c > 0.0)
+                .or(Some(self.default_cpu_limit).filter(|c| c.is_finite() && *c > 0.0)),
+        }
     }
 
     pub fn naming(&self) -> Naming {
@@ -195,6 +232,16 @@ mod tests {
         let worker = Service::new("w", ServiceType::BackgroundWorker);
         assert!(cfg.service_hosts(&worker).is_empty());
         assert!(cfg.service_url(&worker).is_none());
+    }
+
+    #[test]
+    fn effective_limits() {
+        let cfg = Config::default();
+        assert_eq!(cfg.limits(None, None), Limits { memory_mb: Some(512), cpus: Some(1.0) });
+        assert_eq!(cfg.limits(Some(2048), Some(0.5)), Limits { memory_mb: Some(2048), cpus: Some(0.5) });
+        let unlimited = Config { default_memory_limit_mb: 0, default_cpu_limit: 0.0, ..Config::default() };
+        assert_eq!(unlimited.limits(None, None), Limits::default());
+        assert_eq!(unlimited.limits(Some(256), None), Limits { memory_mb: Some(256), cpus: None });
     }
 
     #[test]

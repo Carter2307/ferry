@@ -183,6 +183,9 @@ impl Engine for MockEngine {
                 cpu_percent: Some(1.5),
                 memory_bytes: Some(1024),
                 memory_limit_bytes: None,
+                cpu_limit: None,
+                oom_killed: false,
+                exit_code: None,
             })
             .collect();
         Ok(RuntimeStatus {

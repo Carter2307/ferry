@@ -3,12 +3,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bollard::models::{
-    ContainerCreateBody, ContainerInspectResponse, ContainerStateStatusEnum, ContainerSummary, EndpointSettings,
-    HostConfig, Mount, MountType, NetworkingConfig, PortBinding, PortMap, PortSummary, PortSummaryTypeEnum,
-    RestartPolicy as ApiRestartPolicy, RestartPolicyNameEnum,
+    ContainerCreateBody, ContainerInspectResponse, ContainerStateStatusEnum, ContainerSummary, ContainerUpdateBody,
+    EndpointSettings, HostConfig, HostConfigLogConfig, Mount, MountType, NetworkingConfig, PortBinding, PortMap,
+    PortSummary, PortSummaryTypeEnum, RestartPolicy as ApiRestartPolicy, RestartPolicyNameEnum,
 };
 
-use crate::{ContainerInfo, ContainerSpec, ContainerState, RestartPolicy};
+use crate::{ContainerInfo, ContainerSpec, ContainerState, LimitsUpdate, LogRotation, RestartPolicy};
 
 /// `"<port>/tcp"`, the key Docker uses for exposed ports and port maps.
 pub(crate) fn tcp_port_key(port: u16) -> String {
@@ -52,12 +52,45 @@ pub(crate) fn labels_to_api(labels: &BTreeMap<String, String>) -> Option<HashMap
     (!labels.is_empty()).then(|| to_hash_map(labels))
 }
 
+fn log_config(rotation: &LogRotation) -> HostConfigLogConfig {
+    HostConfigLogConfig {
+        typ: Some("json-file".to_string()),
+        config: Some(HashMap::from([
+            ("max-size".to_string(), format!("{}m", rotation.max_size_mb.max(1))),
+            ("max-file".to_string(), rotation.max_files.max(1).to_string()),
+        ])),
+    }
+}
+
+/// The body of `POST /containers/{id}/update`. Every limit is sent, so the
+/// container ends up with exactly `limits`: Docker reads an absent/0 memory
+/// as "leave unchanged", so "no limit" is spelled -1 for memory, swap and
+/// pids, and 0 for `NanoCpus` (no quota).
+pub(crate) fn update_body(limits: &LimitsUpdate) -> ContainerUpdateBody {
+    let memory = limits.memory_limit_bytes.filter(|m| *m > 0);
+    ContainerUpdateBody {
+        // -1 = unlimited for both; swap must be raised together with memory.
+        memory: Some(memory.unwrap_or(-1)),
+        memory_swap: Some(memory.unwrap_or(-1)),
+        // NanoCpus 0 = no quota.
+        nano_cpus: Some(limits.nano_cpus.filter(|n| *n > 0).unwrap_or(0)),
+        // PidsLimit 0 or -1 = unlimited.
+        pids_limit: Some(limits.pids_limit.filter(|p| *p > 0).unwrap_or(-1)),
+        ..Default::default()
+    }
+}
+
 /// The body of `POST /containers/create` for a spec.
 pub(crate) fn create_body(spec: &ContainerSpec) -> ContainerCreateBody {
+    let memory = spec.memory_limit_bytes.filter(|m| *m > 0);
     let mut host_config = HostConfig {
         restart_policy: Some(restart_policy(spec.restart_policy)),
-        memory: spec.memory_limit_bytes.filter(|m| *m > 0),
+        memory,
+        // No swap beyond the memory limit.
+        memory_swap: memory,
         nano_cpus: spec.nano_cpus.filter(|n| *n > 0),
+        pids_limit: spec.pids_limit.filter(|p| *p > 0),
+        log_config: spec.log_rotation.as_ref().map(log_config),
         ..Default::default()
     };
     if !spec.volumes.is_empty() {
@@ -192,6 +225,9 @@ pub(crate) fn info_from_inspect(resp: ContainerInspectResponse) -> ContainerInfo
             None
         },
         restart_count: resp.restart_count,
+        oom_killed: api_state.and_then(|s| s.oom_killed).unwrap_or(false),
+        memory_limit_bytes: resp.host_config.as_ref().and_then(|h| h.memory).filter(|m| *m > 0),
+        nano_cpus: resp.host_config.as_ref().and_then(|h| h.nano_cpus).filter(|n| *n > 0),
     }
 }
 
@@ -208,6 +244,9 @@ pub(crate) fn info_from_summary(summary: ContainerSummary) -> ContainerInfo {
         labels: summary.labels.map(|l| l.into_iter().collect()).unwrap_or_default(),
         started_at: None,
         restart_count: None,
+        oom_killed: false,
+        memory_limit_bytes: None,
+        nano_cpus: None,
     }
 }
 
@@ -234,6 +273,8 @@ mod tests {
             restart_policy: RestartPolicy::UnlessStopped,
             memory_limit_bytes: Some(64 << 20),
             nano_cpus: Some(500_000_000),
+            pids_limit: Some(256),
+            log_rotation: Some(LogRotation { max_size_mb: 10, max_files: 3 }),
             working_dir: Some("/srv".into()),
         }
     }
@@ -251,7 +292,10 @@ mod tests {
         let hc = &body["HostConfig"];
         assert_eq!(hc["RestartPolicy"]["Name"], "unless-stopped");
         assert_eq!(hc["Memory"], 64 << 20);
+        assert_eq!(hc["MemorySwap"], 64 << 20);
         assert_eq!(hc["NanoCpus"], 500_000_000);
+        assert_eq!(hc["PidsLimit"], 256);
+        assert_eq!(hc["LogConfig"], json!({"Type": "json-file", "Config": {"max-size": "10m", "max-file": "3"}}));
         assert_eq!(hc["NetworkMode"], "ferry");
         assert_eq!(hc["PortBindings"], json!({"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": ""}]}));
         assert_eq!(hc["Mounts"], json!([{"Target": "/data", "Source": "ferry-svc-disk", "Type": "volume"}]));
@@ -266,7 +310,9 @@ mod tests {
         for absent in ["Env", "Labels", "ExposedPorts", "NetworkingConfig", "Cmd", "WorkingDir"] {
             assert!(body.get(absent).is_none(), "{absent} should be absent: {body}");
         }
-        for absent in ["PortBindings", "Mounts", "NetworkMode", "Memory", "NanoCpus"] {
+        for absent in
+            ["PortBindings", "Mounts", "NetworkMode", "Memory", "MemorySwap", "NanoCpus", "PidsLimit", "LogConfig"]
+        {
             assert!(body["HostConfig"].get(absent).is_none(), "{absent} should be absent");
         }
 
@@ -280,6 +326,22 @@ mod tests {
         assert_eq!(body["HostConfig"]["PortBindings"]["5432/tcp"][0]["HostPort"], "15432");
         assert_eq!(body["HostConfig"]["RestartPolicy"]["Name"], "on-failure");
         assert_eq!(body["Entrypoint"], json!(["/bin/sh", "-c"]));
+    }
+
+    #[test]
+    fn update_body_json() {
+        let set =
+            LimitsUpdate { memory_limit_bytes: Some(256 << 20), nano_cpus: Some(1_500_000_000), pids_limit: Some(512) };
+        let body = serde_json::to_value(update_body(&set)).unwrap();
+        assert_eq!(body["Memory"], 256 << 20);
+        assert_eq!(body["MemorySwap"], 256 << 20);
+        assert_eq!(body["NanoCpus"], 1_500_000_000i64);
+        assert_eq!(body["PidsLimit"], 512);
+        let cleared = serde_json::to_value(update_body(&LimitsUpdate::default())).unwrap();
+        assert_eq!(cleared["Memory"], -1);
+        assert_eq!(cleared["MemorySwap"], -1);
+        assert_eq!(cleared["NanoCpus"], 0);
+        assert_eq!(cleared["PidsLimit"], -1);
     }
 
     #[test]

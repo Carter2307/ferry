@@ -41,6 +41,10 @@ pub async fn info(State(st): State<AppState>) -> Json<ServerInfo> {
         dashboard_url: cfg.dashboard_url(),
         github_webhook_enabled: cfg.github_webhook_secret.as_deref().is_some_and(|s| !s.is_empty()),
         docker_version: st.docker_version.clone(),
+        default_memory_limit_mb: cfg.default_memory_limit_mb,
+        default_cpu_limit: cfg.default_cpu_limit,
+        docker_cpus: None,
+        docker_memory_bytes: None,
     })
 }
 

@@ -280,6 +280,17 @@ pub struct Service {
     /// Persistent volume mount path. A service with a disk uses recreate
     /// (stop-then-start) deploys and is limited to one instance.
     pub disk_mount_path: Option<String>,
+    /// Memory limit of each instance (and of the service's jobs), in MiB.
+    /// `None` = the server default (`ferryd --default-memory-limit`). Takes
+    /// effect with the next deploy or restart.
+    #[serde(default)]
+    pub memory_limit_mb: Option<u32>,
+    /// CPU limit of each instance (and of the service's jobs), in CPUs
+    /// (`0.5` = half a core). `None` = the server default
+    /// (`ferryd --default-cpu-limit`). Takes effect with the next deploy or
+    /// restart.
+    #[serde(default)]
+    pub cpu_limit: Option<f64>,
     /// Extra hostnames routed to this service (web services and static sites).
     pub custom_domains: Vec<String>,
     /// Secret for `POST /hooks/deploy/{service_id}?key=...`.
@@ -314,6 +325,8 @@ impl Service {
             auto_deploy: true,
             suspended: false,
             disk_mount_path: None,
+            memory_limit_mb: None,
+            cpu_limit: None,
             custom_domains: Vec::new(),
             deploy_hook_key: ids::random_secret(32),
             live_deploy_id: None,
@@ -467,6 +480,14 @@ pub struct Datastore {
     pub database: Option<String>,
     /// Port published on the host for external access (bound to 127.0.0.1).
     pub host_port: Option<u16>,
+    /// Memory limit of the container, in MiB. `None` = the server default
+    /// (`ferryd --default-memory-limit`).
+    #[serde(default)]
+    pub memory_limit_mb: Option<u32>,
+    /// CPU limit of the container, in CPUs. `None` = the server default
+    /// (`ferryd --default-cpu-limit`).
+    #[serde(default)]
+    pub cpu_limit: Option<f64>,
     pub error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -491,6 +512,8 @@ impl Datastore {
             password: ids::random_secret(32),
             database,
             host_port: None,
+            memory_limit_mb: None,
+            cpu_limit: None,
             error: None,
             created_at: now,
             updated_at: now,

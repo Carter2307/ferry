@@ -68,6 +68,9 @@ async fn instance_status(inner: &Inner, c: &ContainerInfo) -> InstanceStatus {
         cpu_percent: stats.map(|s| s.cpu_percent),
         memory_bytes: stats.map(|s| s.memory_bytes),
         memory_limit_bytes: stats.map(|s| s.memory_limit_bytes).filter(|l| *l > 0),
+        cpu_limit: None,
+        oom_killed: info.oom_killed,
+        exit_code: info.exit_code,
     }
 }
 
@@ -202,6 +205,9 @@ mod tests {
             labels: BTreeMap::from([(LABEL_DEPLOY.to_string(), deploy.to_string())]),
             started_at: None,
             restart_count: None,
+            oom_killed: false,
+            memory_limit_bytes: None,
+            nano_cpus: None,
         }
     }
 

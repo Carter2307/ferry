@@ -185,6 +185,8 @@ pub(crate) fn service_spec(naming: &Naming, svc: &Service, deploy_id: &str, plan
         restart_policy: RestartPolicy::UnlessStopped,
         memory_limit_bytes: None,
         nano_cpus: None,
+        pids_limit: None,
+        log_rotation: None,
         working_dir: None,
     }
 }

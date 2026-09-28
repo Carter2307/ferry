@@ -21,6 +21,8 @@ pub async fn create(ctx: &Ctx, a: DbCreateArgs) -> Result<()> {
         version: a.version.clone(),
         database: a.database.clone(),
         username: a.username.clone(),
+        memory_limit_mb: None,
+        cpu_limit: None,
     };
     let mut resp = ctx.client.post::<_, DatastoreView>(&["datastores"], &[], &body).await?;
     if a.wait && resp.data.datastore.status == DatastoreStatus::Creating {

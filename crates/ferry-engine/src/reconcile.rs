@@ -637,6 +637,9 @@ mod tests {
             labels: BTreeMap::from([(LABEL_DEPLOY.to_string(), deploy.to_string())]),
             started_at: None,
             restart_count: None,
+            oom_killed: false,
+            memory_limit_bytes: None,
+            nano_cpus: None,
         }
     }
 

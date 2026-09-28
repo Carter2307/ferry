@@ -82,6 +82,15 @@ pub struct VolumeMount {
     pub target: String,
 }
 
+/// Rotation of a container's log file (`json-file` driver).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogRotation {
+    /// Rotate when the current file reaches this size (MiB, at least 1).
+    pub max_size_mb: u32,
+    /// Files kept, the current one included (at least 1).
+    pub max_files: u32,
+}
+
 /// Everything needed to create a container.
 #[derive(Debug, Clone, Default)]
 pub struct ContainerSpec {
@@ -100,10 +109,42 @@ pub struct ContainerSpec {
     pub publish: Option<PortPublish>,
     pub volumes: Vec<VolumeMount>,
     pub restart_policy: RestartPolicy,
+    /// Hard memory limit. Swap is not allowed beyond it (`MemorySwap` =
+    /// `Memory`), so a container over its limit is OOM-killed instead of
+    /// swapping the host to a crawl.
     pub memory_limit_bytes: Option<i64>,
     /// CPU quota in units of 1e-9 CPUs.
     pub nano_cpus: Option<i64>,
+    /// Max processes + threads in the container (`--pids-limit`).
+    pub pids_limit: Option<i64>,
+    /// Log rotation; `None` = the daemon's default log configuration.
+    pub log_rotation: Option<LogRotation>,
     pub working_dir: Option<String>,
+}
+
+/// Limits changed in place on a running container (`docker update`).
+/// `None` removes the limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LimitsUpdate {
+    pub memory_limit_bytes: Option<i64>,
+    /// CPU quota in units of 1e-9 CPUs.
+    pub nano_cpus: Option<i64>,
+    pub pids_limit: Option<i64>,
+}
+
+/// Capacity of the Docker host (from `docker info`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HostInfo {
+    /// CPUs available to containers.
+    pub cpus: Option<u32>,
+    /// Memory available to containers (bytes).
+    pub memory_bytes: Option<u64>,
+    /// The daemon's data directory (e.g. `/var/lib/docker`). On Docker
+    /// Desktop it lives inside a VM, not on this machine's filesystem.
+    pub docker_root_dir: Option<String>,
+    /// Name of the daemon's operating system, e.g. `Docker Desktop` or
+    /// `Ubuntu 24.04 LTS`.
+    pub operating_system: Option<String>,
 }
 
 /// Docker container state.
@@ -168,6 +209,14 @@ pub struct ContainerInfo {
     /// RFC3339 start time.
     pub started_at: Option<String>,
     pub restart_count: Option<i64>,
+    /// The kernel OOM-killed the container's process the last time it
+    /// exited (inspect only; `false` from the list API).
+    pub oom_killed: bool,
+    /// Configured memory limit (inspect only; `None` = unlimited or unknown).
+    pub memory_limit_bytes: Option<i64>,
+    /// Configured CPU quota in 1e-9 CPUs (inspect only; `None` = unlimited
+    /// or unknown).
+    pub nano_cpus: Option<i64>,
 }
 
 /// One-shot resource usage.
@@ -247,6 +296,28 @@ impl Docker {
             .version
             .filter(|v| !v.is_empty())
             .ok_or_else(|| Error::Docker("querying the Docker version: the daemon did not report one".into()))
+    }
+
+    /// CPUs, memory and data directory of the Docker host.
+    pub async fn host_info(&self) -> Result<HostInfo> {
+        let info = self.inner.info().await.map_err(|e| errors::map_docker(e, "querying Docker host information"))?;
+        Ok(HostInfo {
+            cpus: info.ncpu.and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0),
+            memory_bytes: info.mem_total.and_then(|m| u64::try_from(m).ok()).filter(|m| *m > 0),
+            docker_root_dir: info.docker_root_dir.filter(|d| !d.is_empty()),
+            operating_system: info.operating_system.filter(|o| !o.is_empty()),
+        })
+    }
+
+    /// Change a running (or stopped) container's limits in place, without a
+    /// restart (`docker update`). Lowering memory below what the container
+    /// uses makes the kernel reclaim or OOM-kill it.
+    pub async fn update_limits(&self, id: &str, limits: LimitsUpdate) -> Result<()> {
+        errors::check_object_ref("container", id)?;
+        self.inner
+            .update_container(id, convert::update_body(&limits))
+            .await
+            .map_err(|e| errors::map_docker(e, &format!("updating the limits of container {id}")))
     }
 
     /// Create a bridge network if it doesn't exist.

@@ -290,6 +290,7 @@ pub fn service(svc: &Service) -> Result<()> {
     if svc.port == Some(0) {
         return Err(Error::invalid("port must be between 1 and 65535"));
     }
+    crate::resources::validate(svc.memory_limit_mb, svc.cpu_limit)?;
     Ok(())
 }
 
@@ -339,6 +340,7 @@ pub fn normalize_service(svc: &mut Service) {
         }
     }
     svc.custom_domains = domains;
+    svc.cpu_limit = svc.cpu_limit.map(crate::resources::round_cpus);
 }
 
 #[cfg(test)]

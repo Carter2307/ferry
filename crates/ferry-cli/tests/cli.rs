@@ -686,6 +686,9 @@ async fn status_shows_instances_with_cpu_and_memory() {
         cpu_percent: cpu,
         memory_bytes: mem,
         memory_limit_bytes: Some(512 * 1024 * 1024),
+        cpu_limit: None,
+        oom_killed: false,
+        exit_code: None,
     };
     let status = RuntimeStatus {
         service_id: "srv-web".into(),

@@ -195,6 +195,8 @@ async fn execute(
         restart_policy: RestartPolicy::No,
         memory_limit_bytes: None,
         nano_cpus: None,
+        pids_limit: None,
+        log_rotation: None,
         working_dir: None,
     };
     match &command {
