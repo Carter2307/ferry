@@ -1,0 +1,231 @@
+---
+title: Set up the CLI
+description: Connect the ferry CLI to your server, and learn how it picks its settings, prints output and reports errors.
+icon: Terminal
+---
+
+import { BookOpen, Braces, Rocket } from 'lucide-react';
+
+`ferry` is the command-line client of Ferry. Everything it does goes through the server's REST API, so it works from the server itself, from your laptop or from a CI job, as long as it can reach the API over HTTP.
+
+## Install
+
+The `ferry` binary is built together with `ferryd` (see [Installation](/docs/getting-started/installation)):
+
+```bash title="Terminal"
+cargo build --release
+sudo install -m 0755 target/release/ferry /usr/local/bin/
+ferry --version
+```
+
+It is a single binary with no runtime dependencies: copy it to any machine you want to drive Ferry from.
+
+## Log in
+
+[`ferry login`](/docs/reference/cli#ferry-login) checks a server URL and an API token, then saves them:
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878 --token <token>
+```
+
+```text title="Output" noCopy
+Logged in to http://127.0.0.1:7878 (Ferry 0.1.0)
+Saved to /home/you/.config/ferry/config.json
+```
+
+- **The token** is printed by `ferryd` on first start and stored in `<data-dir>/api_token` on the server. The dashboard shows a ready-made login command under **Connect** and on **Server › Connections**.
+- **The server URL** is the API address of `ferryd`, `http://127.0.0.1:7878` by default. If you leave out `http://`, Ferry adds it. With no server given at all (no `--server`, no `FERRY_SERVER`, no saved login), `ferry login` uses `http://127.0.0.1:7878` and says so.
+
+`ferry login` calls `GET /api/v1/info` with the token before saving anything, so a wrong URL or token fails right away. Check the connection at any time with `ferry info`:
+
+```bash title="Terminal"
+ferry info
+```
+
+```text title="Output" noCopy
+Server:          http://127.0.0.1:7878
+Version:         0.1.0 (CLI 0.1.0)
+Proxy:           http://localhost:8080
+Base domain:     localhost
+Apps:            <name>.localhost
+TLS:             disabled
+Dashboard:       http://ferry.localhost:8080
+GitHub webhook:  disabled
+Docker:          29.2.0
+```
+
+### Reach a remote server
+
+By default `ferryd` only listens on `127.0.0.1`. To use the CLI from your laptop, forward the API port over SSH, then log in to the forwarded address:
+
+```bash title="Terminal"
+ssh -N -L 7878:127.0.0.1:7878 you@your-server &
+ferry login --server http://127.0.0.1:7878 --token <token>
+```
+
+If you exposed the dashboard through the proxy with HTTPS (`--dashboard-host`), you can also log in to that URL, for example `https://ferry.apps.example.com`. See [Production setup](/docs/guides/production).
+
+## Where settings come from
+
+For the server URL and the token, `ferry` uses the first value it finds:
+
+| Priority | Source | Server | Token |
+|---|---|---|---|
+| 1 | Flags | `--server <URL>` | `--token <TOKEN>` |
+| 2 | Environment variables | `FERRY_SERVER` | `FERRY_TOKEN` |
+| 3 | Config file saved by `ferry login` | `server` | `token` |
+| 4 | Default | `http://127.0.0.1:7878` | none |
+
+`--server`, `--token` and `--json` are global options: they work before or after the command name (`ferry --json services` or `ferry services --json`).
+
+### The config file
+
+`ferry login` writes `~/.config/ferry/config.json`, or `$XDG_CONFIG_HOME/ferry/config.json` when `XDG_CONFIG_HOME` is set to an absolute path. The file is created with mode `0600` (its directory `0700`):
+
+```json title="~/.config/ferry/config.json"
+{
+  "server": "http://127.0.0.1:7878",
+  "token": "fy_3f9c…"
+}
+```
+
+It holds one login. Running `ferry login` again replaces it. To work with several servers, keep the one you use most in the config file and pass the others with flags or environment variables.
+
+<Callout type="info" title="The saved token only goes to its own server">
+When `--server` or `FERRY_SERVER` points at another server than the saved one, `ferry` does not send the saved token there. You must pass a token for that server too:
+
+```text noCopy
+error: no token for http://10.0.0.5:7878: the saved login is for http://127.0.0.1:7878, and its token is only sent there; pass --token or set FERRY_TOKEN (or run 'ferry login --server http://10.0.0.5:7878 --token <TOKEN>')
+```
+</Callout>
+
+### Environment variables for CI
+
+In CI jobs and scripts, skip `ferry login` and set the two variables instead. They override the config file:
+
+```bash title="deploy.sh"
+export FERRY_SERVER=https://ferry.apps.example.com
+export FERRY_TOKEN="$FERRY_API_TOKEN"   # from your CI secrets
+
+ferry deploy api --follow   # exits with 1 if the deploy fails
+```
+
+For a CI job that only needs to trigger a deploy, a service's [deploy hook](/docs/concepts/deploys#triggers) needs no token at all.
+
+## Output
+
+`ferry` prints aligned plain-text tables and key/value blocks meant for people:
+
+```bash title="Terminal"
+ferry services
+```
+
+```text title="Output" noCopy
+NAME           TYPE     STATE   INSTANCES   URL                                  LAST DEPLOY
+docker-echo    pserv    live    1           docker-echo:8000                     live · 4m ago
+echo-worker    worker   live    1                                                live · 11m ago
+nightly        cron     live    -           cron: 0 3 * * *                      live · 11m ago
+node-hello     web      live    1           http://node-hello.localhost:8080     live · 1m ago
+python-hello   web      live    2           http://python-hello.localhost:8080   live · 5m ago
+```
+
+- **Colors** are used only when the output is a terminal, `NO_COLOR` is not set and `TERM` is not `dumb`.
+- **Results go to stdout; progress goes to stderr** ("Packing …", "Uploading …", warnings). Piping `ferry` into another command only passes the results.
+- **Names or ids:** every command that takes a service, datastore or env group accepts its name or its id (`srv-…`, `dbs-…`, `evg-…`).
+- **Log lines** look like `HH:MM:SS [instance] line`. Ferry's own messages in deploy logs start with `==>`.
+
+### JSON output
+
+Add `--json` to get the raw API response instead, for scripts:
+
+```bash title="Terminal"
+ferry --json services | jq -r '.[] | "\(.name) \(.state)"'
+```
+
+```text title="Output" noCopy
+docker-echo live
+echo-worker live
+nightly live
+node-hello live
+python-hello live
+```
+
+The JSON is exactly what the [REST API](/docs/reference/api) returns. For log streams (`ferry logs`, and `--follow` on deploys and jobs), `--json` prints one JSON object per line:
+
+```bash title="Terminal"
+ferry --json logs echo-worker --tail 2
+```
+
+```json title="Output" noCopy
+{"ts":"2026-09-27T07:42:26.092974420Z","stream":"stdout","instance":"4e772d","line":"tick"}
+{"ts":"2026-09-27T07:42:31.100289672Z","stream":"stdout","instance":"4e772d","line":"tick"}
+```
+
+`stream` is `stdout`, `stderr` or `system` (Ferry's own `==>` messages).
+
+## Following deploys and jobs
+
+Commands that start a deploy or a job (`ferry up`, `create`, `deploy`, `restart`, `rollback`, `env set`, `run`) return as soon as the server has queued it. Add `--follow` (`-f`) to stream its log until it finishes:
+
+- the command exits with **0** when the deploy goes live or the job succeeds, and **1** when it fails or is canceled;
+- press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop following. The deploy or job keeps running on the server, and `ferry` tells you how to resume:
+
+```text noCopy
+Stopped following; the deploy continues on the server. Resume with: ferry logs --deploy dep-3493c505ea9b4415b359 -f
+```
+
+If the connection drops while following, `ferry` reconnects and resumes the log where it stopped.
+
+## Confirmations
+
+Commands that delete something ask before doing it: `ferry delete`, `ferry db rm`, `ferry env-group rm` and `ferry deploy-hook rotate`.
+
+```text noCopy
+Delete service 'node-hello' with all its deploys? [y/N]
+```
+
+Pass `--yes` (`-y`) to skip the question. When the input is not a terminal (a script, a CI job), these commands refuse to run without `--yes`:
+
+```text noCopy
+error: refusing to delete service 'node-hello' with all its deploys without confirmation: re-run with --yes
+```
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Failure: API error, failed or canceled deploy or job (with `--follow`), refused confirmation |
+| `2` | Usage error: unknown command, missing argument, invalid flag |
+| `130` | Interrupted with <kbd>Ctrl</kbd>+<kbd>C</kbd> |
+
+Errors are printed on stderr, with the API's error code in parentheses:
+
+```text noCopy
+error: service 'nope' not found (not_found)
+```
+
+An invalid token adds a hint:
+
+```text noCopy
+error: invalid API token (unauthorized)
+hint: check the server URL and token with 'ferry login --server <URL> --token <TOKEN>'
+```
+
+## Quoting environment references
+
+Environment values can reference datastores and services with `${{…}}`. Put them in single quotes, or your shell tries to expand them:
+
+```bash title="Terminal"
+ferry env set api 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+```
+
+See [Environment & env groups](/docs/concepts/environment) and [Env var references](/docs/reference/env-references).
+
+## Next steps
+
+<Cards cols={3}>
+  <Card icon={<Rocket />} title="Quickstart" href="/docs/getting-started/quickstart" description="Deploy your first app." />
+  <Card icon={<BookOpen />} title="CLI reference" href="/docs/reference/cli" description="Every command and option." />
+  <Card icon={<Braces />} title="API reference" href="/docs/reference/api" description="The REST API behind the CLI." />
+</Cards>

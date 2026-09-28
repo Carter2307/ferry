@@ -64,6 +64,7 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
     };
     match command {
         Command::Login => bail!("internal error: 'login' needs no API client"),
+        Command::MarkdownHelp => bail!("internal error: 'markdown-help' needs no API client"),
         Command::Info => auth::info(ctx).await,
         Command::Services => services::list(ctx).await,
         Command::Create(a) => services::create(ctx, a).await,

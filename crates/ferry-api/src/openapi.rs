@@ -323,6 +323,12 @@ pub struct SourceArchive(pub Vec<u8>);
 #[allow(dead_code)]
 fn openapi_json() {}
 
+/// The OpenAPI document as pretty JSON (used by `ferryd --dump-openapi` to
+/// feed the documentation site generator).
+pub fn document_json() -> String {
+    ApiDoc::openapi().to_pretty_json().unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
 /// The unauthenticated routes serving the document and Swagger UI.
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     let config = Config::new([OPENAPI_PATH])

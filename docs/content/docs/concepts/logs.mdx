@@ -1,0 +1,149 @@
+---
+title: "Logs & events"
+description: "Read build, deploy, runtime and job logs, follow them live, and watch every change on the server through one Server-Sent Events feed."
+icon: ScrollText
+---
+
+import { Braces, Clock, Terminal } from 'lucide-react';
+
+Ferry keeps three kinds of logs, and streams all of them live over Server-Sent Events (SSE):
+
+| Log | What it holds | Stored | CLI |
+|---|---|---|---|
+| Deploy log | The build output and Ferry's deploy steps for one deploy | `<data-dir>/logs/deploys/<deploy id>.log`, until the service is deleted | `ferry logs --deploy ID` |
+| Runtime log | What the service's containers write to stdout and stderr | By Docker, as long as the containers exist | `ferry logs NAME` |
+| Job log | The output of one job run | `<data-dir>/logs/jobs/<job id>.log`, for the newest 100 runs per service | `ferry logs --job ID` |
+
+Every line has a timestamp, a stream (`stdout`, `stderr` or `system`) and, in runtime logs, the instance it came from. Ferry's own messages are `system` lines that start with `==> `.
+
+## Deploy logs
+
+A deploy log starts when the deploy is queued and ends when it is live, failed or canceled.
+
+```bash title="Terminal"
+ferry deploy api --follow              # trigger a deploy and stream its log
+ferry logs --deploy dep-285c0c8495fe459db551 -f
+ferry logs --deploy dep-285c0c8495fe459db551 > deploy.log   # the stored log
+```
+
+```text title="Deploy log (excerpt)"
+09:38:30 ==> Build successful 🎉
+09:38:31 ==> Using port 8000 (EXPOSEd by the image)
+09:38:31 ==> Starting 1 instance(s)
+09:38:31 ==> Started instance 2fa90d (port 8000, published on 127.0.0.1:63012)
+09:38:31 ==> Waiting for 1 instance(s) to become healthy: GET /healthz must answer with a status below 400 (timeout 120s)
+09:38:31 [2fa90d] docker-echo listening on :8000
+09:38:32 ==> Health check passed
+09:38:32 ==> Routing traffic to the new instance(s)
+09:38:32 ==> Your service is live 🎉
+09:38:32 ==> Available at http://echo.localhost:8080
+```
+
+While the new instances start, their output is copied into the deploy log (the `[2fa90d]` line above). If an instance crashes during the health check, its last 50 lines are copied in, so you can see why without looking elsewhere. `--follow` exits with code 1 when the deploy fails.
+
+## Runtime logs
+
+```bash title="Terminal"
+ferry logs api                # everything the current containers have written
+ferry logs api -n 100         # the last 100 lines of each instance
+ferry logs api -f             # follow new lines
+```
+
+```text title="ferry logs echo -n 2"
+09:41:26 [0b4e81] 172.21.0.4 - - [27/Sep/2026 07:41:26] "GET / HTTP/1.1" 200 -
+09:41:31 [0b4e81] 172.21.0.4 - - [27/Sep/2026 07:41:31] "GET / HTTP/1.1" 200 -
+```
+
+- The output of all instances of the live deploy is merged by timestamp. The instance id in brackets is the end of the container name. Before anything is live, the logs of whatever containers exist are shown.
+- `-f` keeps following across redeploys, scaling and crash replacements: new containers are picked up as they appear, and the CLI reconnects if the stream drops.
+- When nothing is running, the CLI says why (never deployed, suspended, a deploy in progress, the last deploy failed) and where to look instead.
+
+<Callout type="warning" title="Runtime logs aren't kept">
+Runtime logs are read from Docker. When a deploy replaces the containers, or a crashed container is removed, their logs go with them. Send logs you need to keep to an external log service from your app.
+</Callout>
+
+Cron jobs have no runtime logs: each run has its own [job log](#job-logs).
+
+## Job logs
+
+Every [job run](/docs/concepts/jobs), scheduled or one-off, has its own log:
+
+```bash title="Terminal"
+ferry jobs nightly                                # find the run
+ferry logs --job job-48dd0201159b41c3bb58 -f
+ferry run api --follow -- npm run migrate         # start a job and stream it
+```
+
+Ferry keeps the logs of the newest finished runs of each service (100 by default, `ferryd --keep-job-runs`) and deletes older ones with their runs.
+
+## Stream logs over the API
+
+The log endpoints answer with `Content-Type: text/event-stream`:
+
+| Endpoint | Query | Ends |
+|---|---|---|
+| `GET /api/v1/deploys/{deploy_id}/logs` | `follow=true` to keep streaming while the deploy runs | when the deploy is finished (or at once without `follow`) |
+| `GET /api/v1/jobs/{job_id}/logs` | `follow=true` | when the run is finished (or at once without `follow`) |
+| `GET /api/v1/services/{id}/logs` | `follow=true`, `tail=N` lines per instance | at once without `follow`; with `follow`, when you disconnect |
+
+Each line is an `event: log` whose `data` is a JSON object. A finite stream ends with `event: end` and an empty `data:` field. While a stream is idle, a `: keep-alive` comment is sent every 15 seconds. All streams close when the server shuts down.
+
+```text title="curl -N 'http://127.0.0.1:7878/api/v1/jobs/job-48dd…/logs?access_token=…'"
+event: log
+data: {"ts":"2026-09-27T07:46:59.504869Z","stream":"system","line":"==> Running `npm run migrate`"}
+
+event: log
+data: {"ts":"2026-09-27T07:46:59.634761796Z","stream":"stdout","line":"> node migrate.js"}
+
+event: end
+data: 
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `ts` | RFC 3339 timestamp | When the line was written |
+| `stream` | `stdout`, `stderr` or `system` | Where it came from; `system` lines are Ferry's |
+| `instance` | string, runtime logs only | The instance (last 6 characters of the container name) |
+| `line` | string | The text, without the newline |
+
+Like every `/api` request, streams need the API token. Browsers' `EventSource` can't send an `Authorization` header, so `GET` requests also accept the token as `?access_token=`. Prefer the header wherever you can: a token in a URL can end up in logs and browser history.
+
+## The change feed
+
+`GET /api/v1/events` is one SSE stream that reports every change on the server: services, deploys, datastores, env groups and job runs, whether the change came from the API, a webhook or the engine itself (deploy progress, datastore provisioning, cron runs). The dashboard uses it to stay up to date. You can use it for your own automation.
+
+```bash title="Terminal"
+curl -N http://127.0.0.1:7878/api/v1/events -H "Authorization: Bearer $FERRY_TOKEN"
+```
+
+```text title="Output"
+event: ready
+data: {}
+
+event: change
+data: {"kind":"service","id":"srv-6da2006dc52b4c6ca25f","service_id":"srv-6da2006dc52b4c6ca25f","action":"updated"}
+
+event: change
+data: {"kind":"deploy","id":"dep-0d89a8b1d3ab43dc997f","service_id":"srv-7e321e187891447bb187","action":"created"}
+```
+
+- `ready` arrives once the feed is watching. Fetch your data after it: every later change is reported.
+- `change` events say what changed, not how: `kind` is `service`, `deploy`, `datastore`, `env_group` or `job`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services, deploys and jobs. Fetch the resource to get its new state.
+- A client that falls too far behind gets `{"kind":"all","id":"*","service_id":null,"action":"resync"}`: refetch everything.
+- The server compares its database every second while someone listens, and right after each API or webhook write, so changes arrive within about a second.
+
+See [Change feed (SSE)](/docs/reference/api/events) in the API reference.
+
+## Metrics
+
+`ferry status NAME` (or `GET /api/v1/services/{id}/status`) shows each instance's state, port, CPU and memory use, restart count and start time, read from Docker when you ask. Ferry doesn't keep a history of metrics.
+
+## Server logs
+
+`ferryd` writes its own log (lifecycle events, proxy warnings, certificate requests) to standard error at the `info` level. Set the `RUST_LOG` environment variable to change it, for example `RUST_LOG=debug ferryd` to also log every proxied request. Under systemd, read it with `journalctl -u ferryd`.
+
+<Cards cols={3}>
+  <Card icon={<Terminal />} title="ferry logs" href="/docs/reference/cli#ferry-logs" description="All options of the logs command." />
+  <Card icon={<Clock />} title="Jobs & cron" href="/docs/concepts/jobs" description="Job runs and their retention." />
+  <Card icon={<Braces />} title="API overview" href="/docs/reference/api-overview" description="Authentication, errors and SSE conventions." />
+</Cards>

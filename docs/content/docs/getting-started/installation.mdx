@@ -1,0 +1,206 @@
+---
+title: Installation
+description: Build ferryd, the ferry CLI and the web dashboard from source, then start the server.
+icon: Download
+---
+
+import { Rocket, LayoutDashboard, ShieldCheck, Terminal } from 'lucide-react';
+
+Ferry is one Rust workspace that builds two binaries:
+
+- **`ferryd`**, the server. One process runs the REST API, the web dashboard, the public reverse proxy and the engine that builds and runs your apps.
+- **`ferry`**, the command-line client. It talks to `ferryd` over the REST API.
+
+The web dashboard is a separate React app in `web/`. It is compiled into `ferryd`, so there is nothing else to deploy.
+
+## Requirements
+
+| Tool | Version | Used for |
+|---|---|---|
+| Docker | Engine 27.3 or newer, or Docker Desktop | Running everything. Builds use the `docker` CLI with BuildKit. |
+| git | any recent version | Cloning repositories for git deploys |
+| Rust | stable 1.89 or newer (install with [rustup](https://rustup.rs)) | Building `ferryd` and `ferry` |
+| Node.js | 20.19 or newer, with npm | Building the web dashboard |
+
+Ferry runs on Linux and macOS. On macOS, Docker Desktop works as is: Ferry never connects to container IPs, only to ports published on `127.0.0.1`.
+
+### How ferryd finds Docker
+
+`ferryd` connects to the Docker daemon named by the `DOCKER_HOST` environment variable, or to `/var/run/docker.sock` when it isn't set. On macOS it also tries Docker Desktop's socket, `~/.docker/run/docker.sock`. Builds run the `docker` CLI against the same daemon.
+
+| `DOCKER_HOST` form | Supported |
+|---|---|
+| `unix:///path/to/docker.sock` | Yes |
+| `tcp://host:port`, `http://host:port` | Yes, plain TCP only |
+| TLS (`DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`), `ssh://` | No |
+
+The daemon must run on the same machine as `ferryd`, or forward its published ports to it like Docker Desktop, Colima and OrbStack do: Ferry reaches your containers through the ports they publish on `127.0.0.1`.
+
+With Colima, OrbStack or another Docker context, point `ferryd` at that context's socket before you start it:
+
+```bash title="Terminal"
+export DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
+```
+
+<Callout type="info" title="Why Docker 27.3">
+Build-time environment variables reach your build as BuildKit secrets (`RUN --mount=type=secret,…,env=…`), which need Docker Engine 27.3 or newer. With an older engine, builds that use environment variables fail with a message that asks you to upgrade. See [Builds & runtimes](/docs/concepts/builds#build-time-environment).
+</Callout>
+
+At run time, Ferry only needs Docker, plus git for services that deploy from a repository. Rust and Node.js are only needed to build it.
+
+## Build from source
+
+<Steps>
+<Step>
+### Clone the repository
+
+```bash title="Terminal"
+git clone https://github.com/Carter2307/ferry
+cd ferry
+```
+</Step>
+
+<Step>
+### Build the web dashboard
+
+```bash title="Terminal"
+(cd web && npm ci && npm run build)
+```
+
+This writes the dashboard to `web/dist`. The Rust build embeds that folder into `ferryd` at compile time, so build the dashboard first.
+</Step>
+
+<Step>
+### Build the binaries
+
+```bash title="Terminal"
+cargo build --release
+```
+
+You get `target/release/ferryd` and `target/release/ferry`.
+</Step>
+
+<Step>
+### Put them on your PATH (optional)
+
+```bash title="Terminal"
+sudo install -m 0755 target/release/ferryd target/release/ferry /usr/local/bin/
+```
+
+The rest of the docs call them `ferryd` and `ferry`. Without this step, run `./target/release/ferryd` and `./target/release/ferry` instead.
+</Step>
+</Steps>
+
+<Callout type="tip" title="Skipped the dashboard build?">
+`ferryd` still compiles without Node.js. It then serves a placeholder page at `/` that explains how to build the dashboard, and the REST API and the CLI work normally. To use a dashboard you built later without recompiling the server, start `ferryd` with `FERRY_UI_DIR=/path/to/web/dist`.
+</Callout>
+
+## Start the server
+
+Run `ferryd`. It needs access to the Docker daemon, so run it as a user that can use Docker.
+
+```bash title="Terminal"
+ferryd
+```
+
+On first start, `ferryd` creates its data directory, generates an API token and prints where everything is:
+
+```text title="Output" noCopy
+  Ferry 0.1.0 is running
+  Dashboard + API : http://127.0.0.1:7878
+  Dashboard (proxy): http://ferry.localhost:8080
+  Apps            : http://<name>.localhost:8080
+  Docker          : 29.2.0
+  Data            : /home/you/ferry-data
+  API token       : fy_3f9c…
+
+  Log in with:  ferry login --server http://127.0.0.1:7878 --token fy_3f9c…
+```
+
+Check that it answers:
+
+```bash title="Terminal"
+curl http://127.0.0.1:7878/healthz
+# ok
+```
+
+### The API token
+
+The token protects the API and the dashboard. `ferryd` generates it on first start and stores it in `<data-dir>/api_token` (mode `0600`); later starts reuse it. To use a token of your choice, start `ferryd` with `--api-token` or `FERRY_API_TOKEN`: it then takes precedence over the file.
+
+```bash title="Terminal"
+cat ferry-data/api_token
+```
+
+<Callout type="warning" title="Treat the token like a root password">
+Anyone with the token can deploy code and read every environment variable on the server. Don't commit it, and don't expose the API to the internet without HTTPS. See [Security model](/docs/architecture/security).
+</Callout>
+
+### The data directory
+
+By default the data directory is `./ferry-data`, relative to where you start `ferryd`. Pass `--data-dir` (or set `FERRY_DATA_DIR`) to put it somewhere stable. `ferryd` creates it with mode `0700`, because it holds environment values, datastore passwords and repository credentials.
+
+| Path | Contents |
+|---|---|
+| `ferry.db` | SQLite database: services, deploys, variables, env groups, datastores, job runs |
+| `api_token` | The generated API token (mode `0600`) |
+| `instance_id` | Identifies this data directory to Docker (mode `0600`) |
+| `ferryd.lock` | Held while `ferryd` runs |
+| `logs/` | Deploy and job logs, one JSON object per line |
+| `builds/` | Scratch build contexts, removed after each build |
+| `repos/` | Git caches, one per service, for fast incremental fetches |
+| `uploads/` | Source archives sent by `ferry up` |
+| `certs/` | ACME account and TLS certificates |
+
+Back up the data directory: it is the whole state of the server. Datastore data lives in Docker volumes, not in this directory (see [Datastores](/docs/concepts/datastores)).
+
+### Ports and URLs
+
+| What | Default address | Flag |
+|---|---|---|
+| API and dashboard | `http://127.0.0.1:7878` | `--api-addr` |
+| Public HTTP proxy, where your apps live | `0.0.0.0:8080` | `--proxy-addr` |
+| Public HTTPS proxy | off | `--https-addr` with `--acme-email` |
+
+With the defaults:
+
+- **Dashboard:** http://127.0.0.1:7878, or http://ferry.localhost:8080 through the proxy.
+- **Your apps:** `http://<name>.localhost:8080`. Browsers resolve every `*.localhost` name to `127.0.0.1`, so there is no DNS to set up on your machine.
+- **API reference of your server:** Swagger UI at http://127.0.0.1:7878/api/docs (its **Authorize** button takes the API token) and the OpenAPI 3.1 document at `/api/openapi.json`. Both are served without a token.
+- **Liveness probe:** `/healthz` answers `ok`, without a token.
+
+By default the API listens on `127.0.0.1` only. Reach it from another machine over SSH (`ssh -L 7878:127.0.0.1:7878 your-server`) rather than binding it publicly. See [Production setup](/docs/guides/production).
+
+### Stop and restart
+
+Press <kbd>Ctrl</kbd>+<kbd>C</kbd> (or send `SIGTERM`) to stop `ferryd`. The first signal shuts down gracefully: open API requests get up to 10 seconds, then the engine stops running jobs and records deploys in progress as interrupted, within 25 seconds. A second signal exits at once.
+
+Your app and datastore containers keep running in Docker while `ferryd` is stopped, but the proxy is part of `ferryd`, so their public URLs don't answer until it is back. On the next start, `ferryd` reads the same data directory, restores the routes and brings every service back to its desired state (see [Self-healing](/docs/concepts/self-healing)).
+
+<Callout type="info" title="One server per data directory, one data directory per Docker prefix">
+Only one `ferryd` can use a data directory at a time: it holds `ferryd.lock`. Each server also owns a Docker name prefix (`--name-prefix`, default `ferry`), recorded on a marker volume `<prefix>-owner`. A server refuses to start on a prefix that another data directory owns, so it can never remove another server's containers. To run several servers on one Docker daemon, give each its own prefix; see [Multiple servers](/docs/guides/multiple-servers).
+</Callout>
+
+## Configure for production
+
+The defaults suit a laptop. On a server you will want a real base domain, HTTPS and a service manager. Most flags also have an environment variable; the most common ones:
+
+| Flag | Environment variable | Default | Purpose |
+|---|---|---|---|
+| `--data-dir` | `FERRY_DATA_DIR` | `./ferry-data` | State of the server |
+| `--base-domain` | `FERRY_BASE_DOMAIN` | `localhost` | Apps are served at `<name>.<base-domain>` |
+| `--proxy-addr` | `FERRY_PROXY_ADDR` | `0.0.0.0:8080` | Public HTTP address, e.g. `0.0.0.0:80` |
+| `--https-addr` | `FERRY_HTTPS_ADDR` | none | Public HTTPS address, e.g. `0.0.0.0:443` |
+| `--acme-email` | `FERRY_ACME_EMAIL` | none | Enables Let's Encrypt certificates |
+| `--github-webhook-secret` | `FERRY_GITHUB_WEBHOOK_SECRET` | none | Enables GitHub auto-deploys |
+
+The [Production setup](/docs/guides/production) guide walks through a full setup with systemd, and [Server options](/docs/reference/server-options) lists every flag. If something doesn't start, see [Troubleshooting](/docs/guides/troubleshooting).
+
+## Next steps
+
+<Cards>
+  <Card icon={<Rocket />} title="Quickstart" href="/docs/getting-started/quickstart" description="Log in with the CLI and deploy your first app." />
+  <Card icon={<Terminal />} title="Set up the CLI" href="/docs/getting-started/cli" description="Config file, environment variables, JSON output and exit codes." />
+  <Card icon={<LayoutDashboard />} title="Dashboard tour" href="/docs/getting-started/dashboard" description="Find your way around the web dashboard." />
+  <Card icon={<ShieldCheck />} title="Production setup" href="/docs/guides/production" description="Base domain, HTTPS, systemd and GitHub webhooks." />
+</Cards>

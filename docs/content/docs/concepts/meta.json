@@ -1,0 +1,16 @@
+{
+  "title": "Concepts",
+  "icon": "Boxes",
+  "pages": [
+    "services",
+    "deploys",
+    "builds",
+    "networking",
+    "environment",
+    "datastores",
+    "jobs",
+    "scaling",
+    "logs",
+    "self-healing"
+  ]
+}

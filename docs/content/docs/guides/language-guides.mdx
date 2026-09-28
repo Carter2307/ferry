@@ -1,0 +1,331 @@
+---
+title: "Language guides"
+description: "Deploy Node.js, Python, Go, Rust and Ruby apps and static sites without a Dockerfile: the files Ferry looks for and the commands it generates."
+icon: Code
+---
+
+import { Boxes, FileCode, Braces } from 'lucide-react';
+
+You don't need a Dockerfile. When a service's runtime is `auto` (the default), Ferry looks at the root of the source (or the service's root directory) and generates a Dockerfile for the first match:
+
+| File found | Runtime |
+|---|---|
+| `Dockerfile` | `docker`: your Dockerfile is used as-is |
+| `package.json`, `bun.lock` or `bun.lockb` | `node` |
+| `requirements.txt`, `pyproject.toml` or `Pipfile` | `python` |
+| `go.mod` | `go` |
+| `Cargo.toml` | `rust` |
+| `Gemfile` | `ruby` |
+| `index.html` | `static` |
+
+Force a runtime with `--runtime` (`auto`, `docker`, `image`, `node`, `python`, `go`, `rust`, `ruby` or `static`). The deploy log says what was detected (`==> Detected Node.js runtime`, `==> Generated Dockerfile.ferry for the Node.js runtime`). [Builds & runtimes](/docs/concepts/builds) explains the build itself: caching, build-time variables and image retention.
+
+Three rules apply to every language:
+
+- **Listen on `0.0.0.0` and the `PORT` variable.** Ferry sets `PORT` to the port it routes to: `10000` unless you set `--port`, set a `PORT` variable, or your image exposes a single port. See [The PORT variable](/docs/concepts/environment#the-port-variable).
+- **The start command is chosen in this order:** the service's start command (`--start-cmd`), then the matching `Procfile` entry (`web:` for web and private services, `worker:` for background workers, `cron:` then `worker:` for cron jobs), then the language default below.
+- **A build command** (`--build-cmd`) runs after the dependencies are installed, with your environment variables available.
+
+Every example below deploys from its directory with `ferry up`, which creates the service, uploads the files and streams the build. The same settings work with `ferry create NAME --repo URL`.
+
+## Node.js
+
+<Files>
+  <Folder name="hello-node" defaultOpen>
+    <File name="package.json" />
+    <File name="package-lock.json" />
+    <File name="server.js" />
+  </Folder>
+</Files>
+
+```json title="package.json"
+{
+  "name": "hello-node",
+  "private": true,
+  "scripts": { "start": "node server.js" }
+}
+```
+
+```js title="server.js"
+const http = require("http");
+
+const port = Number(process.env.PORT || 3000);
+http
+  .createServer((req, res) => res.end("Hello from Node on Ferry\n"))
+  .listen(port, "0.0.0.0", () => console.log(`listening on :${port}`));
+```
+
+```bash title="Terminal"
+ferry up hello-node --follow
+```
+
+| Step | What Ferry generates |
+|---|---|
+| Base image | `node:<major>-alpine`: `22` by default, or a major version that satisfies `engines.node` in `package.json` (`"20.x"` gives `node:20-alpine`). Bun projects use `oven/bun:1-alpine`. |
+| Package manager | From the `packageManager` field, else the lock file: `bun.lock`/`bun.lockb` → Bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → Yarn, else npm. Yarn and pnpm run through Corepack. |
+| Install | `npm ci --include=dev` (with a lock file) or `npm install --include=dev` · `yarn install --frozen-lockfile --production=false` (Yarn 1) · `yarn install --immutable` (Yarn 2+) · `pnpm install --frozen-lockfile` · `bun install` |
+| Build | Your build command, else `<package manager> run build` when `package.json` has a `build` script. `NODE_ENV=production` is set after the install, so devDependencies are there for the build. |
+| Start | `npm start` (`yarn start` with Yarn 2+, `bun run start` with Bun) when there is a `start` script, else `node` with the `main` file of `package.json`, `server.js`, `index.js` or `app.js`. |
+
+## Python
+
+<Files>
+  <Folder name="hello-python" defaultOpen>
+    <File name="app.py" />
+    <File name="requirements.txt" />
+    <File name="Procfile" />
+  </Folder>
+</Files>
+
+```txt title="requirements.txt"
+flask==3.1.*
+gunicorn==23.*
+```
+
+```python title="app.py"
+from flask import Flask
+
+app = Flask(__name__)
+
+
+@app.get("/")
+def hello():
+    return "Hello from Python on Ferry\n"
+```
+
+```text title="Procfile"
+web: gunicorn app:app --bind 0.0.0.0:$PORT
+```
+
+```bash title="Terminal"
+ferry up hello-python --follow
+```
+
+| Step | What Ferry generates |
+|---|---|
+| Base image | `python:<version>-slim`: `3.12` by default, or the `major.minor` of `.python-version` or `runtime.txt` (`python-3.11.9`). `PYTHONUNBUFFERED=1` is set, so logs appear immediately. |
+| System packages | Added when your dependencies need them: `psycopg2` or `psycopg[c]` → `build-essential libpq-dev`; `psycopg` → `libpq5`; `mysqlclient` → `build-essential default-libmysqlclient-dev pkg-config`. The `-binary` variants need nothing. |
+| Install | `requirements.txt` → `pip install -r requirements.txt` · `uv.lock` → the locked dependencies via `uv` · `poetry.lock` or `[tool.poetry]` → `poetry install --only main` · a packaged `pyproject.toml` → `pip install .` · a plain PEP 621 `pyproject.toml` → its `[project] dependencies` · `Pipfile` → `pipenv install --system --deploy` (or `--skip-lock` without `Pipfile.lock`) |
+| Build | Your build command, if any (for example `python manage.py collectstatic --noinput`). |
+| Start | `python main.py` or `python app.py` when the file exists. Anything else (Gunicorn, Uvicorn, Django) needs a Procfile entry or `--start-cmd`. |
+
+The `Procfile` line runs with `sh -c`, so `$PORT` is expanded. For FastAPI, use `web: uvicorn main:app --host 0.0.0.0 --port $PORT`.
+
+## Go
+
+<Files>
+  <Folder name="hello-go" defaultOpen>
+    <File name="go.mod" />
+    <File name="main.go" />
+  </Folder>
+</Files>
+
+```go title="go.mod"
+module example.com/hello
+
+go 1.23
+```
+
+```go title="main.go"
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+)
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3000"
+	}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "Hello from Go on Ferry")
+	})
+	log.Printf("listening on :%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+```
+
+```bash title="Terminal"
+ferry up hello-go --follow
+```
+
+| Step | What Ferry generates |
+|---|---|
+| Build image | `golang:<version>-alpine`, with the `go` version of `go.mod` (`1.23` by default). `go mod download` runs in its own cached layer. |
+| Build | `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app <package>`, where the package is the root when it is `package main`, else the only main package under `cmd/<name>`. |
+| Runtime image | `alpine:3.20` with `ca-certificates` and `tzdata`. The binaries of `/out` go to `/usr/local/bin`; your source tree is copied to `/app` (the working directory), so templates and static files are there. |
+| Start | `/usr/local/bin/app`. |
+
+With several commands under `cmd/`, or another layout, set a build command that writes the binary to `/out`, for example `--build-cmd "go build -o /out/api ./cmd/api"`, and start it with `--start-cmd api` (or the full path).
+
+## Rust
+
+<Files>
+  <Folder name="hello-rust" defaultOpen>
+    <File name="Cargo.toml" />
+    <File name="Cargo.lock" />
+    <Folder name="src" defaultOpen>
+      <File name="main.rs" />
+    </Folder>
+  </Folder>
+</Files>
+
+```toml title="Cargo.toml"
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+```
+
+```rust title="src/main.rs"
+use std::io::{Read, Write};
+use std::net::TcpListener;
+
+fn main() {
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let listener = TcpListener::bind(format!("0.0.0.0:{port}")).expect("bind");
+    println!("listening on :{port}");
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { continue };
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let body = "Hello from Rust on Ferry\n";
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    }
+}
+```
+
+```bash title="Terminal"
+ferry up hello-rust --follow
+```
+
+| Step | What Ferry generates |
+|---|---|
+| Build image | `rust:1-slim-bookworm`, plus `pkg-config libssl-dev` when `Cargo.lock` contains `openssl-sys`. The Cargo registry and the `target` directory are cached between builds. |
+| Build | Your build command, else `cargo build --release`. |
+| Binary | `default-run` of `[package]`, else the package name (with `src/main.rs`), else the first `[[bin]]`, else the first file of `src/bin`. It is copied to `/usr/local/bin`. |
+| Runtime image | `debian:bookworm-slim` with `ca-certificates` (and `libssl3` for OpenSSL), your source tree in `/app`. |
+| Start | `/usr/local/bin/<binary>`. A workspace without a root package needs `--start-cmd` naming the binary. |
+
+## Ruby
+
+<Files>
+  <Folder name="hello-ruby" defaultOpen>
+    <File name="Gemfile" />
+    <File name="Gemfile.lock" />
+    <File name="config.ru" />
+  </Folder>
+</Files>
+
+```ruby title="Gemfile"
+source "https://rubygems.org"
+
+gem "rack", "~> 3.1"
+gem "rackup", "~> 2.2"
+gem "puma", "~> 6.4"
+```
+
+```ruby title="config.ru"
+run ->(env) { [200, { "content-type" => "text/plain" }, ["Hello from Ruby on Ferry\n"]] }
+```
+
+```bash title="Terminal"
+ferry up hello-ruby --follow
+```
+
+| Step | What Ferry generates |
+|---|---|
+| Base image | `ruby:<version>-slim`: `3.3` by default, or the `major.minor` of `.ruby-version` or the `ruby` line of the `Gemfile`. |
+| System packages | `build-essential git libpq-dev libyaml-dev pkg-config`, plus `default-libmysqlclient-dev` for `mysql2`. |
+| Install | `bundle install`. |
+| Build | Your build command, if any. |
+| Start | `bundle exec rackup -o 0.0.0.0 -p ${PORT:-10000}` when there is a `config.ru`. |
+
+For Rails, add a Procfile: `web: bundle exec rails server -b 0.0.0.0 -p $PORT`, and set the environment variables Rails needs in production (`RAILS_ENV`, `SECRET_KEY_BASE`…) with `ferry env set`.
+
+## Static sites
+
+A static site is built (optionally) and served by `nginx:alpine` on port 80. Create it with `--type static`.
+
+<Tabs items={['Plain HTML', 'With a build step']} groupId="static-site">
+<Tab value="Plain HTML">
+
+<Files>
+  <Folder name="site" defaultOpen>
+    <File name="index.html" />
+    <File name="about.html" />
+    <File name="404.html" />
+  </Folder>
+</Files>
+
+```bash title="Terminal"
+ferry up site --type static --follow
+```
+
+Without a build step, Ferry serves the publish directory (`--publish-dir`) if you set one, else the root when it has an `index.html`, else the first of `dist`, `build`, `out`, `public`, `_site` and `site` that contains an `index.html`.
+
+</Tab>
+<Tab value="With a build step">
+
+<Files>
+  <Folder name="web" defaultOpen>
+    <File name="package.json" />
+    <File name="package-lock.json" />
+    <File name="index.html" />
+    <File name="vite.config.js" />
+  </Folder>
+</Files>
+
+```bash title="Terminal"
+ferry up web --type static --follow      # runs "npm run build", serves dist/
+```
+
+The build step runs when you set a build command, or when `package.json` has a `build` script. Its toolchain comes from the project files:
+
+| Project | Build image |
+|---|---|
+| `package.json` | Node with the project's package manager, as for [Node.js](#nodejs) |
+| `requirements.txt`, `pyproject.toml`, `Pipfile` (MkDocs, Pelican…) | Python, as for [Python](#python) |
+| `Gemfile` (Jekyll…) | Ruby, as for [Ruby](#ruby) |
+| `hugo.toml` / `hugo.yaml` / `hugo.json`, or `hugo` in the build command | Alpine with Hugo (and Go when there is a `go.mod`) |
+| `go.mod` | Go |
+| none of these | `node:22-alpine` |
+
+After the build, Ferry publishes `--publish-dir`, else the first of `dist`, `build`, `out`, `public`, `_site` and `site` that exists. The build fails if none exists.
+
+```bash title="Terminal"
+ferry create docs --type static --repo https://github.com/you/docs --build-cmd "mkdocs build"   # publishes site/
+ferry create blog --type static --repo https://github.com/you/blog --build-cmd "hugo --minify"  # publishes public/
+```
+
+</Tab>
+</Tabs>
+
+What nginx does with the files:
+
+- `try_files $uri $uri/ $uri.html`: `/about` serves `about.html`, `/docs/` serves `docs/index.html`;
+- unknown paths get `404.html` from the publish directory, if it has one;
+- gzip for text, CSS, JavaScript, JSON, XML and SVG;
+- dotfiles (`.git`, `.env`, `.npmrc`…) are never served, except `/.well-known/`.
+
+<Callout type="warning" title="Builds without package.json at the root">
+When the root has no `package.json` (a build in a subdirectory, for example `cd docs && npm ci && npm run build`), Ferry sets `NODE_ENV=production` before running your build command. `npm ci` then skips devDependencies, which usually hold the build tools. Use `npm ci --include=dev`. The guide [Host these docs on Ferry](/docs/guides/host-docs-on-ferry) does this.
+</Callout>
+
+## Your own Dockerfile
+
+A `Dockerfile` at the root always wins over detection. Point at another one with `--dockerfile` (relative to the root directory), which also switches an `auto` service to Docker builds. With a Dockerfile:
+
+- the port comes from `--port`, a `PORT` variable or the image's single `EXPOSE`d port, else `10000`;
+- a start command replaces the image's command, run as `/bin/sh -c "<command>"`;
+- build commands and publish directories don't apply: the Dockerfile does the build.
+
+<Cards cols={3}>
+  <Card icon={<Boxes />} title="Builds & runtimes" href="/docs/concepts/builds" description="Caching, build-time variables, monorepos and images." />
+  <Card icon={<Braces />} title="Environment" href="/docs/concepts/environment" description="PORT, injected variables and references." />
+  <Card icon={<FileCode />} title="CLI: ferry up" href="/docs/reference/cli#ferry-up" description="Every option of ferry up." />
+</Cards>

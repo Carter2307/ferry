@@ -1,0 +1,153 @@
+---
+title: "Env var references"
+description: "The ${{kind.name.property}} syntax that points an environment variable at a datastore or another service, and when Ferry resolves it."
+icon: Variable
+---
+
+An environment variable's value can reference a datastore or another service instead of copying its address or credentials. Ferry stores the reference as written and replaces it with the real value when it starts containers, so the value always matches the datastore or service it points at.
+
+```bash title="Terminal"
+ferry db create app-db --kind postgres
+ferry env set api 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+```
+
+The container of `api` then gets `DATABASE_URL=postgresql://app_db:<password>@app-db:5432/app_db`. Always quote values that contain references with single quotes in your shell, so it doesn't try to expand `$`.
+
+## Syntax
+
+A reference is `${{`, three dot-separated parts, and `}}`:
+
+```text title="Grammar" noCopy
+reference = "${{" , ws , kind , ws , "." , ws , name , ws , "." , ws , property , ws , "}}"
+kind      = "datastore" | "db" | "database" | "service" | "svc"     (case-insensitive)
+name      = the datastore or service name, exactly as created
+property  = one of the properties below                              (case-sensitive)
+ws        = optional spaces
+escape    = "$${{"                                                   (a literal "${{")
+```
+
+- Spaces around the parts are allowed: `${{ db.app-db.host }}` and `${{db.app-db.host}}` are the same.
+- A value can hold any number of references mixed with text: `postgres://${{db.pg.user}}:${{db.pg.password}}@${{db.pg.host}}/reports`.
+- Only `${{` starts a reference. `$HOME`, `${PATH}` and `{{mustache}}` are ordinary text: Ferry passes them to the container unchanged and never runs a shell over your values.
+
+## Datastore properties
+
+Kind `datastore`, or its aliases `db` and `database`. The name is the datastore's name (see [Datastores](/docs/concepts/datastores)).
+
+| Property | Aliases | Postgres | Redis |
+|---|---|---|---|
+| `connectionString` | `url`, `internalUrl` | `postgresql://USER:PASSWORD@NAME:5432/DATABASE` | `redis://default:PASSWORD@NAME:6379` |
+| `externalConnectionString` | `externalUrl` | the same URL with `ADVERTISE_HOST:HOST_PORT` | the same URL with `ADVERTISE_HOST:HOST_PORT` |
+| `host` | `hostname` | `NAME` | `NAME` |
+| `port` | | `5432` | `6379` |
+| `user` | `username` | the Postgres user | `default` |
+| `password` | | the generated password | the generated password |
+| `database` | `databaseName` | the database name | an error: Redis has no database name |
+
+`connectionString` and `host` use the private network: they work from any service on the same server. `externalConnectionString` goes through the port the datastore publishes on the server (bound to `127.0.0.1`) with the host set by `ferryd --advertise-host` (default `127.0.0.1`); it is meant for tools running outside Docker, and it fails until the datastore has a host port.
+
+## Service properties
+
+Kind `service`, or its alias `svc`. The name is the service's name.
+
+| Property | Aliases | Resolves to | Available for |
+|---|---|---|---|
+| `host` | `hostname` | `NAME`, the service's hostname on the private network | every service type |
+| `port` | | the port the service listens on | web services, private services, static sites |
+| `hostport` | | `NAME:PORT` | web services, private services, static sites |
+| `internalUrl` | | `http://NAME:PORT` | web services, private services, static sites |
+| `url` | `externalUrl` | the public URL, such as `http://web.localhost:8080` | web services and static sites |
+
+The port is the one the service's live deploy listens on, or its configured `port` when nothing is live yet. A service that never deployed and has no configured port has no known port: see [port references wait for the first deploy](#port-references-wait-for-the-first-deploy).
+
+```bash title="Terminal"
+ferry env set web 'API_URL=${{service.api.internalUrl}}/v1'
+# → API_URL=http://api:3000/v1 in the containers of web
+```
+
+## When references resolve
+
+References are resolved each time a deploy starts containers: a deploy, a restart or a rollback. The resolved environment is saved with the deploy, and everything that later starts containers for that deploy reuses it:
+
+- the [reconciler](/docs/architecture/reconciler) replacing a crashed instance,
+- scaling up and resuming,
+- cron runs and one-off jobs.
+
+So when a datastore or a referenced service changes, the running containers keep the old values until the next deploy or restart. Run `ferry restart NAME` to pick up the new ones.
+
+<Callout title="Builds see resolved values too">
+Variables also reach the build, as BuildKit secrets. A reference that can't be resolved at build time (for example a service that hasn't deployed yet) is left out of the build, and the deploy log says so: `==> Warning: not available at build time (unresolved references): API_URL (…)`. The container still gets it once it resolves.
+</Callout>
+
+### Port references wait for the first deploy
+
+`port`, `hostport` and `internalUrl` need the referenced service's port. When that service is still on its first deploy (typical when a blueprint deploys several services at once), the referencing deploy waits for it and logs `==> Waiting for service 'api' to finish deploying: its port is referenced in the environment`. It waits up to 15 minutes, or twice the health check timeout if that is longer. Two services that reference each other's port before either has deployed can't both wait: the deploy fails and asks you to deploy one of them without the reference first.
+
+## Precedence
+
+A container's environment is built in layers; later layers win:
+
+1. Variables Ferry injects: `PORT` (for services that listen), `FERRY=true`, `FERRY_SERVICE_ID`, `FERRY_SERVICE_NAME`, `FERRY_SERVICE_TYPE`, `FERRY_DEPLOY_ID`, `FERRY_INTERNAL_HOSTNAME`, `FERRY_GIT_COMMIT` and `FERRY_GIT_BRANCH` (git deploys), `FERRY_EXTERNAL_HOSTNAME` and `FERRY_EXTERNAL_URL` (public services).
+2. The variables of the linked env groups, in link order.
+3. The service's own variables.
+
+References are resolved after the layers are merged, so a reference can live in an env group and be shared by every service linked to it. `ferry env NAME --effective` prints the merged set before resolution. See [Environment and env groups](/docs/concepts/environment).
+
+## Escaping
+
+To put a literal `${{` in a value, write `$${{`. Everything after it up to `}}` is kept as text:
+
+```bash title="Terminal"
+ferry env set api 'GREETING_TEMPLATE=Hello $${{ name }}'
+# → GREETING_TEMPLATE=Hello ${{ name }} in the container
+```
+
+## Errors
+
+Ferry checks references at several points, so a broken one is caught as early as possible:
+
+| Where | What is checked | Result |
+|---|---|---|
+| `ferry env set`, `ferry env-group set`, `--env` flags | The syntax, the kind and the property, offline | The command fails (exit code 2) and nothing is saved. |
+| The same commands, after saving | The names against the server's datastores and services | A warning: `warning: X: reference to unknown datastore 'missing'; deploys fail until it resolves`. |
+| Blueprints (`fromDatabase`, `fromService`) | The target exists (on the server or in the file), has the right kind and provides the property | The apply fails with a 400 before writing anything. |
+| The REST API and the dashboard | Only the size limits: any value is accepted | Checked at deploy time. |
+| Deploy, restart, rollback | Every reference | The deploy fails with status `deploy_failed`; the instances already running keep serving. |
+
+A deploy that can't resolve a reference fails with a message that names the variable:
+
+```text title="ferry restart hello --follow" noCopy
+==> Starting deploy dep-63eabb61650243ab8bed (trigger: restart)
+==> Reusing image docsc3/hello:dep-3271cdfd1415400d9a5e of deploy dep-f5fb57d117d54ec4ab49
+==> Deploy failed: cannot resolve environment variables: env var X: reference to unknown datastore 'missing'
+```
+
+The messages you can meet:
+
+| Message | Cause |
+|---|---|
+| `invalid reference '${{…}}': expected ${{kind.name.property}}` | Fewer or more than three parts. |
+| `unknown reference kind 'bucket' (use datastore or service)` | A kind other than `datastore`, `db`, `database`, `service` or `svc`. |
+| `unknown datastore property 'nope'` / `unknown service property 'nope'` | A property that doesn't exist for that kind (note that `hostport` is a service property only). |
+| `unterminated reference in '…'` | `${{` without a closing `}}`. |
+| `reference to unknown datastore 'x'` / `reference to unknown service 'x'` | No datastore or service has that name. |
+| `service 'x' has no known port (deploy it first)` | The service has neither a live deploy nor a configured port. |
+| `service 'x' has no public URL` | `url` on a service that isn't a web service or a static site. |
+| `datastore 'x' has no external port yet` | `externalConnectionString` before the datastore has a host port. |
+| `datastore 'x' has no database name` | `database` on a Redis datastore. |
+
+Deleting a datastore or a service that other services reference would make their next deploys fail, so Ferry refuses it with a 409 that lists them, for example `datastore 'app-db' is referenced by service 'hello' (DATABASE_URL, PGHOST)`. Remove the references first, or pass `--force` on the CLI (`force=true` on the API).
+
+## In blueprints
+
+In a blueprint, `fromDatabase` and `fromService` entries compile to references:
+
+```yaml title="ferry.yaml"
+envVars:
+  - key: DATABASE_URL
+    fromDatabase: { name: app-db, property: connectionString }   # ${{datastore.app-db.connectionString}}
+  - key: API_HOST
+    fromService: { type: pserv, name: api, property: hostport }  # ${{service.api.hostport}}
+```
+
+See [envVars entries](/docs/reference/blueprint#envvars-entries) in the blueprint spec.

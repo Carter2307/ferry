@@ -118,9 +118,16 @@ struct Args {
     #[arg(allow_negative_numbers = true, value_parser = clap::value_parser!(i32).range(-1000..=1000))]
     oom_score_adj: i32,
     /// Take ownership of Docker resources (with this name prefix) that another
-    /// Ferry data directory owns — e.g. after moving the data directory.
+    /// Ferry data directory owns — e.g. after restoring a backup into a new data
+    /// directory or losing the old one (moving a data directory keeps ownership).
     #[arg(long)]
     take_over: bool,
+    /// Print the OpenAPI document of the API and exit (used to generate the docs site).
+    #[arg(long, hide = true)]
+    dump_openapi: bool,
+    /// Print this command-line reference as Markdown and exit (used to generate the docs site).
+    #[arg(long, hide = true)]
+    dump_markdown_help: bool,
 }
 
 /// `--log-max-size` / `--min-free-disk`: a size in MiB (`10M`, `1G`, `0`).
@@ -492,6 +499,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let args = Args::parse();
+    if args.dump_openapi {
+        println!("{}", ferry_api::openapi::document_json());
+        return Ok(());
+    }
+    if args.dump_markdown_help {
+        print!("{}", clap_markdown::help_markdown::<Args>());
+        return Ok(());
+    }
     set_oom_score_adj(args.oom_score_adj);
     let acme_directory = args.acme_directory.clone();
     let take_over = args.take_over;
