@@ -281,7 +281,7 @@ async fn cancel_queued(inner: &Inner, deploy: &Deploy, reason: &str) {
 
 /// Make sure the service has a live worker, and wake it (caller holds the
 /// queue lock, so a new worker cannot exit before its handle is recorded).
-fn ensure_worker(inner: &Arc<Inner>, service_id: &str) {
+pub(crate) fn ensure_worker(inner: &Arc<Inner>, service_id: &str) {
     let spawn = inner.with_rt(|rt| {
         if let Some(w) = rt.workers.get(service_id)
             && w.handle.as_ref().is_none_or(|h| !h.is_finished())

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 
 import { MonoLabel } from '@/components/patterns/MonoLabel'
 import { isPublicHttp, type ServiceView } from '@/lib/api/types'
@@ -12,6 +12,7 @@ import { DangerZoneSection } from './config/settings/DangerZoneSection'
 import { DeployHookSection } from './config/settings/DeployHookSection'
 import { DomainsSection } from './config/settings/DomainsSection'
 import { GeneralSection } from './config/settings/GeneralSection'
+import { ResourcesSection } from './config/settings/ResourcesSection'
 import { ScalingSection } from './config/settings/ScalingSection'
 import { UnsavedChangesGuard } from '@/components/patterns/UnsavedChangesGuard'
 import { useServiceOutlet } from './context'
@@ -24,8 +25,14 @@ export function SettingsPage() {
 
 function SettingsView({ service }: { service: ServiceView }) {
   const navigate = useNavigate()
+  const { hash } = useLocation()
   const dirty = useDirtyRegistry()
   const [deleted, setDeleted] = React.useState(false)
+
+  // Deep links such as `/settings#resources` (from the OOM notice on the overview).
+  React.useEffect(() => {
+    if (hash) document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView({ block: 'start' })
+  }, [hash])
 
   React.useEffect(() => {
     if (deleted) void navigate('/services', { replace: true })
@@ -38,6 +45,7 @@ function SettingsView({ service }: { service: ServiceView }) {
       { id: 'general', label: 'General' },
       { id: 'build', label: 'Build & deploy' },
       isCron ? { id: 'schedule', label: 'Cron schedule' } : { id: 'scaling', label: 'Scaling' },
+      { id: 'resources', label: 'Resources' },
       ...(publicHttp ? [{ id: 'domains', label: 'Custom domains' }] : []),
       { id: 'deploy-hook', label: 'Deploy hook' },
       { id: 'danger', label: 'Danger zone' },
@@ -57,6 +65,7 @@ function SettingsView({ service }: { service: ServiceView }) {
           ) : (
             <ScalingSection service={service} reportDirty={dirty.set} />
           )}
+          <ResourcesSection service={service} reportDirty={dirty.set} />
           {publicHttp && <DomainsSection service={service} />}
           <DeployHookSection service={service} />
           <DangerZoneSection service={service} onDeleted={() => setDeleted(true)} />

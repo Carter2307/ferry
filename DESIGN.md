@@ -32,6 +32,7 @@ code).
 | Persistent disks | ✅ named volume, recreate deploys, 1 instance |
 | Custom domains + free TLS | ✅ ACME HTTP-01 (Let's Encrypt) |
 | Manual scaling (instances) | ✅ round-robin in the proxy |
+| Instance types (`plan`) | ✅ memory/CPU limits per service and datastore (server defaults 512 MiB / 1 CPU); blueprint `plan` → limits (§14) |
 | Suspend / resume, restart | ✅ |
 | One-off jobs | ✅ `ferry run` |
 | Blueprints (`render.yaml`) | ✅ `ferry blueprint apply` (same schema, subset) |
@@ -63,7 +64,7 @@ auth, secret files, IP allow lists, teams/RBAC.
 
 | crate | kind | depends on | responsibility |
 |---|---|---|---|
-| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, cron schedules, git URL helpers. **Frozen.** |
+| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers. **Frozen.** |
 | `ferry-docker` | lib | core | typed Docker wrapper (containers, images, volumes, networks, logs, stats, exec) |
 | `ferry-build` | lib | core | git fetch / archive extract, runtime detection, Dockerfile generation, `docker build` |
 | `ferry-proxy` | lib | core | `RouteTable`, HTTP/HTTPS reverse proxy, websockets, error pages |
@@ -118,7 +119,12 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    (`canceled`, error "superseded by dep-…"), wake the service's worker, return.
 2. **One worker per service** processes its queue in order; a global semaphore
    of `config.build_concurrency` bounds concurrent builds.
-3. **Build** (`building`): Git/Archive → `Builder::build` with image tag
+3. **Build** (`building`): Git, Archive and Image deploys first run the
+   free-disk check (§14): too little free space fails the deploy
+   (`build_failed`) with a message naming the path, the free space and the
+   threshold. Reuse deploys (restart, rollback) skip it: they neither build
+   nor pull, and must keep working on a host that is short on disk.
+   Git/Archive → `Builder::build` with image tag
    `naming.image_tag(name, deploy_id)`, build args = the service's resolved env,
    labels `naming.service_labels`. Image → `docker.ensure_image` (pull; always
    pull when the tag is `latest`/untagged). Reuse → verify the image exists.
@@ -130,21 +136,39 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    `:latest` moves. Build-time env reaches builds as **BuildKit secrets**
    (`--secret id=KEY,env=KEY`; generated Dockerfiles mount them per `RUN`),
    never as `ARG`s, so values don't end up in the image history.
-   Cron jobs stop here: mark `live`, set `live_deploy_id`, deactivate previous.
+   Cron jobs stop here: log their limits (`==> Limits: … per run`), mark
+   `live`, set `live_deploy_id`, deactivate previous.
 4. **Start** (`deploying`): port = `env::choose_port(service.port, user_env,
    build.port_hint, docker.image_exposed_ports(image), config.default_port)`
    for listening services (store it in `deploy.port`); env = `env::container_env(
    env::injected(..), env::resolve_all(store.effective_env, RefContext))`;
    `cmd = ["/bin/sh","-c", start_command]` when a start command is set and the
    runtime is `docker`/`image` (generated Dockerfiles already bake it in);
-   restart policy `UnlessStopped`; network + alias; disk volume if configured.
+   restart policy `UnlessStopped`; network + alias; disk volume if configured;
+   the resources of §14 (the service's memory / CPU limits captured in the
+   launch spec, else the server defaults; pids limit; log rotation), logged
+   as `==> Limits: 512 MiB memory, 1 CPU per instance` (plus a
+   `==> Warning:` line when the CPU limit was capped at the host's CPUs or
+   the memory limit exceeds the host's memory).
    Start `desired_instances()` new containers.
    * **Services with a disk** use *recreate*: stop + remove old containers first.
    * Everything else is *blue/green*: old containers keep serving.
 5. **Health check** each new instance, polling every 1s up to
    `config.health_check_timeout_secs`:
-   * container exited/dead → fail immediately, copy its last 50 log lines into
-     the deploy log;
+   * container exited/dead (or already restarted by Docker) → fail
+     immediately, copy its last 50 log lines into the deploy log. The error
+     says why: when Docker's `OOMKilled` flag is set,
+     `instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit`
+     (without a memory limit: killed by the kernel's OOM killer because the
+     host ran out of memory); otherwise the exit code, e.g.
+     `instance ab12cd crashed (exit code 137: killed by SIGKILL)` — 137 alone
+     is no proof of an OOM kill. Docker restarts a crashed instance within
+     ~100 ms and then clears `OOMKilled` and the exit code, so for one seen
+     running again the engine polls ~3 s for it to be restarting or exited
+     again, then reads the container's Docker events since it started
+     (`die` with its `exitCode`, `oom`; a bounded query with `until` = now):
+     an app that runs a while before each OOM kill is still reported as out
+     of memory;
    * web/private/static with `health_check_path`: `GET http://127.0.0.1:<host_port><path>`
      with `Host: <default host>` → success on status < 400;
    * without path: TCP connect to `127.0.0.1:<host_port>` succeeds;
@@ -157,8 +181,9 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    `==> Your service is live 🎉` and the URL. A cancel after the swap is a
    Conflict ("too late to cancel").
    The deploy's full container spec (image, resolved env, command, port,
-   disk) is **snapshotted** when it goes live. The reconciler, scale, resume
-   and one-off jobs always start instances from the live deploy's snapshot —
+   disk, memory / CPU limits) is **snapshotted** when it goes live. The
+   reconciler, scale, resume and one-off jobs always start instances from the
+   live deploy's snapshot —
    never from current settings/env — so settings and env changes take effect
    only through a deploy or restart (like Render), and a failed env-change
    deploy can't break self-healing.
@@ -173,7 +198,8 @@ failures `build_failed` / `deploy_failed`; `canceled`.
 Log conventions (deploy log): system lines start with `==> ` (e.g.
 `==> Cloning from https://github.com/a/b (branch main)`,
 `==> Using Dockerfile at ./Dockerfile`, `==> Build successful 🎉`,
-`==> Starting 2 instance(s)`, `==> Health check passed`, `==> Your service is live 🎉`).
+`==> Limits: 512 MiB memory, 1 CPU per instance`, `==> Starting 2 instance(s)`,
+`==> Health check passed`, `==> Your service is live 🎉`).
 
 ## 6. Reconciler (ferry-engine)
 
@@ -188,12 +214,26 @@ demand after scale/suspend/resume:
 * routes: suspended → `set_service_suspended`; otherwise running live
   containers that accept TCP connections → `set_service_routes` (empty list →
   proxy 503). Remove routes of deleted services (keep `__dashboard`).
-* datastores: ensure container exists & running (volumes keep data).
+* datastores: ensure container exists & running (volumes keep data). A
+  container created here gets the row's limits; limits are not re-applied
+  to existing containers (only `PATCH /api/v1/datastores/{id}` does that).
 * orphans: containers with our `ferry.instance` label whose service/datastore
   no longer exists → remove. Job containers of finished/unknown jobs → remove.
 * boot only: deploys still `queued/building/deploying` → `build_failed` /
   `deploy_failed` with error "interrupted by server restart"; jobs still
   `pending/running` → `failed`.
+
+Next to the loop, an **OOM watcher** (spawned at engine start) follows
+Docker's `oom` events for this server's containers (`type=container`,
+`event=oom`, `label=ferry.instance=<prefix>`) and logs each kill as a
+server-log warning naming the instance / job / datastore, its owner and the
+limit it hit, e.g. `instance a1b2c3 of service 'web' ran out of memory (limit
+512 MiB) — raise the service's memory limit`. After a reconnect it replays
+the events it missed (`since=<secs>.<nanos>`). It uses events rather than the
+reconcile pass because Docker clears a container's `OOMKilled` flag as soon
+as the restart policy runs it again (on Docker Desktop, immediately), so
+polling would miss most kills. Nothing is written to the service's runtime
+log (runtime logs are Docker's container logs).
 
 ## 7. Jobs & cron
 
@@ -205,8 +245,14 @@ demand after scale/suspend/resume:
   image = live deploy image, cmd = `sh -c <command>` (override, else service
   start command, else image default), env like the service (no `PORT`),
   network joined (reaches datastores / private services), no published port,
-  restart `No`. Output streamed into `logs/jobs/<id>.log`; status `running` →
-  `succeeded` (exit 0) / `failed`; container removed after.
+  restart `No`, the live deploy's resources (§14: the service's memory / CPU
+  limits from the live launch spec — each run gets its own, on top of the
+  instances' — plus the pids limit and log rotation; capping / memory
+  warnings go to the job log). Output streamed into `logs/jobs/<id>.log`;
+  status `running` → `succeeded` (exit 0) / `failed` (`error`: `exited with
+  code N`, or `the job ran out of memory (limit 64 MiB) — raise the service's
+  memory limit` when Docker's `OOMKilled` flag is set); container removed
+  after.
 * `run_job` on non-cron services requires `command`; needs a live deploy.
   One-off jobs mount the service's disk.
 
@@ -217,8 +263,60 @@ demand after scale/suspend/resume:
   ready when `pg_isready -U <user> -d <db>` (exec) exits 0.
 * Redis: image `redis:{version}-alpine`, cmd `redis-server --requirepass <pw>
   --appendonly yes`; volume at `/data`; ready when `redis-cli -a <pw> ping` → `PONG`.
+  Its entrypoint is a small `sh -c` script (`REDIS_START` in
+  `ferry-engine/src/datastores.rs`) that reads the container's memory limit
+  from its cgroup (`memory.max`, else cgroup v1's `memory.limit_in_bytes`) on
+  every start, appends `--maxmemory <3/4 of it>` (none when unlimited), then
+  runs the image's own `docker-entrypoint.sh` (which drops root). Over
+  `maxmemory` Redis refuses writes (`OOM command not allowed`, Redis's
+  default `noeviction` policy) instead of the kernel killing it — and killing
+  it again while it replays an append-only file that no longer fits; the
+  other quarter is headroom for the AOF rewrite's fork, client buffers and
+  fragmentation.
 * Publish internal port on `datastore_bind_ip:host_port`; alias = name;
   restart `UnlessStopped`. Status `creating → available | failed` (error set).
+* Resources (§14): the container is created with the row's memory / CPU
+  limits (else the server defaults), the pids limit and log rotation;
+  capping / memory warnings go to the server log (datastores have no log of
+  their own). The free-disk check runs before a **new** datastore's volume
+  and container are created (its volume doesn't exist yet; checked before
+  the volume is created, so a retry still counts as new), and before an
+  image pull; recreating the container of an existing datastore whose image is
+  present (it is dead, was removed, can't be started...) needs no space and
+  is not checked, so the reconciler still heals it on a full disk. A
+  container OOM-killed while starting fails provisioning at once with
+  `the postgres container ran out of memory (limit 256 MiB) — raise the datastore's memory limit`.
+  The failed container stays (`unless-stopped`: Docker keeps restarting it)
+  and the reconciler's retry keeps it.
+* Provisioning that keeps an existing container (running, restarting, or a
+  stopped one it starts) first applies the row's limits to it when they
+  differ from the container's configured `Memory` / `NanoCpus` (a quota of
+  every host CPU counts as none): limits raised while the datastore was
+  `failed` — the advice of the OOM message above — reach the container
+  (a restarting one gets them for its next start). A failed update there is
+  a server-log warning, not a provisioning failure.
+* Limits change **in place**: `Engine::update_datastore_limits` applies the
+  row's limits to the datastore's container with `docker update` (no
+  restart; lowering memory below what it uses can get it killed), whatever
+  the datastore's status; Redis also gets `CONFIG SET maxmemory` (3/4 of the
+  new limit; best effort, a Redis that isn't running gets it from its start
+  script). No container yet (or not ours, or dead / being removed: it is
+  recreated with the row's limits) → Ok; container removed meanwhile → Ok;
+  datastore being deleted → Conflict; any other Docker failure →
+  `Error::Docker("changing the limits of the <kind> container failed: …")`,
+  password redacted. It doesn't take the datastore's lock (a PATCH must not
+  wait behind a provisioning that can take a minute): applying limits —
+  here, and in provisioning right after it creates or keeps a container —
+  reads the row and runs `docker update` under a short per-datastore
+  *limit* lock (`datastore_limit_locks`), so of two concurrent applies the
+  later one always applies the newest row.
+* Docker can't *remove* a memory or CPU limit with `docker update` (`Memory`
+  / `NanoCpus` 0 mean "unchanged", negative values are rejected), so
+  `Docker::update_limits` spells "no limit" (e.g. a server default of 0) as
+  a limit nothing reaches: memory and swap 4e18 bytes (`NO_MEMORY_LIMIT` in
+  `ferry-docker`; inspect reports any limit from 1 EiB up as none) and a CPU
+  quota of all the host's CPUs (read from `docker info`; inspect reports it
+  as is). `PidsLimit: -1` does remove the pids limit.
 * Delete: remove container + volume, then the row.
 * A new datastore never adopts a pre-existing volume of the same name (error
   instead). Readiness probes pass secrets via the exec environment
@@ -262,14 +360,14 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /` (and any other non-API path) | the web client (§13; SPA fallback, no auth) |
 | `GET /api/openapi.json` | the OpenAPI 3.1 document (no auth) |
 | `GET /api/docs` | Swagger UI (no auth; redirects to `/api/docs/`, its **Authorize** takes the API token) |
-| `GET /api/v1/info` | `ServerInfo` |
+| `GET /api/v1/info` | `ServerInfo` (including the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
 | `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
 | `GET /api/v1/services` | `[ServiceView]` |
 | `POST /api/v1/services` | `CreateService` → 201 `ServiceView` (queues a `create` deploy when it has a repo/image, unless `deploy:false`) |
 | `GET /api/v1/services/{id}` | `ServiceView` |
-| `PATCH /api/v1/services/{id}` | `UpdateService` → `ServiceView` (instances → `engine.scale`, suspended → `engine.suspend/resume`, custom_domains → `engine.refresh_routes`; the rest is stored) |
+| `PATCH /api/v1/services/{id}` | `UpdateService` → `ServiceView` (instances → `engine.scale`, suspended → `engine.suspend/resume`, custom_domains → `engine.refresh_routes`; the rest is stored — `memory_limit_mb` / `cpu_limit` too, `0` = back to the server default: they apply with the next deploy or restart, the PATCH doesn't redeploy) |
 | `DELETE /api/v1/services/{id}?force=` | 204 (`engine.delete_service`); 409 listing the referencing services when other services reference it via `${{service.…}}`, unless `force=true` |
-| `GET /api/v1/services/{id}/status` | `RuntimeStatus` |
+| `GET /api/v1/services/{id}/status` | `RuntimeStatus` (per instance: CPU / memory usage, the container's configured `memory_limit_bytes` / `cpu_limit` — `null` = unlimited —, `oom_killed`, `exit_code`) |
 | `GET /api/v1/services/{id}/logs?follow=&tail=` | SSE |
 | `POST /api/v1/services/{id}/restart` | 202 `Deploy` |
 | `POST /api/v1/services/{id}/suspend` · `/resume` | `ServiceView` |
@@ -296,8 +394,9 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `POST /api/v1/jobs/{job_id}/cancel` | `JobRun` (`canceled`); 409 when it already finished |
 | `GET /api/v1/jobs/{job_id}/logs?follow=` | SSE |
 | `GET /api/v1/datastores` | `[DatastoreView]` |
-| `POST /api/v1/datastores` | `CreateDatastore` → 201 `DatastoreView` (row `creating`, then `engine.provision_datastore`) |
+| `POST /api/v1/datastores` | `CreateDatastore` → 201 `DatastoreView` (row `creating`, with its optional `memory_limit_mb` / `cpu_limit`, then `engine.provision_datastore`) |
 | `GET /api/v1/datastores/{id}` · `DELETE ?force=` | `DatastoreView` · 204 (409 while referenced, unless `force=true`) |
+| `PATCH /api/v1/datastores/{id}` | `UpdateDatastore` `{memory_limit_mb?, cpu_limit?}` → `DatastoreView`. Stores the limits (`0` = back to the server default; an omitted field keeps its value) under the datastore's row lock, then `engine.update_datastore_limits` applies them to its container in place, without a restart, whatever the status (also when nothing changed, so re-sending retries a failed apply): a `failed` datastore's container may still be there, restarting with the old limits, and the retry keeps it (§8); one without a container yet gets them when it is created. A failed apply after the save → the engine's error prefixed `limits of 'NAME' saved, but applying them to its container failed: ` (502 for Docker errors, 409 while the datastore is being deleted) |
 | `GET /api/v1/env-groups` · `POST` | `[EnvGroupView]` · `CreateEnvGroup` → 201 `EnvGroupView` |
 | `GET /api/v1/env-groups/{id}` · `DELETE ?force=&restart=` | `EnvGroupView` · 204 (409 while linked, unless `force=true`; `restart=true` restarts the linked live services) |
 | `PUT` / `PATCH /api/v1/env-groups/{id}/env?restart=` | `ReplaceEnv` / `PatchEnv` → `EnvGroupView` (restart linked live services) |
@@ -308,7 +407,12 @@ routes and checks that the document, the router and `lib.rs` agree.
 Name rules: `validate::resource_name` for services/datastores (names shared
 between both; id-shaped names are rejected), `validate::env_group_name`,
 `validate::env_vars` (32 KiB per value, 256 KiB per owner, also checked on
-the merged service + linked groups). Request bodies reject unknown fields.
+the merged service + linked groups). Resource limits (`memory_limit_mb` /
+`cpu_limit` on `CreateService`, `UpdateService`, `CreateDatastore`,
+`UpdateDatastore`) are checked by `resources::validate` — 16 MiB to 1 TiB,
+0.01 to 512 CPUs — with the CPU value rounded to 0.01; on create, an omitted
+limit or `0` means the server default, as on PATCH. Request bodies reject
+unknown fields.
 Git inputs are validated up front (`validate::repo_url` — absolute local
 paths only —, `branch`, `commit`). Switching a service between git and image
 requires clearing the other source in the same PATCH. Cron jobs always have
@@ -322,10 +426,13 @@ Render's schema (camelCase), a pragmatic subset:
 
 ```yaml
 envVarGroups:            # [{name, envVars: [{key, value} | {key, generateValue: true}]}]
-databases:               # Postgres: {name, databaseName?, user?, postgresMajorVersion?}
+databases:               # Postgres: {name, databaseName?, user?, postgresMajorVersion?, plan?, memoryLimit?, cpuLimit?}
 services:
   - type: web|pserv|worker|cron|static|redis|keyvalue   # web + runtime: static → static site
     name: api
+    plan: standard                         # → memory / CPU limits (see below)
+    memoryLimit: 1G                        # Ferry extension: overrides the plan's memory (1G, 512M, or MiB)
+    cpuLimit: 500m                         # Ferry extension: overrides the plan's CPU (0.5, 2, or millicores)
     runtime: docker|image|node|python|go|rust|ruby|static   # legacy key `env` accepted
     repo: https://github.com/org/repo      # or a local path
     branch: main
@@ -359,14 +466,55 @@ services:
   Render properties map: `connectionString`, `host`, `port`, `user`,
   `password`, `database`, `hostport`.
 * `redis` / `keyvalue` services create Redis datastores.
-* Unknown / unsupported keys (`plan`, `region`, `scaling`, `previews`, …) are
+* Unknown / unsupported keys (`region`, `scaling`, `previews`, …) are
   ignored with a warning, never an error.
+* **`plan` → resource limits** (`ferry_api::blueprint::plans`; names are
+  case-insensitive and multi-word plans accept any separator: `pro plus`,
+  `Pro_Plus`, `pro-plus`, `proplus`):
+
+  | entry | plan → memory / CPU |
+  |---|---|
+  | web, pserv, worker, cron | `free`, `starter` → 512 MiB / 0.5 CPU · `standard` → 2 GiB / 1 · `pro` → 4 GiB / 2 · `pro plus` → 8 GiB / 4 · `pro max` → 16 GiB / 4 · `pro ultra` → 32 GiB / 8 |
+  | Postgres (`databases`) | `<tier>-<size>` with tier `basic`, `pro` or `accelerated` (`basic-256mb`, `basic-1gb`, `pro-4gb`, `accelerated-16gb`) → that memory (a unit is required, and it must be a valid limit); legacy `free`, `starter` → 256 MiB · `standard` → 1 GiB · `pro` → 4 GiB · `pro plus` → 8 GiB. CPU: not set |
+  | Key Value (`redis` / `keyvalue`) | `free`, `starter` → 256 MiB · `standard` → 1 GiB · `pro` → 5 GiB · `pro plus` → 10 GiB. CPU: not set |
+  | static sites | `plan` ignored silently (Render has no plans for them); `memoryLimit` / `cpuLimit` still apply, since Ferry runs them in containers |
+
+  Render's `free` plan is 0.1 CPU; Ferry gives `free` and `starter` 0.5
+  CPU, because on your own server a tenth of a core only makes a service
+  slow (builds of interpreted apps, startup, health checks) and frees
+  nothing the host would otherwise use. An unknown plan is a warning
+  (`service 'x': ignoring unknown plan 'y' (known plans: …); set
+  memoryLimit / cpuLimit instead`) and sets nothing.
+* **`memoryLimit` / `cpuLimit`** (Ferry extensions, parsed with
+  `resources::parse_memory_mb` / `parse_cpus`) override the plan key by key:
+  `plan: pro` + `memoryLimit: 1G` = 1 GiB / 2 CPUs. `0` = explicitly the
+  server default. A malformed value is an error naming the entry
+  (`service 'a': 'memoryLimit': invalid memory size 'lots' …`), and so is a
+  non-zero `cpuLimit` that rounds to 0 (`4m`, `0.004`: `parse_cpus` refuses
+  it rather than returning 0, the server default); an out-of-range one fails
+  planning with the validator's message. Either way nothing is written.
+* **Omitted limits keep the current ones**: an existing service or
+  datastore whose entry has no `plan`, `memoryLimit` or `cpuLimit` keeps
+  its limits (like `numInstances` and `domains`: limits are often tuned
+  outside the blueprint, and re-applying must not silently reset them); a
+  new resource gets the server default. Limit changes appear in the
+  `changes` of dry runs and applies: `memory_limit: 512 MiB → 2 GiB`,
+  `cpu_limit: (server default) → 2 CPUs`.
 * Apply order: env groups → datastores (create + provision) → services.
   Nothing is ever deleted. Existing resources are updated in place; the
   result lists `create` / `update` (with human-readable `changes`) /
   `unchanged`. After applying: new services with a source get a
   `blueprint` deploy; updated services whose build/deploy settings changed get
-  a deploy; services whose only changes are env vars get a restart (if live).
+  a deploy; services whose resource limits (or cron command) changed but
+  need no rebuild get a restart (trigger `restart`, when live or with a
+  deploy in flight; a suspended live service gets a warning to resume and
+  restart it instead);
+  services whose only changes are env vars get a restart (if live).
+  Existing datastores whose limits changed get action `update`: the row is
+  written under the locks, then, once they are released,
+  `engine.update_datastore_limits` applies them in place, whatever the
+  datastore's status (§8; a failure becomes a warning). Blueprint applies
+  also take the row locks of the existing datastores they name.
   Services with neither repo nor image produce a warning ("deploy with `ferry up <name>`").
 * `dry_run: true` computes the same result without writing anything.
 
@@ -379,18 +527,23 @@ never with `NO_COLOR`. Exit code 1 with the API error message on failure.
 
 ```
 ferry login --server URL --token TOKEN     # verifies with /api/v1/info, saves config
-ferry info
+ferry info                                 # incl. default limits and the Docker host's CPUs / memory
 ferry services | ferry ls
 ferry create NAME [--type web|pserv|worker|cron|static] [--repo URL] [--branch B] [--image IMG]
              [--runtime R] [--root-dir D] [--dockerfile P] [--build-cmd C] [--start-cmd C]
              [--publish-dir D] [--port N] [--health PATH] [--instances N] [--schedule CRON]
-             [--disk MOUNT] [--domain D]... [--env K=V]... [--env-group G]... [--no-auto-deploy]
-             [--no-deploy] [--follow]
-ferry show NAME
+             [--disk MOUNT] [--domain D]... [--memory SIZE] [--cpu CPUS] [--env K=V]... [--env-group G]...
+             [--no-auto-deploy] [--no-deploy] [--follow]
+      # --memory 512M|1G|1.5G|<MiB>, --cpu 0.5|2|500m: limits of each instance and job run;
+      # `default` (or 0) = the server default
+ferry show NAME                                                     # incl. Memory limit / CPU limit
 ferry update NAME [same flags as create, plus --auto-deploy/--no-auto-deploy]
+      # --memory default / --cpu default go back to the server default; limits apply with the
+      # next deploy or restart (the command prints which: `ferry restart NAME`, `ferry deploy NAME`, …)
 ferry delete NAME [--yes]
 ferry deploy NAME [--commit SHA] [--clear-cache] [--follow]        # follow = stream build logs, exit 1 on failure
-ferry up [NAME] [--dir .] [--type web] [--create-only]... [--follow]
+ferry up [NAME] [--dir .] [--type web] [settings flags of create, incl. --memory/--cpu] [-e K=V]...
+         [--env-group G]... [--clear-cache] [--follow]
       # tar.gz the directory (respect .gitignore/.ferryignore; skip .git, node_modules, target, .venv),
       # create the service if missing (type/runtime auto), upload → deploy; NAME defaults to dir name
 ferry deploys NAME
@@ -398,14 +551,19 @@ ferry cancel DEPLOY_ID
 ferry rollback NAME DEPLOY_ID
 ferry restart NAME | ferry suspend NAME | ferry resume NAME
 ferry scale NAME N
-ferry status NAME                                                   # instances + cpu/mem
+ferry status NAME                                                   # instances + cpu/mem against their limits;
+      # a stopped instance shows why (`exited (exit code 1)`; `restarting (OOM killed, exit code 137)` when Docker's
+      # OOMKilled flag is set — exit code 137 alone is not reported as OOM), with a note on stderr
+      # ("Raise the limit with 'ferry update NAME --memory <SIZE>', then 'ferry restart NAME'.")
 ferry logs NAME [-f] [--tail N] | ferry logs --deploy DEPLOY_ID [-f] | ferry logs --job JOB_ID [-f]
 ferry env NAME                                                     # list
 ferry env set NAME K=V... [--no-restart]  |  ferry env unset NAME K... [--no-restart]
 ferry domains NAME | ferry domains add NAME DOMAIN | ferry domains rm NAME DOMAIN
 ferry run NAME [--follow] [-- CMD...]                               # one-off job / trigger cron now
 ferry jobs NAME
-ferry db create NAME [--kind postgres|redis] [--version V] | ferry db ls | ferry db show NAME | ferry db rm NAME [--yes]
+ferry db create NAME [--kind postgres|redis] [--version V] [--database D] [--user U] [--memory SIZE] [--cpu CPUS] [--wait]
+ferry db ls | ferry db show NAME | ferry db rm NAME [--yes]
+ferry db update NAME [--memory SIZE|default] [--cpu CPUS|default]  # at least one; applied to the running container, no restart
 ferry env-group create NAME [K=V...] | ls | show NAME | set NAME K=V... | unset NAME K... | rm NAME
                 | link SERVICE GROUP | unlink SERVICE GROUP
 ferry blueprint apply [FILE] [--dry-run]       # FILE defaults to ./ferry.yaml, then ./render.yaml
@@ -424,13 +582,27 @@ Rust build never runs Node.
   server state in TanStack Query v5 (`src/lib/api/queries/*`), client state
   in Zustand (`src/stores/auth.ts`, `ui.ts`), routing with react-router v7
   (`createBrowserRouter`, history URLs, code-split pages); Vitest for the pure
-  helpers (SSE parser, formatting, `.env` parsing). Light and dark themes.
+  helpers (SSE parser, formatting, `.env` parsing, resource limits) and a few
+  components (rendered with `react-dom/server`). Light and dark themes.
 * **Views:** login (token, validated with `GET /api/v1/info`) · services
   (list, new) · service detail: Overview, Deploys (+ deploy detail with live
   build logs, rollback, cancel), Logs, Jobs (+ job detail), Environment
   (variables, env group links, "save & restart"), Settings (build & deploy,
-  custom domains, deploy hook) · datastores (+ detail, connection strings) ·
-  env groups (+ detail) · blueprints (paste YAML → dry run → apply) · server.
+  resources, custom domains, deploy hook) · datastores (+ detail,
+  connection strings, resources) · env groups (+ detail) · blueprints (paste
+  YAML → dry run → apply) · server (incl. default container limits and the
+  Docker host's size).
+* **Resource limits in the UI** (§14): "Memory limit" / "CPU limit" selects
+  (`Server default (512 MiB)` from `/api/v1/info`, presets, Custom…) in the
+  service's Settings → Resources ("Changes apply on the next deploy or
+  restart", then a "Restart now" toast), under Advanced when creating a
+  service, in the new-datastore dialog, and in the datastore's Resources
+  section (applied right away, no restart). `src/lib/resources.ts` mirrors
+  `ferry_core::resources` (parsing, formatting, ranges); a new CPU value
+  above the Docker host's CPUs is refused, memory above the host's is only
+  flagged. Instance cards show each limit ("no limit" when unlimited) and,
+  when Docker's `oom_killed` is set, an "OOM killed" badge linking to the
+  settings.
 * **Transport: REST + SSE** (no gRPC, no WebSocket). Queries and mutations
   are the JSON REST API of §10 on the same origin (no CORS), with
   `Authorization: Bearer`. Push uses Server-Sent Events read with `fetch()`
@@ -456,7 +628,154 @@ Rust build never runs Node.
   `/api`, `/hooks` and `/healthz` to `FERRY_API_URL` (default
   `http://127.0.0.1:7878`), SSE unbuffered.
 
-## 14. Operational safety
+## 14. Resource limits
+
+Every container Ferry creates — service instances, one-off jobs, cron runs
+and datastores; not `docker build` — runs with a memory limit, a CPU limit,
+a pids limit and log rotation (unless the operator sets them to 0), so one
+misbehaving app can't take the host down (§15).
+
+**Data model.** `Service` and `Datastore` have `memory_limit_mb:
+Option<u32>` (MiB) and `cpu_limit: Option<f64>` (CPUs, `0.5` = half a
+core); `None` = the server default. Migration `0002_resource_limits.sql`
+adds the nullable columns to `services` and `datastores`.
+`Store::update_datastore` doesn't write them (it persists the engine-owned
+columns, so the engine saving a stale row can never revert a limits
+change); `Store::set_datastore_limits(id, memory, cpus)` does.
+`ferry_core::resources` holds the accepted ranges (16 MiB to 1 TiB, 0.01 to
+512 CPUs), `validate`, `round_cpus` (0.01), and the parsers / formatters
+shared by the `ferryd` flags, the CLI and blueprints: `parse_memory_mb`
+(`512`, `512M`, `1.5G`, `2GiB`; a plain number is MiB; `M`/`MB`/`MiB` all
+mean MiB like in Docker), `format_memory_mb` (`512 MiB`, `1.5 GiB`; GiB
+only for quarter-GiB multiples, exact at 2 decimals, so `1152 MiB` stays in
+MiB and the text parses back — the web client's `formatMemoryMb` matches),
+`parse_cpus` (`0.5`, `2`, `500m`; a non-zero amount that rounds to 0 is
+an error), `format_cpus` (`0.5 CPU`, `2 CPUs`).
+
+**Configuration** (`Config` field — `ferryd` flag / env, default):
+
+| field | flag / env | default | meaning |
+|---|---|---|---|
+| `default_memory_limit_mb` | `--default-memory-limit` `FERRY_DEFAULT_MEMORY_LIMIT` | 512 (`512M`) | memory of each container whose service / datastore sets none; 0 = unlimited |
+| `default_cpu_limit` | `--default-cpu-limit` `FERRY_DEFAULT_CPU_LIMIT` | 1.0 | CPU likewise; 0 = unlimited |
+| `pids_limit` | `--pids-limit` `FERRY_PIDS_LIMIT` | 1024 | processes + threads per container (fork-bomb guard); 0 = unlimited |
+| `log_max_size_mb` | `--log-max-size` `FERRY_LOG_MAX_SIZE` | 10 (`10M`) | `json-file` log driver with `max-size`, only when the daemon's default log driver is `json-file` (or unknown): another driver (journald, syslog, fluentd, `local`...) is the operator's choice and is kept; 0 = set no log config (the daemon's own applies) |
+| `log_max_files` | `--log-max-files` `FERRY_LOG_MAX_FILES` | 3 | `max-file`, current file included (at least 1) |
+| `min_free_disk_mb` | `--min-free-disk` `FERRY_MIN_FREE_DISK` | 1024 (`1G`) | free-disk check threshold; 0 = no check |
+
+`ferryd` validates the flags as it parses them (a bad value stops startup
+with an error naming the flag; a non-zero default must be a valid limit, and
+a CPU default that rounds to 0, like `0.004`, is refused rather than meaning
+unlimited), warns at startup when a default exceeds the Docker host's CPUs
+or memory, and prints them in its banner: a `Limits` line (`512 MiB / 1 CPU
+per container (default), 1024 pids, logs rotated at 10 MiB × 3`; `unlimited
+memory`, `unlimited CPU`, `no pids limit`, `Docker's log settings` for the
+settings that are 0, `Docker's journald log driver (kept)` when the daemon's
+default driver isn't `json-file`), a `Free disk check` line (`deploys need 1 GiB free`
+or `off`), and the host's CPUs and memory on the `Docker` line.
+`--oom-score-adj` is not a `Config` field (§15).
+
+**Effective limits** of a container = `config.limits(memory_limit_mb,
+cpu_limit)`: the resource's own values, else the defaults (a default of 0 =
+unlimited). The container spec gets `Memory` = `MemorySwap` = the memory
+limit (no swap beyond it), `NanoCpus` = CPUs × 1e9 (not on a host without
+CPU CFS quotas, see below), `PidsLimit` (unset when 0) and `LogConfig`
+(only when `log_max_size_mb` > 0 and the daemon's default log driver is
+`json-file`). Limits are per
+container, not shared: a service with 3 instances may use 3 × its limit,
+plus its running jobs.
+
+**Services.** The limits apply to every instance and to the service's jobs
+(one-off and cron runs). They are captured in the deploy's launch spec
+(`LaunchSpec.memory_limit_mb` / `cpu_limit`, §5.6) when the deploy starts
+its instances, so the reconciler, scale, resume and jobs use the live
+deploy's limits. Changing them (API `PATCH`, `ferry update --memory`, the
+dashboard) only saves them: they take effect with the next deploy or restart
+(`ferry restart` reuses the live image, no rebuild). A blueprint apply is
+different: it restarts every live service whose limits changed (§11) —
+including, on the first re-apply of an existing `render.yaml` after
+upgrading, every service whose `plan:` (ignored before) now maps to limits.
+Launch specs stored before limits existed have none: their containers get
+the server defaults when they are (re)created. Containers already running
+when ferryd is upgraded keep running without limits until they are
+replaced.
+
+**Datastores.** Created with their limits; changed in place with
+`PATCH /api/v1/datastores/{id}`, whatever the datastore's status (§8, §10);
+provisioning that keeps an existing container applies the row's limits to
+it when they differ. Redis gets `maxmemory` = 3/4 of its memory limit (§8).
+Datastores created before limits existed keep running without them until
+their limits are changed (PATCH), they are provisioned again (e.g. retried
+after a failure) or their container is recreated: nothing is applied at
+boot.
+
+**Host capacity.** The engine reads `docker info` (CPUs, memory, Docker root
+dir, OS, CPU CFS quota support, default log driver) on first use and caches it (5 s timeout; a failed read isn't
+cached — nothing is capped then — and is retried next time). The cache is
+never refreshed: after resizing Docker Desktop's VM, restart ferryd.
+* Docker refuses a CPU quota above the host's CPU count ("range of CPUs is
+  from 0.01 to N"), so the engine **caps** CPU limits at the host's CPUs and
+  says so: `the CPU limit (8 CPUs) is more than the Docker host has: capped
+  at 4 CPUs` (deploy log and server log; jobs: job log; datastores: server
+  log).
+* Docker accepts a memory limit above the host's memory; it just protects
+  nothing, so it is only a warning (deploy log; jobs: job log; datastores:
+  server log).
+* On a host whose kernel has no CPU CFS quotas (`docker info`
+  `CpuCfsQuota: false`: some NAS / ARM kernels, rootless Docker without the
+  cgroup v2 `cpu` controller delegated) Docker refuses any container or
+  update with `NanoCpus` ("NanoCPUs can not be set, as your kernel does not
+  support CPU CFS scheduler"), while memory and pids limits only warn. So
+  no CPU limit is set there — `docker update` leaves `NanoCpus` out too —
+  and it is said: at ferryd startup (server log) and as `the CPU limit
+  (1 CPU) is not enforced: the Docker host's kernel has no CPU CFS quota
+  support` (deploy log and server log; jobs: job log; datastores: server
+  log).
+* `/api/v1/info` reports `docker_cpus` / `docker_memory_bytes` (read by
+  `ferryd` at startup) so clients can check limits against the host.
+
+**OOM visibility.** Docker's `OOMKilled` flag (inspect only — the list API
+never reports it) is the proof of an out-of-memory kill; exit code 137 alone
+is a SIGKILL, which may have other causes.
+* Deploys: a new instance OOM-killed during its health check fails the
+  deploy with `instance ab12cd ran out of memory (limit 512 MiB) — raise the
+  service's memory limit` (§5.5), also when Docker already restarted it
+  (the container's `oom` events tell).
+* Jobs: `the job ran out of memory (limit 64 MiB) — raise the service's
+  memory limit` (§7).
+* Datastores: provisioning fails at once with `the redis container ran out
+  of memory (limit 256 MiB) — raise the datastore's memory limit` (§8).
+* Running containers: the OOM watcher (§6) logs a server-log warning for
+  every kill.
+* Status: `InstanceStatus` carries the container's configured
+  `memory_limit_bytes` and `cpu_limit` (`None` = unlimited; not docker
+  stats' limit, which reports the host's memory for unlimited containers),
+  `oom_killed` and `exit_code` (filled for exited and restarting containers). Docker
+  clears `OOMKilled` when a container runs again, so `oom_killed` is only
+  seen while an instance is restarting or exited; past kills are in the
+  server log.
+
+**Free-disk check.** Before a Git, Archive or Image deploy builds or pulls
+(§5.3) and before the container of a new datastore is created or a
+datastore's image is pulled (§8; recreating an existing datastore's
+container is not checked, so the reconciler can still heal it), the engine
+checks the free space (`statvfs`: `f_bavail × f_frsize`, the space available
+to unprivileged users; in `spawn_blocking`) of the filesystem of
+`config.data_dir`, and of the Docker root dir when it is local (the path
+exists on this machine and the daemon isn't Docker Desktop, whose root lives
+in its VM). Below `min_free_disk_mb` the deploy fails (`build_failed`) or
+the datastore goes `failed` with:
+
+```
+not enough free disk space on /srv/ferry: 812 MiB free, Ferry needs at least 1 GiB (free some space,
+e.g. remove unused Docker images with `docker image prune`, or change the threshold with
+`ferryd --min-free-disk`, 0 = off)
+```
+
+Paths that can't be checked are skipped (debug log); restarts and rollbacks
+are never checked; on non-Unix systems the check does nothing.
+
+## 15. Operational safety
 
 * The data directory is created `0700` (it holds env values, datastore
   passwords, credentialed repo URLs); `api_token` and `instance_id` are `0600`.
@@ -476,7 +795,56 @@ Rust build never runs Node.
   from the open-file limit (raised to the hard limit at startup).
 * Env values may contain a literal `${{` written as `$${{`.
 
-## 15. Coding rules
+### One misbehaving service (with the default flags, §14)
+
+| When a service… | what happens |
+|---|---|
+| leaks memory | the kernel OOM-kills its container at its memory limit (512 MiB by default; no swap beyond it) instead of picking some host process (ferryd, dockerd, a database). Docker restarts it (`unless-stopped`), the kill goes to the server log, and `ferry status` / the dashboard flag the instance while it restarts |
+| spins the CPU | it is throttled at its CPU quota (1 CPU per container by default); the other cores stay free. On a 1-CPU host the default is the whole host: lower `--default-cpu-limit` there |
+| forks without end | it stops at 1024 processes + threads per container (`fork` fails inside the container); the host's process table is untouched |
+| logs without end | Docker's `json-file` log rotates at 10 MiB × 3 files: at most ~30 MiB per container (a daemon configured with another log driver keeps it, with that driver's own limits) |
+| deploys onto a nearly full disk | the deploy (or a new datastore) fails before building or pulling, with a message naming the path; restarts and rollbacks still work |
+
+Still **not** protected:
+* **Builds.** `docker build` runs in BuildKit, which has no per-build memory
+  or CPU limit: a build can still use all of the host's memory and CPU.
+  Only `--build-concurrency` (default 2) bounds builds, and the free-disk
+  check runs before a build, not during it.
+* **Disks.** Volumes (datastores, service disks), container writable layers,
+  images and the build cache have no quotas: a service writing to its disk
+  or its container filesystem can fill the host's disk. The free-disk check
+  only stops new deploys and new datastores; `--keep-images` bounds Ferry's
+  own images, pruning the rest (`docker image prune`, `docker builder
+  prune`) is up to the operator.
+* **Disk and network I/O.** No I/O or bandwidth limits.
+* **The network.** Every service and datastore shares one private network
+  (§3): any container can reach every service and datastore by name, and
+  datastores are protected by their passwords only.
+* **Overcommit.** Limits are caps, not reservations: nothing checks that the
+  sum of all limits (instances × limit, jobs, datastores) fits the host. When
+  the host itself runs out of memory, the kernel's global OOM killer picks
+  a victim — see ferryd's score below.
+* **Unlimited by choice.** A limit of 0 (`--default-memory-limit 0`,
+  `--default-cpu-limit 0`, `--pids-limit 0`, `--log-max-size 0`,
+  `--min-free-disk 0`) turns that guard off.
+
+**ferryd's OOM score** (Linux): at startup `ferryd` writes
+`--oom-score-adj` (default `-500`, range -1000..=1000, `0` = leave
+unchanged) to `/proc/self/oom_score_adj`, so that when the host runs out of
+memory the kernel kills containers before ferryd. It never raises a lower
+value already set (e.g. systemd's `OOMScoreAdjust=-900` stays). Lowering
+the score needs root or `CAP_SYS_RESOURCE`: otherwise ferryd logs a warning
+suggesting `OOMScoreAdjust=` in its systemd unit (and `--oom-score-adj 0` to
+silence it). Processes ferryd starts (git, the docker CLI) don't keep a
+lowered value: `ferry-build` resets their `oom_score_adj` to 0 before exec
+(raising it needs no privilege), so a runaway `git index-pack` is not
+spared at the expense of the containers and databases. Containers never
+inherit it (dockerd starts them). On other systems the flag does nothing
+(debug log). The README's systemd unit sets `OOMScoreAdjust=` for ferryd
+(no `MemoryMin=`: a memory protection only takes effect when every
+ancestor cgroup, e.g. `system.slice`, has one too).
+
+## 16. Coding rules
 
 * Rust 2024, stable. No `unwrap()`/`expect()` outside tests except on
   invariants documented in a comment. No `todo!()` left behind.
@@ -489,7 +857,7 @@ Rust build never runs Node.
   explicit version (not to the workspace root).
 * `cargo clippy -p <crate> --all-targets -- -D warnings` must pass; `cargo fmt`.
 
-## 16. Testing
+## 17. Testing
 
 * Unit tests next to the code; integration tests in `crates/<crate>/tests/`.
 * Docker-dependent tests are **gated**: they run only when `FERRY_E2E=1` and
@@ -505,3 +873,11 @@ Rust build never runs Node.
   copy it to a temp dir and `git init && git add -A && git commit`.
 * Small base images only in tests: `python:3.12-alpine`, `node:22-alpine`,
   `nginx:alpine`, `busybox:stable`, `postgres:16-alpine`, `redis:7-alpine`.
+* Resource limits (§14) are checked against the real daemon:
+  `ferry-docker/tests/docker_e2e.rs` (`limits_on_create`,
+  `update_limits_in_place`, `oom_kills_are_reported`: inspect values and the
+  kernel's cgroup files — skipped on cgroup v1 hosts —, log rotation, the
+  pids limit, `docker update` and real OOM kills) and
+  `ferry-engine/tests/e2e.rs`
+  (`resource_limits_apply_to_instances_jobs_and_datastores`,
+  `out_of_memory_kills_are_reported`).

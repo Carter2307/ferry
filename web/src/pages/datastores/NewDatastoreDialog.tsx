@@ -5,6 +5,7 @@ import { RadioGroup as RadioGroupPrimitive } from 'radix-ui'
 import { toast } from 'sonner'
 
 import { DatastoreKindIcon } from '@/components/patterns/icons'
+import { LimitControl } from '@/components/patterns/LimitControl'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -18,9 +19,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { errorMessage } from '@/lib/api/client'
-import { useCreateDatastore, useDatastores, useServices } from '@/lib/api/queries'
+import { useCreateDatastore, useDatastores, useServerInfo, useServices } from '@/lib/api/queries'
 import { DATASTORE_KINDS, type CreateDatastore, type DatastoreKind, type DatastoreView } from '@/lib/api/types'
 import { DATASTORE_KIND_LABELS } from '@/lib/format'
+import { DEFAULT_LIMIT, limitError, limitValue, type LimitField } from '@/lib/resources'
 import { cn } from '@/lib/utils'
 
 import {
@@ -83,18 +85,21 @@ function notifyProvisioned(result: Settled, toastId?: string | number) {
   }
 }
 
-/** "New datastore" modal: name, kind, version, and database / user for Postgres. */
+/** "New datastore" modal: name, kind, version, database / user for Postgres, and optional resource limits. */
 export function NewDatastoreDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const navigate = useNavigate()
   const create = useCreateDatastore()
   const { data: datastores } = useDatastores()
   const { data: services } = useServices()
+  const { data: info } = useServerInfo()
   const ids = {
     name: React.useId(),
     version: React.useId(),
     database: React.useId(),
     username: React.useId(),
     kind: React.useId(),
+    memory: React.useId(),
+    cpu: React.useId(),
   }
 
   const [name, setName] = React.useState('')
@@ -102,6 +107,10 @@ export function NewDatastoreDialog({ open, onOpenChange }: { open: boolean; onOp
   const [version, setVersion] = React.useState(DATASTORE_VERSIONS.postgres.default)
   const [database, setDatabase] = React.useState('')
   const [username, setUsername] = React.useState('')
+  const [memory, setMemory] = React.useState<LimitField>(DEFAULT_LIMIT)
+  const [cpu, setCpu] = React.useState<LimitField>(DEFAULT_LIMIT)
+  /** A custom limit was typed: show its error before submit. */
+  const [limitsTouched, setLimitsTouched] = React.useState(false)
   const [touched, setTouched] = React.useState(false)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
   const [pending, setPending] = React.useState(false)
@@ -112,6 +121,9 @@ export function NewDatastoreDialog({ open, onOpenChange }: { open: boolean; onOp
     setVersion(DATASTORE_VERSIONS.postgres.default)
     setDatabase('')
     setUsername('')
+    setMemory(DEFAULT_LIMIT)
+    setCpu(DEFAULT_LIMIT)
+    setLimitsTouched(false)
     setTouched(false)
     setSubmitError(null)
     setPending(false)
@@ -125,7 +137,11 @@ export function NewDatastoreDialog({ open, onOpenChange }: { open: boolean; onOp
   const nameError = resourceNameError(trimmed, taken)
   const databaseError = kind === 'postgres' ? pgIdentifierError(database.trim()) : null
   const usernameError = kind === 'postgres' ? pgIdentifierError(username.trim()) : null
-  const valid = !nameError && !databaseError && !usernameError
+  const memoryError = limitError('memory', memory)
+  const cpuError = limitError('cpu', cpu, info?.docker_cpus)
+  const shownMemoryError = touched || limitsTouched ? memoryError : null
+  const shownCpuError = touched || limitsTouched ? cpuError : null
+  const valid = !nameError && !databaseError && !usernameError && !memoryError && !cpuError
   const shownNameError = touched || trimmed !== '' ? nameError : null
   const dbPlaceholder = defaultDatabaseName(trimmed) || 'my_db'
 
@@ -140,6 +156,10 @@ export function NewDatastoreDialog({ open, onOpenChange }: { open: boolean; onOp
       if (database.trim()) body.database = database.trim()
       if (username.trim()) body.username = username.trim()
     }
+    const memoryMb = limitValue('memory', memory)
+    const cpus = limitValue('cpu', cpu)
+    if (memoryMb !== null) body.memory_limit_mb = memoryMb
+    if (cpus !== null) body.cpu_limit = cpus
     const settled: Promise<Settled> = create.mutateAsync(body).then(
       (ds) => ({ ok: true as const, ds }),
       (error: unknown) => ({ ok: false as const, error }),
@@ -319,6 +339,42 @@ export function NewDatastoreDialog({ open, onOpenChange }: { open: boolean; onOp
                 </Field>
               </div>
             )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                id={ids.memory}
+                label="Memory limit"
+                hint="Optional. Change it later without a restart."
+                error={shownMemoryError}
+              >
+                <LimitControl
+                  kind="memory"
+                  id={ids.memory}
+                  value={memory}
+                  onChange={(v) => {
+                    if (v.custom !== memory.custom) setLimitsTouched(true)
+                    setMemory(v)
+                  }}
+                  info={info}
+                  invalid={Boolean(shownMemoryError)}
+                  describedBy={`${ids.memory}-${shownMemoryError ? 'error' : 'hint'}`}
+                />
+              </Field>
+              <Field id={ids.cpu} label="CPU limit" hint="Optional. In cores (0.5 = half a core)." error={shownCpuError}>
+                <LimitControl
+                  kind="cpu"
+                  id={ids.cpu}
+                  value={cpu}
+                  onChange={(v) => {
+                    if (v.custom !== cpu.custom) setLimitsTouched(true)
+                    setCpu(v)
+                  }}
+                  info={info}
+                  invalid={Boolean(shownCpuError)}
+                  describedBy={`${ids.cpu}-${shownCpuError ? 'error' : 'hint'}`}
+                />
+              </Field>
+            </div>
 
             {submitError && (
               <div

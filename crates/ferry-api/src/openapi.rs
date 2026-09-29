@@ -118,6 +118,7 @@ down.";
         datastores::list,
         datastores::create,
         datastores::get,
+        datastores::update,
         datastores::delete,
         env_groups::list,
         env_groups::create,
@@ -146,6 +147,7 @@ down.";
         ferry_core::dto::InstanceStatus,
         ferry_core::dto::RuntimeStatus,
         ferry_core::dto::CreateDatastore,
+        ferry_core::dto::UpdateDatastore,
         ferry_core::dto::DatastoreView,
         ferry_core::dto::CreateEnvGroup,
         ferry_core::dto::EnvGroupView,
@@ -188,7 +190,7 @@ down.";
         (name = "env-groups", description = "Shared variable sets linked to services (a service's own variables win over its groups'), and linking / unlinking them."),
         (name = "domains", description = "Custom domains of web services and static sites (unique across services)."),
         (name = "jobs", description = "Job runs: cron runs and one-off commands, with their logs."),
-        (name = "datastores", description = "Managed Postgres and Redis instances with their connection strings."),
+        (name = "datastores", description = "Managed Postgres and Redis instances with their connection strings and resource limits."),
         (name = "blueprints", description = "Infrastructure as code: apply a `ferry.yaml` / `render.yaml` (idempotent, with a dry run)."),
         (name = "events", description = "The change feed (Server-Sent Events) the web client uses to stay current without polling."),
         (name = "hooks", description = "Webhooks: secret deploy hook URLs and GitHub push events. They authenticate with their own secrets, never the API token."),
@@ -320,6 +322,12 @@ pub struct SourceArchive(pub Vec<u8>);
 )]
 #[allow(dead_code)]
 fn openapi_json() {}
+
+/// The OpenAPI document as pretty JSON (used by `ferryd --dump-openapi` to
+/// feed the documentation site generator).
+pub fn document_json() -> String {
+    ApiDoc::openapi().to_pretty_json().unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
 
 /// The unauthenticated routes serving the document and Swagger UI.
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {

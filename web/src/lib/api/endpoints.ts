@@ -22,6 +22,7 @@ import type {
   ServerInfo,
   ServiceView,
   TriggerDeploy,
+  UpdateDatastore,
   UpdateService,
 } from './types'
 
@@ -88,6 +89,8 @@ export const endpoints = {
   getDatastore: (ref: string, signal?: AbortSignal) =>
     api.get<DatastoreView>(`${V1}/datastores/${seg(ref)}`, undefined, signal),
   createDatastore: (body: CreateDatastore) => api.post<DatastoreView>(`${V1}/datastores`, body),
+  updateDatastore: (ref: string, body: UpdateDatastore) =>
+    api.patch<DatastoreView>(`${V1}/datastores/${seg(ref)}`, body),
   deleteDatastore: (ref: string, force = false) =>
     api.delete(`${V1}/datastores/${seg(ref)}`, force ? { force: true } : undefined),
 

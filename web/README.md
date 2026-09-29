@@ -9,7 +9,7 @@ The Ferry dashboard is a single-page app in React 19, TypeScript (strict), Vite,
 | Server state | TanStack Query v5 (`src/lib/api/queries/*`) |
 | Client state | Zustand (`src/stores/auth.ts`, `src/stores/ui.ts`) |
 | Routing | React Router v7 (`createBrowserRouter`, history URLs, code-split pages) |
-| Tests | Vitest (`src/lib/**/*.test.ts`) |
+| Tests | Vitest (`src/**/*.test.{ts,tsx}`; components render with `react-dom/server`) |
 
 ## Develop
 
@@ -27,7 +27,7 @@ Vite proxies `/api`, `/hooks` and `/healthz` to `FERRY_API_URL`. Server-Sent Eve
 | `npm run dev` | Vite dev server with HMR and the API proxy |
 | `npm run build` | `tsc -b && vite build` → `dist/` (hashed files under `dist/assets/`) |
 | `npm run preview` | serves `dist/` with the same proxy |
-| `npm test` | Vitest unit tests (SSE parser, formatting, `.env` parsing) |
+| `npm test` | Vitest unit tests (SSE parser, formatting, `.env` parsing, resource limits, a few components) |
 | `npm run typecheck` | `tsc -b --noEmit` |
 | `npm run lint` | ESLint (typescript-eslint, react-hooks, react-refresh) |
 
@@ -66,6 +66,7 @@ src/
   lib/api/queries/*.ts           query + mutation hooks per resource
   lib/api/useLogStream.ts        log stream hook
   lib/format.ts  lib/dotenv.ts   pure helpers (tested)
+  lib/resources.ts               memory / CPU limits: parse + format (mirror of ferry-core resources.rs), presets, form model
   stores/auth.ts  stores/ui.ts   zustand
   components/ui/*                shadcn primitives (customized)
   components/shell/*             AppShell, TopBar, IconRail, InnerMenu, CommandMenu, ConnectPopover

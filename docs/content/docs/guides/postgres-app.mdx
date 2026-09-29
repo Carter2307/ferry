@@ -1,0 +1,223 @@
+---
+title: "Deploy an app with Postgres"
+description: "Create a Postgres datastore, connect a Node.js service to it with a reference, run migrations as a one-off job and back up the data."
+icon: Database
+---
+
+import { Braces, Clock, Database } from 'lucide-react';
+
+In this guide you deploy a small notes API backed by Postgres. You create the database, pass its connection string to the app with a reference, create the table with a one-off job, and learn how to reach and back up the data.
+
+You need a running Ferry server and the `ferry` CLI logged in to it. See the [Quickstart](/docs/getting-started/quickstart).
+
+<Steps>
+<Step>
+
+### Create the database
+
+```bash title="Terminal"
+ferry db create notes-db --wait
+```
+
+```text title="Output"
+Waiting for postgres 'notes-db' to become available…
+Created postgres datastore 'notes-db' (dbs-be901a454ec7413aa1a2) — available
+Internal URL: postgresql://notes_db:6dd99f93338045919b9e682913c3c6a4@notes-db:5432/notes_db
+```
+
+Ferry runs `postgres:16-alpine` with its data on a Docker volume. The user and database are named after the datastore (`notes_db`), and the password is generated.
+
+</Step>
+<Step>
+
+### Write the app
+
+<Files>
+  <Folder name="notes" defaultOpen>
+    <File name="package.json" />
+    <File name="migrate.js" />
+    <File name="server.js" />
+  </Folder>
+</Files>
+
+```json title="package.json"
+{
+  "name": "notes",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}
+```
+
+```js title="migrate.js"
+const { Client } = require("pg");
+
+const client = new Client({ connectionString: process.env.DATABASE_URL });
+
+(async () => {
+  await client.connect();
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id serial PRIMARY KEY,
+      body text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`);
+  console.log("migrations applied");
+  await client.end();
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+```js title="server.js"
+const http = require("http");
+const { Pool } = require("pg");
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === "POST" && req.url === "/notes") {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      await pool.query("INSERT INTO notes (body) VALUES ($1)", [body]);
+      res.writeHead(201).end("saved\n");
+      return;
+    }
+    const { rows } = await pool.query("SELECT id, body FROM notes ORDER BY id");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(rows) + "\n");
+  } catch (err) {
+    console.error(err);
+    res.writeHead(500).end("error\n");
+  }
+});
+
+server.listen(process.env.PORT || 3000, "0.0.0.0");
+```
+
+The app reads the database URL from `DATABASE_URL` and listens on the `PORT` Ferry gives it.
+
+</Step>
+<Step>
+
+### Deploy it with a reference to the database
+
+From the `notes` directory:
+
+```bash title="Terminal"
+ferry up notes -e 'DATABASE_URL=${{datastore.notes-db.connectionString}}' --follow
+```
+
+`${{datastore.notes-db.connectionString}}` is a [reference](/docs/concepts/environment#references): the variable stores the reference, and each container gets the real URL when it starts, over the private network (`notes-db:5432`). Keep the single quotes so your shell doesn't touch it.
+
+```text title="Output (excerpt)"
+==> Detected Node.js runtime
+==> Generated Dockerfile.ferry for the Node.js runtime
+#8 [stage-0 4/5] RUN --mount=type=secret,id=DATABASE_URL,env=DATABASE_URL     npm install --include=dev --no-audit --no-fund
+#8 1.014 added 14 packages in 863ms
+==> Build successful 🎉
+==> Using port 10000 (default port)
+==> Limits: 512 MiB memory, 1 CPU per instance
+…
+==> Your service is live 🎉
+==> Available at http://notes.localhost:8080
+```
+
+</Step>
+<Step>
+
+### Run the migration
+
+The table doesn't exist yet, so the app answers `500` for now. Run the migration as a [one-off job](/docs/concepts/jobs#run-a-job-now): a container from the live image, with the same environment, that runs one command and exits.
+
+```bash title="Terminal"
+ferry run notes --follow -- npm run migrate
+```
+
+```text title="Output"
+Job job-48dd0201159b41c3bb58 pending, streaming output…
+==> Running `npm run migrate`
+> migrate
+> node migrate.js
+migrations applied
+==> Job succeeded
+Job job-48dd0201159b41c3bb58 succeeded (exit code 0)
+```
+
+</Step>
+<Step>
+
+### Try it
+
+```bash title="Terminal"
+curl -X POST --data 'hello from Ferry' http://notes.localhost:8080/notes
+# saved
+curl http://notes.localhost:8080/
+# [{"id":1,"body":"hello from Ferry"}]
+```
+
+</Step>
+</Steps>
+
+## Run migrations on every deploy
+
+Ferry has no pre-deploy command. Pick one of these:
+
+- **Run a job after each deploy:** `ferry up notes --follow && ferry run notes --follow -- npm run migrate` (or `ferry deploy notes --follow` for a service deployed from git). `--follow` makes the first command fail if the deploy fails, so the job only runs against the image that just went live.
+- **Migrate when the app starts:** `ferry update notes --start-cmd 'npm run migrate && npm start'`. Every instance runs the migration at startup, so it must be safe to run several times and concurrently (`CREATE TABLE IF NOT EXISTS`, or a migration tool that takes a lock).
+
+## Connect to the database yourself
+
+From the server, open `psql` inside the datastore container. Its name is `<prefix>-ds-<name>`, so `ferry-ds-notes-db` with the default prefix:
+
+```bash title="Terminal"
+docker exec -it ferry-ds-notes-db psql -U notes_db notes_db
+```
+
+From your machine, use the external URL printed by `ferry db show notes-db`. Its port is bound to `127.0.0.1` on the server, so tunnel it over SSH first:
+
+```bash title="Terminal"
+ssh -L 62975:127.0.0.1:62975 you@your-server
+psql 'postgresql://notes_db:…@127.0.0.1:62975/notes_db'
+```
+
+## Back up and restore
+
+Ferry doesn't back up datastores. Dump the database on a schedule, for example from a cron entry on the server:
+
+```bash title="Terminal"
+docker exec ferry-ds-notes-db pg_dump -U notes_db notes_db > notes-$(date +%F).sql
+```
+
+To restore into a fresh datastore:
+
+```bash title="Terminal"
+docker exec -i ferry-ds-notes-db psql -U notes_db notes_db < notes-2026-09-27.sql
+```
+
+## Add Redis
+
+A Redis datastore works the same way:
+
+```bash title="Terminal"
+ferry db create cache --kind redis --wait
+ferry env set notes 'REDIS_URL=${{datastore.cache.connectionString}}'
+# REDIS_URL=redis://default:<password>@cache:6379, and notes restarts
+```
+
+<Callout type="warning" title="Deleting the datastore deletes the data">
+`ferry db rm notes-db` removes the container and its volume. While `notes` references it, Ferry refuses unless you pass `--force`.
+</Callout>
+
+<Cards cols={3}>
+  <Card icon={<Database />} title="Datastores" href="/docs/concepts/datastores" description="Versions, connection strings, storage and limitations." />
+  <Card icon={<Braces />} title="Environment" href="/docs/concepts/environment" description="References, env groups and when changes apply." />
+  <Card icon={<Clock />} title="Jobs & cron" href="/docs/concepts/jobs" description="One-off jobs and scheduled runs." />
+</Cards>

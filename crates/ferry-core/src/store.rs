@@ -14,7 +14,8 @@ use crate::env::{self, ServiceRef};
 use crate::models::*;
 use crate::{Error, Result};
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] =
+    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_resource_limits.sql")];
 
 /// Handle to the Ferry database.
 #[derive(Clone, Debug)]
@@ -55,6 +56,10 @@ fn get_u16_opt(r: &SqliteRow, col: &str) -> Result<Option<u16>> {
     Ok(r.try_get::<Option<i64>, _>(col)?.and_then(|v| u16::try_from(v).ok()))
 }
 
+fn get_u32_opt(r: &SqliteRow, col: &str) -> Result<Option<u32>> {
+    Ok(r.try_get::<Option<i64>, _>(col)?.and_then(|v| u32::try_from(v).ok()))
+}
+
 fn is_unique_violation(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(db) if db.is_unique_violation())
 }
@@ -81,6 +86,8 @@ fn row_to_service(r: &SqliteRow) -> Result<Service> {
         auto_deploy: r.try_get("auto_deploy")?,
         suspended: r.try_get("suspended")?,
         disk_mount_path: r.try_get("disk_mount_path")?,
+        memory_limit_mb: get_u32_opt(r, "memory_limit_mb")?,
+        cpu_limit: r.try_get("cpu_limit")?,
         custom_domains: serde_json::from_str(&domains)
             .map_err(|e| Error::internal(format!("bad custom_domains json: {e}")))?,
         deploy_hook_key: r.try_get("deploy_hook_key")?,
@@ -136,6 +143,8 @@ fn row_to_datastore(r: &SqliteRow) -> Result<Datastore> {
         password: r.try_get("password")?,
         database: r.try_get("database")?,
         host_port: get_u16_opt(r, "host_port")?,
+        memory_limit_mb: get_u32_opt(r, "memory_limit_mb")?,
+        cpu_limit: r.try_get("cpu_limit")?,
         error: r.try_get("error")?,
         created_at: get_ts(r, "created_at")?,
         updated_at: get_ts(r, "updated_at")?,
@@ -173,7 +182,9 @@ impl Store {
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(10));
-        let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await?;
+        // Lazy: the first connection is the one `migrate` holds, so every
+        // other connection is opened after the migrations (see `migrate`).
+        let pool = SqlitePoolOptions::new().max_connections(8).connect_lazy_with(opts);
         let store = Store { pool };
         store.migrate().await?;
         Ok(store)
@@ -194,10 +205,16 @@ impl Store {
         Ok(store)
     }
 
+    /// Every migration runs on one connection: a connection that loaded the
+    /// schema between two migrations would prepare `SELECT *` statements with
+    /// the old column list, which sqlx caches (it then fails on rows with the
+    /// new columns).
     async fn migrate(&self) -> Result<()> {
-        let version: i64 = sqlx::query_scalar("PRAGMA user_version").fetch_one(&self.pool).await?;
+        use sqlx::Connection;
+        let mut conn = self.pool.acquire().await?;
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version").fetch_one(&mut *conn).await?;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(version.max(0) as usize) {
-            let mut tx = self.pool.begin().await?;
+            let mut tx = conn.begin().await?;
             sqlx::raw_sql(sql).execute(&mut *tx).await?;
             sqlx::query(&format!("PRAGMA user_version = {}", i + 1)).execute(&mut *tx).await?;
             tx.commit().await?;
@@ -237,8 +254,9 @@ impl Store {
         let res = sqlx::query(
             "INSERT INTO services (id, name, service_type, repo_url, branch, image, runtime, root_dir, dockerfile_path,
                 build_command, start_command, publish_dir, port, health_check_path, schedule, instances, auto_deploy,
-                suspended, disk_mount_path, custom_domains, deploy_hook_key, live_deploy_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                suspended, disk_mount_path, memory_limit_mb, cpu_limit, custom_domains, deploy_hook_key, live_deploy_id,
+                created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&s.id)
         .bind(&s.name)
@@ -259,6 +277,8 @@ impl Store {
         .bind(s.auto_deploy)
         .bind(s.suspended)
         .bind(&s.disk_mount_path)
+        .bind(s.memory_limit_mb.map(i64::from))
+        .bind(s.cpu_limit)
         .bind(serde_json::to_string(&s.custom_domains).unwrap_or_else(|_| "[]".into()))
         .bind(&s.deploy_hook_key)
         .bind(&s.live_deploy_id)
@@ -285,7 +305,8 @@ impl Store {
             "UPDATE services SET service_type = ?, repo_url = ?, branch = ?, image = ?, runtime = ?, root_dir = ?,
                 dockerfile_path = ?, build_command = ?, start_command = ?, publish_dir = ?, port = ?,
                 health_check_path = ?, schedule = ?, auto_deploy = ?,
-                disk_mount_path = ?, custom_domains = ?, deploy_hook_key = ?, updated_at = ?
+                disk_mount_path = ?, memory_limit_mb = ?, cpu_limit = ?, custom_domains = ?, deploy_hook_key = ?,
+                updated_at = ?
              WHERE id = ?",
         )
         .bind(s.service_type.as_str())
@@ -303,6 +324,8 @@ impl Store {
         .bind(&s.schedule)
         .bind(s.auto_deploy)
         .bind(&s.disk_mount_path)
+        .bind(s.memory_limit_mb.map(i64::from))
+        .bind(s.cpu_limit)
         .bind(serde_json::to_string(&s.custom_domains).unwrap_or_else(|_| "[]".into()))
         .bind(&s.deploy_hook_key)
         .bind(ts(&Utc::now()))
@@ -847,8 +870,8 @@ impl Store {
         }
         let res = sqlx::query(
             "INSERT INTO datastores (id, name, kind, version, status, username, password, database, host_port,
-                error, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                memory_limit_mb, cpu_limit, error, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&d.id)
         .bind(&d.name)
@@ -859,6 +882,8 @@ impl Store {
         .bind(&d.password)
         .bind(&d.database)
         .bind(d.host_port.map(i64::from))
+        .bind(d.memory_limit_mb.map(i64::from))
+        .bind(d.cpu_limit)
         .bind(&d.error)
         .bind(ts(&d.created_at))
         .bind(ts(&d.updated_at))
@@ -871,7 +896,11 @@ impl Store {
         }
     }
 
-    /// Persist every mutable column and bump `updated_at`. Returns the stored row.
+    /// Persist the engine-owned columns (version, status, credentials,
+    /// database, host port, error) and bump `updated_at`. Returns the stored
+    /// row. Resource limits are NOT written (use
+    /// [`Store::set_datastore_limits`]), so the engine persisting a stale row
+    /// can never revert a limits change.
     pub async fn update_datastore(&self, d: &Datastore) -> Result<Datastore> {
         let res = sqlx::query(
             "UPDATE datastores SET version = ?, status = ?, username = ?, password = ?, database = ?, host_port = ?,
@@ -893,6 +922,27 @@ impl Store {
             return Err(Error::not_found("datastore", &d.id));
         }
         self.require_datastore(&d.id).await
+    }
+
+    /// Set a datastore's resource limits (`None` = the server default) and
+    /// bump `updated_at`. Returns the stored row.
+    pub async fn set_datastore_limits(
+        &self,
+        id: &str,
+        memory_limit_mb: Option<u32>,
+        cpu_limit: Option<f64>,
+    ) -> Result<Datastore> {
+        let res = sqlx::query("UPDATE datastores SET memory_limit_mb = ?, cpu_limit = ?, updated_at = ? WHERE id = ?")
+            .bind(memory_limit_mb.map(i64::from))
+            .bind(cpu_limit)
+            .bind(ts(&Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("datastore", id));
+        }
+        self.require_datastore(id).await
     }
 
     pub async fn find_datastore(&self, id_or_name: &str) -> Result<Option<Datastore>> {
@@ -1062,6 +1112,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn service_limits_round_trip() {
+        let store = Store::open_in_memory().await.unwrap();
+        let mut svc = Service::new("api", ServiceType::WebService);
+        svc.memory_limit_mb = Some(768);
+        svc.cpu_limit = Some(1.5);
+        store.create_service(&svc).await.unwrap();
+        let got = store.require_service(&svc.id).await.unwrap();
+        assert_eq!((got.memory_limit_mb, got.cpu_limit), (Some(768), Some(1.5)));
+        let mut changed = got.clone();
+        changed.memory_limit_mb = None;
+        changed.cpu_limit = Some(0.25);
+        let saved = store.update_service(&changed).await.unwrap();
+        assert_eq!((saved.memory_limit_mb, saved.cpu_limit), (None, Some(0.25)));
+    }
+
+    /// Every pooled connection of a freshly migrated database file sees the
+    /// final schema (a connection opened between two migrations used to
+    /// prepare `SELECT *` with the old column list).
+    #[tokio::test]
+    async fn fresh_database_connections_see_every_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("ferry.db")).await.unwrap();
+        assert!(store.get_service("nope").await.unwrap().is_none());
+        let mut svc = Service::new("web", ServiceType::WebService);
+        svc.memory_limit_mb = Some(256);
+        store.create_service(&svc).await.unwrap();
+        for _ in 0..4 {
+            assert_eq!(store.get_service(&svc.id).await.unwrap().unwrap().memory_limit_mb, Some(256));
+        }
+        let reads = (0..16).map(|_| store.require_service(&svc.id));
+        for got in futures::future::join_all(reads).await {
+            assert_eq!(got.unwrap().memory_limit_mb, Some(256));
+        }
+    }
+
+    #[tokio::test]
     async fn env_and_groups() {
         let store = Store::open_in_memory().await.unwrap();
         let svc = Service::new("api", ServiceType::WebService);
@@ -1100,6 +1186,13 @@ mod tests {
         ds.host_port = Some(54321);
         let ds2 = store.update_datastore(&ds).await.unwrap();
         assert_eq!(ds2.host_port, Some(54321));
+        // Limits: set only by set_datastore_limits; update_datastore keeps them.
+        assert_eq!((ds2.memory_limit_mb, ds2.cpu_limit), (None, None));
+        let limited = store.set_datastore_limits(&ds.id, Some(1024), Some(0.5)).await.unwrap();
+        assert_eq!((limited.memory_limit_mb, limited.cpu_limit), (Some(1024), Some(0.5)));
+        let stale = store.update_datastore(&ds).await.unwrap();
+        assert_eq!((stale.memory_limit_mb, stale.cpu_limit), (Some(1024), Some(0.5)));
+        assert!(matches!(store.set_datastore_limits("dbs-nope", None, None).await, Err(Error::NotFound(_))));
         assert_eq!(store.require_datastore("db").await.unwrap().status, DatastoreStatus::Available);
         assert!(store.name_taken("db").await.unwrap());
         store.delete_datastore(&ds.id).await.unwrap();

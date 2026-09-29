@@ -88,6 +88,13 @@ export interface Service {
   auto_deploy: boolean
   suspended: boolean
   disk_mount_path: string | null
+  /**
+   * Memory limit of each instance (and of the service's jobs), in MiB.
+   * `null` = the server default. Takes effect with the next deploy or restart.
+   */
+  memory_limit_mb: number | null
+  /** CPU limit of each instance (and jobs), in CPUs (`0.5` = half a core). `null` = the server default. */
+  cpu_limit: number | null
   custom_domains: string[]
   deploy_hook_key: string
   live_deploy_id: string | null
@@ -141,6 +148,10 @@ export interface Datastore {
   password: string
   database: string | null
   host_port: number | null
+  /** Memory limit of the container, in MiB. `null` = the server default. */
+  memory_limit_mb: number | null
+  /** CPU limit of the container, in CPUs. `null` = the server default. */
+  cpu_limit: number | null
   error: string | null
   created_at: Timestamp
   updated_at: Timestamp
@@ -183,6 +194,14 @@ export interface ServerInfo {
   dashboard_url: string | null
   github_webhook_enabled: boolean
   docker_version: string | null
+  /** Memory limit (MiB) of containers that set none. 0 = unlimited. */
+  default_memory_limit_mb: number
+  /** CPU limit (CPUs) of containers that set none. 0 = unlimited. */
+  default_cpu_limit: number
+  /** CPUs of the Docker host, if known. */
+  docker_cpus: number | null
+  /** Total memory of the Docker host (bytes), if known. */
+  docker_memory_bytes: number | null
 }
 
 /** A service as returned by the API (flattened `Service` + computed fields). */
@@ -216,13 +235,20 @@ export interface CreateService {
   instances?: number | null
   auto_deploy?: boolean | null
   disk_mount_path?: string | null
+  /** Memory limit per instance, in MiB (default: the server default). */
+  memory_limit_mb?: number | null
+  /** CPU limit per instance, in CPUs (default: the server default). */
+  cpu_limit?: number | null
   custom_domains?: string[] | null
   env?: EnvVar[] | null
   env_groups?: string[] | null
   deploy?: boolean | null
 }
 
-/** `PATCH /api/v1/services/{id}` — empty string clears optional strings, port 0 = auto. */
+/**
+ * `PATCH /api/v1/services/{id}` — empty string clears optional strings, port 0 = auto,
+ * `memory_limit_mb` / `cpu_limit` 0 = back to the server default (next deploy).
+ */
 export interface UpdateService {
   repo_url?: string | null
   branch?: string | null
@@ -240,6 +266,8 @@ export interface UpdateService {
   auto_deploy?: boolean | null
   suspended?: boolean | null
   disk_mount_path?: string | null
+  memory_limit_mb?: number | null
+  cpu_limit?: number | null
   custom_domains?: string[] | null
 }
 
@@ -296,7 +324,14 @@ export interface InstanceStatus {
   restart_count: number | null
   cpu_percent: number | null
   memory_bytes: number | null
+  /** The container's configured memory limit (bytes); `null` when unlimited. */
   memory_limit_bytes: number | null
+  /** The container's CPU limit (CPUs); `null` when unlimited. */
+  cpu_limit: number | null
+  /** The kernel killed the container's process for exceeding its memory limit (its last exit). */
+  oom_killed: boolean
+  /** Exit code of the last exit, for exited / restarting containers. */
+  exit_code: number | null
 }
 
 /** `GET /api/v1/services/{id}/status` */
@@ -314,6 +349,19 @@ export interface CreateDatastore {
   version?: string | null
   database?: string | null
   username?: string | null
+  /** Memory limit, in MiB (default: the server default). */
+  memory_limit_mb?: number | null
+  /** CPU limit, in CPUs (default: the server default). */
+  cpu_limit?: number | null
+}
+
+/**
+ * `PATCH /api/v1/datastores/{id}` — resource limits. 0 = back to the server
+ * default. Applied to the running container in place (no restart).
+ */
+export interface UpdateDatastore {
+  memory_limit_mb?: number | null
+  cpu_limit?: number | null
 }
 
 export interface DatastoreView extends Datastore {

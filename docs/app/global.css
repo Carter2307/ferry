@@ -1,0 +1,275 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+@import 'fumadocs-openapi/css/preset.css';
+
+/* The Ferry design tokens, shared with the web dashboard (single source of truth). */
+@import '../../web/src/styles/tokens.css';
+
+/* Scan our own sources for Tailwind classes (fumadocs presets add their own @source). */
+@source '../components';
+@source '../app';
+@source '../content';
+
+/* ---------------------------------------------------------------------------
+   Fumadocs theme → Ferry tokens. neutral.css is the base; every variable is
+   remapped here, for light (:root) and dark (.dark on <html>, set by next-themes).
+   --------------------------------------------------------------------------- */
+:root,
+.dark {
+  --color-fd-background: var(--background);
+  --color-fd-foreground: var(--foreground);
+  --color-fd-muted: var(--surface-200);
+  --color-fd-muted-foreground: var(--foreground-light);
+  --color-fd-popover: var(--surface-300);
+  --color-fd-popover-foreground: var(--foreground);
+  --color-fd-card: var(--surface-100);
+  --color-fd-card-foreground: var(--foreground);
+  --color-fd-border: var(--border);
+  --color-fd-primary: var(--primary);
+  --color-fd-primary-foreground: var(--primary-foreground);
+  --color-fd-secondary: var(--surface-200);
+  --color-fd-secondary-foreground: var(--foreground);
+  --color-fd-accent: var(--selection);
+  --color-fd-accent-foreground: var(--foreground);
+  --color-fd-ring: var(--ring);
+  --color-fd-overlay: var(--overlay);
+
+  --color-fd-info: var(--info);
+  --color-fd-warning: var(--warning);
+  --color-fd-error: var(--destructive);
+  --color-fd-success: var(--success);
+  --color-fd-idea: var(--warning);
+
+  /* fumadocs layout sizes (notebook layout, see app/docs/layout.tsx) */
+  --fd-layout-width: 1440px;
+}
+
+/* neutral.css tints the sidebar in dark mode: keep our surfaces instead. */
+.dark #nd-sidebar {
+  --color-fd-muted: var(--surface-200);
+  --color-fd-secondary: var(--surface-200);
+  --color-fd-muted-foreground: var(--foreground-light);
+}
+
+/* Dark mode is class based (`<html class="dark">`), like the web client. */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--ferry-font-sans);
+  --font-mono: var(--ferry-font-mono);
+
+  /* Fumadocs uses rounded-xl for cards, code blocks, tabs and callouts and
+     rounded-lg for controls: map them onto our 8px card / 6px control radii. */
+  --radius-sm: var(--ferry-radius-sm);
+  --radius-md: var(--ferry-radius-md);
+  --radius-lg: var(--ferry-radius-md);
+  --radius-xl: var(--ferry-radius-lg);
+  --radius-2xl: var(--ferry-radius-xl);
+  --radius-control: var(--ferry-radius-md);
+  --radius-card: var(--ferry-radius-lg);
+  --radius-badge: var(--ferry-radius-sm);
+
+  /* Ferry token utilities (bg-surface-100, text-foreground-light, border-border-strong…) */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-foreground-light: var(--foreground-light);
+  --color-foreground-lighter: var(--foreground-lighter);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-surface-75: var(--surface-75);
+  --color-surface-100: var(--surface-100);
+  --color-surface-200: var(--surface-200);
+  --color-surface-300: var(--surface-300);
+  --color-selection: var(--selection);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-stronger: var(--border-stronger);
+  --color-primary: var(--primary);
+  --color-primary-solid: var(--primary-solid);
+  --color-primary-solid-border: var(--primary-solid-border);
+  --color-primary-bright: var(--primary-bright);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-destructive: var(--destructive);
+  --color-destructive-solid: var(--destructive-solid);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-destructive-border: var(--destructive-border);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-border: var(--info-border);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-overlay: var(--shadow-overlay);
+}
+
+@layer base {
+  html {
+    scrollbar-gutter: stable;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    font-family: var(--ferry-font-sans);
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 500;
+  }
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--ferry-font-mono);
+  }
+  ::selection {
+    background: var(--primary-soft);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-stronger) transparent;
+  }
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+@layer utilities {
+  /* The Supabase signature: small uppercase monospace labels. */
+  .mono-label {
+    font-family: var(--ferry-font-mono);
+    font-size: 11.5px;
+    line-height: 1.3;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--foreground-lighter);
+  }
+  .bg-dot-grid {
+    background-image: radial-gradient(circle, var(--border-stronger) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Layout details (Supabase-docs look)
+   --------------------------------------------------------------------------- */
+
+/* Sidebar: flush left, thin border, 30px items. */
+#nd-sidebar {
+  font-size: 14px;
+  border-inline-end: 1px solid var(--border);
+}
+
+/* Right table of contents: "ON THIS PAGE" mono label, compact items. */
+#toc-title {
+  font-family: var(--ferry-font-mono);
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--foreground-lighter);
+}
+#toc-title svg {
+  display: none;
+}
+#nd-toc a {
+  font-size: 13px;
+}
+
+/* Page header */
+#nd-page > h1 {
+  letter-spacing: -0.015em;
+}
+
+/* Prose: Supabase-like body rhythm, medium-weight headings. */
+.prose {
+  --tw-prose-body: var(--foreground-light);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-links: var(--foreground);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--foreground-lighter);
+  --tw-prose-bullets: var(--foreground-muted);
+  --tw-prose-quotes: var(--foreground-light);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border);
+  font-size: 15px;
+  line-height: 1.7;
+}
+.prose :where(h1, h2, h3, h4, h5, h6):not(:where(.not-prose, .not-prose *)) {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.prose :where(a):not(:where(.not-prose, .not-prose *)) {
+  text-decoration-color: var(--border-stronger);
+  text-underline-offset: 3px;
+  font-weight: 450;
+}
+.prose :where(a):not(:where(.not-prose, .not-prose *)):hover {
+  text-decoration-color: var(--primary);
+  color: var(--primary);
+}
+.prose :where(code):not(:where(pre code, .not-prose, .not-prose *)) {
+  font-size: 0.86em;
+  font-weight: 450;
+  border-radius: var(--ferry-radius-sm);
+  background: var(--surface-200);
+  border: 1px solid var(--border);
+  padding: 0.1em 0.35em;
+}
+.prose :where(table):not(:where(.not-prose, .not-prose *)) {
+  font-size: 14px;
+}
+.prose :where(th):not(:where(.not-prose, .not-prose *)) {
+  font-family: var(--ferry-font-mono);
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--foreground-lighter);
+}
+
+/* Code blocks: subtle surface, thin border. */
+figure.shiki {
+  background: var(--surface-75);
+  box-shadow: none;
+}
+figure.shiki pre {
+  font-size: 13px;
+  line-height: 1.6;
+}
+/* Blank lines: Shiki renders them as <span class="line"><span></span></span>,
+   which Fumadocs' `.line:empty { height: 1lh }` doesn't match, so inside the
+   flex-column <code> they collapsed to 0px (SSE frames, YAML sections…). */
+figure.shiki .line:not(:has(:not(:empty))) {
+  min-height: 1lh;
+}
+
+/* Steps: mono counters in outlined circles. */
+.fd-step:before {
+  background: var(--surface-100);
+  color: var(--foreground-light);
+  border: 1px solid var(--border-strong);
+  font-family: var(--ferry-font-mono);
+  font-size: 13px;
+}
+.fd-steps {
+  border-color: var(--border);
+}
+
+/* Mermaid diagrams render as inline SVG. */
+.ferry-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}

@@ -6,7 +6,9 @@
 //! Instances are always started from the live deploy's launch spec (see
 //! `spec`), never from the current settings. A route watcher follows the
 //! host ports of running instances every second, so that routes follow a
-//! container Docker restarted on a new port without waiting for a pass.
+//! container Docker restarted on a new port without waiting for a pass. An
+//! OOM watcher logs every container of this server the kernel kills for
+//! exceeding its memory limit.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -45,6 +47,9 @@ const DATASTORE_RETRY_MAX: Duration = Duration::from_secs(30 * 60);
 const CONCURRENCY: usize = 8;
 /// Route warm-up: how often newly started instances are re-checked.
 const WARMUP_POLL: Duration = Duration::from_millis(500);
+/// The OOM watcher subscribes to Docker events again after this pause when
+/// the stream ends (Docker restarted, connection lost).
+const OOM_WATCH_RETRY: Duration = Duration::from_secs(5);
 
 /// Which pass is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -490,6 +495,119 @@ fn changed_services(before: &Fleet, after: &Fleet) -> Vec<String> {
     changed
 }
 
+/// Logs (warn) every container of this server the kernel OOM-kills, from
+/// Docker's `oom` events. Docker restarts crashed instances and datastores
+/// on its own and clears their `OOMKilled` flag as soon as they run again,
+/// so without this an instance crash-looping on its memory limit would go
+/// unnoticed. (A new instance killed during its deploy's health check fails
+/// that deploy, and a killed job fails with the reason: both say so too.)
+pub(crate) async fn watch_oom(inner: Arc<Inner>) {
+    let filters: HashMap<String, Vec<String>> = HashMap::from([
+        ("type".to_string(), vec!["container".to_string()]),
+        ("event".to_string(), vec!["oom".to_string()]),
+        ("label".to_string(), vec![format!("{LABEL_INSTANCE}={}", inner.naming.prefix())]),
+    ]);
+    // Events up to here are handled (ns since the epoch): a new subscription
+    // replays what happened while there was none.
+    let mut cursor: Option<i64> = None;
+    loop {
+        let mut options = bollard::query_parameters::EventsOptionsBuilder::default().filters(&filters);
+        match cursor {
+            Some(ns) => options = options.since(&events_since(ns)),
+            None => cursor = Some(now_ns()),
+        }
+        let mut events = inner.docker.bollard().events(Some(options.build()));
+        loop {
+            let event = tokio::select! {
+                _ = inner.shutdown.cancelled() => return,
+                e = events.next() => e,
+            };
+            match event {
+                Some(Ok(event)) => {
+                    if let Some(ns) = event.time_nano.or(event.time.map(|s| s.saturating_mul(1_000_000_000))) {
+                        cursor = cursor.max(Some(ns.saturating_add(1)));
+                    }
+                    if let Some(actor) = event.actor {
+                        report_oom(&inner, actor.id.unwrap_or_default(), actor.attributes.unwrap_or_default()).await;
+                    }
+                }
+                Some(Err(e)) => {
+                    debug!("OOM watcher: {e}");
+                    break;
+                }
+                None => break,
+            }
+        }
+        tokio::select! {
+            _ = inner.shutdown.cancelled() => return,
+            _ = tokio::time::sleep(OOM_WATCH_RETRY) => {}
+        }
+    }
+}
+
+pub(crate) fn now_ns() -> i64 {
+    let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    i64::try_from(since_epoch.as_nanos()).unwrap_or(i64::MAX)
+}
+
+/// Docker's `since` for a time in ns since the epoch: `<seconds>.<nanoseconds>`.
+pub(crate) fn events_since(ns: i64) -> String {
+    format!("{}.{:09}", ns.div_euclid(1_000_000_000), ns.rem_euclid(1_000_000_000))
+}
+
+/// Log one OOM kill (`attributes`: the container's name and labels).
+async fn report_oom(inner: &Inner, container_id: String, attributes: HashMap<String, String>) {
+    let label = |k: &str| attributes.get(k).map(String::as_str);
+    let owner = match label(LABEL_ROLE) {
+        Some(ROLE_SERVICE | ROLE_JOB) => match label(LABEL_SERVICE) {
+            Some(id) => inner.store.get_service(id).await.ok().flatten().map(|s| s.name),
+            None => None,
+        },
+        Some(ROLE_DATASTORE) => match label(LABEL_DATASTORE) {
+            Some(id) => inner.store.find_datastore(id).await.ok().flatten().map(|d| d.name),
+            None => None,
+        },
+        _ => None,
+    };
+    // The limit it hit (it is restarting, or exited: still inspectable).
+    let limit = match inner.docker.inspect_container(&container_id).await {
+        Ok(Some(c)) => Some(c.memory_limit_bytes),
+        _ => None,
+    };
+    let message = oom_report(&attributes, owner.as_deref(), limit);
+    warn!(container = %attributes.get("name").map_or(container_id.as_str(), String::as_str), "{message}");
+}
+
+/// The server-log line for an OOM kill. `owner`: the name of the container's
+/// service / datastore; `limit`: its memory limit (`Some(None)` = none),
+/// `None` if it could not be read.
+fn oom_report(attributes: &HashMap<String, String>, owner: Option<&str>, limit: Option<Option<i64>>) -> String {
+    let label = |k: &str| attributes.get(k).map(String::as_str);
+    let name = label("name").unwrap_or("?");
+    let (subject, whose) = match label(LABEL_ROLE) {
+        Some(ROLE_SERVICE) => (
+            format!("instance {} of service '{}'", instance_id(name), owner.or(label(LABEL_SERVICE)).unwrap_or("?")),
+            "the service's",
+        ),
+        Some(ROLE_JOB) => (
+            format!(
+                "job {} of service '{}'",
+                label(LABEL_JOB).unwrap_or("?"),
+                owner.or(label(LABEL_SERVICE)).unwrap_or("?")
+            ),
+            "the service's",
+        ),
+        Some(ROLE_DATASTORE) => {
+            (format!("datastore '{}'", owner.or(label(LABEL_DATASTORE)).unwrap_or("?")), "the datastore's")
+        }
+        _ => (format!("container {name}"), "its"),
+    };
+    match limit {
+        Some(limit) => crate::limits::oom_message(&subject, limit, whose),
+        None => format!("{subject} ran out of memory and was killed"),
+    }
+}
+
 /// Re-install a service's routes with its current hosts but the upstreams
 /// the proxy already has (used while a deploy owns the service).
 pub(crate) fn rehost_routes(inner: &Inner, svc: &Service) {
@@ -637,6 +755,9 @@ mod tests {
             labels: BTreeMap::from([(LABEL_DEPLOY.to_string(), deploy.to_string())]),
             started_at: None,
             restart_count: None,
+            oom_killed: false,
+            memory_limit_bytes: None,
+            nano_cpus: None,
         }
     }
 
@@ -769,6 +890,44 @@ mod tests {
         let mut extra = c("x", "live", ContainerState::Running);
         extra.labels.insert(LABEL_SERVICE.to_string(), "srv-1".into());
         assert_eq!(changed_services(&before, &fleet_of(&[a, b, extra])), vec!["srv-1".to_string()]);
+    }
+
+    #[test]
+    fn events_resume_from_the_cursor() {
+        assert_eq!(events_since(1_700_000_000_123_456_789), "1700000000.123456789");
+        assert_eq!(events_since(1_700_000_000_000_000_001), "1700000000.000000001");
+        assert!(now_ns() > 1_700_000_000_000_000_000);
+    }
+
+    #[test]
+    fn oom_reports_name_the_owner_and_the_limit() {
+        let attrs = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+        let instance = attrs(&[
+            ("name", "ferry-web-cdef4567-a1b2c3"),
+            (LABEL_ROLE, ROLE_SERVICE),
+            (LABEL_SERVICE, "srv-1"),
+            (LABEL_DEPLOY, "dep-1"),
+        ]);
+        assert_eq!(
+            oom_report(&instance, Some("web"), Some(Some(512 << 20))),
+            "instance a1b2c3 of service 'web' ran out of memory (limit 512 MiB) — raise the service's memory limit"
+        );
+        assert_eq!(
+            oom_report(&instance, None, None),
+            "instance a1b2c3 of service 'srv-1' ran out of memory and was killed"
+        );
+        let job =
+            attrs(&[("name", "ferry-job-x"), (LABEL_ROLE, ROLE_JOB), (LABEL_SERVICE, "srv-1"), (LABEL_JOB, "job-9")]);
+        assert!(oom_report(&job, Some("web"), Some(Some(64 << 20))).starts_with("job job-9 of service 'web' ran out"));
+        let ds = attrs(&[("name", "ferry-ds-db"), (LABEL_ROLE, ROLE_DATASTORE), (LABEL_DATASTORE, "dbs-1")]);
+        assert_eq!(
+            oom_report(&ds, Some("db"), Some(Some(1 << 30))),
+            "datastore 'db' ran out of memory (limit 1 GiB) — raise the datastore's memory limit"
+        );
+        let other = attrs(&[("name", "stray")]);
+        assert!(oom_report(&other, None, Some(None)).starts_with("container stray was killed by the kernel's"));
     }
 
     #[test]

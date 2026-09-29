@@ -8,6 +8,7 @@ import { Callout } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
 import { ServiceTypeIcon } from '@/components/patterns/icons'
 import { KeyValueEditor } from '@/components/patterns/KeyValueEditor'
+import { LimitControl } from '@/components/patterns/LimitControl'
 import { useKeyValueRows } from '@/components/patterns/kv-rows'
 import { PageContainer, PageHeader, PageSection } from '@/components/patterns/Page'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,7 @@ import { errorMessage } from '@/lib/api/client'
 import { useCreateService, useDatastores, useServerInfo, useServices } from '@/lib/api/queries'
 import { RUNTIMES, type Runtime, type ServiceType } from '@/lib/api/types'
 import { RUNTIME_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
+import { LIMIT_DEFAULT, limitValue, memoryHostWarning, type LimitField } from '@/lib/resources'
 import { cn } from '@/lib/utils'
 import { servicePath } from '@/pages/service/context'
 
@@ -93,7 +95,7 @@ const RUNTIME_HINTS: Record<Exclude<Runtime, 'image'>, string> = {
 }
 
 /** Fields shown in the collapsible "Advanced" card. */
-const ADVANCED_FIELDS: FieldKey[] = ['rootDir', 'dockerfilePath', 'healthCheckPath', 'diskMountPath']
+const ADVANCED_FIELDS: FieldKey[] = ['rootDir', 'dockerfilePath', 'healthCheckPath', 'diskMountPath', 'memoryLimit', 'cpuLimit']
 
 const fieldId = (k: FieldKey) => `field-${k}`
 const errorId = (k: FieldKey) => `field-${k}-error`
@@ -101,7 +103,8 @@ const errorId = (k: FieldKey) => `field-${k}-error`
 /** Focus (and scroll to) the control of a field. */
 function focusField(k: FieldKey) {
   requestAnimationFrame(() => {
-    const root = document.getElementById(fieldId(k))
+    // Limit controls: the custom size input when shown, else the select.
+    const root = document.getElementById(`${fieldId(k)}-custom`) ?? document.getElementById(fieldId(k))
     if (!root) return
     const target =
       root.matches('input,textarea,button,select')
@@ -135,7 +138,8 @@ export function NewServicePage() {
     }),
     [services.data, datastores.data],
   )
-  const errors = React.useMemo(() => validateForm(form, taken), [form, taken])
+  const hostCpus = info.data?.docker_cpus
+  const errors = React.useMemo(() => validateForm(form, taken, hostCpus), [form, taken, hostCpus])
   const vis = visibleFields(form)
 
   const update = <K extends keyof NewServiceForm>(key: K, value: NewServiceForm[K]) => {
@@ -149,7 +153,12 @@ export function NewServicePage() {
     return e && (submitted || touched.has(k)) ? e : undefined
   }
   /** Props wiring a text input to a field (id, value, blur, aria). */
-  const bind = (k: Exclude<keyof NewServiceForm, 'domains' | 'envGroups' | 'autoDeploy' | 'type' | 'source' | 'runtime'>) => {
+  const bind = (
+    k: Exclude<
+      keyof NewServiceForm,
+      'domains' | 'envGroups' | 'autoDeploy' | 'type' | 'source' | 'runtime' | 'memoryLimit' | 'cpuLimit'
+    >,
+  ) => {
     const err = errorFor(k)
     return {
       id: fieldId(k),
@@ -167,21 +176,42 @@ export function NewServicePage() {
     const err = errorFor(k)
     return err ? <span id={errorId(k)}>{err}</span> : undefined
   }
+  /** Props wiring a LimitControl to a field; the error shows once a custom size is typed (or on submit). */
+  const bindLimit = (k: 'memoryLimit' | 'cpuLimit') => {
+    const err = errorFor(k)
+    return {
+      id: fieldId(k),
+      value: form[k],
+      onChange: (v: LimitField) => {
+        if (v.custom !== form[k].custom) touch(k)
+        update(k, v)
+      },
+      info: info.data,
+      invalid: Boolean(err),
+      describedBy: err ? errorId(k) : undefined,
+    }
+  }
 
   const hasAdvancedValues =
     form.rootDir.trim() !== '' ||
     form.dockerfilePath.trim() !== '' ||
     form.healthCheckPath.trim() !== '' ||
-    form.diskMountPath.trim() !== ''
-  const advancedVisible = vis.rootDir || vis.dockerfilePath || vis.healthCheckPath || vis.disk
+    form.diskMountPath.trim() !== '' ||
+    form.memoryLimit.choice !== LIMIT_DEFAULT ||
+    form.cpuLimit.choice !== LIMIT_DEFAULT
+  const advancedVisible = vis.rootDir || vis.dockerfilePath || vis.healthCheckPath || vis.disk || vis.limits
   const advancedParts = [
     vis.rootDir || vis.dockerfilePath ? 'monorepo paths' : null,
     vis.healthCheckPath ? 'health check' : null,
     vis.disk ? 'persistent disk' : null,
+    vis.limits ? 'resource limits' : null,
   ].filter((p): p is string => p !== null)
   const advancedSummary = advancedParts.length
     ? `${advancedParts.join(', ').replace(/, ([^,]*)$/, ' and $1').replace(/^./, (c) => c.toUpperCase())}.`
     : undefined
+
+  const perContainer = form.type === 'cron_job' ? 'each run' : 'each instance'
+  const memoryWarning = errors.memoryLimit ? null : memoryHostWarning(limitValue('memory', form.memoryLimit), info.data)
 
   const name = form.name.trim()
   const publicUrl = vis.domains ? previewServiceUrl(name || 'my-service', info.data) : null
@@ -523,6 +553,27 @@ export function NewServicePage() {
                   >
                     <Input {...bind('diskMountPath')} mono placeholder="/data" />
                   </FormRow>
+                )}
+                {vis.limits && (
+                  <>
+                    <FormRow
+                      label="Memory limit"
+                      htmlFor={fieldId('memoryLimit')}
+                      description={`Most RAM ${perContainer} may use. Past it, the process is killed (out of memory) and restarted.`}
+                      error={errNode('memoryLimit')}
+                    >
+                      <LimitControl kind="memory" {...bindLimit('memoryLimit')} />
+                      {memoryWarning && <p className="text-[13px] text-warning">{memoryWarning}</p>}
+                    </FormRow>
+                    <FormRow
+                      label="CPU limit"
+                      htmlFor={fieldId('cpuLimit')}
+                      description={`CPU time ${perContainer} may use, in cores. Past it, the process is slowed down. Both limits can be changed later in Settings.`}
+                      error={errNode('cpuLimit')}
+                    >
+                      <LimitControl kind="cpu" {...bindLimit('cpuLimit')} />
+                    </FormRow>
+                  </>
                 )}
               </FormCard>
             </div>

@@ -5,6 +5,7 @@ mod common;
 use std::sync::atomic::Ordering;
 
 use common::TestApp;
+use ferry_core::DatastoreStatus;
 use http::{Method, StatusCode};
 use serde_json::{Value, json};
 
@@ -406,6 +407,116 @@ async fn datastore_provisioning_failure_is_recorded() {
     assert_eq!(v["status"], "failed");
     assert!(v["error"].as_str().unwrap().contains("daemon unreachable"));
     assert_eq!(v["external_url"], Value::Null);
+}
+
+#[tokio::test]
+async fn datastore_limits_on_create() {
+    let app = TestApp::new().await;
+    let r = app.post("/api/v1/datastores", json!({"name": "db", "kind": "postgres"})).await;
+    assert_eq!((r.json()["memory_limit_mb"].clone(), r.json()["cpu_limit"].clone()), (Value::Null, Value::Null));
+    let r = app
+        .post(
+            "/api/v1/datastores",
+            json!({"name": "big", "kind": "postgres", "memory_limit_mb": 2048, "cpu_limit": 1.234}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text());
+    assert_eq!((r.json()["memory_limit_mb"].clone(), r.json()["cpu_limit"].clone()), (json!(2048), json!(1.23)));
+    let ds = app.store.require_datastore("big").await.unwrap();
+    assert_eq!((ds.memory_limit_mb, ds.cpu_limit), (Some(2048), Some(1.23)));
+    // 0 = the server default, as in PATCH
+    let r = app
+        .post("/api/v1/datastores", json!({"name": "kv", "kind": "redis", "memory_limit_mb": 0, "cpu_limit": 0}))
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text());
+    assert_eq!((r.json()["memory_limit_mb"].clone(), r.json()["cpu_limit"].clone()), (Value::Null, Value::Null));
+
+    // invalid limits: nothing is created or provisioned
+    app.engine.clear();
+    for body in [
+        json!({"name": "x", "kind": "redis", "memory_limit_mb": 4}),
+        json!({"name": "x", "kind": "redis", "cpu_limit": 600}),
+        json!({"name": "x", "kind": "redis", "cpu_limit": -1}),
+    ] {
+        let r = app.post("/api/v1/datastores", body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}: {}", r.text());
+        assert!(r.json()["error"]["message"].as_str().unwrap().contains("limit must be between"), "{}", r.text());
+    }
+    assert!(app.store.find_datastore("x").await.unwrap().is_none());
+    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+}
+
+#[tokio::test]
+async fn datastore_limits_are_changed_in_place() {
+    let app = TestApp::new().await;
+    let v = app.post("/api/v1/datastores", json!({"name": "db", "kind": "postgres"})).await.json();
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["status"], "creating");
+    app.engine.clear();
+
+    // still creating: applied too (its container may exist already; the
+    // engine does nothing when it doesn't)
+    let r = app.patch("/api/v1/datastores/db", json!({"memory_limit_mb": 1024})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!((r.json()["memory_limit_mb"].clone(), r.json()["cpu_limit"].clone()), (json!(1024), Value::Null));
+    assert_eq!(r.json()["name"], "db");
+    assert!(r.json()["internal_url"].as_str().unwrap().starts_with("postgresql://"));
+    assert_eq!(app.engine.calls(), vec![format!("update_limits {id} 1024 -")]);
+    app.engine.clear();
+
+    // available: applied to the container, by id or name, one field at a time
+    let mut ds = app.store.require_datastore(&id).await.unwrap();
+    ds.status = DatastoreStatus::Available;
+    app.store.update_datastore(&ds).await.unwrap();
+    let r = app.patch(&format!("/api/v1/datastores/{id}"), json!({"cpu_limit": 0.5})).await;
+    assert_eq!((r.json()["memory_limit_mb"].clone(), r.json()["cpu_limit"].clone()), (json!(1024), json!(0.5)));
+    assert_eq!(app.engine.calls(), vec![format!("update_limits {id} 1024 0.5")]);
+    app.engine.clear();
+    let r = app.patch("/api/v1/datastores/db", json!({"memory_limit_mb": 0, "cpu_limit": 2.346})).await;
+    assert_eq!((r.json()["memory_limit_mb"].clone(), r.json()["cpu_limit"].clone()), (Value::Null, json!(2.35)));
+    assert_eq!(app.engine.calls(), vec![format!("update_limits {id} - 2.35")]);
+    // unchanged limits are applied again (retries a failed update)
+    app.engine.clear();
+    let r = app.patch("/api/v1/datastores/db", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(app.engine.calls(), vec![format!("update_limits {id} - 2.35")]);
+
+    // invalid values change nothing
+    app.engine.clear();
+    for body in
+        [json!({"memory_limit_mb": 10}), json!({"cpu_limit": 512.5}), json!({"memory_limit_mb": 64, "cpu_limit": -2})]
+    {
+        let r = app.patch("/api/v1/datastores/db", body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}: {}", r.text());
+        assert!(r.json()["error"]["message"].as_str().unwrap().contains("limit must be between"), "{}", r.text());
+    }
+    let r = app.patch("/api/v1/datastores/db", json!({"version": "17"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    let ds = app.store.require_datastore(&id).await.unwrap();
+    assert_eq!((ds.memory_limit_mb, ds.cpu_limit, ds.version.as_str()), (None, Some(2.35), "16"));
+    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+    assert_eq!(app.patch("/api/v1/datastores/nope", json!({"cpu_limit": 1})).await.status, StatusCode::NOT_FOUND);
+
+    // the engine fails: the limits are saved, and the error says so
+    app.engine.fail_update_limits.store(true, Ordering::SeqCst);
+    let r = app.patch("/api/v1/datastores/db", json!({"memory_limit_mb": 256})).await;
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{}", r.text());
+    let msg = r.json()["error"]["message"].as_str().unwrap().to_string();
+    assert!(msg.starts_with("limits of 'db' saved, but applying them to its container failed: "), "{msg}");
+    assert!(msg.contains("docker update exploded"), "{msg}");
+    assert_eq!(app.store.require_datastore(&id).await.unwrap().memory_limit_mb, Some(256));
+
+    // failed (e.g. out of memory): its container may still be there,
+    // restarting with the old limits, and the next provisioning attempt
+    // keeps it, so the new limits are applied to it too
+    app.engine.fail_update_limits.store(false, Ordering::SeqCst);
+    let mut ds = app.store.require_datastore(&id).await.unwrap();
+    ds.status = DatastoreStatus::Failed;
+    app.store.update_datastore(&ds).await.unwrap();
+    app.engine.clear();
+    let r = app.patch("/api/v1/datastores/db", json!({"memory_limit_mb": 512})).await;
+    assert_eq!((r.status, r.json()["memory_limit_mb"].clone()), (StatusCode::OK, json!(512)));
+    assert_eq!(app.engine.calls(), vec![format!("update_limits {id} 512 2.35")]);
 }
 
 // ---------------------------------------------------------------------------

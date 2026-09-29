@@ -1,0 +1,151 @@
+---
+title: "Security model"
+description: "What the API token protects, how secrets are stored and passed, data directory permissions, what the proxy exposes, how far one misbehaving service can reach, and the safety rules that keep servers apart."
+icon: ShieldCheck
+---
+
+Ferry is built for one team running its own server. Whoever holds the API token is an administrator: there are no users, roles or per-service permissions. The model below keeps that token and the secrets behind it on the server, keeps everything but the proxy off the network, keeps one runaway app from taking the server down, and keeps two Ferry servers from ever damaging each other's workloads.
+
+## The API token
+
+- **One token per server.** `ferryd` generates it on first start (`fy_` followed by 40 random characters) and stores it in `<data-dir>/api_token` with mode `0600`. `--api-token` / `FERRY_API_TOKEN` sets it explicitly instead (the environment value is hidden from `ferryd --help`).
+- **Full access.** The token can read every variable and every datastore password through the API, and deploy, delete or run anything. Treat it like a root password.
+- **Checked in constant time** (both sides are hashed with SHA-256, then compared without early exit) on every `/api/v1` request, including unknown routes.
+- **Header first.** `Authorization: Bearer <token>`. `?access_token=` is accepted on `GET` requests only, for browser `EventSource` streams; `ferryd`'s request log records paths without their query string.
+- **On the client side,** `ferry login` saves the server and token in `~/.config/ferry/config.json` (or `$XDG_CONFIG_HOME/ferry/config.json`) with mode `0600`, in a `0700` directory. The dashboard keeps the token in the browser's `localStorage`.
+
+To rotate the token, restart `ferryd` with a new `--api-token`, or stop it, delete `<data-dir>/api_token` and start it again to generate a new one. Then run `ferry login` again.
+
+## Exposure
+
+| Listener | Default | Reachable from |
+|---|---|---|
+| API and dashboard (`--api-addr`) | `127.0.0.1:7878` | The server itself only |
+| Proxy (`--proxy-addr`, `--https-addr`) | `0.0.0.0:8080` | Everywhere: this is the public edge |
+| App containers | `127.0.0.1:<random>` | The server itself only; the public reaches them through the proxy ([why](/docs/architecture/networking-model#why-127001-published-ports)) |
+| Datastores | `127.0.0.1:<fixed port>` | The server itself only |
+
+The proxy can also serve the dashboard and the full API on a hostname (`--dashboard-host`). By default that is `ferry.<base-domain>` only when the base domain is local (`localhost`, `.local`, `.internal`, `.test`, an IP address), and off on a public domain, where you must enable it explicitly. Only do so with HTTPS (`--https-addr` and `--acme-email`): over plain HTTP the token would cross the network in clear text. The safer default for a production server is to keep the API on localhost and reach it through an SSH tunnel:
+
+```bash title="Terminal"
+ssh -L 7878:127.0.0.1:7878 you@your-server
+ferry login --server http://127.0.0.1:7878 --token <token>
+```
+
+A few endpoints need no token because they reveal nothing secret: `/healthz`, the OpenAPI document (`/api/openapi.json`), Swagger UI (`/api/docs`, which asks for the token to send requests), and the dashboard's static files (the dashboard asks for the token to show anything). Dashboard and Swagger UI pages are sent with `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`. `ferryd` sends no CORS headers, so other origins can't call the API from a browser.
+
+See [Production setup](/docs/guides/production) for a complete hardened setup.
+
+## The data directory
+
+`--data-dir` (default `./ferry-data`) holds everything Ferry knows, including secrets: variable values, datastore passwords, repository URLs with credentials, logs, uploaded source code and TLS keys. `ferryd` therefore creates it with mode `0700` (owner only) and tightens it at every start.
+
+| File | Mode | Contains |
+|---|---|---|
+| `api_token` | `0600` | The API token |
+| `instance_id` | `0600` | This data directory's claim on its Docker name prefix |
+| `ferry.db` | inside the `0700` directory | Services, deploys, variables, datastores (with passwords), env groups, settings |
+| `certs/<host>/key.pem`, `certs/accounts/*.json` | `0600` | TLS private keys and the ACME account |
+| `logs/`, `repos/`, `uploads/`, `builds/` | inside the `0700` directory | Deploy and job logs, git mirrors, uploaded archives, build scratch space |
+
+<Callout type="warning" title="Secrets are not encrypted at rest">
+Variable values and datastore passwords are stored in plain text in `ferry.db`, protected by the directory's permissions. Anyone who can read the data directory, or its backups, can read every secret. Encrypt backups and restrict access to the machine accordingly.
+</Callout>
+
+## Secrets
+
+How Ferry keeps secret values out of places where they tend to leak:
+
+- **Builds.** Variables reach `docker build` as BuildKit secrets (`--secret id=KEY,env=…`), with the values passed through the Docker CLI's environment, never its command line. Generated Dockerfiles mount them only into their install and build steps and never declare them as `ARG`s, so they don't end up in the image or its history. Your own Dockerfile can mount them the same way with `RUN --mount=type=secret,id=KEY,env=KEY …`. For compatibility, your Dockerfile also receives `--build-arg KEY` for the `ARG`s it declares, and BuildKit records those in the image history: declaring a secret as `ARG` is the Dockerfile's choice.
+- **References instead of copies.** [Env var references](/docs/reference/env-references) such as `${{datastore.app-db.password}}` keep the password in one place; the service stores the reference and gets the value only in its containers.
+- **Repository credentials.** A token embedded in a repository URL (`https://user:token@github.com/…`) is redacted as `***` in deploy logs, error messages, blueprint change lists and webhook responses.
+- **Datastore passwords** are generated (32 random characters) and never appear in logs or error messages. Readiness probes never put them on a command line: `redis-cli` gets the password through the exec environment (`REDISCLI_AUTH`).
+- **Webhook responses** return deploys with credentials redacted and without server paths.
+
+The API returns variable values and datastore passwords to token holders: the dashboard shows them so you can copy connection strings.
+
+## Webhooks
+
+Webhooks don't use the API token; each has its own secret:
+
+- **Deploy hooks** are secret URLs (`/hooks/deploy/<service id>?key=<key>`). The path takes the service id only, since names are guessable, and an unknown id and a wrong key get the same 401, so the hook can't be used to discover services. Anyone with the URL can trigger deploys (but nothing else): rotate it with `ferry deploy-hook rotate NAME` if it leaks.
+- **GitHub webhooks** are disabled (404) until `--github-webhook-secret` is set. Each delivery must be signed with it (`X-Hub-Signature-256`, HMAC-SHA256 over the raw body, checked in constant time), and a delivery whose body or delivery id was already processed is ignored, so a captured delivery can't be replayed.
+
+Details are in the [API overview](/docs/reference/api-overview#webhooks).
+
+## Proxy headers
+
+The proxy is the edge, so it can't trust forwarding headers sent by clients. Before forwarding a request, it drops every client-supplied `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Forwarded-For`, `Front-End-Https`, `X-Url-Scheme`, `X-Client-IP` and `X-Cluster-Client-IP` header, then sets:
+
+| Header | Value |
+|---|---|
+| `X-Forwarded-For`, `X-Real-IP` | The address of the connection's peer, and nothing else |
+| `X-Forwarded-Proto` | `http` or `https` |
+| `X-Forwarded-Host` | The `Host` the client used |
+| `X-Forwarded-Port` | The port of that `Host` (else 80 or 443), not the listener's port, so apps build correct URLs behind port forwarding |
+| `Forwarded` | The same facts in RFC 7239 form |
+| `X-Request-Id` | Kept if the client sent one, otherwise a random id |
+
+Your app can trust these headers for requests that come through the proxy, which is the only way in from outside the server thanks to the `127.0.0.1` bindings. (Other containers on the private network can still call it directly.) If you put another proxy or a CDN in front of Ferry, `X-Forwarded-For` is that proxy's address; CDN-specific headers such as `CF-Connecting-IP` are passed through untouched for apps that opt into them.
+
+## Timeouts and limits
+
+Every client connection to the proxy is bounded:
+
+| Limit | Value |
+|---|---|
+| Open connections | Derived from the process's open-file limit, at most 10,000. `ferryd` raises its soft open-file limit to the hard limit at startup. |
+| Connections per client address | 256 (an IPv6 client counts per /64). Loopback clients, such as a local front proxy or tunnel, are exempt. |
+| TLS handshake | 10 seconds |
+| First request head, and each next head on HTTP/1 | 30 seconds (this also bounds idle HTTP/1 keep-alive) |
+| Idle connection (no request in flight) | 60 seconds, 5 seconds while the connection limit is reached |
+| Pause while sending a request body | 60 seconds, then `408` |
+
+Requests in flight (streamed responses such as Server-Sent Events, long downloads, uploads that keep sending) and websocket tunnels are never cut by these timeouts. On the API side, request bodies are limited to 2 MiB, source uploads to 512 MiB and GitHub deliveries to 25 MiB.
+
+## One server per data directory and prefix
+
+Two safety rules keep a server from ever touching another one's workloads. Without them, a second `ferryd` would see the first one's containers as orphans and remove them.
+
+- **One process per data directory.** `ferryd` holds an exclusive lock on `<data-dir>/ferryd.lock` while it runs. A second one fails with `another ferryd is already running with data directory …`.
+- **One data directory per Docker name prefix.** `ferryd` records which data directory owns its prefix (`--name-prefix`, default `ferry`) on a marker volume `<prefix>-owner`, labelled with the `instance_id` and the data directory's path. It refuses to start when the prefix belongs to another data directory, or when a fresh data directory finds containers with its prefix it doesn't know:
+
+```text title="ferryd" noCopy
+Error: Docker resources with prefix 'ferry' belong to another Ferry server (data dir /var/lib/ferry). Run this server with a different --name-prefix, stop the other server, or pass --take-over to adopt the resources (the other server's containers will then be managed — and possibly removed — by this one).
+```
+
+To run several servers on one Docker daemon, give each its own `--name-prefix` and `--data-dir`. A moved data directory keeps its `instance_id`, so it starts again with the same `--name-prefix` and no extra flag. `--take-over` is only for a data directory that lost its `instance_id` (for example, you restored only `ferry.db`), and never while another server uses the prefix: the server that takes over removes the other server's containers as orphans. Inside a server, the engine only lists and touches containers labelled `ferry.instance=<prefix>`. See [Multiple servers](/docs/guides/multiple-servers).
+
+## Shutdown
+
+The first `SIGINT` or `SIGTERM` starts a graceful shutdown: the API stops accepting requests and gets up to 10 seconds to finish those in flight, the proxy drains, and the engine stops job runs and records interrupted deploys (up to 25 seconds). Containers keep running: the next start picks them up. A second signal exits at once (exit code 130).
+
+## One misbehaving service
+
+Anyone who can deploy can run any code on the server, so Ferry can't stop a hostile app. It does keep a buggy or runaway one from taking the server down: every container it starts (service instances, one-off jobs, cron runs and datastores; not builds) runs with a memory limit, a CPU limit, a process limit and log rotation. With the default server options:
+
+| When a service… | What happens |
+|---|---|
+| Leaks memory | The kernel kills its container at its memory limit (512 MiB by default, no swap beyond it) instead of picking some other process on the host, such as `ferryd`, `dockerd` or a database. Docker restarts it, `ferryd` logs the kill in the server log, and `ferry status` and the dashboard mark the instance as OOM killed while it restarts. |
+| Spins the CPU | It is throttled at its CPU limit (1 CPU per container by default), and the other cores stay free. On a 1-CPU host the default is the whole host: lower `--default-cpu-limit` there. |
+| Forks without end | It stops at 1024 processes and threads per container: `fork` fails inside the container, and the host's process table is untouched. |
+| Logs without end | Docker's `json-file` log rotates at 10 MiB × 3 files, at most about 30 MiB per container. A Docker daemon configured with another log driver keeps it, with that driver's own limits. |
+| Deploys onto a nearly full disk | The deploy, or a new datastore, fails before building or pulling, with a message naming the path. Restarts and rollbacks still work. |
+
+The limits are caps, not reservations: nothing checks that their sum fits the host. When the host itself runs out of memory, the kernel's OOM killer picks a victim among all processes. On Linux, `ferryd` lowers its own score at startup (`--oom-score-adj`, default `-500`) so that containers go first, and never raises a lower value set by its service manager, such as systemd's `OOMScoreAdjust=`. Lowering it needs root or `CAP_SYS_RESOURCE`; without them, `ferryd` logs a warning that suggests `OOMScoreAdjust=` in its systemd unit. The processes `ferryd` starts (`git`, the `docker` CLI) are reset to 0, so a runaway `git` isn't spared at the expense of the apps and databases, and containers never inherit the score, since Docker starts them. See [Resource limits](/docs/concepts/resource-limits) for how the limits work, and [Production setup](/docs/guides/production#size-the-container-limits) for sizing them.
+
+Still **not** contained:
+
+- **Builds.** `docker build` runs in BuildKit, which has no per-build memory or CPU limit: a build can still use all of the host's memory and CPU. Only `--build-concurrency` (default 2) bounds builds, and the free-disk check runs before a build, not during it.
+- **Disks.** Volumes (datastores, service disks), containers' own filesystems, images and the build cache have no quotas: a service writing to its disk or its container's filesystem can fill the host's disk. The [free-disk check](/docs/guides/production#the-free-disk-check) only stops new deploys and new datastores; `--keep-images` bounds Ferry's own images, and pruning the rest (`docker image prune`, `docker builder prune`) is up to you.
+- **Disk and network I/O.** There are no I/O or bandwidth limits.
+- **The private network.** Every service and datastore shares one private network ([networking model](/docs/architecture/networking-model#the-private-network)): any container can reach every service and datastore by name, and datastores are protected by their passwords only.
+- **Guards turned off.** A limit of `0` (`--default-memory-limit 0`, `--default-cpu-limit 0`, `--pids-limit 0`, `--log-max-size 0`, `--min-free-disk 0`) turns that guard off.
+
+## Known limitations
+
+- One administrator token: no users, teams, roles or audit log.
+- Secrets are stored unencrypted in `ferry.db` (see [above](#the-data-directory)).
+- No IP allow lists, and no rate limiting beyond the connection limits above.
+- Builds have no memory or CPU limit, disks have no quotas, disk and network I/O aren't limited, and every container can reach every service and datastore on the private network (see [One misbehaving service](#one-misbehaving-service)).
+- Images must be pullable anonymously: private registry credentials are not supported.

@@ -22,6 +22,7 @@ import { DATASTORE_KIND_LABELS, dateTime, relativeTime } from '@/lib/format'
 import { DeleteDatastoreDialog } from './DeleteDatastoreDialog'
 import { DATASTORE_PROPERTIES, datastoreRef, maskPassword, suggestedEnvKey } from './lib'
 import { KindIconBox } from './parts'
+import { DatastoreResourcesSection } from './ResourcesSection'
 import { useDatastoreReferences, type DatastoreReference } from './useDatastoreReferences'
 
 function BackLink() {
@@ -245,7 +246,7 @@ function DetailSkeleton() {
   )
 }
 
-/** `/datastores/:name` — Studio settings-style rows: status, connection info, references, delete. */
+/** `/datastores/:name` — Studio settings-style rows: status, connection info, resource limits, references, delete. */
 export function DatastoreDetailPage() {
   const { name = '' } = useParams()
   const navigate = useNavigate()
@@ -319,6 +320,8 @@ export function DatastoreDetailPage() {
           <PageSection title="Connection" description="Credentials and addresses for this datastore.">
             <ConnectionCard ds={ds} />
           </PageSection>
+
+          <DatastoreResourcesSection key={ds.id} ds={ds} />
 
           <PageSection
             title="Use in a service"

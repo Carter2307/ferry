@@ -1,0 +1,357 @@
+---
+title: Builds & runtimes
+description: How Ferry turns your code into an image, from runtime detection and generated Dockerfiles to build-time variables and image retention.
+icon: Hammer
+---
+
+import { History, Layers, Variable } from 'lucide-react';
+
+Every deploy of a git or upload service builds a Docker image, with your Dockerfile or with one that Ferry writes for your language. You don't need to know Docker to deploy a Node.js, Python, Go, Rust, Ruby or static project; when you want full control, commit a Dockerfile. Services that deploy a prebuilt image skip the build entirely.
+
+## The build step
+
+The first phase of a [deploy](/docs/concepts/deploys) (status `building`) does this:
+
+1. **Fetch the source.** For a git service, fetch the repository into the service's git cache and check out the branch, or the commit given with `--commit`. For an upload, extract the archive sent by `ferry up`.
+2. **Enter the root directory** when the service has one (monorepos).
+3. **Pick the runtime:** the one set on the service, or the one detected from the files.
+4. **Find or write the Dockerfile:** your `Dockerfile`, or a generated `Dockerfile.ferry`.
+5. **Run `docker build`** with BuildKit, and tag the image `<prefix>/<service>:<deploy-id>` (for example `ferry/api:dep-3493c505ea9b4415b359`). The whole build output goes to the deploy log.
+
+```text title="Deploy log" noCopy
+==> Starting deploy dep-3493c505ea9b4415b359 (trigger: upload)
+==> Extracting uploaded source archive
+==> Extracted 2 files (791 B)
+==> Detected Node.js runtime
+==> Generated Dockerfile.ferry for the Node.js runtime
+==> Building image ferry/node-hello:dep-3493c505ea9b4415b359
+#1 [internal] load build definition from Dockerfile.ferry
+…
+==> Build successful 🎉
+```
+
+A git build logs the checkout instead:
+
+```text title="Deploy log" noCopy
+==> Cloning from https://github.com/you/api (branch main)
+==> Checked out c5f8f76: Initial commit
+==> Using Dockerfile at ./Dockerfile
+==> Building image ferry/api:dep-350f412fb3c741d0a2ab
+```
+
+The build gets the files of the commit, without a `.git` directory; the running app finds the commit in `FERRY_GIT_COMMIT`. Git submodules are not fetched. Builds run on the server, several at a time up to `--build-concurrency` (2 by default).
+
+## Runtimes
+
+The runtime tells Ferry how to produce the image. Set it with `--runtime` or on the **Settings** page:
+
+| Runtime | Produces the image with |
+|---|---|
+| `auto` (default) | The runtime detected from the files, see below |
+| `docker` | Your Dockerfile |
+| `image` | No build: pulls the service's image. Set automatically when the service has an image. |
+| `node` | A generated Node.js Dockerfile (npm, Yarn, pnpm or Bun) |
+| `python` | A generated Python Dockerfile |
+| `go` | A generated Go Dockerfile |
+| `rust` | A generated Rust Dockerfile |
+| `ruby` | A generated Ruby Dockerfile |
+| `static` | A generated nginx image, after an optional build step |
+
+A few aliases are accepted too, such as `nodejs` and `bun` for `node`, `python3` for `python` and `golang` for `go`.
+
+### Detection
+
+With `auto`, Ferry looks for these files in the root directory (not in subdirectories). The first match wins:
+
+| File in the root directory | Runtime |
+|---|---|
+| `Dockerfile` | `docker` |
+| `package.json`, `bun.lockb` or `bun.lock` | `node` |
+| `requirements.txt`, `pyproject.toml` or `Pipfile` | `python` |
+| `go.mod` | `go` |
+| `Cargo.toml` | `rust` |
+| `Gemfile` | `ruby` |
+| `index.html` | `static` |
+
+A Dockerfile path other than `Dockerfile` (`--dockerfile`) also selects `docker`. A static site with none of these files is served as static files. For anything else, the build fails with `could not detect the runtime`: add one of the files, or set the runtime.
+
+A runtime you set explicitly must match the files. For example, `--runtime node` without a `package.json` fails with a message that names the missing file and the runtime the project seems to use.
+
+## Dockerfile builds
+
+When the runtime is `docker`, or `auto` with a `Dockerfile` in the root directory, Ferry builds your Dockerfile as it is:
+
+- **Path:** `--dockerfile` sets a path relative to the root directory, `Dockerfile` by default. It may point above the root directory (`../Dockerfile`) as long as it stays inside the repository.
+- **Context:** the root directory. Your `.dockerignore` applies.
+- **Start command:** if the service has one, it replaces the image's `CMD`, run with `/bin/sh -c`.
+- **Port:** Ferry uses the service's port setting, a `PORT` variable, or the port the image `EXPOSE`s when there is exactly one. Otherwise set `--port`. See [Which port](/docs/concepts/deploys#which-port).
+- **Variables:** available to your build as BuildKit secrets and build arguments, see [Build-time environment](#build-time-environment).
+
+## Generated Dockerfiles
+
+For the other runtimes, Ferry writes a Dockerfile named `Dockerfile.ferry` in the root directory. It never overwrites a file of yours: if the name is taken, it uses `Dockerfile.ferry.1`, `Dockerfile.ferry.2` and so on. When the project has no `.dockerignore`, Ferry also writes one that leaves out `.git`, `node_modules`, `target`, `.venv`, `__pycache__` and its own Dockerfiles.
+
+The generated files follow the same pattern: a small official base image, the dependencies installed in their own layer (so a code change doesn't reinstall them), your build command, then the start command. For example, for `examples/python-hello`, which has a `requirements.txt` and a `Procfile` with `web: python app.py`:
+
+```dockerfile title="Dockerfile.ferry"
+# Generated by Ferry: Python app.
+# Commit your own Dockerfile to customize the build.
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["/bin/sh","-c","python app.py"]
+```
+
+The generated file only exists during the build. To customize it, commit your own `Dockerfile`: Ferry then uses it instead.
+
+### Per runtime
+
+What each generated Dockerfile does, when you don't set a build or start command yourself:
+
+<Tabs items={['Node.js', 'Python', 'Go', 'Rust', 'Ruby']} groupId="runtime" persist>
+<Tab value="Node.js">
+
+- **Base image:** `node:<major>-alpine`. The major version comes from `engines.node` in `package.json`: 22 when the range allows it, else the newest major the range allows. Bun projects use `oven/bun:1-alpine`.
+- **Dependencies:** installed with the project's package manager, found from the `packageManager` field or the lockfile: npm (`npm ci` when there is a `package-lock.json`, else `npm install`), Yarn, pnpm (both through Corepack) or Bun. Dev dependencies are included, so your build tools are available.
+- **Build:** the `build` script of `package.json`, if there is one. `NODE_ENV=production` is set after the install, so it applies to the build and at run time.
+- **Start:** `npm start` when there is a `start` script (`yarn start` with Yarn 2+, `bun run start` with Bun), else `node` with the `main` file, `server.js`, `index.js` or `app.js`.
+
+</Tab>
+<Tab value="Python">
+
+- **Base image:** `python:<version>-slim`, with the version from `.python-version` or `runtime.txt` (`python-3.11.4`), 3.12 by default.
+- **Dependencies:** `pip install -r requirements.txt`; with a `pyproject.toml`, uv when there is a `uv.lock`, Poetry for Poetry projects, else `pip install .` or the project's dependencies; Pipenv with a `Pipfile`. Projects that use `psycopg2` or `mysqlclient` get the system libraries they compile against.
+- **Build:** none by default; your build command runs after the install.
+- **Start:** `python main.py`, else `python app.py`.
+
+</Tab>
+<Tab value="Go">
+
+- **Base image:** builds on `golang:<version>-alpine`, with the version from the `go` line of `go.mod` (1.23 by default), and runs on `alpine:3.20`.
+- **Dependencies:** `go mod download`, in its own cached layer.
+- **Build:** `CGO_ENABLED=0 go build` of the root package when it is `package main`, else of the only main package under `cmd/<name>`. A build command of your own must write its binaries to `/out`; they are installed in `/usr/local/bin`.
+- **Start:** the built binary, `/usr/local/bin/app`. The final image also holds your source tree in `/app`, the working directory, for templates and other files read at run time.
+
+</Tab>
+<Tab value="Rust">
+
+- **Base image:** builds on `rust:1-slim-bookworm`, runs on `debian:bookworm-slim`. OpenSSL is installed when `Cargo.lock` depends on `openssl-sys`.
+- **Dependencies:** fetched by Cargo, with the registry and the target directory kept in build caches between builds.
+- **Build:** `cargo build --release`; the binary is installed in `/usr/local/bin`.
+- **Start:** the binary named by `default-run`, else the package's own binary, else the first `[[bin]]` target. The final image also holds your source tree in `/app`, the working directory.
+
+</Tab>
+<Tab value="Ruby">
+
+- **Base image:** `ruby:<version>-slim`, with the version from `.ruby-version` or the Gemfile's `ruby` line, 3.3 by default. `build-essential`, `git`, `libpq-dev`, `libyaml-dev` and `pkg-config` are installed for gems with native extensions, and MySQL's client library when the project uses `mysql2`.
+- **Dependencies:** `bundle install`.
+- **Build:** none by default; your build command runs after the install.
+- **Start:** `bundle exec rackup -o 0.0.0.0 -p ${PORT:-10000}` when there is a `config.ru`.
+
+</Tab>
+</Tabs>
+
+Static sites are covered in [their own section](#static-sites).
+
+When Ferry can't tell how to start the app, the build fails and says what to add, for example:
+
+```text noCopy
+cannot determine how to start this Node.js app: set a start command, add a Procfile with a `web:` entry, a "start" script to package.json, or a server.js / index.js file
+```
+
+### Start command
+
+The start command of a generated image is, in order:
+
+1. the service's **start command** (`--start-cmd`), run with `/bin/sh -c` so `$PORT` and other variables expand;
+2. an entry of a `Procfile` in the root directory: `web:` for web services, private services and static sites, `worker:` for background workers, `cron:` (else `worker:`) for cron jobs;
+3. the runtime's default, described above.
+
+A cron job needs none of them: its command can come at run time.
+
+## Static sites
+
+Static sites (the `static` service type, or the `static` runtime) are served by `nginx:alpine` on port 80, with this behavior:
+
+- `/about` is served from `about`, `about/index.html` or `about.html`, in that order; a missing page answers with a 404 status and your `404.html`, when there is one;
+- responses are gzip-compressed;
+- dotfiles (`.env`, `.git`…) are never served, except under `/.well-known/`, and when the whole root directory is published, Ferry removes `Dockerfile.ferry` and `.git` from it.
+
+**Build step.** There is one when the service has a build command, or when its `package.json` has a `build` script. The build runs with the toolchain your project uses:
+
+| Project | Toolchain |
+|---|---|
+| `package.json` | Node.js, with the project's package manager |
+| `requirements.txt`, `pyproject.toml` or `Pipfile` (MkDocs, Pelican…) | Python |
+| `Gemfile` (Jekyll…) | Ruby |
+| A `hugo.toml` / `hugo.yaml` / `hugo.json`, or a build command that runs `hugo` | Hugo on Alpine |
+| `go.mod` | Go |
+| None of these | A plain `node:22-alpine` image |
+
+A runtime set explicitly (`--runtime python`, for example) picks the toolchain instead.
+
+**Publish directory.** What nginx serves:
+
+| Publish directory (`--publish-dir`) | With a build step | Without a build step |
+|---|---|---|
+| Set, e.g. `dist` | That directory; the build fails if it doesn't exist | That directory |
+| `.` | The whole root directory after the build | The root directory |
+| Not set | The first of `dist`, `build`, `out`, `public`, `_site` and `site` that the build produced; the build fails if there is none | The root directory if it has an `index.html`, else the first of those directories that holds one, else the root directory |
+
+A folder of plain files with an `index.html` is served as it is:
+
+```bash title="Terminal"
+ferry up my-site --type static --dir ./public
+```
+
+<Callout type="warning" title="Custom build commands and devDependencies">
+The build command runs with `NODE_ENV=production`. When your build command installs dependencies itself (for example in a subdirectory, where Ferry doesn't install them for you), `npm ci` would skip the `devDependencies` that hold your build tools. Use `npm ci --include=dev`:
+
+```bash title="Terminal"
+ferry update docs --build-cmd "cd docs && npm ci --include=dev && npm run build" --publish-dir docs/out
+```
+</Callout>
+
+<Accordions>
+<Accordion title="The generated Dockerfile of a static site without a build step">
+
+```dockerfile title="Dockerfile.ferry"
+# Generated by Ferry: static site served by nginx.
+# Commit your own Dockerfile to customize the build.
+FROM nginx:alpine
+RUN rm -rf /usr/share/nginx/html/* \
+ && printf '%s\n' \
+    'server {' \
+    '    listen 80;' \
+    '    server_name _;' \
+    '    root /usr/share/nginx/html;' \
+    '    index index.html index.htm;' \
+    '    absolute_redirect off;' \
+    '    gzip on;' \
+    '    gzip_vary on;' \
+    '    gzip_min_length 256;' \
+    '    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml application/manifest+json image/svg+xml;' \
+    '    location / {' \
+    '        try_files $uri $uri/ $uri.html =404;' \
+    '    }' \
+    '    location ~ /\.(?!well-known(/|$)) {' \
+    '        return 404;' \
+    '    }' \
+    '    error_page 404 /404.html;' \
+    '}' \
+    > /etc/nginx/conf.d/default.conf
+COPY . /usr/share/nginx/html/
+RUN rm -rf /usr/share/nginx/html/Dockerfile.ferry* /usr/share/nginx/html/.git
+EXPOSE 80
+```
+
+</Accordion>
+</Accordions>
+
+## Root directory
+
+In a monorepo, `--root-dir` (or `rootDir` in a blueprint) points the build at a subdirectory:
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/monorepo --root-dir services/api
+```
+
+The root directory becomes the Docker build context, and everything else is relative to it: runtime detection, the Dockerfile path, the `Procfile` and the publish directory. The log says `==> Using root directory ./services/api`. It must be a relative path inside the repository.
+
+Files outside the root directory are not part of the build context. If your build needs them (a shared library, design tokens…), build from the repository root and `cd` in your build command, as in the example above.
+
+## Build-time environment
+
+Your build gets the service's environment variables, so an install step can use a private registry token or a build can bake in a public API URL:
+
+- **Which variables:** those of the linked env groups and of the service, merged the same way as at run time, with `${{…}}` references resolved. The variables Ferry injects at run time (`PORT`, `FERRY_…`) are not part of it.
+- **Unresolvable references** (for example to a service that has never deployed) are left out of the build, with a warning in the log: `==> Warning: not available at build time (unresolved references): …`.
+- **Reserved names** are never passed, so they can't break the build: `PATH`, `HOME`, `PWD`, `OLDPWD`, `HOSTNAME`, `SHELL`, `USER`, `LOGNAME`, `TERM`, `SHLVL`, `TMPDIR`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `SSH_AUTH_SOCK`, names that start with `DOCKER_`, `BUILDKIT_`, `BUILDX_`, `COMPOSE_`, `XDG_` or `FERRY_BUILD_`, and names that are not valid variable names. The log lists them: `==> Not available at build time (reserved or invalid names): …`.
+
+**Values are passed as BuildKit secrets, never as build arguments** in generated Dockerfiles. Docker records build argument values in the image history, where anyone with the image could read them; secrets are only visible to the steps that mount them. Ferry hands the values to `docker build` through its environment, never on its command line, and generated Dockerfiles mount them only into the steps that run your code (installing dependencies and the build command). Here is the Node.js Dockerfile of a service with three variables:
+
+```dockerfile title="Dockerfile.ferry"
+# Generated by Ferry: Node.js app (npm).
+# Commit your own Dockerfile to customize the build.
+FROM node:22-alpine
+WORKDIR /app
+ARG FERRY_BUILD_ENV_DIGEST
+
+COPY package.json ./
+RUN --mount=type=secret,id=LOG_LEVEL,env=LOG_LEVEL \
+    --mount=type=secret,id=DATABASE_URL,env=DATABASE_URL \
+    --mount=type=secret,id=GREETING,env=GREETING \
+    npm install --include=dev --no-audit --no-fund
+
+COPY . .
+ENV NODE_ENV=production
+
+CMD ["npm","start"]
+```
+
+`FERRY_BUILD_ENV_DIGEST` receives a keyed digest of the values, not the values: when a variable changes, the steps that use the variables run again instead of coming from the cache.
+
+**In your own Dockerfile**, each variable is available as a secret with the variable's name as its id. Mount it into the steps that need it:
+
+```dockerfile title="Dockerfile"
+FROM node:22-alpine
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=secret,id=NPM_TOKEN,env=NPM_TOKEN npm ci # [!code highlight]
+COPY . .
+RUN npm run build
+CMD ["npm", "start"]
+```
+
+Ferry also passes each variable as `--build-arg`, so an `ARG NPM_TOKEN` in your Dockerfile receives its value too. Prefer secrets: `ARG` values are recorded in the image history.
+
+<Callout type="info" title="Requires Docker Engine 27.3 or newer">
+Mounting a secret as an environment variable (`env=` in `--mount=type=secret`) needs Docker Engine 27.3 or newer on the Ferry server. With an older engine, builds that use variables fail with a message asking you to upgrade Docker.
+</Callout>
+
+## Build cache
+
+Docker's layer cache makes repeated builds fast: dependencies are only reinstalled when a manifest (`package.json`, `requirements.txt`, `go.mod`…) changes. Go and Rust builds also keep their module, registry and target caches between builds.
+
+To build without the layer cache, for example to pick up new versions of unpinned dependencies:
+
+```bash title="Terminal"
+ferry deploy api --clear-cache
+```
+
+In the dashboard, use **Clear build cache & deploy** in the **Manual deploy** menu. Both run `docker build --no-cache`.
+
+## Images and retention
+
+Each build produces an image tagged `<prefix>/<service>:<deploy-id>`, labelled so Ferry knows it belongs to the service. Images of image services are pulled, then tagged the same way ("pinned"), so every deploy refers to the exact image it ran.
+
+After each deploy, Ferry deletes the service's older images and keeps:
+
+- the 5 newest images of the service (`--keep-images` on `ferryd`);
+- the image of the live deploy, and of deploys in progress, whatever their age.
+
+Only images Ferry tagged for the service are deleted, never images you pulled yourself or public base images. These retained images are what [rollbacks](/docs/concepts/deploys#rollbacks) and restarts reuse: a deploy whose image was cleaned up can't be rolled back to, and you deploy again from source instead. Deleting a service deletes all its images.
+
+## Limits
+
+- **Uploads:** `ferry up` archives can be up to 512 MiB compressed. On the server, an archive may expand to at most 2 GiB and 200,000 files, directories and links.
+- **Registries:** Ferry pulls public images only; it has no registry authentication.
+- **Submodules** are not fetched.
+- **Architecture:** images are built and run on the server's own Docker, for its CPU architecture.
+
+## Next steps
+
+<Cards cols={3}>
+  <Card icon={<History />} title="Deploys" href="/docs/concepts/deploys" description="What happens after the build." />
+  <Card icon={<Variable />} title="Environment & env groups" href="/docs/concepts/environment" description="Variables, env groups and references." />
+  <Card icon={<Layers />} title="Language guides" href="/docs/guides/language-guides" description="Node, Python, Go, Rust and static sites in practice." />
+</Cards>

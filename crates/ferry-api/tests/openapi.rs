@@ -63,6 +63,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/datastores"),
     ("POST", "/api/v1/datastores"),
     ("GET", "/api/v1/datastores/{id}"),
+    ("PATCH", "/api/v1/datastores/{id}"),
     ("DELETE", "/api/v1/datastores/{id}"),
     // env groups
     ("GET", "/api/v1/env-groups"),
@@ -148,6 +149,7 @@ async fn the_document_is_openapi_3_1_with_info_schemas_and_security() {
         "DeploySource",
         "JobRun",
         "DatastoreView",
+        "UpdateDatastore",
         "EnvGroupView",
         "BlueprintResult",
         "ApiErrorBody",
@@ -359,6 +361,49 @@ async fn every_listed_route_reaches_a_handler() {
             .await;
         assert!(missed_the_router(r.status, &r.body, uri), "{method} {uri}: {} {}", r.status, r.text());
     }
+}
+
+#[tokio::test]
+async fn resource_limits_are_documented() {
+    let app = TestApp::new().await;
+    let doc = document(&app).await;
+    let ops = operations(&doc);
+    let op = |m: &str, p: &str| ops[&(m.to_string(), p.to_string())].clone();
+    let schemas = &doc["components"]["schemas"];
+
+    // PATCH /api/v1/datastores/{id} takes an UpdateDatastore
+    let patch = op("PATCH", "/api/v1/datastores/{id}");
+    assert_eq!(patch["operationId"], "updateDatastore");
+    assert_eq!(
+        patch["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/UpdateDatastore"
+    );
+    assert_eq!(
+        patch["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/DatastoreView"
+    );
+    for status in ["400", "404", "409"] {
+        assert!(patch["responses"].get(status).is_some(), "{status}: {patch}");
+    }
+    let description = patch["description"].as_str().unwrap();
+    assert!(description.contains("without a restart") && description.contains("`0`"), "{description}");
+    for field in ["memory_limit_mb", "cpu_limit"] {
+        for schema in ["UpdateDatastore", "CreateDatastore", "CreateService", "UpdateService", "Service", "Datastore"] {
+            assert!(schemas[schema]["properties"].get(field).is_some(), "{schema}.{field}");
+        }
+    }
+    for field in ["default_memory_limit_mb", "default_cpu_limit", "docker_cpus", "docker_memory_bytes"] {
+        assert!(schemas["ServerInfo"]["properties"].get(field).is_some(), "ServerInfo.{field}");
+    }
+
+    // services: limits are saved by PATCH, applied by the next deploy
+    let description = op("PATCH", "/api/v1/services/{id}")["description"].as_str().unwrap().to_string();
+    assert!(description.contains("take effect with the next deploy or restart"), "{description}");
+    assert!(description.contains("doesn't redeploy"), "{description}");
+    let description = op("POST", "/api/v1/services")["description"].as_str().unwrap().to_string();
+    assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
+    let description = op("POST", "/api/v1/datastores")["description"].as_str().unwrap().to_string();
+    assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
 }
 
 /// `.route("<path>", <method routers>)` calls of `src/lib.rs` (each on one

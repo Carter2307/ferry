@@ -1,5 +1,10 @@
 # A Ferry blueprint (render.yaml-compatible). Apply with:
 #   ferry blueprint apply examples/blueprint/ferry.yaml
+#
+# `plan` sets resource limits like Render's instance types; the Ferry keys
+# `memoryLimit` / `cpuLimit` override it. A new resource without any of them
+# gets the server defaults (ferryd --default-memory-limit / --default-cpu-limit);
+# an existing one keeps its current limits.
 envVarGroups:
   - name: shared-settings
     envVars:
@@ -11,10 +16,12 @@ databases:
     postgresMajorVersion: "16"
     databaseName: app
     user: app
+    plan: basic-256mb        # 256 MiB of memory
 
 services:
   - type: redis
     name: cache
+    plan: starter            # 256 MiB of memory
 
   - type: web
     name: hello
@@ -24,6 +31,7 @@ services:
     port: 80
     healthCheckPath: /
     numInstances: 2
+    plan: starter            # 512 MiB / 0.5 CPU per instance
     envVars:
       - fromGroup: shared-settings
       - key: DATABASE_URL
@@ -45,3 +53,5 @@ services:
       url: busybox:stable
     schedule: "0 3 * * *"
     startCommand: echo "nightly job ran at $(date)"
+    memoryLimit: 64M         # per run
+    cpuLimit: 250m

@@ -24,11 +24,12 @@ ferry up                      # deploy the current directory → http://my-app.l
 | **Networking** | built-in reverse proxy (HTTP/1.1, HTTP/2, websockets), `name.your-domain`, custom domains, Let's Encrypt HTTPS, private network (`http://api:3000`) |
 | **Data** | managed Postgres & Redis, persistent disks, env vars with references (`${{datastore.db.connectionString}}`), env groups |
 | **Ops** | instance scaling, suspend/resume, restart, self-healing reconciler, live build & runtime logs, CPU/memory, one-off jobs |
+| **Guardrails** | memory/CPU limits per service and datastore (server defaults 512 MiB / 1 CPU), pids limit and log rotation on every container, out-of-memory kills reported, free-disk check before deploys |
 | **Interfaces** | web dashboard, `ferry` CLI, REST API, `ferry.yaml` / `render.yaml` blueprints |
 
 ## Quick start
 
-Requirements: Docker (Docker Desktop on macOS works), Rust 1.85+ and Node.js 20+ to build.
+Requirements: Docker (Docker Desktop on macOS works), Rust 1.89+ and Node.js 20+ to build.
 
 ```bash
 (cd web && npm ci && npm run build)     # the web dashboard (embedded into ferryd at compile time)
@@ -52,8 +53,9 @@ API reference (Swagger UI) is at **http://127.0.0.1:7878/api/docs**, and the Ope
 ### More examples
 
 ```bash
-# From git, with 2 instances and a health check
-ferry create api --repo https://github.com/you/api --branch main --instances 2 --health /healthz --follow
+# From git, with 2 instances, a health check and 1 GiB / 2 CPUs per instance
+ferry create api --repo https://github.com/you/api --branch main --instances 2 --health /healthz \
+  --memory 1G --cpu 2 --follow
 
 # Prebuilt image
 ferry create hello --image nginx:alpine --port 80
@@ -74,6 +76,8 @@ ferry logs api -f
 ferry scale api 3
 ferry rollback api <deploy-id>
 ferry domains add api api.example.com
+ferry update api --memory 2G && ferry restart api   # new limits apply with the next deploy or restart
+ferry db update app-db --memory 1G                   # datastores: applied right away, no restart
 ```
 
 ## Production setup
@@ -91,7 +95,21 @@ ferry domains add api api.example.com
      --acme-email you@example.com \
      --github-webhook-secret <random>
    Restart=always
+   # When the host runs out of memory, let the kernel kill containers before ferryd.
+   # (ferryd also sets -500 itself when it runs as root; see --oom-score-adj.)
+   OOMScoreAdjust=-900
    ```
+
+   Only ferryd keeps this score: the processes it starts (`git`, the
+   `docker` CLI) are reset to 0, so a runaway `git` isn't spared at the
+   expense of your apps and databases. Containers (and builds, which run
+   inside Docker) live in Docker's cgroups, not in this unit, so memory
+   settings here only cover ferryd and the processes it starts. A
+   `MemoryMin=` here does nothing unless its parent slice (`system.slice`)
+   reserves memory too. Avoid a `MemoryMax=` on this unit: reaching it gets
+   ferryd itself killed. Limit the apps with
+   `--default-memory-limit` or per service instead (see
+   [Resource limits](#resource-limits)).
 
 3. Keep the API on localhost and reach it over SSH (`ssh -L 7878:127.0.0.1:7878 host`).
    You can also expose the dashboard through the proxy with
@@ -125,10 +143,77 @@ Every flag also has an environment variable. `ferryd --help` shows the full list
 | `--default-port` `FERRY_DEFAULT_PORT` | `10000` | container port when nothing else specifies one (`PORT` is injected) |
 | `--keep-images` `FERRY_KEEP_IMAGES` | `5` | built images kept per service for rollbacks |
 | `--advertise-host` `FERRY_ADVERTISE_HOST` | `127.0.0.1` | host used in external datastore connection strings |
+| `--default-memory-limit` `FERRY_DEFAULT_MEMORY_LIMIT` | `512M` | memory limit of each service, job and datastore container that sets none of its own (`512M`, `1G`, `1.5G`; `0` = unlimited) |
+| `--default-cpu-limit` `FERRY_DEFAULT_CPU_LIMIT` | `1` | CPU limit likewise (`0.5`, `2`, `500m`; `0` = unlimited) |
+| `--pids-limit` `FERRY_PIDS_LIMIT` | `1024` | max processes + threads per container, a fork-bomb guard (`0` = unlimited) |
+| `--log-max-size` `FERRY_LOG_MAX_SIZE` | `10M` | rotate each container's Docker log at this size, with the `json-file` driver (`0` = keep the Docker daemon's log configuration). A daemon whose default log driver isn't `json-file` (journald, syslog, fluentd, `local`...) keeps it: Ferry only sets rotation over `json-file` |
+| `--log-max-files` `FERRY_LOG_MAX_FILES` | `3` | log files kept per container when rotating (current one included) |
+| `--min-free-disk` `FERRY_MIN_FREE_DISK` | `1G` | deploys and new datastores fail early when less is free on the data directory's (or the local Docker root's) filesystem (`0` = no check). Recreating an existing datastore's container is not blocked |
+| `--oom-score-adj` `FERRY_OOM_SCORE_ADJ` | `-500` | Linux: ferryd's own OOM-killer score adjustment, -1000 to 1000, so the kernel kills containers before ferryd (`0` = leave unchanged). Lowering it needs root (or `CAP_SYS_RESOURCE`); otherwise use `OOMScoreAdjust=` in the systemd unit |
 
 Two safety rules:
 - Only one `ferryd` can use a data directory at a time (it holds a lock file).
 - Each Docker name prefix belongs to one data directory. Without this, a second server would treat the first one's containers as orphans and remove them.
+
+## Resource limits
+
+Every container Ferry starts (service instances, one-off jobs, cron runs,
+datastores) gets a memory limit, a CPU limit, a pids limit and log rotation.
+A runaway app gets killed or throttled on its own, instead of taking down
+the host, ferryd or your databases.
+
+- **Server defaults:** 512 MiB and 1 CPU per container, set with
+  `--default-memory-limit` / `--default-cpu-limit` (`0` = unlimited).
+  `ferry info` shows them next to the Docker host's CPUs and memory.
+- **Per service:** `ferry create` / `ferry update` / `ferry up` take
+  `--memory 1G --cpu 0.5` (`default` goes back to the server default). The
+  limits apply to each instance and to each job run. A change takes effect
+  with the next deploy or restart; `ferry restart NAME` is enough (no
+  rebuild).
+- **Per datastore:** `ferry db create NAME --memory 1G`, and
+  `ferry db update NAME --memory 2G --cpu 1` changes its container right
+  away, without a restart (also for a failed datastore, e.g. one that ran out
+  of memory: its next start uses the new limit). Lowering the memory below
+  what the datastore uses can get it killed. Redis gets `maxmemory` at 3/4 of
+  its memory limit, so it refuses writes when full instead of being killed.
+- **Blueprints:** Render's `plan` becomes limits (`starter` → 512 MiB /
+  0.5 CPU, `standard` → 2 GiB / 1 CPU, `pro` → 4 GiB / 2 CPUs, …; Postgres
+  and Key Value plans set the memory). The Ferry keys `memoryLimit` and
+  `cpuLimit` override it:
+
+  ```yaml
+  services:
+    - type: web
+      name: api
+      plan: standard        # 2 GiB / 1 CPU
+      cpuLimit: 500m        # but only half a core
+  ```
+
+  An apply restarts every live service whose limits changed (no rebuild).
+  Re-applying an existing `render.yaml` after upgrading Ferry therefore
+  restarts the services that have a `plan:` (it used to be ignored), with
+  that plan's limits.
+
+- **Dashboard:** a Resources section in each service's Settings and on each
+  datastore's page.
+- **Out of memory:** the kernel kills a container that goes over its memory
+  limit, and Docker restarts it (a job run fails instead). A deploy whose new instance runs out of
+  memory fails with `instance ab12cd ran out of memory (limit 512 MiB) —
+  raise the service's memory limit`, `ferry status` marks the instance as
+  OOM killed, and ferryd logs every OOM kill.
+- **Host size:** a CPU limit above the Docker host's CPU count is capped at
+  it, with a warning in the deploy log. On a host whose kernel has no CPU
+  CFS quotas (some NAS / ARM kernels, rootless Docker without the `cpu`
+  cgroup controller), where Docker refuses CPU limits, no CPU limit is set
+  and ferryd and the deploy log say so.
+- **Free disk:** deploys and new datastores fail early, with a clear message,
+  when less than `--min-free-disk` (default `1G`) is free. Restarts,
+  rollbacks and recreating an existing datastore's container still work.
+
+Not covered: builds (BuildKit has no per-build memory limit), disk space
+used by volumes and containers (no quotas), and network traffic (all apps
+share one private network). See [DESIGN.md](DESIGN.md) §14–15 for the
+details.
 
 ## How it works
 
@@ -173,6 +258,11 @@ cargo test --workspace                     # unit + API tests
 FERRY_E2E=1 cargo test --workspace         # + Docker end-to-end tests
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same checks on Linux for every pull request and every push to
+`main`/`dev`: fmt, clippy and tests, the Docker end-to-end suites (`FERRY_E2E=1`), the web dashboard's
+typecheck, lint, tests and build, and the documentation site (generated references in sync, typecheck, build
+with link check).
 
 Crates: `ferry-core` (models, store, contracts) · `ferry-docker` · `ferry-build` ·
 `ferry-proxy` · `ferry-tls` · `ferry-engine` · `ferry-api` (REST + SSE + OpenAPI) ·

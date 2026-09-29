@@ -12,6 +12,10 @@
 //! child also gets `SIGKILL` if the server dies abruptly (`kill -9`). Within
 //! [`record_children_in`], running children are also recorded on disk so
 //! that the next server can reap what a `kill -9` left ([`crate::orphans`]).
+//!
+//! On Linux, children don't inherit a lowered OOM score (`ferryd
+//! --oom-score-adj`): a runaway `git index-pack` must not be spared by the
+//! kernel's OOM killer at the expense of the containers and databases.
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -64,11 +68,13 @@ pub(crate) fn supervise(cmd: &mut Command) {
     #[cfg(target_os = "linux")]
     {
         let parent = std::process::id();
+        let current_adj = std::fs::read_to_string(OOM_SCORE_ADJ).ok().and_then(|s| s.trim().parse::<i32>().ok());
+        let reset_oom_score = resets_oom_score_adj(current_adj);
         // SAFETY: runs in the forked child before exec and only calls
-        // async-signal-safe functions (prctl, getppid). The death signal is
-        // tied to the spawning *thread*: children are spawned from async
-        // code, i.e. runtime worker threads, which live as long as the
-        // runtime (whose shutdown kills the children anyway).
+        // async-signal-safe functions (prctl, getppid, open, write, close).
+        // The death signal is tied to the spawning *thread*: children are
+        // spawned from async code, i.e. runtime worker threads, which live as
+        // long as the runtime (whose shutdown kills the children anyway).
         unsafe {
             cmd.pre_exec(move || {
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
@@ -78,10 +84,29 @@ pub(crate) fn supervise(cmd: &mut Command) {
                 if u32::try_from(libc::getppid()).ok() != Some(parent) {
                     return Err(io::Error::other("the parent process exited"));
                 }
+                // Best effort (raising the score needs no privilege).
+                if reset_oom_score {
+                    let fd = libc::open(c"/proc/self/oom_score_adj".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
+                    if fd >= 0 {
+                        libc::write(fd, b"0".as_ptr().cast(), 1);
+                        libc::close(fd);
+                    }
+                }
                 Ok(())
             });
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+const OOM_SCORE_ADJ: &str = "/proc/self/oom_score_adj";
+
+/// Whether a child should get its OOM score adjustment reset to 0: ferryd
+/// lowered its own (`current`, so the kernel's OOM killer picks a runaway
+/// container first) and children would inherit that. A raised one is kept.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn resets_oom_score_adj(current: Option<i32>) -> bool {
+    current.is_some_and(|adj| adj < 0)
 }
 
 /// Process groups of running children, killed by an `atexit` hook if the
@@ -576,6 +601,28 @@ mod tests {
         assert_eq!(out.status.code(), Some(3));
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "out");
         assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "err");
+    }
+
+    #[test]
+    fn only_a_lowered_oom_score_is_reset_in_children() {
+        assert!(resets_oom_score_adj(Some(-500)));
+        assert!(resets_oom_score_adj(Some(-1000)));
+        assert!(!resets_oom_score_adj(Some(0)));
+        assert!(!resets_oom_score_adj(Some(300)));
+        assert!(!resets_oom_score_adj(None));
+    }
+
+    /// Children never keep a lowered OOM score (lowering ferryd's own needs
+    /// root: without it, the child just has the parent's value).
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn children_do_not_inherit_a_lowered_oom_score() {
+        let parent: i32 = std::fs::read_to_string(OOM_SCORE_ADJ).unwrap().trim().parse().unwrap();
+        let mut cmd = Command::new("cat");
+        cmd.arg("/proc/self/oom_score_adj");
+        let out = run_capture(cmd, None, None).await.unwrap();
+        let child: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+        assert_eq!(child, parent.max(0), "parent {parent}");
     }
 
     #[tokio::test]

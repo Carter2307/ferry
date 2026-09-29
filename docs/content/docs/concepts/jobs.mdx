@@ -1,0 +1,141 @@
+---
+title: "Jobs & cron"
+description: "Run a command on a cron schedule, or once on demand in a service's image, with its own log and exit status."
+icon: Clock
+---
+
+import { HardDrive, ScrollText, Terminal } from 'lucide-react';
+
+A **job run** is a one-time container started from a service's live image. It runs a command, streams its output to its own log, and ends `succeeded` (exit code 0), `failed` or `canceled`. Job runs come from two places:
+
+- **Cron jobs**, a [service type](/docs/concepts/services) that runs its command on a schedule;
+- **one-off jobs** that you start on any deployed service with `ferry run`, for example a database migration.
+
+## Create a cron job
+
+```bash title="Terminal"
+ferry create nightly --type cron --image busybox:stable \
+  --schedule "0 3 * * *" --start-cmd 'echo "nightly run at $(date)"' --follow
+```
+
+```text title="Output (excerpt)"
+==> Pinned busybox:stable as ferry/nightly:dep-4f09d911d31f407fb043
+==> Limits: 512 MiB memory, 1 CPU per run
+==> Your cron job is live 🎉 (schedule: 0 3 * * *, UTC)
+```
+
+A cron job builds or pulls its image like any service (from a repository, `ferry up`, or `--image`), but its deploy starts no container: it only freezes the image, environment, command and [resource limits](/docs/concepts/resource-limits) that its runs will use. The **start command** is the command each run executes; without one, runs use the image's default command.
+
+Cron jobs have no instances, port, health check, custom domain or disk, and can't be scaled.
+
+## Schedule syntax
+
+Schedules use the standard 5-field cron syntax and are evaluated in **UTC**, with minute precision.
+
+```text
+┌───────────── minute        0-59
+│ ┌─────────── hour          0-23
+│ │ ┌───────── day of month  1-31
+│ │ │ ┌─────── month         1-12
+│ │ │ │ ┌───── day of week   0-7 (0 and 7 are Sunday)
+│ │ │ │ │
+* * * * *
+```
+
+| Schedule | Runs |
+|---|---|
+| `*/15 * * * *` | every 15 minutes |
+| `0 3 * * *` | every day at 03:00 UTC |
+| `30 8 * * 1-5` | at 08:30 UTC, Monday to Friday |
+| `0 0 1 * *` | at midnight UTC on the first day of each month |
+| `@hourly` | at minute 0 of every hour |
+
+Aliases: `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight` and `@hourly`. Ferry rejects 6-field expressions (seconds), unknown aliases and schedules that never fire (such as `0 0 30 2 *`), with a message that names the problem.
+
+Change a schedule with `ferry update nightly --schedule "0 4 * * *"`. It applies at the next check of the scheduler.
+
+## How scheduled runs work
+
+- The scheduler checks every 15 seconds and starts the runs whose schedule fired since its last check.
+- Runs of one cron job never overlap. If the previous run is still going when the schedule fires, the new run is skipped and this line is added to the running one's log:
+
+  ```text
+  ==> Warning: a scheduled run was skipped because this run is still running (for 48s); cancel it if it is stuck, or the schedule stays blocked
+  ```
+
+- Runs missed while the server was down are skipped, not caught up.
+- A suspended cron job doesn't run, and neither does a cron job without a live deploy.
+- Ferry doesn't retry failed runs and doesn't limit how long a run takes. A run that hangs blocks the schedule until you [cancel it](#list-follow-and-cancel-runs).
+
+Each run is a new container: the live deploy's image, the service's environment as of that deploy (without `PORT`, since nothing listens), its memory and CPU limits, on the [private network](/docs/concepts/networking#private-network), with no published port and no restart. It is removed when the run ends.
+
+<Callout type="info" title="Changing the command">
+Runs use the command frozen at the last deploy. When you change a cron job's start command (`ferry update nightly --start-cmd …`), Ferry restarts it automatically so the next run uses the new command. Environment changes apply the same way as for other services: see [When changes apply](/docs/concepts/environment#when-changes-apply).
+</Callout>
+
+## Run a job now
+
+`ferry run` starts a job immediately. On a cron job it runs the cron command; on any other service you pass the command after `--`:
+
+```bash title="Terminal"
+ferry run nightly --follow                       # trigger the cron job now
+ferry run api --follow -- npm run migrate        # one-off job in the api image
+ferry run api -- 'python manage.py shell -c "print(1)"'
+```
+
+```text title="Output"
+Job job-48dd0201159b41c3bb58 pending, streaming output…
+09:46:59 ==> Running `npm run migrate`
+09:46:59 > node migrate.js
+09:46:59 migrations applied
+09:46:59 ==> Job succeeded
+Job job-48dd0201159b41c3bb58 succeeded (exit code 0)
+```
+
+- The command runs with `sh -c` in the container. A single argument after `--` is used as a shell line, so `'npm run a && npm run b'` and `'echo $HOME'` are interpreted by the container's shell; several arguments are quoted one by one.
+- With `--follow`, the CLI streams the output and exits with 1 if the job fails.
+- The service needs a live deploy, and it must not be suspended.
+- A one-off job runs exactly like the live deploy's instances: same image, environment and [resource limits](/docs/concepts/resource-limits), even if you changed settings, limits or variables since. Restart first if the job needs the new values.
+- A run that goes over its memory limit is killed and fails, without a restart: `==> Job failed: the job ran out of memory (limit 512 MiB) — raise the service's memory limit`. Raise the service's limit with `ferry update NAME --memory …`, then `ferry restart NAME`.
+- The job runs next to the service's instances, not inside them.
+
+Over the API, `POST /api/v1/services/{id}/jobs` with `{"command": "…"}` starts a run (the command is optional for cron jobs). See [Jobs](/docs/reference/api/jobs) in the API reference.
+
+## Disk access
+
+When the service has a [persistent disk](/docs/concepts/scaling#persistent-disks), its one-off jobs mount the same disk at the same path, so a job can read and write the service's files:
+
+```text title="ferry run files --follow -- 'ls -la /data'"
+==> Mounting the service's disk at /data
+==> Running `ls -la /data`
+```
+
+The job and the running instance use the disk at the same time: make sure your command is safe to run next to the app.
+
+## List, follow and cancel runs
+
+```bash title="Terminal"
+ferry jobs nightly                      # newest first (-n to change the limit, default 20)
+ferry logs --job job-d2ef824c6d6c446086e9 -f
+ferry jobs cancel job-d2ef824c6d6c446086e9
+```
+
+```text title="ferry jobs nightly"
+ID                         STATUS      TRIGGER   COMMAND     EXIT   STARTED   DURATION
+job-d2ef824c6d6c446086e9   canceled    manual    sleep 300   137    1m ago    1m 13s
+job-6e08ed29338c4f9bb96c   succeeded   manual    (default)   0      1m ago    0s
+```
+
+A run goes `pending` → `running` → `succeeded`, `failed` or `canceled`. The trigger is `schedule` or `manual`.
+
+- **Cancel** stops the container with a 10-second grace period (SIGTERM, then SIGKILL) and records the run as `canceled`. Canceling a finished run is an error.
+- **Suspending or deleting** the service cancels its running jobs the same way.
+- **Stopping the server** stops running jobs and records them as `failed` ("interrupted by server shutdown"). After a crash, runs that were still going are marked `failed` ("interrupted by server restart") at the next start.
+
+Ferry keeps the newest 100 finished runs of each service, with their logs, and deletes older ones. Change the number with `ferryd --keep-job-runs`.
+
+<Cards cols={3}>
+  <Card icon={<Terminal />} title="CLI: ferry run" href="/docs/reference/cli#ferry-run" description="All options of ferry run and ferry jobs." />
+  <Card icon={<ScrollText />} title="Logs & events" href="/docs/concepts/logs" description="Job logs, live tails and the SSE streams." />
+  <Card icon={<HardDrive />} title="Disks, scaling & suspend" href="/docs/concepts/scaling" description="Persistent disks and what suspend does to jobs." />
+</Cards>

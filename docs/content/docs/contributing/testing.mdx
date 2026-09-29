@@ -1,0 +1,132 @@
+---
+title: "Testing"
+description: "Run the unit and API tests, the Docker end-to-end suites gated by FERRY_E2E=1, the web client tests and the docs checks."
+icon: FlaskConical
+---
+
+Ferry has three layers of tests. Unit and API tests run anywhere in seconds. End-to-end tests drive a real Docker daemon and only run when you ask for them. The dashboard and the docs site have their own checks.
+
+## Unit and API tests
+
+```bash title="Terminal"
+cargo test --workspace
+```
+
+This runs, without Docker:
+
+- **Unit tests** next to the code, in every crate.
+- **API tests** (`crates/ferry-api/tests/`): the real router over an in-memory store, with a recording `MockEngine` in place of the engine. They cover every route, authentication, errors, blueprints, webhooks, the change feed and concurrency.
+- **Builder tests** (`crates/ferry-build/tests/build_pipeline.rs`): fetch, detect, generate, build and cleanup, against a fake `docker` CLI that records what it receives.
+- **Proxy and TLS tests**: the proxy against local upstreams, and the certificate manager through real TLS handshakes without any network.
+- **The OpenAPI check** (`crates/ferry-api/tests/openapi.rs`): one authoritative list of routes that must match the router, the OpenAPI document and `src/lib.rs`. Adding a route without documenting it fails here.
+
+Narrow a run while you work:
+
+```bash title="Terminal"
+cargo test -p ferry-api                       # one crate
+cargo test -p ferry-api --test blueprints     # one test file
+cargo test -p ferry-core env::                # tests whose name matches
+```
+
+## Docker end-to-end tests
+
+Tests that need Docker are **gated**: they only run with `FERRY_E2E=1`, and otherwise print `skipped` and pass.
+
+```bash title="Terminal"
+cargo build -p ferryd                  # the CLI suite drives a real ferryd binary
+FERRY_E2E=1 cargo test --workspace
+```
+
+| Suite | Covers |
+|---|---|
+| `ferry-docker` · `docker_e2e` | The Docker wrapper against the daemon: container lifecycle and logs, exit codes, images, tags, volumes and exec; resource limits set at creation (with the pids limit and log rotation) and changed in place, and OOM kills told apart from a plain `SIGKILL` |
+| `ferry-build` · `build_e2e` and the regression suites | Real builds of the example apps |
+| `ferry-proxy` · `e2e_docker` | Containers published on `127.0.0.1:<random port>` behind the proxy |
+| `ferry-tls` · `pebble_e2e` | Certificates from Pebble, Let's Encrypt's test ACME server (image `ghcr.io/letsencrypt/pebble:latest`) |
+| `ferry-engine` · `e2e` | The whole stack in-process: store, Docker, builder, engine and proxy, deploying the examples; also the resource limits of instances, jobs and datastores, out-of-memory kills in deploys, jobs and status, and the free-disk check |
+| `ferry-cli` · `e2e` | A real `ferryd` driven by the `ferry` CLI |
+
+The CLI suite looks for `ferryd` in `FERRY_E2E_FERRYD`, else next to the test binary (`target/debug/ferryd` for a debug test run), hence the `cargo build -p ferryd` first. Run one suite with its crate and test name:
+
+```bash title="Terminal"
+FERRY_E2E=1 cargo test -p ferry-engine --test e2e
+FERRY_E2E=1 cargo test -p ferry-build --test build_e2e
+```
+
+<Callout type="warning" title="Use a Docker daemon you don't mind sharing">
+End-to-end tests create containers, volumes, networks and images, pull small public images, and bind free local ports. They never touch a Ferry server's resources (each test uses its own name prefix), but run them where that load is acceptable.
+</Callout>
+
+### Writing an end-to-end test
+
+Tests from different crates run at the same time against the same daemon, so every Docker-dependent test must:
+
+- **Check the gate first:** return early (printing `skipped`) unless `FERRY_E2E=1`.
+- **Use its own name prefix**, such as `ferrytest-<crate>-<random>`, plus free ports and a temporary data directory.
+- **Clean up everything it creates, even on failure:** containers, volumes, the network and images tagged with its prefix. The existing suites do it with a drop guard.
+- **Use small base images only:** `python:3.12-alpine`, `node:22-alpine`, `nginx:alpine`, `busybox:stable`, `postgres:16-alpine`, `redis:7-alpine`.
+- **Use the example apps** in `examples/` as fixtures. To deploy one "from git", copy it to a temporary directory and run `git init && git add -A && git commit` there.
+
+If an interrupted run leaves containers behind, remove them by prefix:
+
+```bash title="Terminal"
+docker ps -aq --filter label=ferry.instance=<prefix> | xargs docker rm -f
+```
+
+## Lints and formatting
+
+```bash title="Terminal"
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Both must pass. See the [coding rules](/docs/contributing/development#coding-rules).
+
+## Web client
+
+```bash title="Terminal"
+cd web
+npm test              # Vitest: SSE parser, change feed, log helpers, formatting, .env parsing, resource limits
+npm run typecheck
+npm run lint
+npm run build
+```
+
+The tests live next to the code as `src/**/*.test.ts` and `src/**/*.test.tsx`. See [Web client](/docs/contributing/web-client).
+
+## Docs site
+
+```bash title="Terminal"
+cd docs
+npm run typecheck
+npm run build            # static export, then a check of every internal link and anchor
+npm run generate:check   # fails when a generated reference page is stale (needs cargo)
+```
+
+See [Docs site](/docs/contributing/docs-site).
+
+## Before you push
+
+<Steps>
+<Step>
+
+### Rust
+
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`; plus `FERRY_E2E=1 cargo test` for the crates you changed when they touch Docker, builds, the proxy or the engine.
+
+</Step>
+<Step>
+
+### Dashboard
+
+When `web/` changed: `npm test`, `npm run typecheck`, `npm run lint` and `npm run build` in `web/`.
+
+</Step>
+<Step>
+
+### Docs
+
+When a command, a flag, a route or a DTO changed: `npm run generate` in `docs/`, then `npm run build`. When `web/src/styles/tokens.css` changed, rebuild both the dashboard and the docs, since they share it.
+
+</Step>
+</Steps>

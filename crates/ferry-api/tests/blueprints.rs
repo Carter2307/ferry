@@ -4,8 +4,8 @@ mod common;
 
 use axum::body::Body;
 use common::{TOKEN, TestApp};
-use ferry_api::blueprint;
-use ferry_core::{DatastoreKind, Runtime, ServiceType};
+use ferry_api::blueprint::{self, LimitsSpec};
+use ferry_core::{DatastoreKind, DatastoreStatus, Runtime, ServiceType};
 use http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
 
@@ -217,7 +217,6 @@ fn parses_a_render_yaml_with_warnings() {
     assert_eq!(bp.datastores.len(), 3);
     assert_eq!(bp.env_groups.len(), 2);
     for key in [
-        "plan",
         "region",
         "scaling",
         "previews",
@@ -237,6 +236,18 @@ fn parses_a_render_yaml_with_warnings() {
     assert_eq!(minio.root_dir, None);
     let date = bp.services.iter().find(|s| s.name == "date").unwrap();
     assert_eq!(date.start_command.as_deref(), Some("date"));
+    // plans are resource limits now, not unsupported keys
+    assert!(!bp.warnings.iter().any(|w| w.contains("plan")), "{:?}", bp.warnings);
+    let limits = |name: &str| {
+        let s = bp.services.iter().find(|s| s.name == name).map(|s| s.limits);
+        s.or_else(|| bp.datastores.iter().find(|d| d.name == name).map(|d| d.limits)).unwrap()
+    };
+    let l = |memory_mb, cpus| LimitsSpec { memory_mb, cpus };
+    assert_eq!(limits("webapp"), l(Some(512), Some(0.5)));
+    assert_eq!(limits("minio"), l(None, None));
+    assert_eq!(limits("mydatabase"), l(Some(4096), None));
+    assert_eq!(limits("lightning"), l(Some(256), None));
+    assert_eq!(limits("celery-redis"), l(Some(256), None));
 }
 
 #[tokio::test]
@@ -278,8 +289,16 @@ async fn apply_render_yaml_then_reapply_then_modify() {
     assert_eq!((db.version.as_str(), db.database.as_deref(), db.username.as_str()), ("15", Some("mydb"), "mydbuser"));
     assert_eq!(app.store.require_datastore("lightning").await.unwrap().kind, DatastoreKind::Redis);
 
+    // resource limits from the plans
+    let db = app.store.require_datastore("mydatabase").await.unwrap();
+    assert_eq!((db.memory_limit_mb, db.cpu_limit), (Some(4096), None));
+    let kv = app.store.require_datastore("lightning").await.unwrap();
+    assert_eq!((kv.memory_limit_mb, kv.cpu_limit), (Some(256), None));
+
     // services
     let web = app.store.require_service("webapp").await.unwrap();
+    assert_eq!((web.memory_limit_mb, web.cpu_limit), (Some(512), Some(0.5)));
+    assert_eq!(app.store.require_service("minio").await.unwrap().memory_limit_mb, None);
     assert_eq!(web.runtime, Runtime::Node);
     assert_eq!(web.instances, 2);
     assert!(!web.auto_deploy);
@@ -744,4 +763,171 @@ async fn env_values_keep_their_yaml_literal_text() {
         .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!(get(&env_of(&app, "flow").await, "V"), Some("1.20"));
+}
+
+#[tokio::test]
+async fn plans_and_limits_are_diffed_and_applied() {
+    let app = TestApp::new().await;
+    let yaml = r#"
+databases:
+  - {name: db, plan: basic-1gb}
+services:
+  - {type: keyvalue, name: kv, plan: starter}
+  - {type: web, name: w, image: nginx, plan: starter}
+  - {type: cron, name: tick, image: busybox, schedule: "* * * * *", memoryLimit: 128M}
+  - {type: static, name: site, repo: "https://github.com/a/site", plan: starter, cpuLimit: 250m}
+"#;
+    let (status, res) = apply(&app, yaml, false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(res["warnings"], json!([]));
+    let w = app.store.require_service("w").await.unwrap();
+    assert_eq!((w.memory_limit_mb, w.cpu_limit), (Some(512), Some(0.5)));
+    let tick = app.store.require_service("tick").await.unwrap();
+    assert_eq!((tick.memory_limit_mb, tick.cpu_limit), (Some(128), None));
+    let site = app.store.require_service("site").await.unwrap();
+    assert_eq!((site.memory_limit_mb, site.cpu_limit), (None, Some(0.25)));
+    let db = app.store.require_datastore("db").await.unwrap();
+    assert_eq!((db.memory_limit_mb, db.cpu_limit), (Some(1024), None));
+    let kv = app.store.require_datastore("kv").await.unwrap();
+    app.make_live("w", Some(80)).await;
+    app.make_live("tick", None).await;
+    let mut available = db.clone();
+    available.status = DatastoreStatus::Available;
+    app.store.update_datastore(&available).await.unwrap();
+
+    // a dry run lists the limit changes and applies nothing
+    app.engine.clear();
+    let bigger = yaml
+        .replace("{name: db, plan: basic-1gb}", "{name: db, plan: pro-4gb, cpuLimit: 2}")
+        .replace("name: kv, plan: starter", "name: kv, plan: standard")
+        .replace("name: w, image: nginx, plan: starter", "name: w, image: nginx, plan: standard")
+        .replace("memoryLimit: 128M", "memoryLimit: 128M, cpuLimit: 0.5");
+    let (status, res) = apply(&app, &bigger, true).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(action_of(&res, "db")["action"], "update");
+    assert_eq!(
+        action_of(&res, "db")["changes"],
+        json!(["memory_limit: 1 GiB → 4 GiB", "cpu_limit: (server default) → 2 CPUs"])
+    );
+    assert_eq!(action_of(&res, "kv")["changes"], json!(["memory_limit: 256 MiB → 1 GiB"]));
+    assert_eq!(action_of(&res, "w")["changes"], json!(["memory_limit: 512 MiB → 2 GiB", "cpu_limit: 0.5 CPU → 1 CPU"]));
+    assert_eq!(action_of(&res, "tick")["changes"], json!(["cpu_limit: (server default) → 0.5 CPU"]));
+    assert_eq!(action_of(&res, "site")["action"], "unchanged");
+    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+    assert_eq!(app.store.require_service("w").await.unwrap().memory_limit_mb, Some(512));
+    assert_eq!(app.store.require_datastore("db").await.unwrap().memory_limit_mb, Some(1024));
+
+    // applied: live services restart (no rebuild), the datastores' containers
+    // are updated in place (also the one still provisioning: its container
+    // may exist already; the engine does nothing when it doesn't)
+    let (status, res) = apply(&app, &bigger, false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(res["warnings"], json!([]));
+    let mut calls = app.engine.calls();
+    calls.sort();
+    let mut want = vec![
+        format!("restart {} restart", tick.id),
+        format!("restart {} restart", w.id),
+        format!("update_limits {} 4096 2", db.id),
+        format!("update_limits {} 1024 -", kv.id),
+    ];
+    want.sort();
+    assert_eq!(calls, want);
+    assert_eq!(res["deploys"].as_array().unwrap().len(), 2);
+    let w_now = app.store.require_service("w").await.unwrap();
+    assert_eq!((w_now.memory_limit_mb, w_now.cpu_limit), (Some(2048), Some(1.0)));
+    let kv_now = app.store.require_datastore("kv").await.unwrap();
+    assert_eq!((kv_now.status, kv_now.memory_limit_mb), (kv.status, Some(1024)));
+
+    // re-applied: nothing to do
+    app.engine.clear();
+    let (_, res) = apply(&app, &bigger, false).await;
+    assert!(actions(&res).iter().all(|(_, _, a)| a == "unchanged"), "{res}");
+    assert!(app.engine.calls().is_empty(), "{:?}", app.engine.calls());
+
+    // no plan / limits: existing resources keep theirs (tuned outside the
+    // blueprint, like numInstances)...
+    app.patch("/api/v1/services/w", json!({"memory_limit_mb": 3072})).await;
+    let bare = "databases:\n  - {name: db}\nservices:\n  - {type: keyvalue, name: kv}\n  - {type: web, name: w, image: nginx}\n";
+    let (_, res) = apply(&app, bare, false).await;
+    assert!(actions(&res).iter().all(|(_, _, a)| a == "unchanged"), "{res}");
+    let w_now = app.store.require_service("w").await.unwrap();
+    assert_eq!((w_now.memory_limit_mb, w_now.cpu_limit), (Some(3072), Some(1.0)));
+    assert_eq!(app.store.require_datastore("db").await.unwrap().memory_limit_mb, Some(4096));
+    // ...and 0 resets one to the server default
+    app.engine.clear();
+    let reset =
+        "databases:\n  - {name: db, cpuLimit: 0}\nservices:\n  - {type: web, name: w, image: nginx, memoryLimit: 0}\n";
+    let (_, res) = apply(&app, reset, false).await;
+    assert_eq!(action_of(&res, "w")["changes"], json!(["memory_limit: 3 GiB → (server default)"]));
+    assert_eq!(action_of(&res, "db")["changes"], json!(["cpu_limit: 2 CPUs → (server default)"]));
+    assert_eq!(app.store.require_service("w").await.unwrap().memory_limit_mb, None);
+    assert_eq!(app.store.require_datastore("db").await.unwrap().cpu_limit, None);
+    let mut calls = app.engine.calls();
+    calls.sort();
+    assert_eq!(calls, vec![format!("restart {} restart", w.id), format!("update_limits {} 4096 -", db.id)]);
+}
+
+#[tokio::test]
+async fn limit_changes_that_cannot_apply_now_are_warnings() {
+    let app = TestApp::new().await;
+    let yaml = "databases:\n  - {name: db, plan: basic-1gb}\nservices:\n  - {type: worker, name: bg, image: busybox, plan: starter}\n  - {type: worker, name: idle, plan: starter}\n";
+    assert_eq!(apply(&app, yaml, false).await.0, StatusCode::OK);
+    let bg = app.store.require_service("bg").await.unwrap();
+    app.make_live("bg", None).await;
+    app.store.set_suspended(&bg.id, true).await.unwrap();
+    let mut db = app.store.require_datastore("db").await.unwrap();
+    db.status = DatastoreStatus::Available;
+    app.store.update_datastore(&db).await.unwrap();
+    app.engine.fail_update_limits.store(true, std::sync::atomic::Ordering::SeqCst);
+    app.engine.clear();
+
+    let (status, res) = apply(&app, &yaml.replace("starter", "pro").replace("basic-1gb", "basic-4gb"), false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    let warnings: Vec<&str> = res["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap()).collect();
+    assert!(
+        warnings.contains(&"service 'bg' is suspended: resume and restart it to apply the new resource limits"),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.starts_with("datastore 'db': limits saved, but applying them to its container failed")),
+        "{warnings:?}"
+    );
+    // never deployed: its first deploy picks the limits up (no warning)
+    assert!(!warnings.iter().any(|w| w.contains("'idle'") && w.contains("limits")), "{warnings:?}");
+    assert!(app.engine.calls_with("restart").is_empty(), "{:?}", app.engine.calls());
+    // the rows are updated either way
+    assert_eq!(app.store.require_service("bg").await.unwrap().memory_limit_mb, Some(4096));
+    assert_eq!(app.store.require_service("idle").await.unwrap().memory_limit_mb, Some(4096));
+    assert_eq!(app.store.require_datastore("db").await.unwrap().memory_limit_mb, Some(4096));
+}
+
+#[tokio::test]
+async fn invalid_limits_fail_the_whole_apply() {
+    let app = TestApp::new().await;
+    apply(&app, "databases:\n  - {name: db}\n", false).await;
+    for (yaml, needle) in [
+        ("services:\n  - {type: web, name: w, memoryLimit: 8M}\n", "service 'w': memory limit must be between"),
+        ("services:\n  - {type: web, name: w, cpuLimit: 1000}\n", "service 'w': CPU limit must be between"),
+        ("services:\n  - {type: web, name: w, memoryLimit: huge}\n", "service 'w': 'memoryLimit': invalid memory size"),
+        ("services:\n  - {type: redis, name: kv, memoryLimit: 1M}\n", "key value 'kv': memory limit must be between"),
+        ("databases:\n  - {name: db, cpuLimit: 600}\n", "database 'db': CPU limit must be between"),
+    ] {
+        let (status, res) = apply(&app, yaml, false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{yaml}: {res}");
+        let msg = res["error"]["message"].as_str().unwrap();
+        assert!(msg.contains(needle), "{yaml}: {msg}");
+    }
+    assert!(app.store.list_services().await.unwrap().is_empty());
+    assert_eq!(app.store.list_datastores().await.unwrap().len(), 1);
+    assert_eq!(app.store.require_datastore("db").await.unwrap().cpu_limit, None);
+
+    // an unknown plan is only a warning
+    let (status, res) = apply(&app, "services:\n  - {type: web, name: w, plan: enterprise}\n", false).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    let warnings = res["warnings"].to_string();
+    assert!(warnings.contains("service 'w': ignoring unknown plan 'enterprise'"), "{warnings}");
+    assert_eq!(app.store.require_service("w").await.unwrap().memory_limit_mb, None);
 }

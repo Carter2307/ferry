@@ -7,6 +7,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use ferry_core::dto::{InstanceStatus, RuntimeStatus};
 use ferry_core::naming::LABEL_DEPLOY;
+use ferry_core::resources::round_cpus;
 use ferry_core::{LogLine, LogOptions, LogStream, Result, compute_service_state};
 use ferry_docker::ContainerInfo;
 use futures::StreamExt;
@@ -44,7 +45,8 @@ pub(crate) async fn service_status(inner: &Arc<Inner>, service_id: &str) -> Resu
 }
 
 async fn instance_status(inner: &Inner, c: &ContainerInfo) -> InstanceStatus {
-    // The list API has no start time / restart count: inspect (bounded).
+    // The list API has no start time, restart count, limits or OOM flag:
+    // inspect (bounded).
     let info = match tokio::time::timeout(INSPECT_TIMEOUT, inner.docker.inspect_container(&c.id)).await {
         Ok(Ok(Some(info))) => info,
         _ => c.clone(),
@@ -57,6 +59,10 @@ async fn instance_status(inner: &Inner, c: &ContainerInfo) -> InstanceStatus {
     } else {
         None
     };
+    to_status(&info, stats)
+}
+
+fn to_status(info: &ContainerInfo, stats: Option<ferry_docker::ContainerStats>) -> InstanceStatus {
     InstanceStatus {
         container_id: info.id.clone(),
         name: info.name.clone(),
@@ -67,7 +73,12 @@ async fn instance_status(inner: &Inner, c: &ContainerInfo) -> InstanceStatus {
         restart_count: info.restart_count,
         cpu_percent: stats.map(|s| s.cpu_percent),
         memory_bytes: stats.map(|s| s.memory_bytes),
-        memory_limit_bytes: stats.map(|s| s.memory_limit_bytes).filter(|l| *l > 0),
+        // The configured limit (docker stats reports the host's memory for
+        // unlimited containers).
+        memory_limit_bytes: info.memory_limit_bytes.and_then(|l| u64::try_from(l).ok()).filter(|l| *l > 0),
+        cpu_limit: info.nano_cpus.filter(|n| *n > 0).map(|n| round_cpus(n as f64 / 1e9)),
+        oom_killed: info.oom_killed,
+        exit_code: info.exit_code,
     }
 }
 
@@ -202,7 +213,31 @@ mod tests {
             labels: BTreeMap::from([(LABEL_DEPLOY.to_string(), deploy.to_string())]),
             started_at: None,
             restart_count: None,
+            oom_killed: false,
+            memory_limit_bytes: None,
+            nano_cpus: None,
         }
+    }
+
+    #[test]
+    fn instance_status_reports_the_configured_limits_and_oom_kills() {
+        let mut info = c("a", "live");
+        info.memory_limit_bytes = Some(512 << 20);
+        info.nano_cpus = Some(1_500_000_000);
+        info.state = ContainerState::Restarting;
+        info.oom_killed = true;
+        info.exit_code = Some(137);
+        let st = to_status(&info, None);
+        assert_eq!(st.memory_limit_bytes, Some(512 << 20));
+        assert_eq!(st.cpu_limit, Some(1.5));
+        assert!(st.oom_killed);
+        assert_eq!(st.exit_code, Some(137));
+        assert_eq!(st.state, "restarting");
+        // Unlimited: no limit, whatever docker stats says.
+        let stats = ferry_docker::ContainerStats { cpu_percent: 1.0, memory_bytes: 10, memory_limit_bytes: 8 << 30 };
+        let st = to_status(&c("b", "live"), Some(stats));
+        assert_eq!((st.memory_limit_bytes, st.cpu_limit, st.oom_killed), (None, None, false));
+        assert_eq!(st.memory_bytes, Some(10));
     }
 
     #[test]

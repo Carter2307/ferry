@@ -344,6 +344,36 @@ async fn datastore_provisioning_failure_is_recorded() {
 }
 
 #[tokio::test]
+async fn datastore_limits_need_an_existing_datastore() {
+    let f = fixture(2).await;
+    assert!(matches!(f.engine.update_datastore_limits("dbs-missing").await, Err(Error::NotFound(_))));
+    // Docker is unreachable: the container can't be looked up.
+    let ds = Datastore::new("db", DatastoreKind::Redis);
+    f.store.create_datastore(&ds).await.unwrap();
+    assert!(f.engine.update_datastore_limits(&ds.id).await.is_err());
+}
+
+#[tokio::test]
+async fn deploys_fail_early_when_the_disk_is_nearly_full() {
+    if !cfg!(unix) {
+        return;
+    }
+    // Nobody has a pebibyte free.
+    let f = fixture_config("docker", |c| c.min_free_disk_mb = 1 << 30).await;
+    let svc = service(&f.store, "web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let lines = log_lines(&f.engine, &d.id).await;
+    let d = wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
+    assert_eq!(d.status, DeployStatus::BuildFailed, "{lines:?}");
+    let error = d.error.unwrap_or_default();
+    assert!(error.starts_with("not enough free disk space on "), "{error}");
+    assert!(error.contains("at least 1048576 GiB") && error.contains("`ferryd --min-free-disk`"), "{error}");
+    // Before anything is pulled or built.
+    assert!(!lines.iter().any(|l| l.contains("Pulling")), "{lines:?}");
+    assert!(lines.last().is_some_and(|l| l.starts_with("==> Build failed: not enough free disk space")), "{lines:?}");
+}
+
+#[tokio::test]
 async fn start_twice_is_a_conflict_and_needs_docker() {
     let f = fixture(2).await;
     let shutdown = ferry_core::CancellationToken::new();
@@ -455,7 +485,7 @@ async fn restart_queues_behind_a_first_deploy_in_progress() {
     let f = fixture(1).await;
     let svc =
         service(&f.store, "api", ServiceType::WebService, |s| s.repo_url = Some("/nonexistent/repo".into())).await;
-    // A first deploy is being built (claimed by a worker): nothing is live yet.
+    // A first deploy is being built: nothing is live yet.
     let mut first = Deploy::new(
         &svc.id,
         DeployTrigger::Create,
@@ -463,7 +493,11 @@ async fn restart_queues_behind_a_first_deploy_in_progress() {
     );
     first.status = DeployStatus::Building;
     f.store.create_deploy(&first).await.unwrap();
-    let slot = f.engine.inner.build_slots.clone().acquire_owned().await.unwrap();
+    // The service's only worker is busy building it, so what is queued
+    // behind it stays queued (`first` is just a row here: a stand-in worker
+    // keeps a real one from claiming the restart, which needs no build slot).
+    let busy = crate::state::Worker { generation: u64::MAX, wake: Arc::new(tokio::sync::Notify::new()), handle: None };
+    f.engine.inner.with_rt(|rt| rt.workers.insert(svc.id.clone(), busy));
 
     let restart = f.engine.restart(&svc.id, DeployTrigger::EnvChange).await.unwrap();
     assert_ne!(restart.id, first.id);
@@ -476,9 +510,11 @@ async fn restart_queues_behind_a_first_deploy_in_progress() {
     // The first deploy is not superseded (it is not queued).
     assert_eq!(f.store.require_deploy(&first.id).await.unwrap().status, DeployStatus::Building);
 
-    // The first deploy failed: the restart has nothing to restart and says so.
+    // The first deploy failed and the worker moves on to the restart, which
+    // has nothing to restart and says so.
     f.store.set_deploy_status(&first.id, DeployStatus::BuildFailed, Some("boom")).await.unwrap();
-    drop(slot);
+    f.engine.inner.with_rt(|rt| rt.workers.remove(&svc.id));
+    crate::deploy::ensure_worker(&f.engine.inner, &svc.id);
     let done = wait_status(&f.store, &restart.id, |s| s.is_terminal()).await;
     assert_eq!(done.status, DeployStatus::BuildFailed);
     assert!(done.error.as_deref().is_some_and(|e| e.contains("no live deploy")), "{done:?}");

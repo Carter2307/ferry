@@ -1,0 +1,365 @@
+---
+title: "Production setup"
+description: "Run ferryd on a Linux server with systemd, a wildcard DNS record, ports 80 and 443 with automatic HTTPS, container limits sized for the host, disk and log guards, backups and a security checklist."
+icon: ServerCog
+---
+
+import { Globe, HeartPulse, Server } from 'lucide-react';
+
+This guide sets up one Linux server to host your apps at `https://<name>.apps.example.com`, with Let's Encrypt certificates, `ferryd` managed by systemd, and the API kept private.
+
+## What you need
+
+- A Linux server (a VM is fine) with a public IP address, and ports 22, 80 and 443 open to the internet.
+- Docker Engine with its `docker` CLI and BuildKit (the default builder of current Docker versions), and `git`: Ferry runs `docker build` and `git` for builds.
+- A domain whose DNS you control. This guide uses `apps.example.com` for the apps.
+- The `ferryd` and `ferry` binaries, built as described in [Installation](/docs/getting-started/installation). Build them for the server's architecture, with the dashboard embedded.
+
+<Steps>
+<Step>
+
+### Point DNS at the server
+
+Create a wildcard record for the apps, plus records for any custom domain:
+
+| Record | Type | Value |
+|---|---|---|
+| `*.apps.example.com` | `A` (and `AAAA` for IPv6) | the server's IP address |
+| `shop.example.com` (a custom domain) | `A`, or `CNAME` to a name that resolves to the server | the server |
+
+Each web service and static site gets `<name>.apps.example.com`, and the dashboard can use `ferry.apps.example.com`. Ferry requests one certificate per hostname through the HTTP-01 challenge, so the wildcard record is all the DNS it needs: no DNS API, no wildcard certificate.
+
+</Step>
+<Step>
+
+### Install the binaries and create a user
+
+```bash title="Terminal"
+sudo install -m 755 ferryd ferry /usr/local/bin/
+sudo useradd --system --create-home --home-dir /home/ferry --shell /usr/sbin/nologin --groups docker ferry
+sudo install -d -o ferry -g ferry -m 700 /var/lib/ferry /etc/ferry
+```
+
+`ferryd` needs the Docker socket, hence the `docker` group. Membership of that group is equivalent to root on the host: keep the `ferry` account for `ferryd` only. If your services clone private repositories over SSH, put the key in `/home/ferry/.ssh`.
+
+</Step>
+<Step>
+
+### Write the configuration
+
+Keep secrets out of the unit file, where `systemctl show` and process listings would reveal them. Every `ferryd` flag except `--take-over` has an environment variable; put the secret ones in a private environment file:
+
+```bash title="/etc/ferry/ferryd.env"
+FERRY_GITHUB_WEBHOOK_SECRET=paste-the-output-of-openssl-rand-hex-32
+```
+
+```bash title="Terminal"
+sudo chown ferry:ferry /etc/ferry/ferryd.env && sudo chmod 600 /etc/ferry/ferryd.env
+```
+
+```ini title="/etc/systemd/system/ferryd.service"
+[Unit]
+Description=Ferry server
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=ferry
+Group=ferry
+SupplementaryGroups=docker
+# Bind ports 80 and 443 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+EnvironmentFile=/etc/ferry/ferryd.env
+ExecStart=/usr/local/bin/ferryd \
+  --data-dir /var/lib/ferry \
+  --base-domain apps.example.com \
+  --proxy-addr 0.0.0.0:80 \
+  --https-addr 0.0.0.0:443 \
+  --acme-email you@example.com
+Restart=always
+# Let ferryd drain requests and stop jobs on shutdown.
+TimeoutStopSec=60
+LimitNOFILE=65536
+# When the host runs out of memory, let the kernel kill containers before ferryd.
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=multi-user.target
+```
+
+What these options do:
+
+| Option | Why |
+|---|---|
+| `--data-dir /var/lib/ferry` | The database, logs, uploads, git caches and certificates. Created with mode `0700`. |
+| `--base-domain apps.example.com` | Apps are served at `<name>.apps.example.com`. |
+| `--proxy-addr 0.0.0.0:80` | Public HTTP. Let's Encrypt validates on port 80, and HTTP requests to hosts with a certificate are redirected to HTTPS. |
+| `--https-addr 0.0.0.0:443` + `--acme-email` | Turn on [automatic HTTPS](/docs/concepts/networking#automatic-https). Both are needed. |
+| `LimitNOFILE` | The proxy sizes its connection limit from the open-file limit. |
+| `OOMScoreAdjust=-900` | If the host itself runs out of memory, the kernel's OOM killer picks containers before `ferryd`. `ferryd` tries to lower its own score to `-500` at startup (`--oom-score-adj`, `FERRY_OOM_SCORE_ADJ`), but that needs root or `CAP_SYS_RESOURCE`, which the `ferry` user doesn't have: systemd sets it instead. Without this line, `ferryd` logs a warning that it could not set its OOM score adjustment. |
+
+The API and dashboard stay on `127.0.0.1:7878` (the default `--api-addr`). Try the certificate setup with `--acme-staging` first if you expect to restart often: Let's Encrypt rate-limits production certificates, and certificates from the staging CA are replaced automatically once you remove the flag. Every option is on [Server options](/docs/reference/server-options).
+
+The container limits (512 MiB of memory and 1 CPU per container by default) need no flag to start with; [size them for your server](#size-the-container-limits) once you know what it runs.
+
+<Callout title="Memory settings in the unit only cover ferryd">
+Only `ferryd` keeps the lowered OOM score: the processes it starts (`git`, the `docker` CLI) are reset to 0, so a runaway `git` isn't spared at the expense of your apps and databases. Containers, and builds, which run inside Docker, live in Docker's cgroups, not in this unit, so memory settings here only cover `ferryd` and the processes it starts. A `MemoryMin=` here does nothing unless its parent slice (`system.slice`) reserves memory too. Avoid `MemoryMax=` on this unit: reaching it gets `ferryd` itself killed. Limit the apps with `--default-memory-limit` or per service instead.
+</Callout>
+
+</Step>
+<Step>
+
+### Start ferryd
+
+```bash title="Terminal"
+sudo systemctl daemon-reload
+sudo systemctl enable --now ferryd
+sudo journalctl -u ferryd -n 30
+```
+
+```text title="Output (excerpt)"
+  Ferry 0.1.0 is running
+  Dashboard + API : http://127.0.0.1:7878
+  Dashboard (proxy): disabled (enable with --dashboard-host ferry.apps.example.com)
+  Apps            : https://<name>.apps.example.com
+  Docker          : 27.3.1 (4 CPUs, 7.8 GiB)
+  Data            : /var/lib/ferry
+  Limits          : 512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3
+  Free disk check : deploys need 1 GiB free
+  API token       : fy_…
+```
+
+The token is also in `/var/lib/ferry/api_token` (mode `0600`). The `Docker` line shows the CPUs and memory the Docker host has, and the `Limits` and `Free disk check` lines the guards Ferry applies: see [Size the container limits](#size-the-container-limits) and [Disk space and logs](#disk-space-and-logs). When a default limit is more than the host has, or the host's kernel can't enforce CPU limits, `ferryd` logs a warning at startup.
+
+</Step>
+<Step>
+
+### Connect the CLI and the dashboard
+
+The API only listens on the server's loopback interface. From your machine, open an SSH tunnel and log in through it:
+
+```bash title="Terminal"
+ssh -N -L 7878:127.0.0.1:7878 you@your-server &
+ferry login --server http://127.0.0.1:7878 --token fy_…
+ferry info
+```
+
+With the tunnel open, the dashboard is at `http://127.0.0.1:7878`.
+
+To reach the dashboard, the API and the webhooks without a tunnel (GitHub webhooks and deploy hooks need this), serve them through the proxy on their own hostname, over HTTPS:
+
+```bash title="Terminal"
+ferryd … --dashboard-host ferry.apps.example.com
+```
+
+Every API call still needs the token. On a public base domain, the dashboard host is off unless you set it.
+
+</Step>
+<Step>
+
+### Deploy and check HTTPS
+
+```bash title="Terminal"
+ferry create hello --image nginx:alpine --port 80 --follow
+curl -I https://hello.apps.example.com
+```
+
+The certificate manager looks for new hostnames every 60 seconds, so the first HTTPS request may get a self-signed certificate for up to a minute or two. The server log shows `requesting a TLS certificate for hello.apps.example.com`, then `obtained a TLS certificate for hello.apps.example.com`.
+
+</Step>
+</Steps>
+
+## Size the container limits
+
+Every container Ferry starts (service instances, one-off jobs, cron runs and datastores) runs with a memory limit, a CPU limit, a process limit and log rotation. An app that leaks memory, spins the CPU or forks without end is killed or throttled on its own, instead of taking down the server, `ferryd` or your databases. Builds are the exception: `docker build` runs in BuildKit, which has no per-build limit. [Resource limits](/docs/concepts/resource-limits) explains how the limits work; this section is about choosing them for your server.
+
+| Flag and variable | Default | What it limits (`0` turns it off) |
+|---|---|---|
+| `--default-memory-limit` `FERRY_DEFAULT_MEMORY_LIMIT` | `512M` | Memory of each container whose service or datastore sets no limit of its own (`512M`, `1G`, `1.5G`). No swap beyond it. |
+| `--default-cpu-limit` `FERRY_DEFAULT_CPU_LIMIT` | `1` | CPUs of each such container (`0.5`, `2`, `500m`). A busy container is throttled, never killed. |
+| `--pids-limit` `FERRY_PIDS_LIMIT` | `1024` | Processes and threads per container, a fork-bomb guard. |
+
+`ferry info` shows the defaults next to what the Docker host has:
+
+```text title="ferry info (excerpt)" noCopy
+Default limits:  512 MiB memory, 1 CPU per container
+Docker host:     4 CPUs, 7.8 GiB memory
+```
+
+### How the limits add up
+
+- **Per container, not per service.** A service with three instances can use three times its limit, plus one more for each of its running jobs, which get the service's limits too. Each datastore has its own.
+- **Caps, not reservations.** Nothing checks that the sum of all limits fits the host, and it doesn't have to: most apps stay well below their limit. If they all use it at once, the host itself runs out of memory and the kernel's OOM killer picks a victim among all its processes. The unit's `OOMScoreAdjust=-900` makes it pick containers before `ferryd`.
+- **Some things have no limit.** `ferryd`, `dockerd`, the system, and up to `--build-concurrency` builds at a time (default 2), which can use all of the host's memory and CPU. Leave room for them.
+
+For example, on the server above (4 CPUs, 7.8 GiB), five web services with one instance each, a Postgres and a Redis are seven containers: 3.5 GiB of memory at most with the defaults, each held to one CPU. About 4 GiB stay free for builds, `ferryd`, Docker and the system.
+
+### Choose the defaults
+
+The defaults suit a small server with a handful of apps. Change them when your server is different:
+
+- **One CPU.** The default CPU limit is then the whole host: lower `--default-cpu-limit`, for example to `0.5`, so one busy app can't starve the others.
+- **Little memory, many small apps.** Lower `--default-memory-limit`, for example to `256M`, and [raise it for the services that need more](#give-one-app-more).
+- **No default limits.** `--default-memory-limit 0` and `--default-cpu-limit 0` run containers without limits unless their service or datastore sets its own. Like every guard here, a `0` turns it off, and the protection with it.
+
+Add the flags to `ExecStart`, or their variables to `/etc/ferry/ferryd.env`, then restart `ferryd`:
+
+```bash title="/etc/ferry/ferryd.env"
+FERRY_DEFAULT_MEMORY_LIMIT=256M
+FERRY_DEFAULT_CPU_LIMIT=0.5
+```
+
+`ferryd` refuses to start on a value it can't use, naming the flag, and logs a warning when a default is more than the host has: `--default-cpu-limit 4 is more than the Docker host's 2 CPUs; containers get at most 2`. New defaults apply to the containers created from then on: deploys, restarts, instances the reconciler replaces, job runs and new datastores. Running containers keep their limits until they are replaced; `ferry restart NAME` replaces a service's instances without a rebuild, and `ferry db update NAME --memory default` applies the new defaults to a datastore that sets no limits of its own.
+
+`ferryd` reads the host's CPUs and memory once. After resizing the machine, restart `ferryd`.
+
+### Give one app more
+
+A service's own limits apply to each of its instances and job runs, from its next deploy or restart. A datastore's limits change right away, without a restart:
+
+```bash title="Terminal"
+ferry update api --memory 1G --cpu 2
+ferry restart api
+ferry db update app-db --memory 2G
+```
+
+```text title="Output" noCopy
+Updated 'api'
+Resource limits apply to the next deploy or restart: ferry restart api
+…
+Updated datastore 'app-db': memory limit 2 GiB
+Applied to the running container (no restart).
+```
+
+`--memory default` and `--cpu default` go back to the server's defaults. Lowering a datastore's memory below what it uses can get it killed. The dashboard has the same settings in the **Resources** section of a service's **Settings** and of a datastore's page, and a [blueprint](/docs/reference/blueprint) sets them with `memoryLimit` and `cpuLimit`, or Render's `plan`. See [Resource limits](/docs/concepts/resource-limits), [`ferry update`](/docs/reference/cli#ferry-update) and [`ferry db update`](/docs/reference/cli#ferry-db-update).
+
+A CPU limit above the host's CPU count is capped at it, with a warning in the deploy log: `the CPU limit (8 CPUs) is more than the Docker host has: capped at 4 CPUs`.
+
+<Callout type="warning" title="Kernels without CPU CFS quotas">
+Some NAS and ARM kernels, and rootless Docker without the cgroup v2 `cpu` controller delegated, have no CPU CFS quotas, and Docker refuses CPU limits there. Ferry then sets no CPU limit: `ferryd` says so at startup, and deploy logs say `the CPU limit (1 CPU) is not enforced: the Docker host's kernel has no CPU CFS quota support`.
+</Callout>
+
+### When an app runs out of memory
+
+The kernel kills a container that goes over its memory limit, and Docker restarts it; a job run fails instead. A deploy whose new instance runs out of memory fails with `instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit`, and the old instances keep serving. `ferry status NAME` and the dashboard mark a killed instance while it restarts, but Docker forgets the kill once the container runs again, so the server log is the record: `ferryd` logs every kill of one of its containers, naming the service or datastore and its limit.
+
+```bash title="Terminal"
+journalctl -u ferryd | grep 'ran out of memory'
+```
+
+[Resource limits](/docs/concepts/resource-limits) lists every message and how to fix it.
+
+## Disk space and logs
+
+### The free-disk check
+
+Before a deploy builds or pulls an image (git, upload and image deploys), before a new datastore is created, and before a datastore's image is pulled, Ferry checks the free space on the data directory's filesystem and, when it is on this machine, on Docker's root directory. Below `--min-free-disk` (`FERRY_MIN_FREE_DISK`, default `1G`), the deploy fails as `build_failed`, or the new datastore as `failed`, before anything fills the disk:
+
+```text title="Deploy log (excerpt)" noCopy
+10:42:07 ==> Build failed: not enough free disk space on /var/lib/ferry: 812 MiB free, Ferry needs at least 1 GiB (free some space, e.g. remove unused Docker images with `docker image prune`, or change the threshold with `ferryd --min-free-disk`, 0 = off)
+```
+
+Restarts and rollbacks are never checked, and neither is recreating an existing datastore's container when its image is still there: what already runs keeps running, and the reconciler can still heal it on a full disk.
+
+The check runs before a build, not during it, and nothing sets disk quotas: volumes (datastores, service disks), containers' own filesystems, images and the build cache can still fill the disk. Ferry deletes its own old images beyond `--keep-images` (default 5); prune the rest yourself from time to time, with `docker image prune` and `docker builder prune`. If builds need more headroom than 1 GiB, raise `--min-free-disk`; `0` turns the check off.
+
+### Container logs
+
+Docker stores what each container writes to stdout and stderr. With Docker's default `json-file` log driver, Ferry rotates each container's log at `--log-max-size` (`FERRY_LOG_MAX_SIZE`, default `10M`) and keeps `--log-max-files` (`FERRY_LOG_MAX_FILES`, default `3`) files, current one included: at most about 30 MiB per container. `ferry logs NAME` reads this output from Docker, so it goes back as far as those files do.
+
+If you configured the Docker daemon with another default log driver (journald, syslog, fluentd, `local`…), Ferry keeps it and sets no rotation: that driver's own limits apply, and the startup banner's `Limits` line says so, for example `Docker's journald log driver (kept)`. `--log-max-size 0` also leaves the daemon's log configuration alone. Log settings are fixed when a container is created, so a change applies to containers created afterwards.
+
+`ferryd`'s own server log goes to its standard output, which systemd sends to the journal (`journalctl -u ferryd`) under the journal's own size limits. Deploy and job logs are files in the data directory.
+
+## Behind an existing reverse proxy
+
+If ports 80 and 443 are already taken on the server (by nginx, Caddy, Traefik or a cloud load balancer), or TLS must terminate elsewhere, run Ferry's proxy on a local port and forward your apps' hostnames to it. Ferry doesn't do HTTPS itself in this setup: leave out `--https-addr` and `--acme-email`.
+
+```bash title="Terminal"
+ferryd --data-dir /var/lib/ferry \
+  --base-domain apps.example.com \
+  --proxy-addr 127.0.0.1:8080 \
+  --public-port 80
+```
+
+- **`--proxy-addr 127.0.0.1:8080`:** only the upstream proxy can reach Ferry's proxy, so nobody bypasses it.
+- **`--public-port 80`:** the port shown in the URLs that Ferry prints and resolves (`ferry open`, the dashboard, `${{service.NAME.url}}`). Port `80` is left out, so the URLs are `http://<name>.apps.example.com`.
+- **The upstream proxy** must forward `*.apps.example.com`, your custom domains, and the dashboard host if you set `--dashboard-host`, to `127.0.0.1:8080` with the original `Host` header. It also needs the TLS certificates: a wildcard certificate for `*.apps.example.com` and one per custom domain. To keep WebSockets and streamed logs working, pass the upgrade headers and don't buffer responses.
+
+For example, with nginx:
+
+```nginx title="/etc/nginx/conf.d/ferry.conf"
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  ''      close;
+}
+
+server {
+  listen 443 ssl;
+  server_name *.apps.example.com;
+  ssl_certificate     /etc/ssl/apps.example.com/fullchain.pem;
+  ssl_certificate_key /etc/ssl/apps.example.com/privkey.pem;
+
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+  }
+}
+```
+
+<Callout type="warning" title="Known limitations behind another proxy">
+Ferry is designed to be the edge of the server, and it has no setting to trust an upstream proxy:
+
+- It drops the `X-Forwarded-*`, `Forwarded` and `X-Real-IP` headers it receives and sets its own. Your apps see `X-Forwarded-Proto: http` and the upstream proxy's address as the client IP (`X-Forwarded-For`, `X-Real-IP`). An app that builds absolute URLs or enforces HTTPS from these headers needs its public URL from its own configuration, for example an environment variable.
+- The URLs Ferry prints start with `http://`, because its own HTTPS is off. Make the upstream proxy redirect HTTP to HTTPS.
+- Automatic HTTPS isn't available: Let's Encrypt must reach Ferry on port 80 of the public address, which the upstream proxy now owns.
+</Callout>
+
+## Back up your data
+
+Ferry doesn't back anything up for you. Three things hold your state:
+
+| What | Where | How to back it up |
+|---|---|---|
+| Ferry's state: services, settings, variables, deploy history, datastore passwords, certificates, logs | The data directory, `/var/lib/ferry` | Copy `ferry.db` safely while `ferryd` runs with `sqlite3 /var/lib/ferry/ferry.db ".backup /backup/ferry.db"`, and copy the rest of the directory (`api_token`, `instance_id`, `certs/`). Or stop `ferryd` and copy the whole directory. |
+| Datastore data | Docker volumes `<prefix>-ds-<name>-data` | `pg_dump` for Postgres (see [Datastores](/docs/concepts/datastores#delete-a-datastore)). Redis persists to its volume; copy the volume if you need it. |
+| Persistent disks | Docker volumes `<prefix>-svc-<service id>-disk` | Copy the volume with a throwaway container, for example `docker run --rm -v ferry-svc-srv-…-disk:/data:ro -v "$PWD":/backup alpine tar czf /backup/disk.tgz -C /data .` |
+
+Keep backups off the server, and encrypt them: the data directory and the dumps contain every secret of your apps.
+
+Built images aren't part of any of these. To restore on a new server, restore the data directory, start `ferryd` with the same `--name-prefix`, and deploy each service again (`ferry deploy NAME`, or `ferry up` for services deployed from a local directory). Datastores come back empty with their old credentials: load your dumps into them.
+
+## Upgrade Ferry
+
+Build the new version, replace the binaries in `/usr/local/bin` and restart the unit with `sudo systemctl restart ferryd`. Running containers aren't touched while `ferryd` restarts, but nothing proxies public traffic until it is back, and deploys in progress at that moment are marked as failed. See [Self-healing](/docs/concepts/self-healing#when-the-server-restarts).
+
+<Callout title="Upgrading from a version without resource limits">
+- Containers already running keep running without limits until they are replaced. Deploys and restarts start new ones with limits (the service's own, else the server defaults), and so do the reconciler and job runs: `ferry restart NAME` gives a service its limits without a rebuild.
+- Datastores created before the upgrade run without limits until you change their limits or their container is recreated: `ferry db update NAME --memory default` applies the server defaults in place.
+- The first apply of an existing `render.yaml` restarts the live services whose `plan:` now sets their limits (Ferry used to ignore it), without a rebuild, and applies the plans of its databases and key value stores to their containers in place.
+- An app or database that needs more than the default memory gets killed once it runs with the default: give it its own limit first (`ferry update NAME --memory 2G`, `ferry db update NAME --memory 2G`), or raise `--default-memory-limit`.
+</Callout>
+
+## Security checklist
+
+- [ ] **Keep the API private.** Leave `--api-addr` on `127.0.0.1` and use an SSH tunnel, or expose it only through `--dashboard-host` **with HTTPS**. The API token gives full control of every app on the server: treat it like a root password.
+- [ ] **Protect the data directory.** It holds variable values, datastore passwords and credentials embedded in repository URLs. Ferry creates it with mode `0700` and `api_token` and `instance_id` with mode `0600`; keep it that way, and restrict who can log in as the `ferry` user.
+- [ ] **Rotate a leaked token.** Stop `ferryd`, delete `<data-dir>/api_token` and start it again: it generates and prints a new token. (With `--api-token` or `FERRY_API_TOKEN`, change the value instead.)
+- [ ] **Use secrets for hooks.** Set a random `--github-webhook-secret`, and rotate a leaked deploy hook with `ferry deploy-hook rotate NAME`.
+- [ ] **Open only ports 22, 80 and 443.** Datastore ports are bound to `127.0.0.1` and are never public; reach them over SSH.
+- [ ] **Trust the forwarding headers.** The proxy drops client-supplied `X-Forwarded-*`, `Forwarded` and `X-Real-IP` headers and sets `X-Forwarded-For` to the connecting address only, so apps can use them. See [Networking](/docs/concepts/networking#request-headers-your-app-receives).
+- [ ] **Give each server its own data directory and name prefix.** Ferry refuses to start on a prefix another data directory owns; don't override that with `--take-over`. A moved data directory keeps its `instance_id` and needs no flag; `--take-over` is only for a data directory whose `instance_id` was lost. See [Multiple servers](/docs/guides/multiple-servers).
+- [ ] **Keep a misbehaving app contained.** Leave the container limits on (a limit of `0` turns its guard off), [size them](#size-the-container-limits) for the host, and keep `OOMScoreAdjust=` in the unit so the kernel kills a container before `ferryd` when memory runs out.
+- [ ] **Know the limits.** One API token, no users or roles; no IP allow lists. Everyone who can deploy can run any code on the server. Containers have memory, CPU and process limits, but builds don't, disks have no quotas, and every container can reach every service and datastore on the private network. See [Security model](/docs/architecture/security#one-misbehaving-service).
+
+<Cards cols={3}>
+  <Card icon={<Globe />} title="Custom domains & HTTPS" href="/docs/guides/custom-domains-https" description="Serve apps on your own domains." />
+  <Card icon={<HeartPulse />} title="Self-healing" href="/docs/concepts/self-healing" description="Restarts, crashes and graceful shutdown." />
+  <Card icon={<Server />} title="Server options" href="/docs/reference/server-options" description="Every ferryd flag and environment variable." />
+</Cards>

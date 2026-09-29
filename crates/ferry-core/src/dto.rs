@@ -21,6 +21,18 @@ pub struct ServerInfo {
     pub github_webhook_enabled: bool,
     /// Docker server version, if reachable.
     pub docker_version: Option<String>,
+    /// Memory limit (MiB) of containers that set none. 0 = unlimited.
+    #[serde(default)]
+    pub default_memory_limit_mb: u32,
+    /// CPU limit (CPUs) of containers that set none. 0 = unlimited.
+    #[serde(default)]
+    pub default_cpu_limit: f64,
+    /// CPUs of the Docker host, if known.
+    #[serde(default)]
+    pub docker_cpus: Option<u32>,
+    /// Total memory of the Docker host (bytes), if known.
+    #[serde(default)]
+    pub docker_memory_bytes: Option<u64>,
 }
 
 /// A service as returned by the API (the stored row plus computed fields).
@@ -66,6 +78,10 @@ pub struct CreateService {
     pub instances: Option<u32>,
     pub auto_deploy: Option<bool>,
     pub disk_mount_path: Option<String>,
+    /// Memory limit per instance, in MiB. Omitted or 0 = the server default.
+    pub memory_limit_mb: Option<u32>,
+    /// CPU limit per instance, in CPUs. Omitted or 0 = the server default.
+    pub cpu_limit: Option<f64>,
     pub custom_domains: Option<Vec<String>>,
     /// Initial service env vars.
     pub env: Option<Vec<EnvVar>>,
@@ -78,7 +94,7 @@ pub struct CreateService {
 /// `PATCH /api/v1/services/{id}` — every field optional. For optional string
 /// settings, an empty string clears the value. Changing `instances` scales,
 /// `suspended` suspends/resumes, `custom_domains` refreshes routes; build
-/// settings take effect on the next deploy.
+/// settings and resource limits take effect on the next deploy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateService {
@@ -99,6 +115,12 @@ pub struct UpdateService {
     pub auto_deploy: Option<bool>,
     pub suspended: Option<bool>,
     pub disk_mount_path: Option<String>,
+    /// Memory limit per instance, in MiB. 0 clears (server default). Takes
+    /// effect with the next deploy or restart.
+    pub memory_limit_mb: Option<u32>,
+    /// CPU limit per instance, in CPUs. 0 clears (server default). Takes
+    /// effect with the next deploy or restart.
+    pub cpu_limit: Option<f64>,
     pub custom_domains: Option<Vec<String>>,
 }
 
@@ -178,7 +200,18 @@ pub struct InstanceStatus {
     pub restart_count: Option<i64>,
     pub cpu_percent: Option<f64>,
     pub memory_bytes: Option<u64>,
+    /// The container's memory limit (bytes); `None` when unlimited.
     pub memory_limit_bytes: Option<u64>,
+    /// The container's CPU limit (CPUs); `None` when unlimited.
+    #[serde(default)]
+    pub cpu_limit: Option<f64>,
+    /// The kernel killed the container's process for exceeding its memory
+    /// limit (the last time it exited).
+    #[serde(default)]
+    pub oom_killed: bool,
+    /// Exit code of the last exit, for exited / restarting containers.
+    #[serde(default)]
+    pub exit_code: Option<i64>,
 }
 
 /// `GET /api/v1/services/{id}/status`
@@ -202,6 +235,21 @@ pub struct CreateDatastore {
     pub database: Option<String>,
     /// Postgres user (default: same as database).
     pub username: Option<String>,
+    /// Memory limit, in MiB. Omitted or 0 = the server default.
+    pub memory_limit_mb: Option<u32>,
+    /// CPU limit, in CPUs. Omitted or 0 = the server default.
+    pub cpu_limit: Option<f64>,
+}
+
+/// `PATCH /api/v1/datastores/{id}` — change resource limits. 0 clears
+/// (server default). Applied to the running container in place (no restart).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateDatastore {
+    /// Memory limit, in MiB. 0 clears (server default); omitted keeps it.
+    pub memory_limit_mb: Option<u32>,
+    /// CPU limit, in CPUs. 0 clears (server default); omitted keeps it.
+    pub cpu_limit: Option<f64>,
 }
 
 /// A datastore with its connection info.

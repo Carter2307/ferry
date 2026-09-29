@@ -9,6 +9,7 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Local, Utc};
+use ferry_core::resources::{format_cpus, format_memory_mb};
 use ferry_core::{DatastoreStatus, DeployStatus, JobStatus, LogLine, LogStreamKind, ServiceState, ServiceType};
 
 /// Print a line to stdout, returning an `io::Result` instead of panicking on
@@ -309,6 +310,52 @@ pub fn human_bytes(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
+/// A container's configured memory limit (bytes) in the words of
+/// `ferry show` (`512 MiB`, `1 GiB`) when it is a whole number of MiB.
+pub fn memory_limit_bytes(bytes: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    match u32::try_from(bytes / MIB) {
+        Ok(mb) if mb > 0 && bytes.is_multiple_of(MIB) => format_memory_mb(mb),
+        _ => human_bytes(bytes),
+    }
+}
+
+/// A server default memory limit (MiB): `512 MiB`, or `unlimited` for 0.
+pub fn memory_or_unlimited(mb: u32) -> String {
+    if mb == 0 { "unlimited".to_string() } else { format_memory_mb(mb) }
+}
+
+/// A server default CPU limit: `1 CPU`, or `unlimited` for 0.
+pub fn cpus_or_unlimited(cpus: f64) -> String {
+    if cpus > 0.0 { format_cpus(cpus) } else { "unlimited".to_string() }
+}
+
+/// The memory limit of a service or datastore: its own (`explicit`), else
+/// the server default (`default`, 0 = unlimited; `None` when the server
+/// didn't say what it is).
+pub fn memory_limit(explicit: Option<u32>, default: Option<u32>) -> String {
+    match explicit.filter(|m| *m > 0) {
+        Some(mb) => format_memory_mb(mb),
+        None => server_default(default.map(memory_or_unlimited)),
+    }
+}
+
+/// The CPU limit of a service or datastore (see [`memory_limit`]).
+pub fn cpu_limit(explicit: Option<f64>, default: Option<f64>) -> String {
+    match explicit.filter(|c| *c > 0.0) {
+        Some(cpus) => format_cpus(cpus),
+        None => server_default(default.map(cpus_or_unlimited)),
+    }
+}
+
+fn server_default(value: Option<String>) -> String {
+    match value.as_deref() {
+        Some("unlimited") => "unlimited (server default)".to_string(),
+        Some(v) => format!("server default ({v})"),
+        None => "server default".to_string(),
+    }
+}
+
 /// Truncate to `max` characters, ending with `…` when shortened.
 pub fn truncate(s: &str, max: usize) -> String {
     if width(s) <= max {
@@ -487,6 +534,22 @@ background   worker
         assert_eq!(human_bytes(12 * 1024 * 1024 + 300 * 1024), "12.3 MiB");
         assert_eq!(human_bytes(3 * 1024 * 1024 * 1024), "3.0 GiB");
         assert_eq!(span(None, None), "-");
+    }
+
+    #[test]
+    fn limits() {
+        assert_eq!(memory_limit_bytes(512 * 1024 * 1024), "512 MiB");
+        assert_eq!(memory_limit_bytes(2 * 1024 * 1024 * 1024), "2 GiB");
+        assert_eq!(memory_limit_bytes(1_000_000_000), "953.7 MiB");
+        assert_eq!(memory_limit(Some(1536), Some(512)), "1.5 GiB");
+        assert_eq!(memory_limit(None, Some(512)), "server default (512 MiB)");
+        assert_eq!(memory_limit(Some(0), Some(0)), "unlimited (server default)");
+        assert_eq!(memory_limit(None, None), "server default");
+        assert_eq!(cpu_limit(Some(0.5), Some(1.0)), "0.5 CPU");
+        assert_eq!(cpu_limit(None, Some(2.0)), "server default (2 CPUs)");
+        assert_eq!(cpu_limit(None, Some(0.0)), "unlimited (server default)");
+        assert_eq!(cpu_limit(None, None), "server default");
+        assert_eq!((memory_or_unlimited(0), cpus_or_unlimited(0.0)), ("unlimited".into(), "unlimited".into()));
     }
 
     #[test]

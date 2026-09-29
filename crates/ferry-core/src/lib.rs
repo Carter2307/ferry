@@ -16,6 +16,7 @@ pub mod ids;
 pub mod logs;
 pub mod models;
 pub mod naming;
+pub mod resources;
 pub mod schedule;
 pub mod store;
 pub mod tls;

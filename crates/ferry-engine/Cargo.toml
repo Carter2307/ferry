@@ -26,6 +26,10 @@ reqwest.workspace = true
 # labels of an existing volume.
 bollard.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# statvfs, for the free disk space check.
+libc = "0.2.189"
+
 [dev-dependencies]
 tempfile.workspace = true
 # E2E tests print engine logs when RUST_LOG is set.

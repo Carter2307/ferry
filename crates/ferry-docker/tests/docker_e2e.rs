@@ -10,11 +10,16 @@ use std::time::Duration;
 
 use chrono::Utc;
 use ferry_core::{Error, LogLine, LogSink, LogStreamKind, ids};
-use ferry_docker::{ContainerSpec, ContainerState, Docker, PortPublish, RestartPolicy, VolumeMount};
+use ferry_docker::{
+    ContainerSpec, ContainerState, Docker, LimitsUpdate, LogRotation, PortPublish, RestartPolicy, VolumeMount,
+};
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const BUSYBOX: &str = "busybox:stable";
+/// Images the tests expect to be present already (a fresh CI runner has
+/// none): pulled once per test binary by [`connect`].
+const BASE_IMAGES: &[&str] = &[BUSYBOX, "nginx:alpine"];
 
 fn e2e_enabled() -> bool {
     std::env::var("FERRY_E2E").is_ok_and(|v| v == "1")
@@ -101,7 +106,16 @@ impl Drop for Cleanup {
 }
 
 async fn connect() -> Docker {
-    Docker::connect().await.expect("connect to Docker")
+    static PULLED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    let docker = Docker::connect().await.expect("connect to Docker");
+    PULLED
+        .get_or_init(|| async {
+            for image in BASE_IMAGES {
+                docker.ensure_image(image, &LogSink::noop()).await.expect("pulling a test image");
+            }
+        })
+        .await;
+    docker
 }
 
 async fn collect(stream: ferry_core::LogStream) -> Vec<LogLine> {
@@ -544,4 +558,220 @@ async fn tags_volumes_and_exec_secrets() {
     let err = docker.exec(&info.id, &["redis-cli", "-a", secret, "ping"]).await.unwrap_err();
     assert!(matches!(&err, Error::NotFound(_)), "{err:?}");
     assert!(!err.to_string().contains(secret), "{err}");
+}
+
+/// The container's own cgroup v2 limits (`memory.max`, `cpu.max`,
+/// `pids.max`), or `None` on a cgroup v1 host.
+async fn cgroup_limits(docker: &Docker, id: &str) -> Option<[String; 3]> {
+    let out = docker
+        .exec(id, &["cat", "/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/pids.max"])
+        .await
+        .unwrap();
+    if out.exit_code != 0 {
+        return None;
+    }
+    let lines: Vec<String> = out.output.lines().map(|l| l.trim().to_string()).collect();
+    Some(lines.try_into().unwrap_or_else(|l| panic!("unexpected cgroup output: {l:?}")))
+}
+
+/// `(Memory, MemorySwap, NanoCpus, PidsLimit)` of a container's HostConfig.
+async fn host_limits(docker: &Docker, id: &str) -> (Option<i64>, Option<i64>, Option<i64>, Option<i64>) {
+    let hc = docker.bollard().inspect_container(id, None).await.unwrap().host_config.unwrap();
+    (hc.memory, hc.memory_swap, hc.nano_cpus, hc.pids_limit)
+}
+
+/// `host_info`, and what the daemon accepts at creation: limits, pids limit
+/// and log rotation are applied; a CPU quota above the host's CPU count is
+/// refused, a memory limit above the host's memory is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn limits_on_create() {
+    require_e2e!();
+    let cleanup = Cleanup::new();
+    let docker = connect().await;
+    docker.ensure_image(BUSYBOX, &LogSink::noop()).await.unwrap();
+
+    let host = docker.host_info().await.unwrap();
+    let cpus = host.cpus.expect("host CPUs");
+    let memory = host.memory_bytes.expect("host memory");
+    assert!(memory > 64 << 20, "{host:?}");
+    assert!(host.docker_root_dir.as_deref().is_some_and(|d| d.starts_with('/')), "{host:?}");
+    assert!(host.operating_system.is_some(), "{host:?}");
+    let cli = Command::new("docker")
+        .args(["info", "--format", "{{.NCPU}} {{.MemTotal}} {{.CPUCfsQuota}} {{.LoggingDriver}}"])
+        .output()
+        .unwrap();
+    let cfs = host.cpu_cfs_quota.expect("CPU CFS quota support");
+    let driver = host.logging_driver.as_deref().expect("log driver");
+    assert_eq!(
+        String::from_utf8_lossy(&cli.stdout).trim(),
+        format!("{cpus} {memory} {cfs} {driver}"),
+        "same as `docker info`"
+    );
+
+    let spec = ContainerSpec {
+        memory_limit_bytes: Some(64 << 20),
+        nano_cpus: Some(500_000_000),
+        pids_limit: Some(128),
+        log_rotation: Some(LogRotation { max_size_mb: 1, max_files: 2 }),
+        ..cleanup.spec("limited", "seq 1 100000; echo end; exec sleep 300")
+    };
+    let info = docker.run_container(&spec).await.unwrap();
+    assert_eq!(info.memory_limit_bytes, Some(64 << 20));
+    assert_eq!(info.nano_cpus, Some(500_000_000));
+    assert!(!info.oom_killed);
+    assert_eq!(host_limits(&docker, &info.id).await, (Some(64 << 20), Some(64 << 20), Some(500_000_000), Some(128)));
+    let hc = docker.bollard().inspect_container(&info.id, None).await.unwrap().host_config.unwrap();
+    let log_config = hc.log_config.expect("log config");
+    assert_eq!(log_config.typ.as_deref(), Some("json-file"));
+    let options = log_config.config.unwrap_or_default();
+    assert_eq!((options["max-size"].as_str(), options["max-file"].as_str()), ("1m", "2"));
+    if let Some([mem, cpu, pids]) = cgroup_limits(&docker, &info.id).await {
+        assert_eq!((mem.as_str(), cpu.as_str(), pids.as_str()), ("67108864", "50000 100000", "128"));
+    }
+    // Rotation: ~10 MB of json-file log was written, at most ~2 MiB is kept.
+    let lines = logs_until(&docker, &info.id, "end").await;
+    assert!(lines.len() < 100_000, "{} lines kept", lines.len());
+    assert_ne!(lines.first().map(|l| l.line.as_str()), Some("1"), "the oldest lines were rotated away");
+    // The pids limit holds: forking past it fails.
+    let fork = docker.exec(&info.id, &["sh", "-c", "for i in $(seq 1 200); do sleep 30 & done; wait"]).await.unwrap();
+    assert_ne!(fork.exit_code, 0, "{fork:?}");
+    assert!(fork.output.contains("fork") || fork.output.contains("resource"), "{fork:?}");
+
+    // No limits at all: nothing is set, inspect reports None.
+    let free = docker.run_container(&cleanup.spec("free", "exec sleep 300")).await.unwrap();
+    assert_eq!((free.memory_limit_bytes, free.nano_cpus), (None, None));
+    let (mem, swap, nano, pids) = host_limits(&docker, &free.id).await;
+    assert_eq!((mem, swap, nano), (Some(0), Some(0), Some(0)));
+    assert!(pids.is_none_or(|p| p <= 0), "{pids:?}");
+
+    // More CPUs than the host has: refused (the engine caps the quota).
+    let too_many = ContainerSpec {
+        nano_cpus: Some(i64::from(cpus + 1) * 1_000_000_000),
+        ..cleanup.spec("cpus", "exec sleep 300")
+    };
+    match docker.run_container(&too_many).await {
+        Err(Error::Docker(m)) => assert!(m.to_lowercase().contains("range of cpus"), "{m}"),
+        other => panic!("expected the daemon to refuse the CPU quota, got {other:?}"),
+    }
+    assert!(docker.inspect_container(&too_many.name).await.unwrap().is_none());
+    // More memory than the host has: accepted.
+    let big = ContainerSpec {
+        memory_limit_bytes: Some(i64::try_from(memory).unwrap() + (1 << 30)),
+        ..cleanup.spec("bigmem", "exec sleep 300")
+    };
+    let big = docker.run_container(&big).await.unwrap();
+    assert_eq!(big.memory_limit_bytes, Some(i64::try_from(memory).unwrap() + (1 << 30)));
+}
+
+/// `update_limits` changes a live container's limits without a restart and
+/// really removes them with `None` (see `convert::update_body` for the
+/// encoding Docker needs).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_limits_in_place() {
+    require_e2e!();
+    let cleanup = Cleanup::new();
+    let docker = connect().await;
+    docker.ensure_image(BUSYBOX, &LogSink::noop()).await.unwrap();
+    let cpus = docker.host_info().await.unwrap().cpus.expect("host CPUs");
+    let all_cpus = i64::from(cpus) * 1_000_000_000;
+
+    // Created without limits, then limited.
+    let info = docker.run_container(&cleanup.spec("db", "exec sleep 300")).await.unwrap();
+    let id = info.id.clone();
+    let limited =
+        LimitsUpdate { memory_limit_bytes: Some(96 << 20), nano_cpus: Some(250_000_000), pids_limit: Some(64) };
+    docker.update_limits(&id, limited).await.unwrap();
+    let after = docker.inspect_container(&id).await.unwrap().unwrap();
+    assert_eq!(after.started_at, info.started_at, "no restart");
+    assert_eq!((after.memory_limit_bytes, after.nano_cpus), (Some(96 << 20), Some(250_000_000)));
+    assert_eq!(host_limits(&docker, &id).await, (Some(96 << 20), Some(96 << 20), Some(250_000_000), Some(64)));
+    if let Some([mem, cpu, pids]) = cgroup_limits(&docker, &id).await {
+        assert_eq!((mem.as_str(), cpu.as_str(), pids.as_str()), ("100663296", "25000 100000", "64"));
+    }
+
+    // Changed.
+    let changed = LimitsUpdate { memory_limit_bytes: Some(48 << 20), nano_cpus: Some(1_000_000_000), pids_limit: None };
+    docker.update_limits(&id, changed).await.unwrap();
+    assert_eq!(host_limits(&docker, &id).await, (Some(48 << 20), Some(48 << 20), Some(1_000_000_000), Some(0)));
+
+    // Removed: no memory limit (reported as None), a quota of every host CPU,
+    // no pids limit — and the kernel agrees.
+    docker.update_limits(&id, LimitsUpdate::default()).await.unwrap();
+    let removed = docker.inspect_container(&id).await.unwrap().unwrap();
+    assert_eq!(removed.state, ContainerState::Running);
+    assert_eq!(removed.memory_limit_bytes, None);
+    assert_eq!(removed.nano_cpus, Some(all_cpus));
+    assert_eq!(host_limits(&docker, &id).await.3, Some(0));
+    if let Some([mem, cpu, pids]) = cgroup_limits(&docker, &id).await {
+        assert!(mem == "max" || mem.parse::<u64>().is_ok_and(|m| m >= 1 << 60), "memory.max {mem}");
+        assert_eq!(cpu, format!("{} 100000", u64::from(cpus) * 100_000));
+        assert_eq!(pids, "max");
+    }
+
+    // Limited again after the removal; then removed on a stopped container,
+    // which must still start (the sentinel survives Docker Desktop's proxy).
+    docker.update_limits(&id, limited).await.unwrap();
+    assert_eq!(host_limits(&docker, &id).await, (Some(96 << 20), Some(96 << 20), Some(250_000_000), Some(64)));
+    docker.stop_container(&id, 1).await.unwrap();
+    docker.update_limits(&id, LimitsUpdate::default()).await.unwrap();
+    docker.start_container(&id).await.unwrap();
+    let restarted = docker.inspect_container(&id).await.unwrap().unwrap();
+    assert_eq!(restarted.state, ContainerState::Running);
+    assert_eq!((restarted.memory_limit_bytes, restarted.nano_cpus), (None, Some(all_cpus)));
+    let restart = Command::new("docker").args(["restart", "-t", "1", &id]).output().unwrap();
+    assert!(restart.status.success(), "docker restart: {}", String::from_utf8_lossy(&restart.stderr));
+    assert_eq!(docker.inspect_container(&id).await.unwrap().unwrap().state, ContainerState::Running);
+
+    // Errors.
+    let too_many = LimitsUpdate { nano_cpus: Some(all_cpus + 1_000_000_000), ..limited };
+    match docker.update_limits(&id, too_many).await {
+        Err(Error::Docker(m)) => assert!(m.to_lowercase().contains("range of cpus"), "{m}"),
+        other => panic!("expected the daemon to refuse the CPU quota, got {other:?}"),
+    }
+    docker.remove_container(&id, true).await.unwrap();
+    assert!(matches!(docker.update_limits(&id, limited).await, Err(Error::NotFound(_))));
+}
+
+/// A container killed by the kernel for going over its memory limit is
+/// reported `oom_killed`; one killed by a plain SIGKILL (same exit code
+/// 137) is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oom_kills_are_reported() {
+    require_e2e!();
+    let cleanup = Cleanup::new();
+    let docker = connect().await;
+    docker.ensure_image(BUSYBOX, &LogSink::noop()).await.unwrap();
+
+    // `tail` buffers a newline-free /dev/zero until the limit is hit.
+    let hog = ContainerSpec { memory_limit_bytes: Some(32 << 20), ..cleanup.spec("hog", "exec tail /dev/zero") };
+    let info = docker.run_container(&hog).await.unwrap();
+    let code = tokio::time::timeout(Duration::from_secs(60), docker.wait_container(&info.id))
+        .await
+        .expect("the container is OOM-killed quickly")
+        .unwrap();
+    assert_eq!(code, 137);
+    // Docker can record the OOM kill a moment after it reports the exit
+    // (seen on Linux hosts): the flag gets a few seconds to show up.
+    let mut dead = docker.inspect_container(&info.id).await.unwrap().unwrap();
+    for _ in 0..50 {
+        if dead.oom_killed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        dead = docker.inspect_container(&info.id).await.unwrap().unwrap();
+    }
+    assert_eq!(dead.state, ContainerState::Exited);
+    assert_eq!(dead.exit_code, Some(137));
+    assert!(dead.oom_killed, "{dead:?}");
+    assert_eq!(dead.memory_limit_bytes, Some(32 << 20));
+    let listed = docker.list_containers(&[("ferry.instance", &cleanup.prefix)], true).await.unwrap();
+    assert!(listed.iter().all(|c| !c.oom_killed), "the list API never reports OOM kills");
+
+    // SIGKILL without OOM: same exit code, not an OOM kill.
+    let killed = docker.run_container(&cleanup.spec("killed", "exec sleep 300")).await.unwrap();
+    docker.stop_container(&killed.id, 0).await.unwrap();
+    let killed = docker.inspect_container(&killed.id).await.unwrap().unwrap();
+    assert_eq!(killed.exit_code, Some(137));
+    assert!(!killed.oom_killed);
+    assert_eq!((killed.memory_limit_bytes, killed.nano_cpus), (None, None));
 }

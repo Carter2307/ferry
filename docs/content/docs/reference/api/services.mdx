@@ -1,0 +1,139 @@
+---
+title: "Services"
+description: "Web services, private services, background workers, static sites and cron jobs: CRUD, lifecycle actions (restart, suspend, resume, scale, rollback), status and runtime logs."
+full: true
+_openapi:
+  preload:
+    - ferry
+  toc:
+    - depth: 2
+      title: List services
+      url: '#list-services'
+    - depth: 2
+      title: Create a service
+      url: '#create-a-service'
+    - depth: 2
+      title: Get a service
+      url: '#get-a-service'
+    - depth: 2
+      title: Update a service
+      url: '#update-a-service'
+    - depth: 2
+      title: Delete a service
+      url: '#delete-a-service'
+    - depth: 2
+      title: Restart a service
+      url: '#restart-a-service'
+    - depth: 2
+      title: Suspend a service
+      url: '#suspend-a-service'
+    - depth: 2
+      title: Resume a service
+      url: '#resume-a-service'
+    - depth: 2
+      title: Scale a service
+      url: '#scale-a-service'
+    - depth: 2
+      title: Roll back to an earlier deploy
+      url: '#roll-back-to-an-earlier-deploy'
+    - depth: 2
+      title: Rotate the deploy hook key
+      url: '#rotate-the-deploy-hook-key'
+    - depth: 2
+      title: Runtime status
+      url: '#runtime-status'
+    - depth: 2
+      title: Runtime logs (SSE)
+      url: '#runtime-logs-sse'
+  structuredData:
+    headings:
+      - content: List services
+        id: list-services
+      - content: Create a service
+        id: create-a-service
+      - content: Get a service
+        id: get-a-service
+      - content: Update a service
+        id: update-a-service
+      - content: Delete a service
+        id: delete-a-service
+      - content: Restart a service
+        id: restart-a-service
+      - content: Suspend a service
+        id: suspend-a-service
+      - content: Resume a service
+        id: resume-a-service
+      - content: Scale a service
+        id: scale-a-service
+      - content: Roll back to an earlier deploy
+        id: roll-back-to-an-earlier-deploy
+      - content: Rotate the deploy hook key
+        id: rotate-the-deploy-hook-key
+      - content: Runtime status
+        id: runtime-status
+      - content: Runtime logs (SSE)
+        id: runtime-logs-sse
+    contents:
+      - content: Every service with its computed fields. The `state` of live services
+          reflects their running instances (`degraded` when some are down), from
+          counts refreshed at most every few seconds.
+        heading: list-services
+      - content: Creates the service with its own variables and env group links, then
+          queues a first deploy (trigger `create`) when it has a repository or
+          an image, unless `deploy` is `false`. Services and datastores share
+          one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and
+          `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance
+          and job run of the service; omitted or `0` = the server default (see
+          `GET /api/v1/info`).
+        heading: create-a-service
+      - content: "Every field is optional; for optional string settings an empty string
+          clears the value. `instances` scales, `suspended` suspends or resumes,
+          `custom_domains` refreshes the routes; build settings take effect on
+          the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0`
+          = back to the server default) are only saved: they take effect with
+          the next deploy or restart, this request doesn't redeploy. Switching
+          between a git repository and an image requires clearing the other
+          source in the same request. When a side effect fails after the
+          settings were saved, the error message says so."
+        heading: update-a-service
+      - content: Removes its containers, routes, deploys and variables. Refused while
+          other services reference it in their env (`${{service.NAME...}}`),
+          unless `force=true`.
+        heading: delete-a-service
+      - content: Rolls out the live deploy's image again (a new deploy with trigger
+          `restart`), picking up changed variables.
+        heading: restart-a-service
+      - content: Stops its containers; settings, variables and deploys stay until it is
+          resumed.
+        heading: suspend-a-service
+      - content: Starts the live deploy's containers again.
+        heading: resume-a-service
+      - content: Sets the number of instances. Cron jobs can't be scaled, and services
+          with a disk run 1 instance.
+        heading: scale-a-service
+      - content: Queues a deploy (trigger `rollback`) reusing the image of an earlier
+          deploy of this service that went live.
+        heading: roll-back-to-an-earlier-deploy
+      - content: "Replaces the secret of the service's deploy hook URL: the old URL
+          stops working, the new one is the returned `deploy_hook_path`."
+        heading: rotate-the-deploy-hook-key
+      - content: 'The live state of each container: Docker state, host port, restarts,
+          CPU and memory.'
+        heading: runtime-status
+      - content: "The merged output of the service's current containers (`instance`
+          names the container). Cron jobs have no long-running containers: their
+          stream is a few `system` lines pointing at the job logs."
+        heading: runtime-logs-sse
+---
+
+{/* This file was generated by Fumadocs. Do not edit this file directly. Any changes should be made by running the generation command again. */}
+
+export default function Layout(props) {
+  const { OpenAPIPage } = props.components ?? {};
+  return (
+    <>
+      {props.children}
+      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/services","method":"get"},{"path":"/api/v1/services","method":"post"},{"path":"/api/v1/services/{id}","method":"get"},{"path":"/api/v1/services/{id}","method":"patch"},{"path":"/api/v1/services/{id}","method":"delete"},{"path":"/api/v1/services/{id}/restart","method":"post"},{"path":"/api/v1/services/{id}/suspend","method":"post"},{"path":"/api/v1/services/{id}/resume","method":"post"},{"path":"/api/v1/services/{id}/scale","method":"post"},{"path":"/api/v1/services/{id}/rollback","method":"post"},{"path":"/api/v1/services/{id}/deploy-hook/rotate","method":"post"},{"path":"/api/v1/services/{id}/status","method":"get"},{"path":"/api/v1/services/{id}/logs","method":"get"}]} showTitle showDescription />
+    </>
+  );
+}

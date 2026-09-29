@@ -100,6 +100,19 @@ describe('visibleFields / validateForm', () => {
     )
     expect(errors.instances).toMatch(/disk/)
   })
+  it('validates custom limits against ferry_core ranges and the host CPUs', () => {
+    const f = form({
+      name: 'api',
+      source: 'image',
+      image: 'nginx',
+      memoryLimit: { choice: 'custom', custom: '8M' },
+      cpuLimit: { choice: '4', custom: '' },
+    })
+    expect(validateForm(f, none).memoryLimit).toMatch(/16 MiB/)
+    expect(validateForm(f, none).cpuLimit).toBeUndefined()
+    expect(validateForm(f, none, 2).cpuLimit).toMatch(/Docker host/)
+    expect(validateForm(form({ name: 'api', source: 'image', image: 'nginx' }), none, 2)).toEqual({})
+  })
   it('an invalid domain draft blocks submit', () => {
     const errors = validateForm(form({ name: 'web', source: 'image', image: 'nginx', domainDraft: 'not a domain' }), none)
     expect(errors.domains).toBeDefined()
@@ -163,6 +176,22 @@ describe('toCreateRequest', () => {
     expect(body).not.toHaveProperty('image')
     expect(body).not.toHaveProperty('schedule')
   })
+  it('sends resource limits only when set (default = the server default)', () => {
+    const plain = toCreateRequest(form({ name: 'api', source: 'image', image: 'nginx' }), [])
+    expect(plain).not.toHaveProperty('memory_limit_mb')
+    expect(plain).not.toHaveProperty('cpu_limit')
+    const limited = toCreateRequest(
+      form({
+        name: 'api',
+        source: 'image',
+        image: 'nginx',
+        memoryLimit: { choice: '1024', custom: '' },
+        cpuLimit: { choice: 'custom', custom: '750m' },
+      }),
+      [],
+    )
+    expect(limited).toMatchObject({ memory_limit_mb: 1024, cpu_limit: 0.75 })
+  })
   it('upload services are created without a deploy', () => {
     const body = toCreateRequest(form({ name: 'app', source: 'upload' }), [])
     expect(body.deploy).toBe(false)
@@ -178,6 +207,8 @@ describe('fieldForServerError', () => {
     expect(fieldForServerError("domain 'a.example.com' is already used by service 'web'")).toBe('domains')
     expect(fieldForServerError("env group 'nope' not found")).toBe('envGroups')
     expect(fieldForServerError("invalid repo_url 'x': must not be empty")).toBe('repoUrl')
+    expect(fieldForServerError('memory limit must be between 16 MiB and 1024 GiB (got 8 MiB)')).toBe('memoryLimit')
+    expect(fieldForServerError('CPU limit must be between 0.01 and 512 CPUs (got 0)')).toBe('cpuLimit')
     expect(fieldForServerError('something else entirely')).toBeNull()
   })
 })

@@ -1,0 +1,17 @@
+{
+  "title": "Concepts",
+  "icon": "Boxes",
+  "pages": [
+    "services",
+    "deploys",
+    "builds",
+    "networking",
+    "environment",
+    "datastores",
+    "jobs",
+    "scaling",
+    "resource-limits",
+    "logs",
+    "self-healing"
+  ]
+}

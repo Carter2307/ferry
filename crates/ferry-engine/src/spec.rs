@@ -1,8 +1,8 @@
 //! Launch specs: exactly what a deploy's instances (and one-off / cron jobs)
-//! run with — image, container port, resolved environment, command and
-//! disk. A deploy computes its spec from the service's settings and env when
-//! it starts its instances, and stores it (JSON in the `settings` table under
-//! `engine.spec.<deploy_id>`) when it goes live.
+//! run with — image, container port, resolved environment, command, disk
+//! and resource limits. A deploy computes its spec from the service's
+//! settings and env when it starts its instances, and stores it (JSON in the
+//! `settings` table under `engine.spec.<deploy_id>`) when it goes live.
 //!
 //! Everything that starts containers for an existing deploy — the reconciler
 //! replacing a crashed instance, scale, resume, jobs — uses the live deploy's
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::instances::{self, BuildInfo, Plan};
+use crate::limits::{self, Resources};
 use crate::state::Inner;
 use crate::util::error_message;
 
@@ -38,6 +39,15 @@ pub(crate) struct LaunchSpec {
     pub start_command: Option<String>,
     /// Where the service's disk is mounted, if it has one.
     pub disk_mount_path: Option<String>,
+    /// The service's memory limit (MiB) at deploy time. `None` = the server
+    /// default when a container is created (also for specs stored before
+    /// limits existed).
+    #[serde(default)]
+    pub memory_limit_mb: Option<u32>,
+    /// The service's CPU limit (CPUs) at deploy time. `None` = the server
+    /// default when a container is created.
+    #[serde(default)]
+    pub cpu_limit: Option<f64>,
 }
 
 impl LaunchSpec {
@@ -65,7 +75,15 @@ impl LaunchSpec {
                 .map(str::trim)
                 .filter(|p| !p.is_empty())
                 .map(str::to_string),
+            memory_limit_mb: svc.memory_limit_mb.filter(|m| *m > 0),
+            cpu_limit: svc.cpu_limit.filter(|c| *c > 0.0),
         }
+    }
+
+    /// The resources of a container started from this spec (instance or
+    /// job): its limits, else the server defaults.
+    pub(crate) async fn resources(&self, inner: &Inner) -> Resources {
+        limits::for_container(inner, self.memory_limit_mb, self.cpu_limit).await
     }
 
     /// The instances' environment: injected variables overridden by the
@@ -159,7 +177,14 @@ pub(crate) async fn for_deploy(inner: &Inner, svc: &Service, deploy: &Deploy) ->
 /// The container plan of a spec (creating the disk volume if needed).
 pub(crate) async fn plan(inner: &Inner, svc: &Service, spec: &LaunchSpec) -> Result<Plan> {
     let volume = instances::disk_volume(inner, &svc.id, spec.disk_mount_path.as_deref()).await?;
-    Ok(Plan { image: spec.image.clone(), port: spec.port, env: spec.container_env(), cmd: spec.cmd.clone(), volume })
+    Ok(Plan {
+        image: spec.image.clone(),
+        port: spec.port,
+        env: spec.container_env(),
+        cmd: spec.cmd.clone(),
+        volume,
+        resources: spec.resources(inner).await,
+    })
 }
 
 /// Names of the services whose port is referenced in the values of `vars`
@@ -222,6 +247,37 @@ mod tests {
         let native = LaunchSpec::new(&svc, &deploy, "img".into(), None, Some(Runtime::Node), user, &config);
         assert_eq!(native.cmd, None);
         assert_eq!(native.start_command.as_deref(), Some("./serve"), "still the default of cron runs");
+    }
+
+    #[test]
+    fn specs_capture_the_service_limits() {
+        let config = Config::default();
+        let mut svc = Service::new("web", ServiceType::WebService);
+        let deploy = Deploy::new(&svc.id, DeployTrigger::Manual, DeploySource::Image { image: "x".into() });
+        let spec = LaunchSpec::new(&svc, &deploy, "img".into(), Some(80), None, Vec::new(), &config);
+        assert_eq!((spec.memory_limit_mb, spec.cpu_limit), (None, None), "server defaults");
+        svc.memory_limit_mb = Some(768);
+        svc.cpu_limit = Some(1.5);
+        let spec = LaunchSpec::new(&svc, &deploy, "img".into(), Some(80), None, Vec::new(), &config);
+        assert_eq!((spec.memory_limit_mb, spec.cpu_limit), (Some(768), Some(1.5)));
+        // Changing the service afterwards does not change the spec.
+        svc.memory_limit_mb = Some(64);
+        assert_eq!(spec.memory_limit_mb, Some(768));
+        let json = serde_json::to_value(&spec).unwrap();
+        assert_eq!(json["memory_limit_mb"], 768);
+        assert_eq!(json["cpu_limit"], 1.5);
+    }
+
+    #[test]
+    fn specs_stored_before_limits_existed_use_the_server_defaults() {
+        let old = r#"{"image":"ferry/web:dep-1","port":8000,"injected_env":[],"user_env":[{"key":"A","value":"1"}],
+            "cmd":null,"start_command":null,"disk_mount_path":null}"#;
+        let spec: LaunchSpec = serde_json::from_str(old).unwrap();
+        assert_eq!(spec.image, "ferry/web:dep-1");
+        assert_eq!(spec.port, Some(8000));
+        assert_eq!((spec.memory_limit_mb, spec.cpu_limit), (None, None));
+        let r = Resources::new(&Config::default(), None, spec.memory_limit_mb, spec.cpu_limit);
+        assert_eq!(r.summary(), "512 MiB memory, 1 CPU");
     }
 
     #[tokio::test]

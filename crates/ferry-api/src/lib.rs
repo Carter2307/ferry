@@ -53,6 +53,10 @@ pub struct AppState {
     pub engine: Arc<dyn Engine>,
     /// Docker server version (for `/api/v1/info`).
     pub docker_version: Option<String>,
+    /// CPUs of the Docker host (for `/api/v1/info`).
+    pub docker_cpus: Option<u32>,
+    /// Total memory of the Docker host in bytes (for `/api/v1/info`).
+    pub docker_memory_bytes: Option<u64>,
     /// Cancelled when the server shuts down: open SSE log streams end so the
     /// HTTP server's graceful shutdown can complete.
     pub shutdown: CancellationToken,
@@ -97,7 +101,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/jobs/{job_id}/logs", get(jobs::logs))
         // datastores
         .route("/v1/datastores", get(datastores::list).post(datastores::create))
-        .route("/v1/datastores/{id}", get(datastores::get).delete(datastores::delete))
+        .route("/v1/datastores/{id}", get(datastores::get).patch(datastores::update).delete(datastores::delete))
         // env groups
         .route("/v1/env-groups", get(env_groups::list).post(env_groups::create))
         .route("/v1/env-groups/{id}", get(env_groups::get).delete(env_groups::delete))
