@@ -1147,6 +1147,59 @@
         ]
       }
     },
+    "/api/v1/certificates": {
+      "get": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "List the certificates of the routed hosts",
+        "description": "One entry per hostname the proxy routes — the dashboard's, then every hostname of every web service and static site (under each served domain, and its custom domains) — with where its certificate stands: `issued` (and until when), `pending` or `issuing` (a new host gets its certificate within seconds of being routed), `failed` with the reason and the time of the next attempt, `local` for names no authority certifies, `disabled` when the server runs without HTTPS.",
+        "operationId": "listCertificates",
+        "responses": {
+          "200": {
+            "description": "The certificates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CertificateView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/datastores": {
       "get": {
         "tags": [
@@ -1778,6 +1831,449 @@
         ]
       }
     },
+    "/api/v1/domains": {
+      "get": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "List the server's domains",
+        "description": "The domains services are served under, the default one first: the server's base domain (`source: config`) and the connected ones. Each comes with the DNS records that point it at this server and what its last verification found.",
+        "operationId": "listServerDomains",
+        "responses": {
+          "200": {
+            "description": "The domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DomainView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Connect a domain",
+        "description": "Adds a domain (or a subdomain) of yours. It starts `pending`: create the `records` it comes with where its DNS is managed — one wildcard record covers every service. The server then verifies it every few seconds; once its names reach the server it is `active`, every web service and static site is served at `<service>.<name>` (with a certificate when the server has HTTPS), and it becomes the default domain if the default one was a local name. A local name (`*.localhost`, `.test`…) is served at once.",
+        "operationId": "connectDomain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connected domain, with the DNS records to create.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a domain name (a URL, a wildcard, an address), or too many domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The domain is already connected, or a service would be served at a hostname that is taken: a custom domain of another service, or the dashboard's host.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/domains/{id}": {
+      "get": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Get a domain",
+        "operationId": "getServerDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Disconnect a domain",
+        "description": "The services stop being served under the domain at once (their other hostnames and their custom domains stay), and its certificates are no longer renewed. When it was the default domain, the base domain is again. The DNS records stay where they were created. The base domain of the server (`source: config`) can't be removed here: it is set by `--base-domain`.",
+        "operationId": "disconnectDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected."
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is the base domain of the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Make a domain the default",
+        "description": "`is_default: true` makes it the domain of the URL every service is shown and linked with (`url`, `FERRY_EXTERNAL_URL`); the services stay served under the other domains too. Running services read the new `FERRY_EXTERNAL_URL` at their next deploy or restart.",
+        "operationId": "updateServerDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`is_default: false`: make another domain the default instead.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The domain is not served yet (its DNS doesn't point at this server).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/domains/{id}/verify": {
+      "post": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Verify a domain now",
+        "description": "Checks at once, instead of at the server's next pass, whether the names under the domain reach this server: what a made-up name under it resolves to (`dns`), and whether this server answers a request for it on its public HTTP port (`http`). The answer is the domain with its new `status` and `checks`. A local domain has nothing to verify and is returned as it is.",
+        "operationId": "verifyDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain, with what the verification found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/env-groups": {
       "get": {
         "tags": [
@@ -2285,7 +2781,7 @@
         "operationId": "streamEvents",
         "responses": {
           "200": {
-            "description": "Server-Sent Events. First `event: ready` (`data: {}`) once the feed watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: `kind` is `service`, `deploy`, `datastore`, `env_group`, `job` or `git_connection`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts down.",
+            "description": "Server-Sent Events. First `event: ready` (`data: {}`) once the feed watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: `kind` is `service`, `deploy`, `datastore`, `env_group`, `job`, `git_connection` or `domain`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts down.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -2976,7 +3472,7 @@
           "info"
         ],
         "summary": "Server info",
-        "description": "Version, base domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
+        "description": "Version, base domain and default domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
         "operationId": "getServerInfo",
         "responses": {
           "200": {
@@ -6080,6 +6576,64 @@
           }
         }
       },
+      "CertificateState": {
+        "type": "string",
+        "description": "What the server knows about the certificate of a hostname.",
+        "enum": [
+          "disabled",
+          "local",
+          "pending",
+          "issuing",
+          "issued",
+          "failed"
+        ]
+      },
+      "CertificateView": {
+        "type": "object",
+        "description": "`GET /api/v1/certificates` — the certificate of one hostname the proxy\nroutes.",
+        "required": [
+          "host",
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`failed`: what the certificate authority (or reaching it) answered."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`issued`: when the certificate expires."
+          },
+          "host": {
+            "type": "string"
+          },
+          "retry_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`failed`: when the server asks again."
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the service the host is routed to; `null` for the dashboard."
+          },
+          "state": {
+            "$ref": "#/components/schemas/CertificateState"
+          }
+        }
+      },
       "ChangeAction": {
         "type": "string",
         "description": "What happened (`resync`: refetch everything).",
@@ -6134,6 +6688,7 @@
           "env_group",
           "job",
           "git_connection",
+          "domain",
           "all"
         ]
       },
@@ -6154,6 +6709,15 @@
           }
         },
         "additionalProperties": false
+      },
+      "CheckOutcome": {
+        "type": "string",
+        "enum": [
+          "passed",
+          "warning",
+          "failed",
+          "skipped"
+        ]
       },
       "CliLoginPoll": {
         "type": "object",
@@ -6267,6 +6831,20 @@
             "$ref": "#/components/schemas/CliLoginStatus"
           }
         }
+      },
+      "ConnectDomain": {
+        "type": "object",
+        "description": "`POST /api/v1/domains` — connect a domain: once its DNS points at this\nserver, services are served at `<service>.<name>`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "A domain or a subdomain of yours: `example.com`, `apps.example.com`."
+          }
+        },
+        "additionalProperties": false
       },
       "ConnectGit": {
         "type": "object",
@@ -6927,6 +7505,123 @@
           "upload"
         ]
       },
+      "DnsRecord": {
+        "type": "object",
+        "description": "A DNS record to create where the zone of a domain is managed.",
+        "required": [
+          "type",
+          "name",
+          "required"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "`*`: every name under the domain, so every service. `@`: the domain\nitself."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "`false` for what only serving the domain itself needs."
+          },
+          "type": {
+            "type": "string",
+            "description": "`A` (an IPv4 address) or `AAAA` (IPv6)."
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address this server is reached at from the internet; `null` when\nthe server could not find it out."
+          }
+        }
+      },
+      "Domain": {
+        "type": "object",
+        "description": "A domain services are served under: `<service>.<name>`. One DNS record\n(`*.<name>`) points every service at the server.",
+        "required": [
+          "id",
+          "name",
+          "source",
+          "status",
+          "is_default",
+          "checks",
+          "created_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was last verified."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainCheck"
+            },
+            "description": "What the last verification found (empty before the first one)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "The domain of the URL a service is shown and linked with. One domain\nis the default."
+          },
+          "name": {
+            "type": "string",
+            "description": "Lowercase, without a trailing dot."
+          },
+          "source": {
+            "$ref": "#/components/schemas/DomainSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DomainStatus"
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When its names last reached this server."
+          }
+        }
+      },
+      "DomainCheck": {
+        "type": "object",
+        "description": "One step of a domain verification, and what it found.",
+        "required": [
+          "kind",
+          "outcome",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DomainCheckKind"
+          },
+          "message": {
+            "type": "string",
+            "description": "What was found, in a sentence a person can act on."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/CheckOutcome"
+          }
+        }
+      },
+      "DomainCheckKind": {
+        "type": "string",
+        "enum": [
+          "dns",
+          "http"
+        ]
+      },
       "DomainRequest": {
         "type": "object",
         "description": "`POST /api/v1/services/{id}/domains`",
@@ -6939,6 +7634,59 @@
           }
         },
         "additionalProperties": false
+      },
+      "DomainSource": {
+        "type": "string",
+        "enum": [
+          "config",
+          "connected"
+        ]
+      },
+      "DomainStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "active",
+          "misconfigured"
+        ]
+      },
+      "DomainView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Domain"
+          },
+          {
+            "type": "object",
+            "required": [
+              "local",
+              "served",
+              "records",
+              "url_pattern"
+            ],
+            "properties": {
+              "local": {
+                "type": "boolean",
+                "description": "A name that never leaves this machine or its network (`*.localhost`,\n`.test`…): nothing to verify, no certificate."
+              },
+              "records": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DnsRecord"
+                },
+                "description": "The DNS records that point the domain at this server (none for a\nlocal domain)."
+              },
+              "served": {
+                "type": "boolean",
+                "description": "Whether services are served at `<service>.<name>` now."
+              },
+              "url_pattern": {
+                "type": "string",
+                "description": "Where a service is found under this domain, with `<service>` in the\nplace of its name: `https://<service>.example.com`."
+              }
+            }
+          }
+        ],
+        "description": "A domain as returned by the API (the stored row plus computed fields)."
       },
       "EnvGroup": {
         "type": "object",
@@ -7804,7 +8552,8 @@
         ],
         "properties": {
           "base_domain": {
-            "type": "string"
+            "type": "string",
+            "description": "The server's `--base-domain`."
           },
           "dashboard_url": {
             "type": [
@@ -7816,6 +8565,10 @@
             "type": "number",
             "format": "double",
             "description": "CPU limit (CPUs) of containers that set none. 0 = unlimited."
+          },
+          "default_domain": {
+            "type": "string",
+            "description": "The domain of the URL services are shown with: the default domain\n(§21). The base domain on a server that connected none."
           },
           "default_memory_limit_mb": {
             "type": "integer",
@@ -8259,6 +9012,20 @@
         },
         "additionalProperties": false
       },
+      "UpdateDomain": {
+        "type": "object",
+        "description": "`PATCH /api/v1/domains/{id}`",
+        "properties": {
+          "is_default": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` makes it the default domain: the one of the URL every service\nis shown with. `false` is refused (make another domain the default)."
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateService": {
         "type": "object",
         "description": "`PATCH /api/v1/services/{id}` — every field optional. For optional string\nsettings, an empty string clears the value. Changing `instances` scales,\n`suspended` suspends/resumes, `custom_domains` refreshes routes; build\nsettings and resource limits take effect on the next deploy.",
@@ -8461,7 +9228,7 @@
     },
     {
       "name": "domains",
-      "description": "Custom domains of web services and static sites (unique across services)."
+      "description": "The domains services are served under — `<service>.<domain>` for every web service and static site: the server's base domain and the domains connected to it, each pointed at the server with one wildcard DNS record and verified by the server — the certificates of the routed hostnames, and the custom domains of one service (unique across services)."
     },
     {
       "name": "jobs",

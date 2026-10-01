@@ -1,6 +1,6 @@
 ---
 title: "Networking, domains & TLS"
-description: "How the built-in proxy routes public traffic, how services reach each other on the private network, and how custom domains get HTTPS certificates."
+description: "How the built-in proxy routes public traffic, how services reach each other on the private network, and how the server's domains and custom domains get HTTPS certificates."
 icon: Network
 ---
 
@@ -27,12 +27,12 @@ flowchart TB
 
 ## Public URLs
 
-Web services and static sites are public. Each one is served at `<name>.<base-domain>`, plus any [custom domains](#custom-domains) you add. The base domain comes from `ferryd --base-domain` and defaults to `localhost`, so on your machine an app named `shop` answers at `http://shop.localhost:8080`: browsers resolve every `*.localhost` name to `127.0.0.1`, with no DNS setup.
+Web services and static sites are public. Each one is served at `<name>.<domain>` under every [domain of the server](#domains-of-the-server), plus any [custom domains](#custom-domains) you add. A server starts with one domain, its base domain. It comes from `ferryd --base-domain` and defaults to `localhost`, so on your machine an app named `shop` answers at `http://shop.localhost:8080`: browsers resolve every `*.localhost` name to `127.0.0.1`, with no DNS setup.
 
 | Service type | Public URL | Reachable from other services |
 |---|---|---|
-| Web service | `<name>.<base-domain>` and custom domains | yes, at `<name>:<port>` |
-| Static site | `<name>.<base-domain>` and custom domains | yes, at `<name>:80` |
+| Web service | `<name>.<domain>` for each domain of the server, and custom domains | yes, at `<name>:<port>` |
+| Static site | `<name>.<domain>` for each domain of the server, and custom domains | yes, at `<name>:80` |
 | Private service | none | yes, at `<name>:<port>` |
 | Background worker | none | no port (it can still open connections) |
 | Cron job | none | no port (each run joins the network) |
@@ -50,10 +50,11 @@ Ferry publishes each container's port on `127.0.0.1` of the server and forwards 
 For each request, the proxy:
 
 1. answers ACME HTTP-01 challenges at `/.well-known/acme-challenge/` on plain HTTP, when HTTPS is enabled;
-2. reads the host from the `Host` header (or the HTTP/2 `:authority`), ignoring case, the port and a trailing dot;
-3. redirects plain HTTP to HTTPS with a `308` when the host has a certificate;
-4. looks up the service that owns the host and picks one of its instances, round-robin;
-5. forwards the request over HTTP/1.1 to that instance, with the original `Host` header.
+2. answers the [verification of a domain](#domains-of-the-server) at `/.well-known/ferry-domain-check/`, whatever the host;
+3. reads the host from the `Host` header (or the HTTP/2 `:authority`), ignoring case, the port and a trailing dot;
+4. redirects plain HTTP to HTTPS with a `308` when the host has a certificate;
+5. looks up the service that owns the host and picks one of its instances, round-robin;
+6. forwards the request over HTTP/1.1 to that instance, with the original `Host` header.
 
 A route only points at instances that accept TCP connections. During a deploy, the proxy switches to the new instances in one step, after they pass their health check. See [Deploys](/docs/concepts/deploys).
 
@@ -158,6 +159,23 @@ ssh -L 62975:127.0.0.1:62975 you@your-server   # then use the external URL on yo
 
 `--advertise-host` only changes the host printed in external connection strings (default `127.0.0.1`). The port stays bound to `127.0.0.1`: datastores are never exposed on a public interface.
 
+## Domains of the server
+
+A domain of the server is a name services are served under: connect `example.com` and every web service and static site also answers at `<name>.example.com`. One wildcard DNS record (`*.example.com`) covers every service, present and future.
+
+```bash title="Terminal"
+ferry domains connect example.com   # prints the DNS record to create
+ferry domains                       # status of each domain, and what its last verification found
+```
+
+- **The base domain** (`--base-domain`) is the first domain of a server. It is always served.
+- **A connected domain** starts as `pending`. Ferry verifies it every 15 seconds: it resolves a made-up name under the domain and checks that a request for it comes back to this very server. Once it does, the domain is `active` and every service is served under it, without a deploy.
+- **The default domain** is the one service URLs are shown with (the dashboard, `ferry open`, `FERRY_EXTERNAL_URL`). The first domain that reaches a server whose default is a local name becomes the default; change it with `ferry domains default`.
+- **A domain whose DNS breaks** is flagged `misconfigured` after three failed checks, and stays served.
+- **Local names** (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.test`) are never verified.
+
+You can do all of this in the dashboard under **Server → Domains**. Follow [Connect a domain](/docs/guides/domains) for the complete procedure.
+
 ## Custom domains
 
 Web services and static sites can have extra hostnames. A custom domain is routed as soon as you add it: no deploy is needed.
@@ -198,7 +216,7 @@ services:
 Rules:
 
 - The domain must be a valid DNS name with at least one dot, not an IP address. It is stored lowercase, without a trailing dot.
-- A domain belongs to one service. It can't be the default host of any service (`<name>.<base-domain>`) or the dashboard host.
+- A domain belongs to one service. It can't be the default host of any service (`<name>.<domain>` under any domain of the server) or the dashboard host.
 - Point the domain's DNS at your server: an `A`/`AAAA` record, or a `CNAME` to a name that resolves to it.
 
 Follow [Custom domains & HTTPS](/docs/guides/custom-domains-https) for the complete procedure.
@@ -215,9 +233,10 @@ ferryd --base-domain apps.example.com \
 
 Both are required: `--https-addr` alone doesn't start an HTTPS listener. Then:
 
-- **Which hosts:** every host the proxy routes, except local names (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.test`) and IP addresses. That is the default host of each web service and static site, every custom domain, and the dashboard host if you set one. Each host gets its own certificate; Ferry doesn't request wildcard certificates.
+- **Which hosts:** every host the proxy routes, except local names (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.test`) and IP addresses. That is the host of each web service and static site under every domain of the server, every custom domain, and the dashboard host if you set one. Each host gets its own certificate; Ferry doesn't request wildcard certificates.
 - **How:** Let's Encrypt connects to the host on port 80 and the proxy answers the challenge. The HTTP listener must therefore be reachable from the internet on port 80, and the DNS name must point at the server.
-- **When:** a background loop checks every 60 seconds, orders missing certificates (at most 2 orders at a time) and renews certificates in their last 30 days. After a failure, Ferry waits 5 minutes before the next attempt for that host, then 10, 20, and so on up to 6 hours.
+- **When:** a new hostname gets its certificate within seconds of being routed. A background loop also checks every 60 seconds, orders missing certificates (at most 2 orders at a time) and renews certificates in their last 30 days. After a failure, Ferry waits 5 minutes before the next attempt for that host, then 10, 20, and so on up to 6 hours.
+- **Where to look:** `ferry certificates`, or **Server → Domains** in the dashboard, lists every hostname with the state of its certificate: issued (and until when), being requested, or failed, with the reason and the time of the next attempt.
 - **Redirects:** once a host has a certificate, plain HTTP requests to it get a `308` redirect to HTTPS. Hosts without a certificate yet are served over HTTPS with a self-signed fallback certificate, so handshakes never hard-fail.
 - **Storage:** the ACME account and certificates live in `<data-dir>/certs`, private keys with mode `0600`. They are reloaded at startup.
 
@@ -228,6 +247,7 @@ With HTTPS on, public URLs are printed as `https://host` without a port. Listen 
 </Callout>
 
 <Cards>
+  <Card icon={<Globe />} title="Connect a domain" href="/docs/guides/domains" description="Serve every service under a domain of yours, with one DNS record." />
   <Card icon={<Globe />} title="Custom domains & HTTPS" href="/docs/guides/custom-domains-https" description="Add a domain, point DNS at the server and get a certificate." />
   <Card icon={<ShieldCheck />} title="Production setup" href="/docs/guides/production" description="Ports 80 and 443, a wildcard DNS record and a systemd unit." />
   <Card icon={<Lock />} title="Networking model" href="/docs/architecture/networking-model" description="How the proxy, routes and container ports fit together inside ferryd." />

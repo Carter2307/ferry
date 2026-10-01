@@ -29,6 +29,8 @@ Create a wildcard record for the apps, plus records for any custom domain:
 
 Each web service and static site gets `<name>.apps.example.com`, and the dashboard can use `ferry.apps.example.com`. Ferry requests one certificate per hostname through the HTTP-01 challenge, so the wildcard record is all the DNS it needs: no DNS API, no wildcard certificate.
 
+You can also leave `--base-domain` out and [connect the domain from the dashboard](/docs/guides/domains) once the server runs: Ferry then shows the record to create with the server's address, and tells you when the DNS reaches it. In that case add `--dashboard-host none` (or a hostname of your own), because a server with the default base domain also answers its dashboard on the public proxy at `ferry.localhost`. More domains are added the same way.
+
 </Step>
 <Step>
 
@@ -94,7 +96,7 @@ What these options do:
 |---|---|
 | `ferryd run` | Keeps the server in the foreground, where systemd supervises it, restarts it and collects its output. `ferryd start` would detach from systemd, which would then consider the service stopped. |
 | `--data-dir /var/lib/ferry` | The database, logs, uploads, git caches and certificates. Created with mode `0700`. |
-| `--base-domain apps.example.com` | Apps are served at `<name>.apps.example.com`. |
+| `--base-domain apps.example.com` | Apps are served at `<name>.apps.example.com`. It is the first [domain of the server](/docs/guides/domains); others are connected while it runs. |
 | `--proxy-addr 0.0.0.0:80` | Public HTTP. Let's Encrypt validates on port 80, and HTTP requests to hosts with a certificate are redirected to HTTPS. |
 | `--https-addr 0.0.0.0:443` + `--acme-email` | Turn on [automatic HTTPS](/docs/concepts/networking#automatic-https). Both are needed. |
 | `LimitNOFILE` | The proxy sizes its connection limit from the open-file limit. |
@@ -180,7 +182,7 @@ ferry create hello --image nginx:alpine --port 80 --follow
 curl -I https://hello.apps.example.com
 ```
 
-The certificate manager looks for new hostnames every 60 seconds, so the first HTTPS request may get a self-signed certificate for up to a minute or two. The server log shows `requesting a TLS certificate for hello.apps.example.com`, then `obtained a TLS certificate for hello.apps.example.com`.
+A new hostname gets its certificate within seconds of being routed; until then HTTPS answers with a self-signed certificate. `ferry certificates` shows where each one stands, and the server log shows `requesting a TLS certificate for hello.apps.example.com`, then `obtained a TLS certificate for hello.apps.example.com`.
 
 </Step>
 </Steps>
@@ -376,7 +378,7 @@ Build the new version, replace the binaries in `/usr/local/bin` and restart the 
 - [ ] **Know the limits.** One administrator account, no other users or roles, and every API token has full access; no IP allow lists. Everyone who can deploy can run any code on the server. Containers have memory, CPU and process limits, but builds don't, disks have no quotas, and every container can reach every service and datastore on the private network. See [Security model](/docs/architecture/security#one-misbehaving-service).
 
 <Cards cols={3}>
-  <Card icon={<Globe />} title="Custom domains & HTTPS" href="/docs/guides/custom-domains-https" description="Serve apps on your own domains." />
+  <Card icon={<Globe />} title="Connect a domain" href="/docs/guides/domains" description="Serve every app under a domain of yours." />
   <Card icon={<HeartPulse />} title="Self-healing" href="/docs/concepts/self-healing" description="Restarts, crashes and graceful shutdown." />
   <Card icon={<Server />} title="Server options" href="/docs/reference/server-options" description="Every ferryd flag and environment variable." />
 </Cards>

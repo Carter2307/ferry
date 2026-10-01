@@ -303,12 +303,12 @@ curl -sI http://shop.localhost:8080/ | grep -i x-ferry-error
 
 | Status and `x-ferry-error` | Cause | Fix |
 |---|---|---|
-| `404` `not_found` | No service owns this hostname: a typo, a base domain other than `--base-domain`, a request by IP address, a worker or private service (they have no public URL), or a reverse proxy in front of Ferry that doesn't pass the `Host` header. | Get the URL with `ferry open NAME`. For custom domains, check `ferry domains NAME`. |
+| `404` `not_found` | No service owns this hostname: a typo, a domain that isn't a domain of the server or is still waiting for its DNS (`ferry domains`), a request by IP address, a worker or private service (they have no public URL), or a reverse proxy in front of Ferry that doesn't pass the `Host` header. | Get the URL with `ferry open NAME`. For custom domains, check `ferry domains NAME`. |
 | `503` `no_upstreams` | The service has no running instance: it was never deployed, its last deploy failed, or its first deploy is still running. | Check `ferry deploys NAME` and `ferry status NAME`, then read the failed deploy's log. |
 | `503` `suspended` | The service is suspended. | `ferry resume NAME` |
 | `502` `bad_gateway` | The instance refused the connection or failed in the middle of the request. | Read the runtime logs: `ferry logs NAME`. |
 
-For certificates and custom domains, see the troubleshooting table in [Custom domains & HTTPS](/docs/guides/custom-domains-https#troubleshooting).
+For a domain that stays on **Waiting for DNS**, see [how Ferry verifies a domain](/docs/guides/domains#how-ferry-verifies-a-domain). For certificates and custom domains, see the troubleshooting table in [Custom domains & HTTPS](/docs/guides/custom-domains-https#troubleshooting).
 
 <Cards cols={3}>
   <Card icon={<Server />} title="Installation" href="/docs/getting-started/installation" description="Requirements, ports and how ferryd finds Docker." />

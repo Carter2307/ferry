@@ -33,8 +33,8 @@ The request examples target `http://127.0.0.1:7878`, the default `--api-addr` (d
   <Card title="Env groups" href="/docs/reference/api/env-groups">
     Shared variable sets linked to services (a service's own variables win over its groups'), and linking / unlinking them.
   </Card>
-  <Card title="Custom domains" href="/docs/reference/api/domains">
-    Custom domains of web services and static sites (unique across services).
+  <Card title="Domains" href="/docs/reference/api/domains">
+    The domains services are served under — `<service>.<domain>` for every web service and static site: the server's base domain and the domains connected to it, each pointed at the server with one wildcard DNS record and verified by the server — the certificates of the routed hostnames, and the custom domains of one service (unique across services).
   </Card>
   <Card title="Jobs" href="/docs/reference/api/jobs">
     Job runs: cron runs and one-off commands, with their logs.
