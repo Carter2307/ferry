@@ -89,7 +89,6 @@ fn new_service(req: &CreateService) -> Result<Service, Error> {
     let mut svc = Service::new(req.name.trim(), service_type);
     let has_image = req.image.as_deref().is_some_and(|i| !i.trim().is_empty());
     svc.repo_url = req.repo_url.clone();
-    svc.git_connection_id = req.git_connection_id.clone();
     if let Some(b) = &req.branch {
         svc.branch = b.clone();
     }
@@ -123,11 +122,11 @@ fn new_service(req: &CreateService) -> Result<Service, Error> {
     tag = "services",
     operation_id = "createService",
     summary = "Create a service",
-    description = "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names. `git_connection_id` names the git connection (a connected GitHub / GitLab account, see the `git` operations) whose token clones `repo_url`, which must then be an http(s) repository on that connection's provider instance. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance and job run of the service; omitted or `0` = the server default (see `GET /api/v1/info`).",
+    description = "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance and job run of the service; omitted or `0` = the server default (see `GET /api/v1/info`).",
     request_body = CreateService,
     responses(
         (status = 201, description = "The new service.", body = ServiceView),
-        (status = 400, description = "Invalid settings (including resource limits out of range), name, variables or domains, an unknown env group, or a git connection that is unknown or not for the repository.", body = ApiErrorBody),
+        (status = 400, description = "Invalid settings (including resource limits out of range), name, variables or domains, or an unknown env group.", body = ApiErrorBody),
         (status = 409, description = "The name, its default host or a custom domain is already taken.", body = ApiErrorBody),
     ),
 )]
@@ -141,7 +140,6 @@ pub async fn create(
 
 async fn create_service(st: AppState, req: CreateService) -> ApiResult<(StatusCode, Json<ServiceView>)> {
     let svc = new_service(&req)?;
-    checks::git_connection(&st.store, &svc).await?;
     let env = req.env.clone().unwrap_or_default();
     validate::env_vars(&env)?;
     let mut groups: Vec<EnvGroup> = Vec::new();
@@ -215,23 +213,8 @@ fn apply_update(next: &mut Service, req: &UpdateService) -> Result<(), Error> {
         }
     }
     // Switching sources must clear the old one explicitly (see check_source_switch).
-    let previous_repo = next.repo_url.clone();
     set(&mut next.repo_url, &req.repo_url);
     set(&mut next.image, &req.image);
-    match &req.git_connection_id {
-        Some(id) => next.git_connection_id = Some(id.clone()),
-        // Not mentioned: the connection follows the repository for as long
-        // as it stays on the connection's host (its token is for nothing else).
-        None => {
-            let same_host = match (previous_repo.as_deref(), next.repo_url.as_deref()) {
-                (Some(old), Some(new)) => old == new || git::same_http_origin(old, new),
-                _ => false,
-            };
-            if !same_host {
-                next.git_connection_id = None;
-            }
-        }
-    }
     match req.runtime {
         Some(r) => next.runtime = r,
         None => {
@@ -329,12 +312,12 @@ fn row_changed(a: &Service, b: &Service) -> bool {
     tag = "services",
     operation_id = "updateService",
     summary = "Update a service",
-    description = "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0` = back to the server default) are only saved: they take effect with the next deploy or restart, this request doesn't redeploy. Switching between a git repository and an image requires clearing the other source in the same request. `git_connection_id` selects the git connection whose token clones the repository (an empty string removes it); when it is omitted, the service keeps its connection as long as `repo_url` stays on the connection's provider instance and loses it otherwise. When a side effect fails after the settings were saved, the error message says so.",
+    description = "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0` = back to the server default) are only saved: they take effect with the next deploy or restart, this request doesn't redeploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
     params(("id" = String, Path, description = "Service id or name.")),
     request_body = UpdateService,
     responses(
         (status = 200, description = "The updated service.", body = ServiceView),
-        (status = 400, description = "Invalid settings (including resource limits out of range, and a git connection that is unknown or not for the repository).", body = ApiErrorBody),
+        (status = 400, description = "Invalid settings (including resource limits out of range).", body = ApiErrorBody),
         (status = 404, description = "No such service.", body = ApiErrorBody),
         (status = 409, description = "A source switch that doesn't clear the old source, or a custom domain another service uses.", body = ApiErrorBody),
     ),
@@ -364,9 +347,6 @@ async fn update_service(st: AppState, id: String, req: UpdateService) -> ApiResu
     validate::normalize_service(&mut next);
     validate::service(&next)?;
     checks::source_paths(&next)?;
-    if (&next.git_connection_id, &next.repo_url) != (&current.git_connection_id, &current.repo_url) {
-        checks::git_connection(&st.store, &next).await?;
-    }
     let domains_changed = next.custom_domains != current.custom_domains;
     if domains_changed {
         let all = st.store.list_services().await?;

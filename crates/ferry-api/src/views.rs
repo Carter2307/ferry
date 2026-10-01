@@ -1,9 +1,11 @@
 //! Assembling API views (stored rows + computed fields).
 
-use ferry_core::dto::{DatastoreView, EnvGroupView, GitConnectionView, ServiceView};
+use std::collections::HashMap;
+
+use ferry_core::dto::{DatastoreView, EnvGroupView, GitConnectionStatus, GitConnectionView, ServiceView};
 use ferry_core::{
-    Config, Datastore, Deploy, DeploySource, EnvGroup, GitConnection, Result, Service, Store, compute_service_state,
-    git,
+    Config, Datastore, Deploy, DeploySource, EnvGroup, GitAuth, GitConnection, Result, Service, Store,
+    compute_service_state, git, git_connection_for,
 };
 
 use crate::runtime;
@@ -69,23 +71,68 @@ pub fn datastore_view(config: &Config, datastore: Datastore) -> DatastoreView {
     }
 }
 
-/// Build the [`GitConnectionView`] of a git connection: everything but the
-/// token, of which only a hint is shown.
-pub async fn git_connection_view(store: &Store, connection: GitConnection) -> Result<GitConnectionView> {
-    let services = store.git_connection_services(&connection.id).await?.into_iter().map(|s| s.name).collect();
-    Ok(GitConnectionView {
+/// The names of the services each git connection clones for, by connection
+/// id: services don't name a connection, their repository's URL decides
+/// ([`git_connection_for`]).
+pub async fn git_connection_users(
+    store: &Store,
+    connections: &[GitConnection],
+) -> Result<HashMap<String, Vec<String>>> {
+    let mut users: HashMap<String, Vec<String>> = HashMap::new();
+    for service in store.list_services().await? {
+        if let Some(repo) = service.repo_url.as_deref()
+            && let Some(connection) = git_connection_for(connections, repo)
+        {
+            users.entry(connection.id.clone()).or_default().push(service.name);
+        }
+    }
+    for names in users.values_mut() {
+        names.sort();
+    }
+    Ok(users)
+}
+
+/// Build the [`GitConnectionView`] of a git connection: everything but its
+/// secrets (of a personal access token, only a hint is shown).
+pub fn git_connection_view(connection: GitConnection, services: Vec<String>) -> GitConnectionView {
+    let status = if connection.is_connected() { GitConnectionStatus::Connected } else { GitConnectionStatus::Pending };
+    // The tokens of the other kinds are renewed: when one expires says nothing.
+    let personal = connection.auth == GitAuth::Token;
+    let (app_slug, app_url) = match connection.app {
+        Some(ref app) => (Some(app.slug.clone()), Some(app.url.clone())),
+        None => (None, None),
+    };
+    let (manage_url, repository_selection) = match connection.installation {
+        Some(ref installation) => (installation.url.clone(), installation.repository_selection.clone()),
+        None => (None, None),
+    };
+    GitConnectionView {
         token_hint: connection.token_hint(),
+        status,
+        token_expires_at: connection.token_expires_at.filter(|_| personal),
         id: connection.id,
         provider: connection.provider,
         base_url: connection.base_url,
+        auth: connection.auth,
         account: connection.account,
         account_name: connection.account_name,
         scopes: connection.scopes,
-        token_expires_at: connection.token_expires_at,
+        client_id: connection.client_id,
+        app_slug,
+        app_url,
+        manage_url,
+        repository_selection,
         services,
         created_at: connection.created_at,
         updated_at: connection.updated_at,
-    })
+    }
+}
+
+/// The view of one connection (with the services it clones for).
+pub async fn git_connection_view_of(store: &Store, connection: GitConnection) -> Result<GitConnectionView> {
+    let all = store.list_git_connections().await?;
+    let services = git_connection_users(store, &all).await?.remove(&connection.id).unwrap_or_default();
+    Ok(git_connection_view(connection, services))
 }
 
 /// Build the [`EnvGroupView`] of an env group.

@@ -33,6 +33,33 @@ mod redact;
 use crate::git::GitError;
 
 pub use crate::git::Credentials as GitCredentials;
+pub use crate::git::RemoteBranches;
+
+/// Why a remote's branches could not be listed. Messages never contain
+/// credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteError {
+    /// The URL isn't one git can be given.
+    Invalid(String),
+    /// The remote refused, wasn't found or couldn't be reached in time.
+    Unreachable(String),
+}
+
+/// The branches of a repository and its default one, asked from the remote
+/// itself (`git ls-remote`): works for any URL a service can deploy from.
+/// `credentials` authenticate an http(s) remote as in [`BuildSource::Git`];
+/// credentials in the URL work too.
+pub async fn remote_branches(
+    repo_url: &str,
+    credentials: Option<&GitCredentials>,
+    timeout: std::time::Duration,
+) -> std::result::Result<RemoteBranches, RemoteError> {
+    git::list_remote_branches(repo_url, credentials, timeout).await.map_err(|e| match e {
+        GitError::Invalid(m) => RemoteError::Invalid(m),
+        GitError::NotFound(m) | GitError::Failed(m) => RemoteError::Unreachable(m),
+        GitError::Canceled => RemoteError::Unreachable("canceled".into()),
+    })
+}
 
 /// Where the code comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]

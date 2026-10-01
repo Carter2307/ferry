@@ -332,10 +332,13 @@ impl Snapshot {
         for members in members_of.values_mut() {
             members.sort();
         }
-        let services = rows_by_id(&mut tx, "services").await?;
-        let datastores = rows_by_id(&mut tx, "datastores").await?;
-        let env_groups = rows_by_id(&mut tx, "env_groups").await?;
-        let git_connections = rows_by_id(&mut tx, "git_connections").await?;
+        let services = rows_by_id(&mut tx, "services", "*").await?;
+        let datastores = rows_by_id(&mut tx, "datastores", "*").await?;
+        let env_groups = rows_by_id(&mut tx, "env_groups", "*").await?;
+        // Every change its users see bumps `updated_at`; an access token
+        // renewed behind the scenes doesn't, and isn't one (nor is any
+        // secret read here).
+        let git_connections = rows_by_id(&mut tx, "git_connections", "id, updated_at").await?;
         let deploys = window(&mut tx, "deploys", "('queued', 'building', 'deploying')").await?;
         let jobs = window(&mut tx, "job_runs", "('pending', 'running')").await?;
         tx.rollback().await?;
@@ -411,10 +414,11 @@ impl Snapshot {
 
 type Tx = sqlx::Transaction<'static, sqlx::Sqlite>;
 
-/// Every row of `table` as id → hash of all its columns (whatever they are).
-async fn rows_by_id(tx: &mut Tx, table: &str) -> Result<HashMap<String, u64>> {
+/// Every row of `table` as id → hash of its `columns` (`*`: all of them,
+/// whatever they are; else a list that includes `id`).
+async fn rows_by_id(tx: &mut Tx, table: &str, columns: &str) -> Result<HashMap<String, u64>> {
     let mut out = HashMap::new();
-    for row in sqlx::query(&format!("SELECT * FROM {table}")).fetch_all(&mut **tx).await? {
+    for row in sqlx::query(&format!("SELECT {columns} FROM {table}")).fetch_all(&mut **tx).await? {
         let mut h = DefaultHasher::new();
         for i in 0..row.len() {
             // SQLite hands out any value as bytes (numbers as their text).

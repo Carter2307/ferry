@@ -15,6 +15,7 @@ use ferry_core::{
     Service, ServiceType, env,
 };
 use ferry_docker::{ContainerInfo, Docker};
+use ferry_scm::RepoAccess;
 use futures::StreamExt;
 use futures::future::try_join_all;
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
@@ -210,10 +211,11 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
     }
     match &deploy.source {
         DeploySource::Git { repo_url, branch, commit } => {
-            let connection = git_connection(ctx, svc, repo_url).await.map_err(Failure::build)?;
-            let credentials = connection
-                .as_ref()
-                .map(|c| GitCredentials { username: c.provider.git_username().to_string(), password: c.token.clone() });
+            let access = git_access(ctx, repo_url).await.map_err(Failure::build)?;
+            let credentials = access.as_ref().and_then(|a| {
+                let token = a.token.as_ref().ok()?;
+                Some(GitCredentials { username: a.username().to_string(), password: token.clone() })
+            });
             let source = BuildSource::Git {
                 repo_url: repo_url.clone(),
                 branch: branch.clone(),
@@ -222,7 +224,7 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
             };
             let built = build_image(ctx, svc, deploy, source, opts).await;
             if let Err(Failure { error, .. }) = &built
-                && let Some(hint) = git_access_hint(error, connection.as_ref(), repo_url)
+                && let Some(hint) = git_access_hint(error, access.as_ref().map(|a| &a.connection), repo_url)
             {
                 ctx.log.system(hint);
             }
@@ -281,59 +283,32 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
     }
 }
 
-/// The service's git connection, when it has one for `repo_url`: its token
-/// authenticates the clone. A token is only ever used for a repository on
-/// its own provider instance ([`GitConnection::serves`]).
-async fn git_connection(ctx: &Ctx, svc: &Service, repo_url: &str) -> ferry_core::Result<Option<GitConnection>> {
-    let Some(id) = svc.git_connection_id.as_deref() else { return Ok(None) };
-    let Some(connection) = ctx.inner.store.get_git_connection(id).await? else {
-        ctx.log.system("==> Warning: the git connection of this service no longer exists: cloning without it");
-        return Ok(None);
-    };
-    if !connection.serves(repo_url) {
-        ctx.log.system(format!(
-            "==> Warning: the {} is connected to {}, which this repository is not on: cloning without it",
-            connection.describe(),
-            connection.base_url
-        ));
-        return Ok(None);
+/// How `repo_url` is read: with a token of the git connection that serves
+/// it, when the server has one (connections belong to the server, see
+/// [`ferry_core::git_connection_for`]). A token is only ever used for a
+/// repository on its own provider instance.
+async fn git_access(ctx: &Ctx, repo_url: &str) -> ferry_core::Result<Option<RepoAccess>> {
+    let access = ferry_scm::repo_access(&ctx.inner.store, repo_url).await?;
+    match &access {
+        Some(RepoAccess { connection, token: Ok(_) }) => {
+            ctx.log.system(format!("==> Cloning with the {}", connection.describe()));
+        }
+        // A public repository still clones; a private one fails below, with
+        // this line above the failure.
+        Some(RepoAccess { connection, token: Err(e) }) => {
+            ctx.log
+                .system(format!("==> Warning: the {} can't be used ({e}): cloning without it", connection.describe()));
+        }
+        None => {}
     }
-    ctx.log.system(format!("==> Cloning with the {}", connection.describe()));
-    Ok(Some(connection))
+    Ok(access)
 }
 
 /// What to do about a clone the remote refused: a line for the deploy log,
 /// or `None` when the failure doesn't look like an access problem.
 fn git_access_hint(error: &Error, connection: Option<&GitConnection>, repo_url: &str) -> Option<String> {
     let Error::Build(message) = error else { return None };
-    let m = message.to_ascii_lowercase();
-    // Wrong credentials, none where some are needed (git can't prompt: which
-    // of the two messages depends on its version), or a private repository
-    // the remote won't admit to.
-    let refused = m.contains("authentication failed")
-        || m.contains("unable to get password")
-        || m.contains("could not read username")
-        || m.contains("could not read password")
-        || m.contains("access denied")
-        || m.contains("returned error: 403")
-        || (m.contains("repository") && m.contains("not found"));
-    if !refused {
-        return None;
-    }
-    match connection {
-        Some(c) => Some(format!(
-            "==> Hint: the token of the {} may have expired, been revoked or lack access to this repository: \
-             connect the account again with a new token",
-            c.describe()
-        )),
-        // Credentials in the URL are the user's own business.
-        None if ferry_core::git::parse_http_url(repo_url).is_some() => Some(
-            "==> Hint: if the repository is private, connect its GitHub or GitLab account and select it in the \
-             service's settings"
-                .to_string(),
-        ),
-        None => None,
-    }
+    ferry_scm::access_hint(message, connection, repo_url).map(|hint| format!("==> Hint: {hint}"))
 }
 
 /// Restarts reuse what is live when they run, not when they were queued
@@ -1142,7 +1117,7 @@ mod tests {
 
     #[test]
     fn refused_clones_get_a_hint() {
-        use ferry_core::GitProvider;
+        use ferry_core::{GitAuth, GitProvider};
         let url = "https://github.com/acme/app.git";
         let account = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "ghp_token");
         let build = |m: &str| Error::Build(format!("git fetch from {url} failed: {m}"));
@@ -1159,6 +1134,15 @@ mod tests {
             assert!(!with.contains("ghp_"), "{with}");
             let without = git_access_hint(&build(refused), None, url).unwrap_or_default();
             assert!(without.starts_with("==> Hint: if the repository is private, connect its"), "{without}");
+            // The hint says what to fix for the way the account is connected.
+            let mut oauth = account.clone();
+            oauth.auth = GitAuth::Oauth;
+            let hint = git_access_hint(&build(refused), Some(&oauth), url).unwrap_or_default();
+            assert!(hint.contains("its authorization was revoked") && hint.contains("'octocat'"), "{hint}");
+            let mut app = account.clone();
+            app.auth = GitAuth::GithubApp;
+            let hint = git_access_hint(&build(refused), Some(&app), url).unwrap_or_default();
+            assert!(hint.contains("add the repository to the app's installation"), "{hint}");
             // ssh and local repositories don't use connections.
             assert_eq!(git_access_hint(&build(refused), None, "git@github.com:acme/app.git"), None);
             assert_eq!(git_access_hint(&build(refused), None, "/srv/repos/app"), None);

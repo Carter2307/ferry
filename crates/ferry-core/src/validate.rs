@@ -216,23 +216,52 @@ pub fn git_token(token: &str) -> Result<&str> {
     Ok(t)
 }
 
-/// The full name of a repository on a provider (`owner/name`, GitLab
-/// subgroups included: `group/sub/name`): 2 to 20 path segments of letters,
-/// digits, `.`, `_` and `-`.
-pub fn git_repository_name(name: &str) -> Result<()> {
-    let segments: Vec<&str> = name.split('/').collect();
-    let segment_ok = |s: &&str| {
-        !s.is_empty()
-            && *s != "."
-            && *s != ".."
-            && s.len() <= 255
-            && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-    };
-    if (2..=20).contains(&segments.len()) && segments.iter().all(segment_ok) {
-        Ok(())
+/// Where a git provider sends the browser back after an authorization: an
+/// http(s) URL without credentials, query string or fragment (the provider
+/// appends its own parameters). Returns it trimmed.
+pub fn git_redirect_uri(url: &str) -> Result<&str> {
+    let u = url.trim();
+    let plain = u.len() <= 2048
+        && !u.contains(['?', '#'])
+        && crate::git::parse_http_url(u).is_some_and(|p| p.path.bytes().all(|b| b.is_ascii_graphic()));
+    if plain {
+        Ok(u)
     } else {
-        Err(Error::invalid(format!("invalid repository '{name}': expected its full name, such as owner/name")))
+        Err(Error::invalid(
+            "invalid redirect_uri: expected the http(s) URL of the dashboard's /git/callback page, without credentials, query string or fragment",
+        ))
     }
+}
+
+/// The login of a GitHub organization: 1 to 39 letters, digits or `-`, not
+/// at its ends. Returns it trimmed.
+pub fn git_organization(name: &str) -> Result<&str> {
+    let n = name.trim();
+    let ok = (1..=39).contains(&n.len())
+        && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !n.starts_with('-')
+        && !n.ends_with('-');
+    if ok {
+        Ok(n)
+    } else {
+        Err(Error::invalid(format!("invalid organization '{n}': expected its GitHub login (letters, digits and '-')")))
+    }
+}
+
+/// The id or the secret of an OAuth application (`what` names it in the
+/// error): printable ASCII without spaces, at most 256 characters. Returns
+/// it trimmed.
+pub fn git_client_credential<'a>(what: &str, value: &'a str) -> Result<&'a str> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(Error::invalid(format!("the {what} is empty")));
+    }
+    if v.len() > 256 || !v.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(Error::invalid(format!(
+            "invalid {what}: expected at most 256 printable characters without spaces (check that it was copied completely)"
+        )));
+    }
+    Ok(v)
 }
 
 /// Validate and normalize (lowercase, no trailing dot) a custom domain.
@@ -365,7 +394,6 @@ pub fn normalize_service(svc: &mut Service) {
     }
     for f in [
         &mut svc.repo_url,
-        &mut svc.git_connection_id,
         &mut svc.image,
         &mut svc.root_dir,
         &mut svc.dockerfile_path,
@@ -387,10 +415,6 @@ pub fn normalize_service(svc: &mut Service) {
         svc.runtime = Runtime::Image;
     } else if svc.runtime == Runtime::Image {
         // runtime image without an image is caught by `service()`.
-    }
-    // A git connection authenticates clones: no repository, no connection.
-    if svc.repo_url.is_none() {
-        svc.git_connection_id = None;
     }
     let mut domains: Vec<String> = Vec::new();
     for d in &svc.custom_domains {
@@ -485,12 +509,32 @@ mod tests {
         // The message never repeats the token.
         assert!(!git_token("tok\u{e9}n-s3cret").unwrap_err().to_string().contains("s3cret"));
 
-        for ok in ["octocat/hello-world", "group/sub.group/my_app", "a/b"] {
-            assert!(git_repository_name(ok).is_ok(), "{ok}");
+        // What a browser authorization is given.
+        assert_eq!(
+            git_redirect_uri(" http://localhost:7878/git/callback ").unwrap(),
+            "http://localhost:7878/git/callback"
+        );
+        assert!(git_redirect_uri("https://ferry.example.com/git/callback").is_ok());
+        for bad in [
+            "",
+            "/git/callback",
+            "ferry.example.com/git/callback",
+            "javascript:alert(1)",
+            "https://user:pw@ferry.example.com/git/callback",
+            "https://ferry.example.com/git/callback?next=x",
+            "https://ferry.example.com/git/callback#x",
+            "https://ferry.example.com/git call",
+        ] {
+            assert!(git_redirect_uri(bad).is_err(), "{bad}");
         }
-        for bad in ["", "app", "a/", "/a", "a//b", "a/../b", "a/b c", "a/b?x", "a/b#x", "a/b%2F"] {
-            assert!(git_repository_name(bad).is_err(), "{bad}");
+        assert_eq!(git_organization(" acme-corp ").unwrap(), "acme-corp");
+        for bad in ["", "-acme", "acme-", "acme corp", "acme/corp", "a?b", &"a".repeat(40)] {
+            assert!(git_organization(bad).is_err(), "{bad}");
         }
+        assert_eq!(git_client_credential("application id", " 0a1b2c ").unwrap(), "0a1b2c");
+        let err = git_client_credential("application secret", "gloas-ab cd").unwrap_err().to_string();
+        assert!(err.starts_with("invalid application secret") && !err.contains("gloas"), "{err}");
+        assert!(git_client_credential("application id", "  ").unwrap_err().to_string().contains("is empty"));
     }
 
     #[test]
@@ -523,14 +567,5 @@ mod tests {
         let mut worker = Service::new("bg", ServiceType::BackgroundWorker);
         worker.custom_domains = vec!["x.com".into()];
         assert!(service(&worker).is_err());
-        // A git connection only makes sense with a repository.
-        let mut git = Service::new("app", ServiceType::WebService);
-        git.repo_url = Some("https://github.com/a/b".into());
-        git.git_connection_id = Some(" git-0123456789abcdef0123 ".into());
-        normalize_service(&mut git);
-        assert_eq!(git.git_connection_id.as_deref(), Some("git-0123456789abcdef0123"));
-        git.repo_url = Some("  ".into());
-        normalize_service(&mut git);
-        assert_eq!((git.repo_url, git.git_connection_id), (None, None));
     }
 }

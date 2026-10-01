@@ -4,6 +4,7 @@ members = [
     "crates/ferry-core",
     "crates/ferry-docker",
     "crates/ferry-build",
+    "crates/ferry-scm",
     "crates/ferry-proxy",
     "crates/ferry-tls",
     "crates/ferry-engine",
@@ -24,6 +25,7 @@ repository = "https://github.com/Carter2307/ferry"
 ferry-core = { path = "crates/ferry-core" }
 ferry-docker = { path = "crates/ferry-docker" }
 ferry-build = { path = "crates/ferry-build" }
+ferry-scm = { path = "crates/ferry-scm" }
 ferry-proxy = { path = "crates/ferry-proxy" }
 ferry-tls = { path = "crates/ferry-tls" }
 ferry-engine = { path = "crates/ferry-engine" }
@@ -82,6 +84,8 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
+# RS256 signatures (the JWTs of a GitHub App); already built for rustls.
+ring = "0.17"
 
 # archives & files
 tar = "0.4"

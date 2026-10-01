@@ -13,7 +13,7 @@ use axum::body::Body;
 use common::{TOKEN, TestApp};
 use http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 /// Every operation of the router, as documented (method, OpenAPI path).
@@ -78,7 +78,9 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/git/connections/{id}"),
     ("DELETE", "/api/v1/git/connections/{id}"),
     ("GET", "/api/v1/git/connections/{id}/repositories"),
-    ("GET", "/api/v1/git/connections/{id}/branches"),
+    ("POST", "/api/v1/git/authorize"),
+    ("POST", "/api/v1/git/callback"),
+    ("GET", "/api/v1/git/branches"),
     // blueprints
     ("POST", "/api/v1/blueprints/apply"),
     // webhooks
@@ -416,15 +418,35 @@ async fn resource_limits_are_documented() {
 }
 
 #[tokio::test]
-async fn git_connections_are_documented_without_their_token() {
+async fn git_connections_are_documented_without_their_secrets() {
     let app = TestApp::new().await;
     let doc = document(&app).await;
     let ops = operations(&doc);
     let op = |m: &str, p: &str| ops[&(m.to_string(), p.to_string())].clone();
     let schemas = &doc["components"]["schemas"];
     let body = |op: &Value, status: &str| op["responses"][status]["content"]["application/json"]["schema"].clone();
+    let request = |op: &Value| op["requestBody"]["content"]["application/json"]["schema"]["$ref"].clone();
 
-    // Connecting takes a token; nothing ever returns one.
+    // Authorizing in the browser: where to send it, then what it came back with.
+    let authorize = op("POST", "/api/v1/git/authorize");
+    let callback = op("POST", "/api/v1/git/callback");
+    assert_eq!((&authorize["operationId"], &callback["operationId"]), (&json!("authorizeGit"), &json!("gitCallback")));
+    assert_eq!(request(&authorize), "#/components/schemas/AuthorizeGit");
+    assert_eq!(request(&callback), "#/components/schemas/GitCallback");
+    for operation in [&authorize, &callback] {
+        assert_eq!(body(operation, "200")["$ref"], "#/components/schemas/GitAuthorization");
+        for status in ["400", "502"] {
+            assert!(operation["responses"].get(status).is_some(), "{status}: {operation}");
+        }
+    }
+    assert_eq!(schemas["AuthorizeGit"]["required"], json!(["redirect_uri"]));
+    assert_eq!(schemas["GitCallback"]["required"], json!(["state"]));
+    assert_eq!(schemas["GitAuthorizationStatus"]["enum"], json!(["redirect", "connected"]));
+    assert_eq!(schemas["GitRedirectMethod"]["enum"], json!(["get", "post"]));
+    assert_eq!(schemas["GitAuth"]["enum"], json!(["github_app", "oauth", "token"]));
+    assert_eq!(schemas["GitConnectionStatus"]["enum"], json!(["connected", "pending"]));
+
+    // Connecting with a token takes one; nothing ever returns a secret.
     let connect = op("POST", "/api/v1/git/connections");
     assert_eq!(connect["operationId"], "connectGit");
     assert_eq!(
@@ -439,26 +461,33 @@ async fn git_connections_are_documented_without_their_token() {
     }
     assert!(schemas["ConnectGit"]["properties"].get("token").is_some());
     let view = schemas["GitConnectionView"]["properties"].as_object().unwrap();
-    assert!(view.contains_key("token_hint") && !view.contains_key("token"), "{view:?}");
-    assert_eq!(schemas["GitProvider"]["enum"], serde_json::json!(["github", "gitlab"]));
+    for shown in ["auth", "status", "token_hint", "client_id", "app_slug", "manage_url", "services"] {
+        assert!(view.contains_key(shown), "{shown}: {view:?}");
+    }
+    for secret in ["token", "refresh_token", "client_secret", "private_key", "webhook_secret"] {
+        assert!(!view.contains_key(secret), "{secret}: {view:?}");
+    }
+    assert_eq!(schemas["GitProvider"]["enum"], json!(["github", "gitlab"]));
 
     let repositories = op("GET", "/api/v1/git/connections/{id}/repositories");
     assert_eq!(body(&repositories, "200")["$ref"], "#/components/schemas/GitRepositoryList");
-    let branches = op("GET", "/api/v1/git/connections/{id}/branches");
-    assert_eq!(body(&branches, "200")["items"]["$ref"], "#/components/schemas/GitBranch");
-    let repository = branches["parameters"].as_array().unwrap().iter().find(|p| p["name"] == "repository").unwrap();
-    assert_eq!((&repository["in"], &repository["required"]), (&serde_json::json!("query"), &serde_json::json!(true)));
-    for operation in [&repositories, &branches] {
-        for status in ["404", "409", "502"] {
-            assert!(operation["responses"].get(status).is_some(), "{status}: {operation}");
-        }
+    for status in ["404", "409", "502"] {
+        assert!(repositories["responses"].get(status).is_some(), "{status}: {repositories}");
+    }
+    // Branches are asked by repository URL, whatever reads it.
+    let branches = op("GET", "/api/v1/git/branches");
+    assert_eq!(body(&branches, "200")["$ref"], "#/components/schemas/GitBranches");
+    let repo_url = branches["parameters"].as_array().unwrap().iter().find(|p| p["name"] == "repo_url").unwrap();
+    assert_eq!((&repo_url["in"], &repo_url["required"]), (&json!("query"), &json!(true)));
+    for status in ["400", "502"] {
+        assert!(branches["responses"].get(status).is_some(), "{status}: {branches}");
     }
     let delete = op("DELETE", "/api/v1/git/connections/{id}");
     assert!(delete["parameters"].as_array().unwrap().iter().any(|p| p["name"] == "force" && p["in"] == "query"));
 
-    // Services name the connection that clones their repository.
+    // Connections belong to the server: services name none.
     for schema in ["Service", "CreateService", "UpdateService"] {
-        assert!(schemas[schema]["properties"].get("git_connection_id").is_some(), "{schema}.git_connection_id");
+        assert!(schemas[schema]["properties"].get("git_connection_id").is_none(), "{schema}.git_connection_id");
     }
 }
 
