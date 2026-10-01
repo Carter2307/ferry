@@ -988,6 +988,11 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   skipped without `openssl`). `ferry-build` / `ferry-engine` clone and list
   branches from a local HTTP server that demands the token (also through a
   redirect, which must not get it).
+* The background commands of `ferryd` (§19) are tested on the real binary
+  in `ferryd/tests/background.rs`: without Docker, a start that fails
+  before the server listens (its error reaches the terminal, exit code 1)
+  and `status` / `stop` / `logs` when nothing runs; gated, the whole cycle
+  `start` → `status` → `logs` → `stop`.
 
 ## 18. Git connections
 
@@ -1201,3 +1206,56 @@ none; auto-deploy still needs the GitHub webhook of §10 or a deploy hook),
 encrypting the stored secrets beyond the data directory's permissions
 (§15), and connecting accounts from the CLI or a blueprint (both deploy
 repositories through the server's connections, like the API).
+
+## 19. Running the server (`ferryd`)
+
+`ferryd` is one binary: the server's options (`ferryd --help`) and five
+commands.
+
+| command | does |
+|---|---|
+| `ferryd [options]` | `start` when stdin and stdout are a terminal (and it is not PID 1, Unix only), `run` otherwise: a service manager, a container, a pipe and a script get the foreground server they supervise |
+| `ferryd start [options]` | starts the server in the background and returns once it listens |
+| `ferryd run [options]` | the server itself, in the foreground, until SIGINT / SIGTERM (a second one exits at once) |
+| `ferryd stop` | SIGTERM to the server of the data directory, then waits (up to 60 s) until it released the lock; a second `stop` is the server's second signal: it exits at once |
+| `ferryd status` | where the server of the data directory listens; exit code 0 when one runs, 3 when none does |
+| `ferryd logs [-f] [-n N]` | the end (100 lines) of `ferryd.log`, and with `-f` what is appended to it |
+
+Options are written after the command (`ferryd run --data-dir …`); one in
+front of a command is an error, not ignored. `stop`, `status` and `logs`
+only take `--data-dir` / `FERRY_DATA_DIR`.
+
+**Finding the server** takes two files of the data directory. The lock
+`ferryd.lock` (§15) says whether a server is alive: nothing else is trusted
+for that. `ferryd.json` (`0600`) says what it is — `ServerState { pid,
+version, started_at, background, ready: { api_url, summary }? }` — written
+by every server (`run` too) when it has the lock, completed with `ready`
+(the lines of the startup banner) when the API listens, and removed when
+it stops. A `ferryd.json` without the lock held is a leftover of a server
+that was killed and is ignored; a lock held without the file (a server of
+an older version) is "running" for `status` and an error for `stop`, which
+never signals a process it can't name.
+
+**`start`** (`ferryd::daemon::start`, Unix only — elsewhere it says to use
+`ferryd run`):
+
+1. A server already holds the data directory: prints where it listens and
+   exits 0, changing nothing.
+2. Opens `<data-dir>/ferryd.log` for appending (`0600`), after moving a
+   file bigger than 10 MiB to `ferryd.log.1`.
+3. Executes itself as `ferryd run --detached <the same options>` — the
+   command line as typed, so relative paths and the environment mean the
+   same — with stdin from `/dev/null`, stdout and stderr to the log, in a
+   session of its own (`setsid`): closing the terminal (SIGHUP) and Ctrl-C
+   in it no longer reach the server.
+4. Polls, every 50 ms: the child exited → prints what it logged (its
+   `Error: …` included) and exits 1; `ferryd.json` has the child's pid and
+   `ready` → prints the banner under "running in the background (pid N)",
+   the warnings and errors it logged while starting, and how to follow and
+   stop it; after 60 s → exits 1, saying the server keeps starting.
+
+The server logs with colors only when its stdout is a terminal (and
+`NO_COLOR` is unset): never into `ferryd.log`, a pipe or the journal.
+Nothing rotates `ferryd.log` while a server runs; a long-lived server
+belongs under a service manager with `ferryd run` (README, "Running the
+server").

@@ -34,10 +34,13 @@ Requirements: Docker (Docker Desktop on macOS works), Rust 1.89+ and Node.js 20+
 ```bash
 (cd web && npm ci && npm run build)     # the web dashboard (embedded into ferryd at compile time)
 cargo build --release
-./target/release/ferryd                 # starts the server; prints the dashboard URL and API token
+./target/release/ferryd                 # starts the server in the background; prints the dashboard URL and API token
 ```
 
-In another terminal:
+`ferryd` gives the terminal back once the server listens, and the server keeps
+running when you close it. `ferryd status` says where it listens, `ferryd logs -f`
+follows its log (`ferry-data/ferryd.log`), `ferryd stop` shuts it down, and
+`ferryd run` keeps it in the foreground instead (see [Running the server](#running-the-server)).
 
 ```bash
 ./target/release/ferry login --server http://127.0.0.1:7878 --token <token printed by ferryd>
@@ -84,11 +87,12 @@ ferry db update app-db --memory 1G                   # datastores: applied right
 
 1. A Linux VM with Docker. Point a wildcard DNS record `*.apps.example.com` (and
    your custom domains) at it.
-2. Run `ferryd` as a service (systemd), for example:
+2. Run `ferryd` as a service (systemd), with `ferryd run`, which stays in
+   the foreground for the service manager to supervise. For example:
 
    ```ini
    [Service]
-   ExecStart=/usr/local/bin/ferryd \
+   ExecStart=/usr/local/bin/ferryd run \
      --data-dir /var/lib/ferry \
      --base-domain apps.example.com \
      --proxy-addr 0.0.0.0:80 --https-addr 0.0.0.0:443 \
@@ -118,6 +122,22 @@ ferry db update app-db --memory 1G                   # datastores: applied right
 4. For GitHub auto-deploys, add a webhook to your repo:
    `https://ferry.apps.example.com/hooks/github`, content type JSON, with the
    same secret.
+
+### Running the server
+
+| Command | What it does |
+|---|---|
+| `ferryd [options]` | `ferryd start` when run from a terminal, `ferryd run` otherwise (systemd, a container, a pipe) |
+| `ferryd start [options]` | starts the server in the background and returns once it listens; a start that fails prints why and exits 1. The server's output goes to `<data-dir>/ferryd.log` |
+| `ferryd run [options]` | runs the server in the foreground until Ctrl-C or `SIGTERM`: for service managers, containers, or to watch the log |
+| `ferryd status` | where the server listens; exit code 0 when it runs, 3 when it doesn't |
+| `ferryd logs [-f] [-n N]` | the end of the log of a server started in the background (`-f` follows it) |
+| `ferryd stop` | asks the server to shut down and waits until it has (works for a foreground server too); a second `ferryd stop` forces it, like a second Ctrl-C |
+
+`stop`, `status` and `logs` find the server through its data directory: run
+them where you started `ferryd`, or with the same `--data-dir` /
+`FERRY_DATA_DIR`. Apps and datastores keep running in Docker while `ferryd`
+is stopped; their public URLs answer again once it is back.
 
 ### Server configuration
 

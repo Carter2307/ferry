@@ -64,10 +64,10 @@ cd web && npm ci && npm run build && cd ..
 
 ```bash title="Terminal"
 cargo build
-./target/debug/ferryd --data-dir ./ferry-data
+./target/debug/ferryd run --data-dir ./ferry-data
 ```
 
-`ferryd` prints the API URL and the token, and stores the token in `ferry-data/api_token`. `./ferry-data` is the default and is ignored by git. Set `RUST_LOG=debug` (or a filter such as `RUST_LOG=ferry_engine=debug`) for more detail; the default level is `info`.
+`ferryd run` keeps the server in the foreground, so its log is in front of you and <kbd>Ctrl</kbd>+<kbd>C</kbd> stops it; without `run`, `ferryd` starts in the background and logs to `ferry-data/ferryd.log` (`ferryd logs -f`). It prints the API URL and the token, and stores the token in `ferry-data/api_token`. `./ferry-data` is the default and is ignored by git. Set `RUST_LOG=debug` (or a filter such as `RUST_LOG=ferry_engine=debug`) for more detail; the default level is `info`.
 
 <Callout type="tip" title="Keep experiments away from your real server">
 If a Ferry server already runs on this machine, give your development server its own data directory, name prefix and ports: `--data-dir ./dev-data --name-prefix ferrydev --api-addr 127.0.0.1:17878 --proxy-addr 127.0.0.1:18080`. `ferryd` refuses to start on a prefix another data directory owns, which protects the other server's containers.

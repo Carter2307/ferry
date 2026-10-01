@@ -48,6 +48,8 @@ ferryd --data-dir /var/lib/ferry-staging \
   --base-domain staging.localhost
 ```
 
+`ferryd stop`, `ferryd status` and `ferryd logs` act on the server of the data directory you name: `ferryd stop --data-dir /var/lib/ferry-staging` stops staging and leaves production alone.
+
 Apps of the staging server are at `http://<name>.staging.localhost:8081`. On a public server, give the second server its own base domain (`--base-domain staging.example.com`) and put it behind a different port or another IP address.
 
 The CLI saves one server in its config. Point a command at another server with flags or environment variables, which take precedence over the saved config:
