@@ -136,6 +136,7 @@ async fn e2e_up_deploy_env_and_delete_a_static_site() {
     let log_file = std::fs::File::create(&log).unwrap();
 
     let mut daemon = tokio::process::Command::new(&ferryd)
+        .arg("run")
         .args(["--data-dir", data.path().to_str().unwrap()])
         .args(["--api-addr", &format!("127.0.0.1:{api_port}")])
         .args(["--proxy-addr", &format!("127.0.0.1:{proxy_port}")])
