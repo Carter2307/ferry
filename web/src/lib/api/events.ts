@@ -9,7 +9,7 @@ import { useEffect } from 'react'
 import { useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { create } from 'zustand'
 
-import { useAuth } from '@/stores/auth'
+import { useSignedIn } from '@/stores/auth'
 
 import { ApiError } from './client'
 import { streamPaths } from './endpoints'
@@ -90,15 +90,14 @@ function invalidate(qc: QueryClient, batch: Invalidation[]): void {
 
 /**
  * Mount once (AppShell). Keeps a change-feed subscription open while signed
- * in, reconnecting with exponential backoff (1s → 15s); resubscribes when the
- * token changes and stops on sign-out.
+ * in, reconnecting with exponential backoff (1s → 15s), and stops on sign-out.
  */
 export function useChangeFeed(): void {
   const qc = useQueryClient()
-  const token = useAuth((s) => s.token)
+  const signedIn = useSignedIn()
 
   useEffect(() => {
-    if (!token) {
+    if (!signedIn) {
       setMode('off')
       return
     }
@@ -168,5 +167,5 @@ export function useChangeFeed(): void {
       ctrl.abort()
       if (flushTimer) clearTimeout(flushTimer)
     }
-  }, [qc, token])
+  }, [qc, signedIn])
 }

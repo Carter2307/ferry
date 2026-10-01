@@ -1,40 +1,49 @@
 import { create } from 'zustand'
 
+import type { AuthStatus, UserView } from '@/lib/api/types'
 import { safeStorage } from '@/lib/storage'
 
-/** Same key as the legacy single-file dashboard, so existing sessions carry over. */
-export const TOKEN_KEY = 'ferry.token'
+/**
+ * Where the dashboard stands with the server's account:
+ * `loading` until the server said, `unreachable` when it couldn't be asked,
+ * `setup` while the server has no account, then `signed-out` / `signed-in`.
+ */
+export type AuthPhase = 'loading' | 'unreachable' | 'setup' | 'signed-out' | 'signed-in'
 
 interface AuthState {
-  /** API token sent as `Authorization: Bearer …`; null when signed out. */
-  token: string | null
-  /** Store a validated token. */
-  signIn: (token: string) => void
-  /** Forget the token (the router guard then redirects to /login). */
-  signOut: () => void
+  phase: AuthPhase
+  /** The account, while signed in. */
+  user: UserView | null
+  /** Why the server couldn't be asked (`unreachable`). */
+  error: string | null
+  /** Take what `GET /api/v1/auth/status` (or signing in) answered. */
+  apply: (status: AuthStatus) => void
+  /** The session is gone: signed out here, ended elsewhere, or expired. */
+  signedOut: () => void
+  unreachable: (message: string) => void
 }
 
+/**
+ * The session itself is an HttpOnly cookie the browser keeps: no script, this
+ * one included, can read it. The store only knows whether there is one.
+ */
 export const useAuth = create<AuthState>()((set) => ({
-  token: safeStorage.get(TOKEN_KEY) || null,
-  signIn: (token) => {
-    const t = token.trim()
-    safeStorage.set(TOKEN_KEY, t)
-    set({ token: t })
+  phase: 'loading',
+  user: null,
+  error: null,
+  apply: (status) => {
+    if (status.setup_required) set({ phase: 'setup', user: null, error: null })
+    else if (status.auth === 'session' && status.user) set({ phase: 'signed-in', user: status.user, error: null })
+    else set({ phase: 'signed-out', user: null, error: null })
   },
-  signOut: () => {
-    safeStorage.remove(TOKEN_KEY)
-    set({ token: null })
-  },
+  signedOut: () => set((s) => (s.phase === 'signed-in' ? { phase: 'signed-out', user: null } : s)),
+  unreachable: (message) => set({ phase: 'unreachable', user: null, error: message }),
 }))
 
-// Keep tabs in sync: signing out in one tab signs out the others.
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (e) => {
-    if (e.key === TOKEN_KEY) useAuth.setState({ token: e.newValue || null })
-  })
+/** True while signed in: what the pages, the change feed and the log streams watch. */
+export function useSignedIn(): boolean {
+  return useAuth((s) => s.phase === 'signed-in')
 }
 
-/** Current token outside React (API client). */
-export function getToken(): string | null {
-  return useAuth.getState().token
-}
+// Earlier versions kept the server's API token here: forget it.
+safeStorage.remove('ferry.token')

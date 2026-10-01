@@ -1,5 +1,6 @@
 /** Only allow in-app redirects after login (no protocol-relative / absolute URLs, no loops). */
 export function safeNext(next: string | null): string {
-  if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/login')) return '/services'
+  const loops = ['/login', '/setup'].some((p) => next?.startsWith(p))
+  if (!next || !next.startsWith('/') || next.startsWith('//') || loops) return '/services'
   return next
 }

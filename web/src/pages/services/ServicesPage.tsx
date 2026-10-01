@@ -24,7 +24,7 @@ import { useServicesViewPrefs } from './viewPrefs'
 function NoServices() {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:7878'
   const quickstart = [
-    `ferry login --server ${origin} --token <token>`,
+    `ferry login --server ${origin}`,
     '',
     '# deploy the current directory (creates the service)',
     'ferry up my-app',

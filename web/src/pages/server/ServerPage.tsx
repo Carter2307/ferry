@@ -1,16 +1,18 @@
 import * as React from 'react'
 import { useSearchParams } from 'react-router'
-import { Code2, Plug, Settings2 } from 'lucide-react'
+import { Code2, Plug, Settings2, UserRound } from 'lucide-react'
 
 import { PageContainer } from '@/components/patterns/Page'
 import { API_DOCS_URL, DESIGN_DOC_URL, DOCS_URL, REPO_URL } from '@/components/shell/nav'
 import { useOpenApiSpec } from '@/lib/api/queries'
 
+import { AccountSection } from './AccountSection'
 import { ServerMenu, type ServerMenuItem } from './ServerMenu'
 import { ApiSection, ConnectionsSection, GeneralSection } from './sections'
 
 const SECTIONS: (ServerMenuItem & { Component: React.ComponentType })[] = [
   { id: 'general', label: 'General', icon: <Settings2 />, Component: GeneralSection },
+  { id: 'account', label: 'Account', icon: <UserRound />, Component: AccountSection },
   { id: 'connections', label: 'Connections', icon: <Plug />, Component: ConnectionsSection },
   { id: 'api', label: 'API', icon: <Code2 />, Component: ApiSection },
 ]
@@ -24,7 +26,8 @@ const LINKS = [
 
 /**
  * `/server` — Studio "Settings"-style page with an inner menu:
- * General (server info + theme), Connections (CLI, git accounts, GitHub webhook), API.
+ * General (server info + theme), Account (password, API tokens, sessions),
+ * Connections (CLI, git accounts, GitHub webhook), API.
  * The section lives in `?section=` (the route has no sub-paths).
  */
 export function ServerPage() {
