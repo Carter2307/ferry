@@ -103,10 +103,10 @@ Run `ferryd`. It needs access to the Docker daemon, so run it as a user that can
 ferryd
 ```
 
-On first start, `ferryd` creates its data directory, generates an API token and prints where everything is:
+On first start, `ferryd` creates its data directory and generates an API token. It starts the server in the background, waits until it listens and prints where everything is:
 
 ```text title="Output" noCopy
-  Ferry 0.1.0 is running
+  Ferry 0.1.0 is running in the background (pid 48213)
   Dashboard + API : http://127.0.0.1:7878
   Dashboard (proxy): http://ferry.localhost:8080
   Apps            : http://<name>.localhost:8080
@@ -117,7 +117,12 @@ On first start, `ferryd` creates its data directory, generates an API token and 
   API token       : fy_3f9c…
 
   Log in with:  ferry login --server http://127.0.0.1:7878 --token fy_3f9c…
+
+  Logs            : ferryd logs -f
+  Stop            : ferryd stop
 ```
+
+The terminal is yours again, and the server keeps running after you close it. If the server can't start (Docker isn't running, a port is taken), `ferryd` prints the error and exits with code 1.
 
 The `Docker` line shows the CPUs and memory of the Docker host (with Docker Desktop, those of its virtual machine). The `Limits` line shows the memory and CPU limits every container gets unless its service or datastore sets its own; see [Resource limits](/docs/concepts/resource-limits).
 
@@ -150,6 +155,8 @@ By default the data directory is `./ferry-data`, relative to where you start `fe
 | `api_token` | The generated API token (mode `0600`) |
 | `instance_id` | Identifies this data directory to Docker (mode `0600`) |
 | `ferryd.lock` | Held while `ferryd` runs |
+| `ferryd.json` | The running server's process id and addresses, read by `ferryd status` and `ferryd stop`; removed when it stops |
+| `ferryd.log` | Output of a server started in the background (`ferryd logs`) |
 | `logs/` | Deploy and job logs, one JSON object per line |
 | `builds/` | Scratch build contexts, removed after each build |
 | `repos/` | Git caches, one per service, for fast incremental fetches |
@@ -175,9 +182,34 @@ With the defaults:
 
 By default the API listens on `127.0.0.1` only. Reach it from another machine over SSH (`ssh -L 7878:127.0.0.1:7878 your-server`) rather than binding it publicly. See [Production setup](/docs/guides/production).
 
+### Background and foreground
+
+`ferryd` without a command picks how to run from where it is started:
+
+- **from a terminal**, it starts the server in the background, like `ferryd start`;
+- **anywhere else** (under systemd or launchd, in a container, in a pipe or a script), it runs the server in the foreground, like `ferryd run`. A service manager needs the server to stay in the foreground: write `ferryd run` in unit files, as in [Production setup](/docs/guides/production).
+
+| Command | What it does |
+|---|---|
+| `ferryd start` | Starts the server in the background and returns once it listens. Takes the same options as `ferryd`. |
+| `ferryd run` | Runs the server in the foreground and logs to the terminal, until <kbd>Ctrl</kbd>+<kbd>C</kbd> or `SIGTERM`. Takes the same options as `ferryd`. |
+| `ferryd status` | Says whether the server runs and where it listens. The exit code is 0 when it runs and 3 when it doesn't. |
+| `ferryd logs` | Prints the last 100 lines of the server's log. `-n N` changes the number, and `-f` keeps printing new lines. |
+| `ferryd stop` | Shuts the server down and waits until it has stopped. |
+
+A server started in the background writes its output to `<data-dir>/ferryd.log`. When that file is larger than 10 MiB, the next `ferryd start` moves it to `ferryd.log.1` and starts a new one. A server in the foreground has no log file: its output goes to the terminal, or to the journal under systemd.
+
+`ferryd stop`, `ferryd status` and `ferryd logs` find the server through its data directory. Run them from the directory where you started `ferryd`, or pass the same `--data-dir` (or `FERRY_DATA_DIR`):
+
+```bash title="Terminal"
+ferryd status --data-dir /var/lib/ferry
+```
+
+Starting a server that already runs changes nothing: `ferryd` prints where the running one listens. To start it with other options, stop it first.
+
 ### Stop and restart
 
-Press <kbd>Ctrl</kbd>+<kbd>C</kbd> (or send `SIGTERM`) to stop `ferryd`. The first signal shuts down gracefully: open API requests get up to 10 seconds, then the engine stops running jobs and records deploys in progress as interrupted, within 25 seconds. A second signal exits at once.
+Run `ferryd stop`, or press <kbd>Ctrl</kbd>+<kbd>C</kbd> in the terminal of a server in the foreground. Both shut the server down gracefully: open API requests get up to 10 seconds, then the engine stops running jobs and records deploys in progress as interrupted, within 25 seconds. A second `ferryd stop` (or a second <kbd>Ctrl</kbd>+<kbd>C</kbd>) while the server shuts down makes it exit at once.
 
 Your app and datastore containers keep running in Docker while `ferryd` is stopped, but the proxy is part of `ferryd`, so their public URLs don't answer until it is back. On the next start, `ferryd` reads the same data directory, restores the routes and brings every service back to its desired state (see [Self-healing](/docs/concepts/self-healing)).
 

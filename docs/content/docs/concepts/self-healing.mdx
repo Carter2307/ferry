@@ -70,13 +70,13 @@ Interrupted deploys aren't retried. Start them again with `ferry deploy NAME`.
 
 ## Graceful shutdown
 
-On the first `SIGINT` (Ctrl-C) or `SIGTERM`, `ferryd` shuts down in order:
+On the first `SIGINT` (Ctrl-C) or `SIGTERM` (what `ferryd stop` sends), `ferryd` shuts down in order:
 
 1. the API stops accepting requests and waits up to 10 seconds for requests in progress; log streams and the change feed end;
 2. the proxy stops accepting connections and drains the open ones;
 3. the engine fails queued deploys, stops deploys in progress (removing their new instances; the live deploy keeps its containers), and stops running jobs with a 10-second grace period, recording them as `failed` ("interrupted by server shutdown"). It gets up to 25 seconds.
 
-A second signal exits immediately (exit code 130). Under systemd, give the service enough time to stop, for example `TimeoutStopSec=60`.
+A second signal, or a second `ferryd stop`, exits immediately (exit code 130). `ferryd stop` waits up to 60 seconds for the server to release its data directory. Under systemd, give the service enough time to stop, for example `TimeoutStopSec=60`.
 
 ## One server per data directory and prefix
 

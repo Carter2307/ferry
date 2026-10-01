@@ -14,16 +14,16 @@ You need `ferryd` and `ferry` built, as described in [Installation](/docs/gettin
 <Step>
 ### Start the server
 
-In a first terminal, from the root of the Ferry repository:
+From the root of the Ferry repository:
 
-```bash title="Terminal 1"
+```bash title="Terminal"
 ferryd
 ```
 
-It prints the dashboard URL and the API token:
+It starts the server in the background and prints the dashboard URL and the API token:
 
 ```text title="Output" noCopy
-  Ferry 0.1.0 is running
+  Ferry 0.1.0 is running in the background (pid 48213)
   Dashboard + API : http://127.0.0.1:7878
   Dashboard (proxy): http://ferry.localhost:8080
   Apps            : http://<name>.localhost:8080
@@ -31,17 +31,20 @@ It prints the dashboard URL and the API token:
   API token       : fy_3f9c…
 
   Log in with:  ferry login --server http://127.0.0.1:7878 --token fy_3f9c…
+
+  Logs            : ferryd logs -f
+  Stop            : ferryd stop
 ```
 
-Leave it running.
+The server keeps running while you use the same terminal for the next steps.
 </Step>
 
 <Step>
 ### Log in with the CLI
 
-In a second terminal, copy the `ferry login` command that `ferryd` printed:
+Copy the `ferry login` command that `ferryd` printed:
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 ferry login --server http://127.0.0.1:7878 --token <token printed by ferryd>
 ```
 
@@ -56,7 +59,7 @@ Saved to /home/you/.config/ferry/config.json
 <Step>
 ### Deploy the app
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 cd examples/node-hello
 ferry up --follow
 ```
@@ -108,7 +111,7 @@ The first deploy takes longer: Docker downloads the `node:22-alpine` base image 
 
 The service answers on its own hostname through the Ferry proxy:
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 curl http://node-hello.localhost:8080
 ```
 
@@ -124,7 +127,7 @@ Or open http://node-hello.localhost:8080 in your browser. `ferry open node-hello
 
 List your services, then check the running instances and their logs:
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 ferry services
 ferry status node-hello
 ferry logs node-hello
@@ -158,7 +161,7 @@ res.end(`Hello from Ferry (node)! service=…`); // [!code --]
 res.end(`Hello again from Ferry! service=…`); // [!code ++]
 ```
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 ferry up --follow
 ```
 
@@ -182,7 +185,7 @@ Deploy dep-ba5a7fce730d4061aaa7 is live at http://node-hello.localhost:8080
 
 The service already exists, so `ferry up` only uploads and deploys. The old container kept serving until the new one passed its health check; then the proxy switched to the new one and the old one was stopped. That's a zero-downtime, blue/green deploy.
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 curl http://node-hello.localhost:8080
 # Hello again from Ferry! service=node-hello deploy=dep-ba5a7fce730d4061aaa7
 ```
@@ -193,7 +196,7 @@ curl http://node-hello.localhost:8080
 
 Every deploy is kept in the service's history:
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 ferry deploys node-hello
 ```
 
@@ -205,7 +208,7 @@ dep-3493c505ea9b4415b359   deactivated   upload    -        23s ago   2s
 
 Roll back to the first deploy with [`ferry rollback`](/docs/reference/cli#ferry-rollback). Ferry reuses the image that deploy built, so nothing is rebuilt:
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 ferry rollback node-hello dep-3493c505ea9b4415b359 --follow
 ```
 
@@ -232,7 +235,7 @@ A rollback is a new deploy with the trigger `rollback`, so it shows up at the to
 
 Delete the service with its containers, images and deploy history:
 
-```bash title="Terminal 2"
+```bash title="Terminal"
 ferry delete node-hello
 ```
 
@@ -241,7 +244,7 @@ Delete service 'node-hello' with all its deploys? [y/N] y
 Deleted service 'node-hello'
 ```
 
-Pass `--yes` to skip the question, for example in scripts. Stop `ferryd` with <kbd>Ctrl</kbd>+<kbd>C</kbd> in the first terminal when you are done.
+Pass `--yes` to skip the question, for example in scripts. Stop the server with `ferryd stop` when you are done.
 </Step>
 </Steps>
 

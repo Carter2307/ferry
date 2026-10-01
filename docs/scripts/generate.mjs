@@ -243,16 +243,27 @@ function clapMarkdownToMdx(md, { keepOverview }) {
     .trim();
 }
 
-/** `ferryd --help` → { '--data-dir': 'FERRY_DATA_DIR', … } */
+/**
+ * `ferryd --help` → { '--data-dir': 'FERRY_DATA_DIR', … }: the options of the
+ * server (the ones listed without a command) and their environment variables.
+ * An option without a variable maps to `undefined`.
+ */
 function ferrydEnvVars(help) {
   const env = {};
+  const isFlag = (line) => /^\s+(?:-\w, )?(--[a-z0-9-]+)(?: <[A-Z_]+>)?\s*$/.exec(line);
   const lines = help.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    const flag = /^\s+(?:-\w, )?(--[a-z0-9-]+)(?: <[A-Z_]+>)?\s*$/.exec(lines[i]);
+    const flag = isFlag(lines[i]);
     if (!flag) continue;
-    const next = lines[i + 1] ?? '';
-    const m = /\[env: ([A-Z0-9_]+)=?[^\]]*\]/.exec(next);
-    if (m) env[flag[1]] = m[1];
+    env[flag[1]] = undefined;
+    // The description follows, then (after a blank line in the long help) `[env: …]`.
+    for (let j = i + 1; j < lines.length && !isFlag(lines[j]); j++) {
+      const m = /\[env: ([A-Z0-9_]+)=?[^\]]*\]/.exec(lines[j]);
+      if (m) {
+        env[flag[1]] = m[1];
+        break;
+      }
+    }
   }
   return env;
 }
@@ -337,7 +348,7 @@ function optionListsToTables(mdx, env) {
     out.push('', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows, '');
   }
   if (env) {
-    const missing = Object.keys(env).filter((f) => !seenEnv.has(f));
+    const missing = Object.keys(env).filter((f) => env[f] && !seenEnv.has(f));
     if (missing.length > 0) {
       throw new Error(`ferryd options with an env var but no entry in --dump-markdown-help: ${missing.join(', ')}`);
     }
@@ -366,24 +377,42 @@ ${optionListsToTables(clapMarkdownToMdx(markdownHelp, { keepOverview: true })).m
 `;
 }
 
+/**
+ * `ferryd start` and `ferryd run` take the options of `ferryd` itself:
+ * their copies of the table become one sentence.
+ */
+function dedupeServerOptions(mdx) {
+  const table = /\*\*Options\*\*\n\n((?:\|.*\n)+)/.exec(mdx);
+  if (!table) throw new Error('no **Options** table in the ferryd reference');
+  const first = table.index + table[0].length;
+  const copies = mdx.slice(first).split(table[1]);
+  if (copies.length !== 3) {
+    throw new Error(`expected the server options twice more (ferryd start, ferryd run), found ${copies.length - 1}`);
+  }
+  return mdx.slice(0, first) + copies.join('The same options as [`ferryd`](#ferryd) without a command.\n');
+}
+
 function serverOptionsPage(markdownHelp, help) {
-  const { mdx: body, withoutEnv } = optionListsToTables(
-    clapMarkdownToMdx(markdownHelp, { keepOverview: false }),
-    ferrydEnvVars(help),
-  );
+  const env = ferrydEnvVars(help);
+  const { mdx, withoutEnv } = optionListsToTables(clapMarkdownToMdx(markdownHelp, { keepOverview: false }), env);
+  const body = dedupeServerOptions(mdx);
+  // Of the server's own options (not the ones of `ferryd logs`).
+  const serverWithoutEnv = [...new Set(withoutEnv)].filter((f) => f in env);
   const flagList = (flags) => flags.map((f) => `\`${f}\``).join(', ').replace(/, ([^,]+)$/, ' and $1');
   const envSentence =
-    withoutEnv.length === 0
-      ? 'Each option can also be set with the environment variable shown under it.'
-      : `Every option except ${flagList(withoutEnv)} can also be set with the environment variable shown under it.`;
+    serverWithoutEnv.length === 0
+      ? 'Each option of the server can also be set with the environment variable shown under it.'
+      : `Every option of the server except ${flagList(serverWithoutEnv)} can also be set with the environment variable shown under it.`;
   return `${frontmatter({
     title: 'Server options',
-    description: 'Every ferryd command-line option with its environment variable and default, generated from the server itself.',
+    description: 'Every ferryd command and option, with its environment variable and default, generated from the server itself.',
     icon: 'Server',
   })}
 {/* ${GENERATED_NOTE} Source: \`cargo run -p ferryd -- --dump-markdown-help\` and \`ferryd --help\`. */}
 
-\`ferryd\` is the Ferry server: one process that runs the REST API and the dashboard, the public reverse proxy, the build and deploy engine and the reconciler. This page lists all of its options. It is generated from \`ferryd --dump-markdown-help\` and \`ferryd --help\`, so it matches the binary built from this repository.
+\`ferryd\` is the Ferry server: one process that runs the REST API and the dashboard, the public reverse proxy, the build and deploy engine and the reconciler. This page lists its commands and all of its options. It is generated from \`ferryd --dump-markdown-help\` and \`ferryd --help\`, so it matches the binary built from this repository.
+
+\`ferryd\` alone starts the server: in the background when you run it from a terminal (like \`ferryd start\`), in the foreground otherwise (like \`ferryd run\`). \`ferryd stop\`, \`ferryd status\` and \`ferryd logs\` find that server through its data directory. See [Background and foreground](/docs/getting-started/installation#background-and-foreground).
 
 ${envSentence} When both are set, the command-line flag wins.
 

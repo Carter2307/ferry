@@ -71,7 +71,7 @@ SupplementaryGroups=docker
 # Bind ports 80 and 443 without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 EnvironmentFile=/etc/ferry/ferryd.env
-ExecStart=/usr/local/bin/ferryd \
+ExecStart=/usr/local/bin/ferryd run \
   --data-dir /var/lib/ferry \
   --base-domain apps.example.com \
   --proxy-addr 0.0.0.0:80 \
@@ -92,6 +92,7 @@ What these options do:
 
 | Option | Why |
 |---|---|
+| `ferryd run` | Keeps the server in the foreground, where systemd supervises it, restarts it and collects its output. `ferryd start` would detach from systemd, which would then consider the service stopped. |
 | `--data-dir /var/lib/ferry` | The database, logs, uploads, git caches and certificates. Created with mode `0700`. |
 | `--base-domain apps.example.com` | Apps are served at `<name>.apps.example.com`. |
 | `--proxy-addr 0.0.0.0:80` | Public HTTP. Let's Encrypt validates on port 80, and HTTP requests to hosts with a certificate are redirected to HTTPS. |
@@ -270,7 +271,7 @@ Docker stores what each container writes to stdout and stderr. With Docker's def
 
 If you configured the Docker daemon with another default log driver (journald, syslog, fluentd, `local`…), Ferry keeps it and sets no rotation: that driver's own limits apply, and the startup banner's `Limits` line says so, for example `Docker's journald log driver (kept)`. `--log-max-size 0` also leaves the daemon's log configuration alone. Log settings are fixed when a container is created, so a change applies to containers created afterwards.
 
-`ferryd`'s own server log goes to its standard output, which systemd sends to the journal (`journalctl -u ferryd`) under the journal's own size limits. Deploy and job logs are files in the data directory.
+`ferryd`'s own server log goes to its standard output, which systemd sends to the journal (`journalctl -u ferryd`) under the journal's own size limits. (Only a server started in the background with `ferryd start` writes `<data-dir>/ferryd.log`.) Deploy and job logs are files in the data directory.
 
 ## Behind an existing reverse proxy
 

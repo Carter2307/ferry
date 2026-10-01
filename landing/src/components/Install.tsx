@@ -32,12 +32,13 @@ export function Install() {
             <li>
               <h3 className="text-base font-semibold">Build and start the server</h3>
               <p className="mt-1 mb-3 text-sm text-foreground-lighter">
-                <code className="inline-code">ferryd</code> prints the dashboard’s address and an API token.
+                <code className="inline-code">ferryd</code> starts in the background and prints the dashboard’s address and
+                an API token. <code className="inline-code">ferryd stop</code> stops it.
               </p>
               <CommandBlock lines={SERVER} label="Copy the server commands" />
             </li>
             <li>
-              <h3 className="text-base font-semibold">Deploy the example app from a second terminal</h3>
+              <h3 className="text-base font-semibold">Deploy the example app</h3>
               <p className="mt-1 mb-3 text-sm text-foreground-lighter">
                 Paste the token in place of <code className="inline-code">&lt;token&gt;</code>. The dashboard is at{' '}
                 <code className="inline-code">http://127.0.0.1:7878</code>.
