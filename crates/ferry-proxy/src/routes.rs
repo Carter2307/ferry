@@ -7,6 +7,8 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use tokio::sync::Notify;
+
 /// Result of looking up a host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -110,25 +112,27 @@ impl Table {
             .map_or(0, |route| route.next.load(Ordering::Relaxed))
     }
 
-    /// Drop every host owned by `service_id`.
-    fn remove_service(&mut self, service_id: &str) {
-        if let Some(hosts) = self.by_service.remove(service_id) {
-            for host in hosts {
-                if self.by_host.get(&host).is_some_and(|r| r.service_id == service_id) {
-                    self.by_host.remove(&host);
-                }
+    /// Drop every host owned by `service_id`. Returns whether it had any.
+    fn remove_service(&mut self, service_id: &str) -> bool {
+        let Some(hosts) = self.by_service.remove(service_id) else { return false };
+        for host in hosts {
+            if self.by_host.get(&host).is_some_and(|r| r.service_id == service_id) {
+                self.by_host.remove(&host);
             }
         }
+        true
     }
 
     /// Replace the hosts of `route.service_id` with `hosts` (already
     /// normalized and deduplicated). Hosts owned by another service are taken
     /// over (last writer wins) and removed from that service's index.
-    fn install(&mut self, hosts: Vec<String>, route: ServiceRoute) {
+    /// Returns whether the service's hosts changed.
+    fn install(&mut self, hosts: Vec<String>, route: ServiceRoute) -> bool {
         let service_id = route.service_id.clone();
+        let changed = self.by_service.get(&service_id).map(Vec::as_slice).unwrap_or_default() != hosts.as_slice();
         self.remove_service(&service_id);
         if hosts.is_empty() {
-            return;
+            return changed;
         }
         let route = Arc::new(route);
         for host in &hosts {
@@ -150,6 +154,7 @@ impl Table {
             }
         }
         self.by_service.insert(service_id, hosts);
+        changed
     }
 }
 
@@ -169,6 +174,8 @@ fn normalize_all(hosts: &[String]) -> Vec<String> {
 #[derive(Debug, Clone, Default)]
 pub struct RouteTable {
     inner: Arc<RwLock<Table>>,
+    /// Signalled when the hostnames of a service change.
+    hosts_changed: Arc<Notify>,
 }
 
 impl RouteTable {
@@ -191,23 +198,26 @@ impl RouteTable {
     /// routed to that service. An empty `upstreams` yields `NoUpstreams`.
     pub fn set_service_routes(&self, service_id: &str, hosts: &[String], upstreams: Vec<SocketAddr>) {
         let hosts = normalize_all(hosts);
-        let mut table = self.write();
-        let cursor = table.cursor_of(service_id);
-        table.install(
-            hosts,
-            ServiceRoute {
-                service_id: service_id.to_string(),
-                upstreams,
-                suspended: false,
-                next: AtomicUsize::new(cursor),
-            },
-        );
+        let changed = {
+            let mut table = self.write();
+            let cursor = table.cursor_of(service_id);
+            table.install(
+                hosts,
+                ServiceRoute {
+                    service_id: service_id.to_string(),
+                    upstreams,
+                    suspended: false,
+                    next: AtomicUsize::new(cursor),
+                },
+            )
+        };
+        self.signal(changed);
     }
 
     /// Route `hosts` of `service_id` to the "suspended" page.
     pub fn set_service_suspended(&self, service_id: &str, hosts: &[String]) {
         let hosts = normalize_all(hosts);
-        self.write().install(
+        let changed = self.write().install(
             hosts,
             ServiceRoute {
                 service_id: service_id.to_string(),
@@ -216,11 +226,28 @@ impl RouteTable {
                 next: AtomicUsize::new(0),
             },
         );
+        self.signal(changed);
     }
 
     /// Remove every route of a service.
     pub fn remove_service(&self, service_id: &str) {
-        self.write().remove_service(service_id);
+        let changed = self.write().remove_service(service_id);
+        self.signal(changed);
+    }
+
+    fn signal(&self, hosts_changed: bool) {
+        if hosts_changed {
+            self.hosts_changed.notify_one();
+        }
+    }
+
+    /// Notified when the hostnames of a service change (new upstreams alone
+    /// don't count). One permit is kept: a change that happens while nobody
+    /// waits makes the next `notified().await` return at once. For one
+    /// waiter — the certificate manager, which then asks for the
+    /// certificates of the new hosts without waiting for its next pass.
+    pub fn hosts_changed(&self) -> Arc<Notify> {
+        self.hosts_changed.clone()
     }
 
     /// Look up a `Host` header value (may include `:port`; case-insensitive).
@@ -333,6 +360,29 @@ mod tests {
         assert_eq!(t.resolve("a.test"), Resolution::Upstream(addr(1)));
         t.set_service_routes("srv-1", &hosts(&["a.test"]), vec![addr(1), addr(2)]);
         assert_eq!(t.resolve("a.test"), Resolution::Upstream(addr(2)));
+    }
+
+    #[tokio::test]
+    async fn host_changes_are_signalled_and_new_upstreams_are_not() {
+        use std::time::Duration;
+        let t = RouteTable::new();
+        let changed = t.hosts_changed();
+        let signalled = || async { tokio::time::timeout(Duration::from_millis(20), changed.notified()).await.is_ok() };
+        assert!(!signalled().await);
+        // A change nobody was waiting for is kept for the next wait.
+        t.set_service_routes("srv-1", &hosts(&["a.test"]), vec![addr(1)]);
+        assert!(signalled().await);
+        assert!(!signalled().await);
+        // Same hosts, other upstreams (every reconcile pass does this): nothing.
+        t.set_service_routes("srv-1", &hosts(&["A.test."]), vec![addr(2)]);
+        t.set_service_suspended("srv-1", &hosts(&["a.test"]));
+        assert!(!signalled().await);
+        t.set_service_routes("srv-1", &hosts(&["a.test", "b.test"]), vec![addr(2)]);
+        assert!(signalled().await);
+        t.remove_service("srv-1");
+        assert!(signalled().await);
+        t.remove_service("srv-1");
+        assert!(!signalled().await);
     }
 
     #[test]

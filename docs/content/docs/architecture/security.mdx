@@ -58,6 +58,12 @@ ssh -L 7878:127.0.0.1:7878 you@your-server
 ferry login --server http://127.0.0.1:7878
 ```
 
+Connecting a [domain](/docs/guides/domains) to a server that still has a local base domain doesn't change this: the dashboard stays where `--dashboard-host` put it. On a public server started without `--base-domain`, that is `ferry.localhost` on the public proxy, which anyone can ask for by sending that `Host` header. Start such a server with `--dashboard-host none`, or with a hostname of your own and HTTPS.
+
+The proxy answers one path for any host, without authentication: `/.well-known/ferry-domain-check/<token>`, which Ferry uses to verify that a domain reaches this server. The answer is the token, which must be alphanumeric, followed by an id made up when the process started. It says nothing about the services.
+
+To show the DNS records of a domain, a server behind NAT asks a public service which IPv4 address it has (`api.ipify.org`, then `ipv4.icanhazip.com`, then `checkip.amazonaws.com`). It is the only request Ferry makes to a third party on its own, it only happens once a non-local domain exists, and `--public-ip` replaces it.
+
 A few endpoints need no authentication because they reveal nothing secret: `/healthz`, the OpenAPI document (`/api/openapi.json`), Swagger UI (`/api/docs`, which asks for an API token to send requests), and the dashboard's static files (the dashboard asks you to sign in to show anything). Dashboard and Swagger UI pages are sent with `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`. `ferryd` sends no CORS headers, so other origins can't call the API from a browser.
 
 See [Production setup](/docs/guides/production) for a complete hardened setup.

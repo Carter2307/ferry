@@ -10,6 +10,7 @@ import type {
   AuthorizeGit,
   AuthStatus,
   BlueprintResult,
+  CertificateView,
   ChangePassword,
   CliLoginView,
   ConnectGit,
@@ -20,6 +21,7 @@ import type {
   CreateService,
   DatastoreView,
   Deploy,
+  DomainView,
   EnvGroupView,
   EnvVar,
   GitAuthorization,
@@ -105,7 +107,7 @@ export const endpoints = {
   unlinkEnvGroup: (ref: string, group: string) =>
     api.delete<ServiceView>(`${V1}/services/${seg(ref)}/env-groups/${seg(group)}`),
 
-  // domains
+  // custom domains of a service
   listDomains: (ref: string, signal?: AbortSignal) =>
     api.get<string[]>(`${V1}/services/${seg(ref)}/domains`, undefined, signal),
   addDomain: (ref: string, domain: string) => api.post<string[]>(`${V1}/services/${seg(ref)}/domains`, { domain }),
@@ -156,6 +158,14 @@ export const endpoints = {
     api.get<GitRepositoryList>(`${V1}/git/connections/${seg(id)}/repositories`, undefined, signal),
   listGitBranches: (repoUrl: string, signal?: AbortSignal) =>
     api.get<GitBranches>(`${V1}/git/branches`, { repo_url: repoUrl }, signal),
+
+  // the server's domains (services are served under them) and certificates
+  listServerDomains: (signal?: AbortSignal) => api.get<DomainView[]>(`${V1}/domains`, undefined, signal),
+  connectDomain: (name: string) => api.post<DomainView>(`${V1}/domains`, { name }),
+  verifyDomain: (ref: string) => api.post<DomainView>(`${V1}/domains/${seg(ref)}/verify`),
+  setDefaultDomain: (ref: string) => api.patch<DomainView>(`${V1}/domains/${seg(ref)}`, { is_default: true }),
+  disconnectDomain: (ref: string) => api.delete(`${V1}/domains/${seg(ref)}`),
+  listCertificates: (signal?: AbortSignal) => api.get<CertificateView[]>(`${V1}/certificates`, undefined, signal),
 
   // blueprints
   applyBlueprint: (body: ApplyBlueprint) => api.post<BlueprintResult>(`${V1}/blueprints/apply`, body),

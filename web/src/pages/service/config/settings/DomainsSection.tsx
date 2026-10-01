@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { Link } from 'react-router'
 import { ExternalLink, Globe, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -28,6 +29,16 @@ function hostUrl(serviceUrl: string | null, host: string): string | null {
   }
 }
 
+/** `http://api.localhost:19801` → `api.localhost`. */
+function urlHost(serviceUrl: string | null): string | null {
+  if (!serviceUrl) return null
+  try {
+    return new URL(serviceUrl).hostname
+  } catch {
+    return null
+  }
+}
+
 /** Custom domains (add / remove) and every host the proxy routes to the service. */
 export function DomainsSection({ service }: { service: ServiceView }) {
   const name = service.name
@@ -45,6 +56,8 @@ export function DomainsSection({ service }: { service: ServiceView }) {
   const custom = domainsQuery.data ?? service.custom_domains
   const defaults = service.hosts.filter((h) => !service.custom_domains.includes(h))
   const hosts = [...defaults.map((h) => ({ host: h, custom: false })), ...custom.map((h) => ({ host: h, custom: true }))]
+  // The host of the service's URL: the one under the server's default domain.
+  const primary = urlHost(service.url)
 
   const check = checkDomain(input)
   const duplicate = !check.error && (custom.includes(check.domain) || defaults.includes(check.domain))
@@ -77,8 +90,17 @@ export function DomainsSection({ service }: { service: ServiceView }) {
       title="Custom domains"
       description={
         <>
-          Serve {name} on your own domains. Point their DNS (A/AAAA or CNAME) at this server
-          {info.data?.tls_enabled ? '; certificates are issued automatically.' : '.'}
+          Serve {name} at a name of its own, like <span className="font-mono text-[13px]">www.example.com</span>.
+          Point its DNS (A/AAAA or CNAME) at this server
+          {info.data?.tls_enabled ? '; its certificate is issued automatically.' : '.'} To serve every service under
+          a domain, connect it under{' '}
+          <Link
+            to="/server?section=domains"
+            className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Server → Domains
+          </Link>
+          .
         </>
       }
     >
@@ -141,7 +163,13 @@ export function DomainsSection({ service }: { service: ServiceView }) {
                     ) : (
                       <span className="min-w-0 truncate font-mono text-[13px] text-foreground">{host}</span>
                     )}
-                    {isCustom ? <Badge variant="outline">Custom</Badge> : <Badge>Default</Badge>}
+                    {isCustom ? (
+                      <Badge variant="outline">Custom</Badge>
+                    ) : host === primary ? (
+                      <Badge>Default</Badge>
+                    ) : (
+                      <Badge variant="outline">Server domain</Badge>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     {url && (

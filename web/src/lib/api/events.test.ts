@@ -41,4 +41,15 @@ describe('invalidationsForChange', () => {
       expect(key[0]).toBe(keys.git()[0])
     }
   })
+  it('maps domain changes to the domains, the server info and every service', () => {
+    // a domain that starts or stops being served changes the hosts and the URL of every service
+    expect(invalidationsForChange({ kind: 'domain', id: 'dom-1', service_id: null, action: 'updated' })).toEqual([
+      keys.domains(),
+      keys.info(),
+      keys.services(),
+    ])
+    for (const key of [keys.domainList(), keys.certificates()]) {
+      expect(key[0]).toBe(keys.domains()[0])
+    }
+  })
 })

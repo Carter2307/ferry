@@ -40,6 +40,7 @@ import { ApiError } from '@/lib/api/client'
 import { useLive } from '@/lib/api/events'
 import { signOut } from '@/lib/api/session'
 import { useDatastores, useEnvGroups, useOpenApiSpec, useServerInfo, useService, useServices } from '@/lib/api/queries'
+import { defaultDomain } from '@/lib/domains'
 import { DATASTORE_KIND_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
 import { isMac } from '@/lib/platform'
 import { cn } from '@/lib/utils'
@@ -73,14 +74,14 @@ function ServerSegment() {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Server ${info?.base_domain || 'Ferry'}${info ? ` v${info.version}` : ''}, open server menu`}
+          aria-label={`Server ${info ? defaultDomain(info) : 'Ferry'}${info ? ` v${info.version}` : ''}, open server menu`}
           className="group inline-flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 text-sm text-foreground outline-none transition-colors hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-surface-200"
         >
           <Server className="size-4 shrink-0 text-foreground-lighter" aria-hidden="true" />
           {isLoading ? (
             <Skeleton className="h-4 w-20" />
           ) : (
-            <span className="max-w-[160px] truncate">{info?.base_domain || 'Ferry'}</span>
+            <span className="max-w-[160px] truncate">{info ? defaultDomain(info) : 'Ferry'}</span>
           )}
           {info && (
             <Badge font="mono" case="normal" className="hidden xl:inline-flex">

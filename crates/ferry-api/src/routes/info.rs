@@ -28,7 +28,7 @@ pub fn url_for_addr(addr: SocketAddr) -> String {
     tag = "info",
     operation_id = "getServerInfo",
     summary = "Server info",
-    description = "Version, base domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
+    description = "Version, base domain and default domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
     responses((status = 200, description = "Server info.", body = ServerInfo)),
 )]
 pub async fn info(State(st): State<AppState>) -> Json<ServerInfo> {
@@ -36,6 +36,7 @@ pub async fn info(State(st): State<AppState>) -> Json<ServerInfo> {
     Json(ServerInfo {
         version: ferry_core::VERSION.to_string(),
         base_domain: cfg.base_domain.clone(),
+        default_domain: cfg.primary_domain(),
         proxy_url: url_for_addr(cfg.proxy_addr),
         tls_enabled: cfg.tls_enabled(),
         dashboard_url: cfg.dashboard_url(),

@@ -19,7 +19,7 @@ use futures::StreamExt;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use crate::health::SIGKILL_EXIT_CODE;
+use crate::health::{LastExit, SIGKILL_EXIT_CODE};
 use crate::images;
 use crate::instances;
 use crate::logs::{LogHandle, LogKind};
@@ -36,7 +36,8 @@ const OUTPUT_DRAIN: Duration = Duration::from_secs(10);
 /// How long `cancel_job`, suspend and delete wait for a job to stop.
 const STOP_WAIT: Duration = Duration::from_secs(JOB_STOP_GRACE_SECS as u64 + 20);
 /// How long (polls × interval) a SIGKILLed job's container is watched for
-/// Docker's OOM flag, which can be recorded just after the exit.
+/// Docker's OOM flag, which can be recorded just after the exit. Its Docker
+/// events are then asked a while longer (`health::with_late_oom`).
 const OOM_FLAG_POLLS: usize = 10;
 const OOM_FLAG_POLL: Duration = Duration::from_millis(100);
 /// The error of a job a user canceled.
@@ -287,7 +288,8 @@ async fn execute(
 /// kernel's OOM killer, and Docker may record the OOM kill a moment after
 /// it reports the exit (seen on Linux hosts): a SIGKILLed job's container
 /// is looked at again briefly, then its Docker events since `started` (a
-/// time since the epoch) decide.
+/// time since the epoch) are asked for as long as an instance's are — one
+/// look at them right after the flag was not always late enough.
 async fn failure_reason(inner: &Inner, container_id: &str, code: i64, started: Duration) -> String {
     let mut memory_limit_bytes = None;
     for attempt in 0..OOM_FLAG_POLLS {
@@ -301,12 +303,9 @@ async fn failure_reason(inner: &Inner, container_id: &str, code: i64, started: D
         }
         tokio::time::sleep(OOM_FLAG_POLL).await;
     }
-    if code == SIGKILL_EXIT_CODE
-        && crate::health::exit_from_events(inner, container_id, started, memory_limit_bytes).await.oom_killed
-    {
-        return failure_text(code, true, memory_limit_bytes);
-    }
-    failure_text(code, false, None)
+    let exit = LastExit { code: Some(code), oom_killed: false, memory_limit_bytes };
+    let exit = crate::health::with_late_oom(inner, container_id, started, exit).await;
+    failure_text(code, exit.oom_killed, memory_limit_bytes)
 }
 
 fn failure_text(code: i64, oom_killed: bool, memory_limit_bytes: Option<i64>) -> String {

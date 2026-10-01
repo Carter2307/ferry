@@ -11,15 +11,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::models::{
-    ApiToken, Datastore, DatastoreKind, Deploy, EnvGroup, EnvVar, GitAuth, GitProvider, Runtime, Service, ServiceState,
-    ServiceType, User,
+    ApiToken, Datastore, DatastoreKind, Deploy, Domain, EnvGroup, EnvVar, GitAuth, GitProvider, Runtime, Service,
+    ServiceState, ServiceType, User,
 };
 
 /// `GET /api/v1/info`
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ServerInfo {
     pub version: String,
+    /// The server's `--base-domain`.
     pub base_domain: String,
+    /// The domain of the URL services are shown with: the default domain
+    /// (§21). The base domain on a server that connected none.
+    #[serde(default)]
+    pub default_domain: String,
     /// e.g. `http://localhost:8080` — where the proxy listens.
     pub proxy_url: String,
     pub tls_enabled: bool,
@@ -585,6 +590,95 @@ pub struct BlueprintResult {
     /// Non-fatal problems (unsupported keys ignored, etc.).
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// domains and certificates (DESIGN.md §21)
+
+/// `POST /api/v1/domains` — connect a domain: once its DNS points at this
+/// server, services are served at `<service>.<name>`.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectDomain {
+    /// A domain or a subdomain of yours: `example.com`, `apps.example.com`.
+    pub name: String,
+}
+
+/// `PATCH /api/v1/domains/{id}`
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateDomain {
+    /// `true` makes it the default domain: the one of the URL every service
+    /// is shown with. `false` is refused (make another domain the default).
+    pub is_default: Option<bool>,
+}
+
+/// A DNS record to create where the zone of a domain is managed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DnsRecord {
+    /// `A` (an IPv4 address) or `AAAA` (IPv6).
+    #[serde(rename = "type")]
+    pub record_type: String,
+    /// `*`: every name under the domain, so every service. `@`: the domain
+    /// itself.
+    pub name: String,
+    /// The address this server is reached at from the internet; `null` when
+    /// the server could not find it out.
+    pub value: Option<String>,
+    /// `false` for what only serving the domain itself needs.
+    pub required: bool,
+}
+
+/// A domain as returned by the API (the stored row plus computed fields).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DomainView {
+    #[serde(flatten)]
+    pub domain: Domain,
+    /// A name that never leaves this machine or its network (`*.localhost`,
+    /// `.test`…): nothing to verify, no certificate.
+    pub local: bool,
+    /// Whether services are served at `<service>.<name>` now.
+    pub served: bool,
+    /// The DNS records that point the domain at this server (none for a
+    /// local domain).
+    pub records: Vec<DnsRecord>,
+    /// Where a service is found under this domain, with `<service>` in the
+    /// place of its name: `https://<service>.example.com`.
+    pub url_pattern: String,
+}
+
+/// What the server knows about the certificate of a hostname.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CertificateState {
+    /// The server runs without HTTPS (no `--https-addr` and `--acme-email`).
+    Disabled,
+    /// A local name: no certificate authority issues a certificate for it.
+    Local,
+    /// None yet: the server asks for one shortly.
+    Pending,
+    /// Being asked for.
+    Issuing,
+    /// Served to browsers; renewed before `expires_at`.
+    Issued,
+    /// The last request failed (`error`); it is made again at `retry_at`.
+    Failed,
+}
+
+/// `GET /api/v1/certificates` — the certificate of one hostname the proxy
+/// routes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CertificateView {
+    pub host: String,
+    /// Name of the service the host is routed to; `null` for the dashboard.
+    pub service: Option<String>,
+    pub state: CertificateState,
+    /// `issued`: when the certificate expires.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// `failed`: what the certificate authority (or reaching it) answered.
+    pub error: Option<String>,
+    /// `failed`: when the server asks again.
+    pub retry_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------

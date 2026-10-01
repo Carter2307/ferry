@@ -73,8 +73,8 @@ The proxy (`--proxy-addr`, default `0.0.0.0:8080`, and `--https-addr` for TLS) r
 
 | Hostname | Routed to |
 |---|---|
-| `<name>.<base-domain>` | The web service or static site `<name>`. With the default base domain `localhost`, browsers resolve `*.localhost` to `127.0.0.1` without any DNS setup. |
-| A custom domain | The service that claimed it. Domains are unique across services. |
+| `<name>.<domain>`, for each served domain of the server | The web service or static site `<name>`. The base domain (`--base-domain`) is always served; a [connected domain](#domains) is served once its DNS reaches the server. With the default base domain `localhost`, browsers resolve `*.localhost` to `127.0.0.1` without any DNS setup. |
+| A custom domain | The service that claimed it. Domains are unique across services, and can't be a hostname under a domain of the server. |
 | `ferry.<base-domain>` (the dashboard host) | The API and dashboard (`--api-addr`). On by default only for local base domains; see [Security model](/docs/architecture/security#exposure). |
 
 Requests are spread round-robin over the service's routable instances. HTTP/1.1 and HTTP/2 clients are supported, websockets are passed through, and a bodyless `GET` or `HEAD` whose connection fails is retried once on another instance. Requests reach the app as HTTP/1.1 with the original `Host` and the forwarding headers described in [Security model](/docs/architecture/security#proxy-headers).
@@ -91,6 +91,23 @@ When the proxy answers by itself, the response carries an `x-ferry-error` header
 | 503 | `no_upstreams` | No instance accepts connections yet (never deployed, deploy in progress, or crashed). Sent with `Retry-After: 5`. |
 | 502 | `bad_gateway` | The instance refused the connection or failed mid-request. |
 
+## Domains
+
+The domains of the server live in the database, and the set that is served lives in the configuration every part of `ferryd` derives hostnames from. Connecting, verifying, promoting or disconnecting a domain replaces that set, and the engine installs the routes of every service again under its new hostnames. The upstreams don't change: no container is touched, and no deploy is needed.
+
+A connected domain is only served once it is **verified**. The engine resolves a made-up name under it, `ferry-check-<random>.<domain>`, then requests `/.well-known/ferry-domain-check/<token>` for that name from the address it resolved to, on the public HTTP port. The proxy answers that path for any host with the token followed by an id made up when the process started, so the engine knows the request came back to this very process and not to another server.
+
+```mermaid
+flowchart LR
+  engine["ferry-engine<br/>verifier"] -- "1 · resolve ferry-check-….example.com" --> dns[("DNS")]
+  dns -- "203.0.113.10" --> engine
+  engine -- "2 · GET /.well-known/ferry-domain-check/token" --> proxy["ferry-proxy<br/>203.0.113.10:80"]
+  proxy -- "token.probe-id" --> engine
+  engine -- "3 · active: install routes" --> routes["RouteTable<br/>shop.example.com → shop"]
+```
+
+A new name each time means only a wildcard record answers for it, and no resolver has an old answer in its cache. A pending domain is verified every 15 seconds, an active one every 10 minutes; three failures in a row flag an active domain as misconfigured, and it stays served. [Connect a domain](/docs/guides/domains) describes it from the user's side.
+
 ## HTTPS
 
-With `--https-addr` and `--acme-email`, the proxy also terminates TLS. `ferry-tls` requests a Let's Encrypt certificate (ACME HTTP-01, answered by the proxy on plain HTTP at `/.well-known/acme-challenge/`) for every public hostname, keeps certificates in `<data-dir>/certs`, and renews them when they expire within 30 days. Plain-HTTP requests to a host that has a certificate are redirected to HTTPS with a `308`. Local hostnames (`*.localhost`, `.local`, `.internal`, `.test`, IP addresses) never get a certificate and stay on HTTP. The [custom domains and HTTPS guide](/docs/guides/custom-domains-https) has the full setup.
+With `--https-addr` and `--acme-email`, the proxy also terminates TLS. `ferry-tls` requests a Let's Encrypt certificate (ACME HTTP-01, answered by the proxy on plain HTTP at `/.well-known/acme-challenge/`) for every public hostname within seconds of it being routed (the route table wakes the certificate loop when its hostnames change), keeps certificates in `<data-dir>/certs`, and renews them when they expire within 30 days. Plain-HTTP requests to a host that has a certificate are redirected to HTTPS with a `308`. Local hostnames (`*.localhost`, `.local`, `.internal`, `.test`, IP addresses) never get a certificate and stay on HTTP. The [custom domains and HTTPS guide](/docs/guides/custom-domains-https) has the full setup.

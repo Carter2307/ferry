@@ -45,7 +45,7 @@ flowchart TB
 
 ### Web services
 
-A public HTTP app. The proxy routes `<name>.<base-domain>` (and any [custom domain](/docs/concepts/networking)) to it, and balances requests across its instances in turn. HTTP/1.1, HTTP/2 and WebSockets pass through.
+A public HTTP app. The proxy routes `<name>.<domain>` under each domain of the server (and any [custom domain](/docs/concepts/networking)) to it, and balances requests across its instances in turn. HTTP/1.1, HTTP/2 and WebSockets pass through.
 
 Your app must listen on the port in the `PORT` environment variable, on `0.0.0.0`. An app listening on `127.0.0.1` inside its container can't be reached.
 
@@ -193,7 +193,7 @@ A service name is 1 to 40 characters: lowercase letters, digits and `-`, startin
 
 ## Hosts and URLs
 
-Web services and static sites get a public URL built from the server's base domain and public port:
+Web services and static sites get a public URL built from the server's default domain and public port. The default domain is the base domain until you [connect a domain](/docs/guides/domains) of your own:
 
 | Server settings | URL of a service named `api` |
 |---|---|
@@ -203,7 +203,7 @@ Web services and static sites get a public URL built from the server's base doma
 
 The port is left out when it is 80 or when HTTPS is on. `--public-port` changes the port shown in URLs, for example behind port forwarding. Browsers resolve `*.localhost` to your own machine, so the default URLs work without any DNS setup.
 
-Custom domains are added with `ferry domains add api api.example.com`, `--domain` or the dashboard; the proxy then routes both hostnames to the service. See [Networking, domains & TLS](/docs/concepts/networking).
+A service is served under every domain of the server, so connecting `example.com` to the server also serves this service at `api.example.com`. Custom domains, for one service, are added with `ferry domains add api api.example.org`, `--domain` or the dashboard; the proxy routes all of these hostnames to the service. See [Networking, domains & TLS](/docs/concepts/networking).
 
 ## Internal hostnames
 

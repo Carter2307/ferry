@@ -1,11 +1,32 @@
 ---
-title: "Custom domains"
-description: "Custom domains of web services and static sites (unique across services)."
+title: "Domains"
+description: "The domains services are served under — <service>.<domain> for every web service and static site: the server's base domain and the domains connected to it, each pointed at the server with one wildcard DNS record and verified by the server — the certificates of the routed hostnames, and the custom domains of one service (unique across services)."
 full: true
 _openapi:
   preload:
     - ferry
   toc:
+    - depth: 2
+      title: List the server's domains
+      url: '#list-the-servers-domains'
+    - depth: 2
+      title: Connect a domain
+      url: '#connect-a-domain'
+    - depth: 2
+      title: Get a domain
+      url: '#get-a-domain'
+    - depth: 2
+      title: Make a domain the default
+      url: '#make-a-domain-the-default'
+    - depth: 2
+      title: Disconnect a domain
+      url: '#disconnect-a-domain'
+    - depth: 2
+      title: Verify a domain now
+      url: '#verify-a-domain-now'
+    - depth: 2
+      title: List the certificates of the routed hosts
+      url: '#list-the-certificates-of-the-routed-hosts'
     - depth: 2
       title: List custom domains
       url: '#list-custom-domains'
@@ -17,6 +38,20 @@ _openapi:
       url: '#remove-a-custom-domain'
   structuredData:
     headings:
+      - content: List the server's domains
+        id: list-the-servers-domains
+      - content: Connect a domain
+        id: connect-a-domain
+      - content: Get a domain
+        id: get-a-domain
+      - content: Make a domain the default
+        id: make-a-domain-the-default
+      - content: Disconnect a domain
+        id: disconnect-a-domain
+      - content: Verify a domain now
+        id: verify-a-domain-now
+      - content: List the certificates of the routed hosts
+        id: list-the-certificates-of-the-routed-hosts
       - content: List custom domains
         id: list-custom-domains
       - content: Add a custom domain
@@ -24,6 +59,47 @@ _openapi:
       - content: Remove a custom domain
         id: remove-a-custom-domain
     contents:
+      - content: "The domains services are served under, the default one first: the
+          server's base domain (`source: config`) and the connected ones. Each
+          comes with the DNS records that point it at this server and what its
+          last verification found."
+        heading: list-the-servers-domains
+      - content: 'Adds a domain (or a subdomain) of yours. It starts `pending`: create
+          the `records` it comes with where its DNS is managed — one wildcard
+          record covers every service. The server then verifies it every few
+          seconds; once its names reach the server it is `active`, every web
+          service and static site is served at `<service>.<name>` (with a
+          certificate when the server has HTTPS), and it becomes the default
+          domain if the default one was a local name. A local name
+          (`*.localhost`, `.test`…) is served at once.'
+        heading: connect-a-domain
+      - content: '`is_default: true` makes it the domain of the URL every service is
+          shown and linked with (`url`, `FERRY_EXTERNAL_URL`); the services stay
+          served under the other domains too. Running services read the new
+          `FERRY_EXTERNAL_URL` at their next deploy or restart.'
+        heading: make-a-domain-the-default
+      - content: "The services stop being served under the domain at once (their other
+          hostnames and their custom domains stay), and its certificates are no
+          longer renewed. When it was the default domain, the base domain is
+          again. The DNS records stay where they were created. The base domain
+          of the server (`source: config`) can't be removed here: it is set by
+          `--base-domain`."
+        heading: disconnect-a-domain
+      - content: "Checks at once, instead of at the server's next pass, whether the
+          names under the domain reach this server: what a made-up name under it
+          resolves to (`dns`), and whether this server answers a request for it
+          on its public HTTP port (`http`). The answer is the domain with its
+          new `status` and `checks`. A local domain has nothing to verify and is
+          returned as it is."
+        heading: verify-a-domain-now
+      - content: "One entry per hostname the proxy routes — the dashboard's, then every
+          hostname of every web service and static site (under each served
+          domain, and its custom domains) — with where its certificate stands:
+          `issued` (and until when), `pending` or `issuing` (a new host gets its
+          certificate within seconds of being routed), `failed` with the reason
+          and the time of the next attempt, `local` for names no authority
+          certifies, `disabled` when the server runs without HTTPS."
+        heading: list-the-certificates-of-the-routed-hosts
       - content: Web services and static sites only. The domain is normalized
           (lowercase, no trailing dot) and must not be used by another service
           or be a default host.
@@ -37,7 +113,7 @@ export default function Layout(props) {
   return (
     <>
       {props.children}
-      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/services/{id}/domains","method":"get"},{"path":"/api/v1/services/{id}/domains","method":"post"},{"path":"/api/v1/services/{id}/domains/{domain}","method":"delete"}]} showTitle showDescription />
+      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/domains","method":"get"},{"path":"/api/v1/domains","method":"post"},{"path":"/api/v1/domains/{id}","method":"get"},{"path":"/api/v1/domains/{id}","method":"patch"},{"path":"/api/v1/domains/{id}","method":"delete"},{"path":"/api/v1/domains/{id}/verify","method":"post"},{"path":"/api/v1/certificates","method":"get"},{"path":"/api/v1/services/{id}/domains","method":"get"},{"path":"/api/v1/services/{id}/domains","method":"post"},{"path":"/api/v1/services/{id}/domains/{domain}","method":"delete"}]} showTitle showDescription />
     </>
   );
 }

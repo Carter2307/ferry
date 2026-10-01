@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ferry_core::CancellationToken;
+use ferry_core::domains::{PROBE_PATH, is_probe_token, probe_answer};
 use ferry_core::tls::TlsHooks;
 use http::header::{CONNECTION, HOST, HeaderValue};
 use http::uri::{Authority, PathAndQuery, Scheme};
@@ -19,6 +20,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio_util::task::TaskTracker;
 
+use crate::ProxyConfig;
 use crate::body::{self, BodyTimedOut, ProxyBody};
 use crate::headers::{self, Forwarded};
 use crate::limits::ConnSlot;
@@ -59,6 +61,8 @@ pub(crate) struct Proxy {
     redirect_https: bool,
     /// Port of the running HTTPS listener (None → never redirect).
     https_port: Option<u16>,
+    /// What domain verification probes are answered with (None → not answered).
+    domain_probe_id: Option<String>,
     /// Longest wait for the next piece of a client's request body.
     request_body_timeout: Duration,
     /// Upgraded (websocket) tunnels are tracked with the connections...
@@ -68,12 +72,11 @@ pub(crate) struct Proxy {
 }
 
 impl Proxy {
+    /// `https_port`: the port of the running HTTPS listener, if any.
     pub(crate) fn new(
+        config: &ProxyConfig,
         routes: RouteTable,
-        tls_hooks: Option<Arc<dyn TlsHooks>>,
-        redirect_https: bool,
         https_port: Option<u16>,
-        request_body_timeout: Duration,
         tasks: TaskTracker,
         shutdown: CancellationToken,
     ) -> Self {
@@ -87,7 +90,17 @@ impl Proxy {
             .pool_timer(TokioTimer::new())
             .timer(TokioTimer::new())
             .build(connector);
-        Proxy { routes, client, tls_hooks, redirect_https, https_port, request_body_timeout, tasks, shutdown }
+        Proxy {
+            routes,
+            client,
+            tls_hooks: config.tls_hooks.clone(),
+            redirect_https: config.redirect_https,
+            https_port,
+            domain_probe_id: config.domain_probe_id.clone(),
+            request_body_timeout: config.limits.request_body_timeout,
+            tasks,
+            shutdown,
+        }
     }
 
     /// hyper service entry point. Never fails: every problem becomes a response.
@@ -123,9 +136,19 @@ impl Proxy {
             && let (Some(hooks), Some(token)) = (&self.tls_hooks, req.uri().path().strip_prefix(ACME_PREFIX))
         {
             return match hooks.http01_response(token) {
-                Some(key_authorization) => pages::acme_answer(key_authorization, head),
+                Some(key_authorization) => pages::plain_answer(key_authorization, head),
                 None => pages::error_page(ErrorKind::NotFound, "Unknown ACME challenge", head),
             };
+        }
+
+        // Domain verification (DESIGN.md §21): the server that asks wants
+        // to know which server a name reaches, so every host is answered,
+        // routed or not, before anything that depends on the host.
+        if (req.method() == Method::GET || head)
+            && let (Some(probe_id), Some(token)) = (&self.domain_probe_id, req.uri().path().strip_prefix(PROBE_PATH))
+            && is_probe_token(token)
+        {
+            return pages::plain_answer(probe_answer(token, probe_id), head);
         }
 
         if req.method() == Method::CONNECT {

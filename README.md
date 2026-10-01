@@ -21,7 +21,7 @@ ferry up                      # deploy the current directory → http://my-app.l
 | **Builds** | your Dockerfile, or auto-detected Node / Python / Go / Rust / Ruby / static (no Dockerfile needed) |
 | **Deploys** | zero-downtime blue/green with health checks, deploy history, one-click rollbacks, cancel |
 | **Triggers** | CLI / dashboard / API, GitHub push webhooks (auto-deploy), secret deploy-hook URLs, blueprints |
-| **Networking** | built-in reverse proxy (HTTP/1.1, HTTP/2, websockets), `name.your-domain`, custom domains, Let's Encrypt HTTPS, private network (`http://api:3000`) |
+| **Networking** | built-in reverse proxy (HTTP/1.1, HTTP/2, websockets), `<service>.<your-domain>` under the domains you connect (Ferry checks their DNS), custom domains, Let's Encrypt HTTPS, private network (`http://api:3000`) |
 | **Data** | managed Postgres & Redis, persistent disks, env vars with references (`${{datastore.db.connectionString}}`), env groups |
 | **Ops** | instance scaling, suspend/resume, restart, self-healing reconciler, live build & runtime logs, CPU/memory, one-off jobs |
 | **Guardrails** | memory/CPU limits per service and datastore (server defaults 512 MiB / 1 CPU), pids limit and log rotation on every container, out-of-memory kills reported, free-disk check before deploys |
@@ -82,15 +82,17 @@ ferry blueprint apply examples/blueprint/ferry.yaml
 ferry logs api -f
 ferry scale api 3
 ferry rollback api <deploy-id>
-ferry domains add api api.example.com
+ferry domains connect example.com        # every service at <service>.example.com (see Domains below)
+ferry domains add api api.example.org    # one more name for one service
 ferry update api --memory 2G && ferry restart api   # new limits apply with the next deploy or restart
 ferry db update app-db --memory 1G                   # datastores: applied right away, no restart
 ```
 
 ## Production setup
 
-1. A Linux VM with Docker. Point a wildcard DNS record `*.apps.example.com` (and
-   your custom domains) at it.
+1. A Linux VM with Docker, reachable on ports 80 and 443. Point a wildcard DNS
+   record `*.apps.example.com` (and your custom domains) at it — or start
+   without a domain and [connect one](#domains) from the dashboard.
 2. Run `ferryd` as a service (systemd), with `ferryd run`, which stays in
    the foreground for the service manager to supervise. For example:
 
@@ -126,6 +128,62 @@ ferry db update app-db --memory 1G                   # datastores: applied right
 4. For GitHub auto-deploys, add a webhook to your repo:
    `https://ferry.apps.example.com/hooks/github`, content type JSON, with the
    same secret.
+
+### Domains
+
+Every web service and static site is served at `<service>.<domain>`, for
+each domain of the server. A server starts with one domain, its
+`--base-domain` (`localhost` by default), and you connect others while it
+runs — no restart, no deploy:
+
+1. **Connect it**: **Server → Domains → Connect a domain** in the
+   dashboard, or `ferry domains connect example.com`. A subdomain works too
+   (`apps.example.com`).
+2. **Create one DNS record** where the DNS of the domain is managed (your
+   registrar or DNS provider). Ferry shows it with the server's public
+   address:
+
+   | Type | Name | Value |
+   |---|---|---|
+   | `A` | `*` | the public IP address of the server |
+
+   `*` is a wildcard: one record answers for every name under the domain, so
+   a new service needs no new record. A second record, `A` `@`, is only
+   needed to serve the domain itself.
+3. **Ferry verifies it**: every 15 seconds it resolves a made-up name under
+   the domain and checks that the request comes back to this very server.
+   Once it does, the domain is `active`: every service is served under it,
+   gets its certificate within seconds when HTTPS is on, and the domain
+   becomes the default one — the one service URLs are shown with — if the
+   default was a local name. Until then the dashboard and `ferry domains`
+   say what is wrong: no record yet, a record that points elsewhere, another
+   server answering, a closed port.
+
+```bash
+ferry domains                          # the domains, their status, the record to create
+ferry domains verify example.com       # check now (exit 1 while it doesn't reach the server)
+ferry domains default example.com      # the domain service URLs are shown with
+ferry domains disconnect example.com
+ferry certificates                     # every hostname with the state of its certificate
+```
+
+A domain whose DNS breaks later is flagged `misconfigured` after three
+failed checks, and stays served. The base domain is always served and is
+only changed with `--base-domain`. Local names (`*.localhost`, `.test`…)
+need no DNS and are never verified.
+
+Ferry finds the server's public IPv4 address by itself: from its network
+interface, or — behind NAT — by asking a public service which address it
+sees (api.ipify.org, then ipv4.icanhazip.com, then checkip.amazonaws.com). Set
+`--public-ip` to say it yourself (also the only way to get `AAAA` records
+for IPv6); nothing is asked then.
+
+HTTPS is still turned on when the server starts (`--https-addr` and
+`--acme-email`), and the dashboard is served through the proxy at the host
+given by `--dashboard-host`, not under each domain. A public server started
+without `--base-domain` should also get `--dashboard-host none` (or a
+hostname of its own, with HTTPS): with the default `localhost` base domain,
+the proxy answers the dashboard for the host `ferry.localhost`.
 
 ### Running the server
 
@@ -173,7 +231,8 @@ Every flag also has an environment variable. `ferryd --help` shows the full list
 | `--api-addr` `FERRY_API_ADDR` | `127.0.0.1:7878` | API + dashboard |
 | `--proxy-addr` `FERRY_PROXY_ADDR` | `0.0.0.0:8080` | public HTTP |
 | `--https-addr` `FERRY_HTTPS_ADDR` | – | public HTTPS (together with `--acme-email`) |
-| `--base-domain` `FERRY_BASE_DOMAIN` | `localhost` | apps live at `<name>.<base-domain>` |
+| `--base-domain` `FERRY_BASE_DOMAIN` | `localhost` | the domain the server starts with: apps live at `<name>.<base-domain>`. More are [connected](#domains) while it runs |
+| `--public-ip` `FERRY_PUBLIC_IP` | detected (IPv4) | the address(es) the server is reached at from the internet: what the DNS records of a domain point at, and what its DNS is checked against. Repeat the flag (or separate with commas) for IPv4 + IPv6 |
 | `--public-port` `FERRY_PUBLIC_PORT` | proxy port | port shown in app URLs (e.g. behind port forwarding) |
 | `--dashboard-host` `FERRY_DASHBOARD_HOST` | `ferry.<base-domain>` for local domains, otherwise off | serve the dashboard + API through the public proxy (`none` disables it). On a public domain, only enable it together with HTTPS. |
 | `--acme-email` `FERRY_ACME_EMAIL` | – | enables Let's Encrypt |

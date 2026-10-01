@@ -32,6 +32,7 @@ code).
 | Managed Postgres, Key Value (Redis) | ✅ containers + volumes, internal & external URLs |
 | Persistent disks | ✅ named volume, recreate deploys, 1 instance |
 | Custom domains + free TLS | ✅ ACME HTTP-01 (Let's Encrypt) |
+| A subdomain per service (`<name>.onrender.com`) | ✅ `<service>.<domain>` under the server's domains: the one it is started with, and domains connected while it runs and verified through their DNS (§21) |
 | Manual scaling (instances) | ✅ round-robin in the proxy |
 | Instance types (`plan`) | ✅ memory/CPU limits per service and datastore (server defaults 512 MiB / 1 CPU); blueprint `plan` → limits (§14) |
 | Suspend / resume, restart | ✅ |
@@ -65,13 +66,13 @@ auth, secret files, IP allow lists, teams/RBAC.
 
 | crate | kind | depends on | responsibility |
 |---|---|---|---|
-| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers, git connections (§18). **Frozen.** |
+| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers, git connections (§18), the server's domains (§21). **Frozen.** |
 | `ferry-docker` | lib | core | typed Docker wrapper (containers, images, volumes, networks, logs, stats, exec) |
 | `ferry-build` | lib | core | git fetch / archive extract, the branches of a remote (`git ls-remote`), runtime detection, Dockerfile generation, `docker build` |
 | `ferry-scm` | lib | core | git providers (§18): GitHub / GitLab REST clients, authorizing an account in the browser (GitHub App manifest + installation, GitLab OAuth), the tokens of a connection (minted or renewed on demand), which connection reads a repository |
 | `ferry-proxy` | lib | core | `RouteTable`, HTTP/HTTPS reverse proxy, websockets, error pages |
-| `ferry-tls` | lib | core | ACME certificates, SNI resolver, `TlsHooks` impl |
-| `ferry-engine` | lib | core, docker, build, proxy, scm | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs |
+| `ferry-tls` | lib | core | ACME certificates, SNI resolver, `TlsHooks` impl, the state of each certificate (`Certificates`) |
+| `ferry-engine` | lib | core, docker, build, proxy, scm | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs, verifying domains (§21) |
 | `ferry-api` | lib | core, build, scm | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, git connections (§18; `build` only for the branches of a remote), serves the embedded web client (`web/dist`) |
 | `ferry-cli` | bin `ferry` | core | CLI client |
 | `ferryd` | bin | all | wiring (already written) |
@@ -92,9 +93,11 @@ Leaf crates must not depend on each other beyond this table.
   engine refreshes routes from `inspect`/`list` data in every reconcile pass.
 * Datastores publish on `config.datastore_bind_ip:<fixed host_port>` (allocated
   once with `ferry_docker::free_host_port()` and stored).
-* Public hostnames: `<name>.<base_domain>` (default `*.localhost`, which
-  browsers resolve to 127.0.0.1) plus custom domains. Dashboard:
-  `ferry.<base_domain>` routed to the API address (service id `__dashboard`).
+* Public hostnames: `<name>.<domain>` under every served domain of the
+  server (§21) — the base domain (default `localhost`: browsers resolve
+  `*.localhost` to 127.0.0.1) and the domains connected to it — plus custom
+  domains. Dashboard: `ferry.<base_domain>` routed to the API address
+  (service id `__dashboard`).
 
 ## 4. Docker resource naming & labels
 
@@ -412,8 +415,8 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /api/v1/auth/cli/{id}` | `CliLoginView` `{id, name, code, status, created_at, expires_at}`: what the approval page shows |
 | `POST /api/v1/auth/cli/{id}/approve` · `/deny` | `CliLoginView`; approving creates the API token the terminal collects |
 | `POST /api/v1/auth/cli/{id}/token` | `CliLoginPoll` `{secret}` → `CliLoginResult` `{status, token?}` (no auth): `pending`, `denied`, or `approved` with the token, once. 401 for another secret, 404 once expired or collected |
-| `GET /api/v1/info` | `ServerInfo` (including the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
-| `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`/`git_connection`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
+| `GET /api/v1/info` | `ServerInfo` (including `base_domain`, the `default_domain` service URLs are shown with (§21), the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
+| `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`/`git_connection`/`domain`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
 | `GET /api/v1/services` | `[ServiceView]` |
 | `POST /api/v1/services` | `CreateService` → 201 `ServiceView` (queues a `create` deploy when it has a repo/image, unless `deploy:false`) |
 | `GET /api/v1/services/{id}` | `ServiceView` |
@@ -438,8 +441,15 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `POST /api/v1/services/{id}/env-groups` | `LinkEnvGroup` → `ServiceView` |
 | `DELETE /api/v1/services/{id}/env-groups/{group}` | `ServiceView` |
 | `GET /api/v1/services/{id}/domains` | `[String]` custom domains |
-| `POST /api/v1/services/{id}/domains` | `DomainRequest` → `[String]` (validated, unique across services, not a default host) |
+| `POST /api/v1/services/{id}/domains` | `DomainRequest` → `[String]` (validated, unique across services, not a default host under any domain of the server) |
 | `DELETE /api/v1/services/{id}/domains/{domain}` | `[String]` |
+| `GET /api/v1/domains` | `[DomainView]` (§21): the domains services are served under, the default one first. `DomainView` = the `Domain` (`id`, `name`, `source`, `status`, `is_default`, `checks`, `created_at`, `verified_at`, `checked_at`) + `local`, `served`, `records` (the DNS records to create) and `url_pattern` (`https://<service>.example.com`) |
+| `POST /api/v1/domains` | `ConnectDomain` `{name}` → 201 `DomainView`, `pending` (a local name: `active`). 400 for a URL, a wildcard, an address, or past 20 connected domains; 409 when it is connected already, is the base domain, or would put a service on a hostname that is taken |
+| `GET /api/v1/domains/{id}` | `DomainView` |
+| `PATCH /api/v1/domains/{id}` | `UpdateDomain` `{is_default: true}` → `DomainView`: the default domain. 409 while the domain is not served; 400 for `false` (make another one the default) |
+| `POST /api/v1/domains/{id}/verify` | `DomainView` after a verification made now (`engine.verify_domain`); a local domain is returned as it is |
+| `DELETE /api/v1/domains/{id}` | 204: services stop being served under it; the default goes back to the base domain. 409 for the base domain (`source: config`) |
+| `GET /api/v1/certificates` | `[CertificateView]` `{host, service, state, expires_at, error, retry_at}`: every routed hostname — the dashboard's (`service: null`), then each service's — with the state of its certificate: `issued`, `issuing`, `pending`, `failed`, `local`, or `disabled` without HTTPS |
 | `GET /api/v1/services/{id}/jobs?limit=20` | `[JobRun]` |
 | `POST /api/v1/services/{id}/jobs` | `RunJobRequest` → 202 `JobRun` |
 | `GET /api/v1/jobs/{job_id}` | `JobRun` |
@@ -477,8 +487,9 @@ paths only —, `branch`, `commit`). Switching a service between git and image
 requires clearing the other source in the same PATCH. A service names no
 git connection: its repository is cloned with the connection of the server
 that serves `repo_url` (§18). Cron jobs always have
-exactly 1 instance. Writes to one service are serialized, and custom-domain
-claims are globally serialized. GitHub webhooks also accept form-encoded
+exactly 1 instance. Writes to one service are serialized, and the claims
+of hostnames — custom domains and the server's domains (§21) — are
+globally serialized. GitHub webhooks also accept form-encoded
 deliveries and ignore replayed payloads.
 
 ## 11. Blueprints (`ferry.yaml` / `render.yaml`)
@@ -625,7 +636,13 @@ ferry status NAME                                                   # instances 
 ferry logs NAME [-f] [--tail N] | ferry logs --deploy DEPLOY_ID [-f] | ferry logs --job JOB_ID [-f]
 ferry env NAME                                                     # list
 ferry env set NAME K=V... [--no-restart]  |  ferry env unset NAME K... [--no-restart]
-ferry domains NAME | ferry domains add NAME DOMAIN | ferry domains rm NAME DOMAIN
+ferry domains NAME | ferry domains add NAME DOMAIN | ferry domains rm NAME DOMAIN    # custom domains of a service
+ferry domains                                  # the server's domains (§21): status, default, where services are served,
+      # and for one that doesn't reach the server: what the last verification found and the DNS record to create
+ferry domains connect DOMAIN                   # prints the DNS records to create
+ferry domains verify DOMAIN                    # verifies now; exit 1 while its names don't reach the server
+ferry domains default DOMAIN | ferry domains disconnect DOMAIN [--yes]
+ferry certificates | ferry certs               # every routed hostname with the state of its certificate
 ferry run NAME [--follow] [-- CMD...]                               # one-off job / trigger cron now
 ferry jobs NAME
 ferry db create NAME [--kind postgres|redis] [--version V] [--database D] [--user U] [--memory SIZE] [--cpu CPUS] [--wait]
@@ -660,7 +677,8 @@ Rust build never runs Node.
   resources, custom domains, deploy hook) · datastores (+ detail,
   connection strings, resources) · env groups (+ detail) · blueprints (paste
   YAML → dry run → apply) · server (incl. default container limits, the
-  Docker host's size, the connected git accounts, and **Account**: the
+  Docker host's size, the connected git accounts, **Domains** — below —
+  and **Account**: the
   email, changing the password, the API tokens — created with a name and
   an expiry, shown once, revoked — and the sessions).
 * **Signing in** (§20): on load, `GET /api/v1/auth/status` decides between
@@ -707,6 +725,20 @@ Rust build never runs Node.
     (how each was authorized, the services it clones for) with "Finish
     connecting", "Authorize again", "Repositories" (GitHub's page of the
     installation), "Replace token" and "Disconnect".
+* **Domains in the UI** (§21): Server → Domains lists the server's
+  domains with their state (`Active`, `Waiting for DNS`, `Misconfigured`,
+  `Local`), the default one, and where services are found under each.
+  "Connect a domain" asks for the name, then shows the DNS records to
+  create — type, name and address, each with a copy button, the names in
+  the parent's zone for a subdomain — and what the last verification
+  found; the dialog follows the domain and turns to "connected" on its
+  own. Each row verifies now, makes the domain the default or disconnects
+  it; its records are open while its DNS needs attention. Below, every
+  routed hostname with the state of its certificate (asked every 3 s
+  while one is on its way: certificates are not in the change feed), or
+  how to turn HTTPS on. `src/lib/domains.ts` mirrors
+  `ferry_core::domains::connectable_name`. The server's name in the top
+  bar and the URL previewed for a new service use the default domain.
 * **Resource limits in the UI** (§14): "Memory limit" / "CPU limit" selects
   (`Server default (512 MiB)` from `/api/v1/info`, presets, Custom…) in the
   service's Settings → Resources ("Changes apply on the next deploy or
@@ -855,7 +887,14 @@ never refreshed: after resizing Docker Desktop's VM, restart ferryd.
 
 **OOM visibility.** Docker's `OOMKilled` flag (inspect only — the list API
 never reports it) is the proof of an out-of-memory kill; exit code 137 alone
-is a SIGKILL, which may have other causes.
+is a SIGKILL, which may have other causes. Docker can record the kill a
+moment after it reports the exit (seen on Linux hosts): an instance or a job
+that ended with a SIGKILL and no kill on record is looked at a while longer —
+its flag, then its `oom` events for 2 s — before it is reported as a plain
+exit. That is all the engine can do: the kill of a container that is gone at
+once (a job whose only process was killed) is not always on Docker's record
+by then (seen on Linux CI), and the job then fails with `exited with code
+137`.
 * Deploys: a new instance OOM-killed during its health check fails the
   deploy with `instance ab12cd ran out of memory (limit 512 MiB) — raise the
   service's memory limit` (§5.5), also when Docker already restarted it
@@ -920,6 +959,14 @@ are never checked; on non-Unix systems the check does nothing.
 * The dashboard/API is only exposed through the public proxy by default for
   local base domains; on public domains it must be enabled explicitly
   (`--dashboard-host`), ideally with HTTPS.
+* Verifying a domain (§21) makes the proxy answer one path for any host,
+  `/.well-known/ferry-domain-check/<token>`, with the token (alphanumeric,
+  64 characters at most) and an id made up when the process starts: it
+  tells nothing about the services, and nothing in the answer is chosen by
+  the caller beyond that token. A server behind NAT with a non-local
+  domain asks a public address echo service which IPv4 address it has —
+  the only request Ferry makes to a third party on its own; `--public-ip`
+  replaces it.
 * Shutdown: first SIGINT/SIGTERM drains (API ≤ 10s, then the engine stops
   jobs and records interrupted deploys, ≤ 25s); a second signal exits at once.
 * Proxy: `X-Forwarded-For` is the peer address only (client-supplied
@@ -1013,7 +1060,10 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   pids limit, `docker update` and real OOM kills) and
   `ferry-engine/tests/e2e.rs`
   (`resource_limits_apply_to_instances_jobs_and_datastores`,
-  `out_of_memory_kills_are_reported`).
+  `out_of_memory_kills_are_reported`). The job of the latter runs under a
+  shell that outlives the kill for a second, so that Docker records it
+  while the container is still there (§14); when its error is not the
+  expected one, the test prints Docker's events for the job's container.
 * Git connections (§18) never call the real providers in tests:
   `ferry-api/tests/git_connections.rs` runs a fake GitHub Enterprise /
   GitLab on a local socket — accounts, paginated repositories, rejected
@@ -1033,6 +1083,18 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   whole `ferry login` exchange; `ferry-cli/tests/cli.rs` runs `ferry login`
   against a fake server (approved, denied, expired, an older server). No
   password is written in a test: each one is made up when the test runs.
+* Domains (§21) never use the real DNS in tests: the engine's verifier
+  runs against a fake network (`ferry-engine/src/domains.rs`, `FakeNet`:
+  what the names under a domain resolve to, what answers at each address,
+  the server's public addresses) for every outcome of a verification, the
+  schedule and the status changes; `ferry-engine/src/tests.rs` follows a
+  service that becomes served under a domain once it reaches the server.
+  `ferry-proxy` answers verification requests on a real socket,
+  `ferry-tls` reports the state of certificates and is woken by a new
+  host, `ferry-api/tests/domains.rs` drives the routes with a mock engine
+  and fake certificates, `ferry-cli/tests/cli.rs` the commands against a
+  fake server. No test resolves a real name or connects to an address
+  outside the machine.
 * The background commands of `ferryd` (§19) are tested on the real binary
   in `ferryd/tests/background.rs`: without Docker, a start that fails
   before the server listens (its error reaches the terminal, exit code 1)
@@ -1426,3 +1488,156 @@ Not covered: several accounts, roles, an audit log, single sign-on,
 passkeys or a second factor, sessions shown with their address, limiting
 attempts per client, and the scopes of API tokens (each is an
 administrator).
+
+## 21. Domains
+
+A **domain** of the server is a name services are served under: every web
+service and static site answers at `<service>.<domain>`, for each served
+domain, on top of its custom domains. A server starts with one — the
+`--base-domain` it is given — and others are connected while it runs,
+through the API, the CLI or the dashboard: no restart, no deploy.
+
+| | covers | DNS |
+|---|---|---|
+| a domain of the server (this section) | every service: `<service>.example.com` | one wildcard record, `*.example.com` |
+| a custom domain of a service (§10) | that service: `www.example.com` | one record per name |
+
+**Data model** (migration `0006_domains.sql`). `Domain { id (dom-…), name
+(lowercase, unique), source, status, is_default, checks, failures,
+created_at, verified_at?, checked_at? }`.
+
+* `source`: `config` — the base domain: one row, kept in step with
+  `--base-domain` at every start (`Store::sync_base_domain`: a base
+  domain that changed replaces the row, a connected domain of that name
+  becomes it) — or `connected`.
+* `status`: `pending` (its names don't reach the server yet), `active`,
+  or `misconfigured` (they no longer do). A local name — `localhost`,
+  `*.localhost`, `.local`, `.internal`, `.test` (`config::is_local_host`)
+  — is `active` from the start and never verified: there is no DNS to
+  wait for.
+* `is_default`: exactly one row (a partial unique index). The default
+  domain is the one of a service's URL: `ServiceView.url`,
+  `FERRY_EXTERNAL_URL`, the startup banner.
+* `checks`: what the last verification found, `[{kind: dns|http, outcome:
+  passed|warning|failed|skipped, message}]`. `failures`: how many failed
+  in a row (not serialized). `verified_at`: when its names last reached
+  the server; `checked_at`: when it was last verified.
+
+**What is served.** `Domain::is_served`: the base domain, and every
+domain that is not `pending`. The set lives where every part of the
+server already derives hostnames from, the `Config`: `config.domains`
+(`ServedDomains`, shared by the clones of a `Config`), replaced from the
+store by `ferry_core::domains::reload` at startup and whenever a domain
+is connected, verified, made the default or disconnected.
+`Config::service_hosts` is `<name>.<each served domain>` (the default
+one first) plus the custom domains; `Config::default_host` and
+`service_url` use the default domain while it is served, else the base
+domain. The proxy routes, the certificates, the URLs of the API and
+`FERRY_EXTERNAL_URL` follow without knowing about domains. A server that
+sets `--base-domain` loses nothing: that domain is served whatever its
+DNS says, as before.
+
+After a change, `Engine::refresh_domains` reloads the set, installs the
+routes of every service again under its new hostnames (the upstreams
+stay: no instance is touched) and wakes the reconciler. Running
+containers keep the `FERRY_EXTERNAL_URL` they were started with until
+their next deploy or restart.
+
+**DNS records.** `DomainView.records` is what to create where the DNS of
+the domain is managed (`ferry_core::domains::dns_records`):
+
+| type | name | value | |
+|---|---|---|---|
+| `A` | `*` | the server's public IPv4 address | required: every service |
+| `A` | `@` | the same | optional: only to serve the domain itself (a custom domain of a service) |
+
+and the same two as `AAAA` when the server knows an IPv6 address of its
+own (optional next to the IPv4 ones). Names are relative to the domain.
+Without a known address the records come with `value: null`.
+
+The **public addresses** are `--public-ip` (repeatable; `FERRY_PUBLIC_IP`,
+comma-separated) when given. Otherwise the engine finds one IPv4 address
+the first time a non-local domain needs it, and remembers it for 30
+minutes (2 minutes when it found none): the address of the interface
+that routes to the internet when that is a public address; else — a
+server behind NAT — what an address echo service sees
+(`https://api.ipify.org`, `https://ipv4.icanhazip.com`,
+`https://checkip.amazonaws.com`, in that order). An IPv6 address is
+never guessed: the one a machine leaves with is often temporary
+(RFC 8981), and no DNS record should hold it.
+
+**Verification** (`ferry-engine/src/domains.rs`). A domain is verified
+the way a visitor reaches it, with a name nobody used before:
+
+1. **DNS.** The engine resolves `ferry-check-<10 hex>.<domain>` with the
+   system resolver. A new name each time: only a wildcard record answers
+   for it, and no resolver has an old answer in its cache. The addresses
+   are compared with the server's public addresses, per family: an IPv6
+   answer is only judged when the server knows its IPv6 address.
+2. **HTTP.** It requests `GET /.well-known/ferry-domain-check/<token>` for
+   that name from the addresses it resolved to (4 at most, IPv4 first),
+   on the public HTTP port. The proxy answers that path on both
+   listeners, for any `Host`, before routing and before the redirect to
+   HTTPS, with `<token>.<probe id>` — the probe id is made up when the
+   process starts (`config.domains.probe_id()`), so a parked page,
+   another server and another Ferry server are all told apart.
+
+The names **reach the server** when it got its own answer. A server that
+can't reach its own public address (some networks don't route a machine
+back to itself) is believed on its DNS alone — the name resolves to its
+public address and the request timed out or was refused — with an `http`
+warning that says to check the firewall. Every other outcome says what
+it found: no record yet; records that point elsewhere, and where;
+several records of which some are another machine's; a private address
+(reachable from the server, not from the internet); something in between
+that forwards (a CDN, a load balancer); another server answering.
+
+| change | when |
+|---|---|
+| `pending` → `active` | the first verification that reaches the server. Every service is served under the domain at once, and when the default domain was a local name (or one that is not served), this one becomes the default: the URL of a service should be one its visitors can open |
+| `active` → `misconfigured` | 3 failed verifications in a row. The domain **stays served**: an outage of the DNS must not take the services down, and nothing else would answer for these names |
+| `misconfigured` → `active` | the next verification that reaches the server |
+
+The verifier (one task) looks every 5 s, or when a change wakes it, for
+the domains that are due: `pending` ones every 15 s during their first
+hour, then every minute for a day, then every 10 minutes like `active`
+ones; `misconfigured` ones every minute. `POST
+/api/v1/domains/{id}/verify` verifies now. One verification runs at a
+time; resolving is bounded by 5 s, connecting by 4 s, a request by 6 s.
+
+**Hostnames are claimed once.** Connecting a domain and adding a custom
+domain take the same global lock (§10). A domain is refused when it
+would put a service on the dashboard's host or on a custom domain of
+another service. A custom domain can't be `<service>.<domain>` under any
+domain of the server, pending ones included (`Config::claimed_hosts`),
+and a new service can't take a name whose hostnames are custom domains.
+At most 20 connected domains (`MAX_DOMAINS`): each one adds a hostname —
+and with HTTPS a certificate — to every service.
+
+**Certificates.** With HTTPS on, every routed hostname that is not local
+gets its own certificate by HTTP-01, as before; a hostname under a
+connected domain only exists once the domain is verified, so its
+challenge can be answered. What changed is when:
+`RouteTable::hosts_changed()` wakes the certificate loop
+(`CertManager::spawn_with_wake`) 2 s after the set of routed hostnames
+changed, instead of at its next pass, so the services of a domain that
+was just verified have their certificates within seconds. `GET
+/api/v1/certificates` reads the state of each routed hostname through
+`ferry_core::tls::Certificates` (implemented by the manager): `issued`
+with `expires_at`, `issuing`, `pending`, `failed` with `error` and
+`retry_at` (the manager's backoff), `local`, or `disabled` without
+HTTPS.
+
+**Changes** reach the dashboard through the change feed (kind `domain`,
+§10): a verification that changes nothing but `checked_at` is a change
+too, which is how the dashboard shows when a domain was last looked at.
+
+Not covered: a wildcard certificate (one per domain instead of one per
+hostname; it takes the DNS-01 challenge, so the API of the DNS provider —
+and with it, creating the records from the dashboard after authorizing
+Ferry on the provider's own page); serving the dashboard under a
+connected domain (`--dashboard-host` decides, at startup); turning HTTPS
+on without a restart; verifying from outside (the check runs on the
+server: it can't see a firewall that only lets the server reach itself);
+choosing the domains per service (every service is served under every
+domain); internationalized names (use the punycode form).

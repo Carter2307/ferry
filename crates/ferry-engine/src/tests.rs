@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use ferry_build::Builder;
 use ferry_core::{
-    Config, Datastore, DatastoreKind, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Engine, Error,
-    GitConnection, GitProvider, JobRun, JobStatus, JobTrigger, LogLine, Service, ServiceType, Store,
+    CheckOutcome, Config, Datastore, DatastoreKind, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger,
+    Domain, DomainSource, DomainStatus, Engine, Error, GitConnection, GitProvider, JobRun, JobStatus, JobTrigger,
+    LogLine, Service, ServiceType, Store,
 };
 use ferry_docker::Docker;
 use ferry_proxy::{Resolution, RouteTable};
@@ -831,4 +832,108 @@ async fn cancel_job_conflicts_once_finished_and_recovers_orphaned_rows() {
     f.store.set_suspended(&svc.id, true).await.unwrap();
     assert!(matches!(f.engine.run_job(&svc.id, None, JobTrigger::Manual).await, Err(Error::Conflict(_))));
     assert!(f.engine.inner.with_rt(|rt| rt.jobs.is_empty()));
+}
+
+// ---------------------------------------------------------------------------
+// domains (DESIGN.md §21)
+
+use crate::domains::tests::{FakeNet, ip};
+
+const HERE: &str = "203.0.113.10";
+
+/// An engine whose network is `FakeNet`, with the base domain in the store.
+async fn domains_fixture() -> (Fixture, Arc<FakeNet>) {
+    let f = fixture(2).await;
+    let net = Arc::new(FakeNet::default());
+    *net.public.lock().unwrap() = vec![ip(HERE)];
+    f.engine.inner.domains.set_network(net.clone());
+    ferry_core::domains::init(&f.store, &f.engine.inner.config).await.unwrap();
+    (f, net)
+}
+
+#[tokio::test]
+async fn services_are_served_under_a_domain_once_it_reaches_the_server() {
+    let (f, net) = domains_fixture().await;
+    let config = f.engine.inner.config.clone();
+    let svc = service(&f.store, "web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    let upstream: std::net::SocketAddr = "127.0.0.1:4242".parse().unwrap();
+    f.routes.set_service_routes(&svc.id, &["web.localhost".into()], vec![upstream]);
+
+    // Connected, and its DNS isn't there yet: pending, nothing served.
+    let d = Domain::new("example.com", DomainSource::Connected);
+    f.store.create_domain(&d).await.unwrap();
+    f.engine.refresh_domains().await.unwrap();
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::NotFound);
+    let checked = f.engine.verify_domain(&d.id).await.unwrap();
+    assert_eq!((checked.status, checked.checks[0].outcome), (DomainStatus::Pending, CheckOutcome::Failed));
+    assert!(checked.checked_at.is_some() && checked.verified_at.is_none());
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::NotFound);
+
+    // The record exists and this server answers: served at once, with the
+    // upstreams the service had, and the domain of its URL from now on (the
+    // default one was a local name).
+    net.point("example.com", &[HERE]);
+    net.answer(HERE, Ok(config.domains.probe_id()));
+    let verified = f.engine.verify_domain("example.com").await.unwrap();
+    assert_eq!(verified.status, DomainStatus::Active);
+    assert!(verified.is_default && verified.verified_at.is_some());
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::Upstream(upstream));
+    assert_eq!(f.routes.resolve("web.localhost"), Resolution::Upstream(upstream));
+    assert_eq!(config.default_host("web"), "web.example.com");
+    assert!(!f.store.require_domain("localhost").await.unwrap().is_default);
+
+    // Its DNS breaks: flagged after three verifications, and still served.
+    net.point("example.com", &["198.51.100.7"]);
+    for expected in [DomainStatus::Active, DomainStatus::Active, DomainStatus::Misconfigured] {
+        assert_eq!(f.engine.verify_domain(&d.id).await.unwrap().status, expected);
+    }
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::Upstream(upstream));
+    net.point("example.com", &[HERE]);
+    assert_eq!(f.engine.verify_domain(&d.id).await.unwrap().status, DomainStatus::Active);
+
+    // Removed: its hostnames go, the base domain is the default again.
+    f.store.delete_domain(&d.id).await.unwrap();
+    f.engine.refresh_domains().await.unwrap();
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::NotFound);
+    assert_eq!(f.routes.resolve("web.localhost"), Resolution::Upstream(upstream));
+    assert_eq!(config.default_host("web"), "web.localhost");
+    assert!(matches!(f.engine.verify_domain(&d.id).await, Err(Error::NotFound(_))));
+}
+
+#[tokio::test]
+async fn a_second_domain_does_not_take_the_default_and_local_ones_need_no_dns() {
+    let (f, net) = domains_fixture().await;
+    let config = f.engine.inner.config.clone();
+    net.answer(HERE, Ok(config.domains.probe_id()));
+    for name in ["example.com", "example.org"] {
+        net.point(name, &[HERE]);
+        f.store.create_domain(&Domain::new(name, DomainSource::Connected)).await.unwrap();
+        assert_eq!(f.engine.verify_domain(name).await.unwrap().status, DomainStatus::Active);
+    }
+    // The first one that worked replaced the local default; the second didn't.
+    assert_eq!(config.primary_domain(), "example.com");
+    assert_eq!(config.served_domains(), vec!["example.com", "localhost", "example.org"]);
+
+    // A local name is served as soon as it is connected, and never verified.
+    let local = Domain::new("dev.localhost", DomainSource::Connected);
+    f.store.create_domain(&local).await.unwrap();
+    f.engine.refresh_domains().await.unwrap();
+    assert!(config.served_domains().contains(&"dev.localhost".to_string()));
+    let asked = net.requests.lock().unwrap().len();
+    let same = f.engine.verify_domain("dev.localhost").await.unwrap();
+    assert_eq!((same.status, same.checked_at), (DomainStatus::Active, None));
+    assert_eq!(net.requests.lock().unwrap().len(), asked);
+}
+
+#[tokio::test]
+async fn the_public_address_is_the_configured_one_else_the_one_found() {
+    let (f, net) = domains_fixture().await;
+    assert_eq!(f.engine.public_addresses().await, vec![ip(HERE)]);
+    // Found once, then remembered.
+    *net.public.lock().unwrap() = vec![ip("198.51.100.7")];
+    assert_eq!(f.engine.public_addresses().await, vec![ip(HERE)]);
+
+    let configured = fixture_config("docker", |c| c.public_ips = vec![ip("192.0.2.44")]).await;
+    configured.engine.inner.domains.set_network(net);
+    assert_eq!(configured.engine.public_addresses().await, vec![ip("192.0.2.44")]);
 }

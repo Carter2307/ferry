@@ -69,6 +69,14 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/services/{id}/domains"),
     ("POST", "/api/v1/services/{id}/domains"),
     ("DELETE", "/api/v1/services/{id}/domains/{domain}"),
+    // the domains services are served under, and certificates
+    ("GET", "/api/v1/domains"),
+    ("POST", "/api/v1/domains"),
+    ("GET", "/api/v1/domains/{id}"),
+    ("PATCH", "/api/v1/domains/{id}"),
+    ("DELETE", "/api/v1/domains/{id}"),
+    ("POST", "/api/v1/domains/{id}/verify"),
+    ("GET", "/api/v1/certificates"),
     // jobs
     ("GET", "/api/v1/services/{id}/jobs"),
     ("POST", "/api/v1/services/{id}/jobs"),

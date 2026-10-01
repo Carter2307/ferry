@@ -42,7 +42,15 @@ export function usePollInterval(ms: number, opts: { always?: boolean } = {}): nu
   return mode === 'live' ? false : ms
 }
 
-const CHANGE_KINDS: readonly ChangeKind[] = ['service', 'deploy', 'datastore', 'env_group', 'job', 'git_connection']
+const CHANGE_KINDS: readonly ChangeKind[] = [
+  'service',
+  'deploy',
+  'datastore',
+  'env_group',
+  'job',
+  'git_connection',
+  'domain',
+]
 
 function isChangeEvent(v: unknown): v is ChangeEvent {
   if (typeof v !== 'object' || v === null) return false
@@ -71,6 +79,10 @@ export function invalidationsForChange(change: ChangeEvent): Invalidation[] {
     case 'git_connection':
       // the accounts, and what they let the server read (repositories, branches)
       return [keys.git()]
+    case 'domain':
+      // the domains and their certificates, the default domain of /info, and
+      // the hosts and URL of every service
+      return [keys.domains(), keys.info(), keys.services()]
   }
 }
 

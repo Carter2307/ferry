@@ -183,24 +183,26 @@ fn is_dashboard_host(config: &Config, host: &str) -> bool {
 }
 
 /// Check that custom `domains` (already normalized) of the service named
-/// `own_name` are free: not the dashboard host, not a default host
-/// (`<name>.<base_domain>`) of any service, and not a custom domain of one of
-/// the `others` (every service except this one).
+/// `own_name` are free: not the dashboard host, not a default host of any
+/// service — `<name>.<domain>` under every domain of the server, served or
+/// still waiting for its DNS (§21) — and not a custom domain of one of the
+/// `others` (every service except this one).
 pub fn check_domains<'a>(
     config: &Config,
     others: impl IntoIterator<Item = &'a Service> + Clone,
     own_name: &str,
     domains: &[String],
 ) -> Result<()> {
+    let own_hosts = config.claimed_hosts(own_name);
     for d in domains {
         if is_dashboard_host(config, d) {
             return Err(Error::conflict(format!("domain '{d}' is reserved for the Ferry dashboard")));
         }
-        if *d == config.default_host(own_name) {
+        if own_hosts.contains(d) {
             return Err(Error::conflict(format!("domain '{d}' is already the default host of service '{own_name}'")));
         }
         for s in others.clone() {
-            if *d == config.default_host(&s.name) {
+            if config.claimed_hosts(&s.name).contains(d) {
                 return Err(Error::conflict(format!("domain '{d}' is the default host of service '{}'", s.name)));
             }
             if s.custom_domains.iter().any(|c| c.eq_ignore_ascii_case(d)) {
@@ -211,22 +213,47 @@ pub fn check_domains<'a>(
     Ok(())
 }
 
-/// Check that the default host of a new service named `name` isn't already
-/// claimed as a custom domain by another service (or by the dashboard).
+/// Check that the default hosts of a new service named `name` (one under
+/// every domain of the server) aren't already claimed as a custom domain by
+/// another service (or by the dashboard).
 pub fn check_default_host_free<'a>(
     config: &Config,
     others: impl IntoIterator<Item = &'a Service>,
     name: &str,
 ) -> Result<()> {
-    let host = config.default_host(name);
-    if is_dashboard_host(config, &host) {
+    let hosts = config.claimed_hosts(name);
+    if let Some(host) = hosts.iter().find(|h| is_dashboard_host(config, h)) {
         return Err(Error::conflict(format!("host '{host}' is reserved for the Ferry dashboard; choose another name")));
     }
     for s in others {
-        if s.custom_domains.iter().any(|c| c.eq_ignore_ascii_case(&host)) {
+        if let Some(host) = hosts.iter().find(|h| s.custom_domains.iter().any(|c| c.eq_ignore_ascii_case(h))) {
             return Err(Error::conflict(format!(
                 "host '{host}' is already used as a custom domain by service '{}'",
                 s.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Check that a domain to connect takes no hostname that is in use: with it
+/// every service is served at `<service>.<domain>`, which must not be the
+/// dashboard's host or the custom domain of another service.
+pub fn check_domain_free(config: &Config, services: &[Service], domain: &str) -> Result<()> {
+    for s in services {
+        let host = format!("{}.{domain}", s.name);
+        if is_dashboard_host(config, &host) {
+            return Err(Error::conflict(format!(
+                "with '{domain}', service '{}' would be served at '{host}', which is the host of the Ferry dashboard",
+                s.name
+            )));
+        }
+        if let Some(other) =
+            services.iter().find(|o| o.id != s.id && o.custom_domains.iter().any(|c| c.eq_ignore_ascii_case(&host)))
+        {
+            return Err(Error::conflict(format!(
+                "with '{domain}', service '{}' would be served at '{host}', which is a custom domain of service '{}': remove that custom domain first",
+                s.name, other.name
             )));
         }
     }
@@ -253,6 +280,39 @@ mod tests {
         let mut x = Service::new("x", ServiceType::WebService);
         x.custom_domains = vec!["c.localhost".into()];
         assert!(check_default_host_free(&cfg, &[x], "c").is_err());
+    }
+
+    #[test]
+    fn domain_rules_cover_every_domain_of_the_server() {
+        use ferry_core::{Domain, DomainSource};
+        let cfg = Config::default();
+        // One connected domain that still waits for its DNS: its names are taken already.
+        let base = Domain { is_default: true, ..Domain::new("localhost", DomainSource::Config) };
+        cfg.domains.replace("localhost", &[base, Domain::new("example.com", DomainSource::Connected)]);
+        let mut a = Service::new("a", ServiceType::WebService);
+        a.custom_domains = vec!["c.example.com".into()];
+        let b = Service::new("b", ServiceType::WebService);
+        let others = [a.clone()];
+        for taken in ["a.example.com", "b.example.com", "a.localhost"] {
+            assert!(matches!(check_domains(&cfg, &others, "b", &[taken.into()]), Err(Error::Conflict(_))), "{taken}");
+        }
+        assert!(check_domains(&cfg, &others, "b", &["b.example.org".into()]).is_ok());
+        // A new service named `c` would be served where `a` has a custom domain.
+        let err = check_default_host_free(&cfg, &others, "c").unwrap_err().to_string();
+        assert!(err.contains("c.example.com") && err.contains("'a'"), "{err}");
+        // Connecting a domain: no service may land on another one's custom domain...
+        let all = [a, b];
+        assert!(check_domain_free(&cfg, &all, "example.org").is_ok());
+        let mut c = Service::new("c", ServiceType::WebService);
+        c.custom_domains = vec!["c.example.com".into()];
+        let err = check_domain_free(&cfg, &[all[0].clone(), c.clone()], "example.com").unwrap_err().to_string();
+        assert!(err.contains("'c.example.com'") && err.contains("service 'a'"), "{err}");
+        // ...but its own custom domain under it is fine.
+        assert!(check_domain_free(&cfg, std::slice::from_ref(&c), "example.com").is_ok());
+        // ...nor on the dashboard's host.
+        let dashboard = Config { dashboard_host: Some("c.example.net".into()), ..Config::default() };
+        let err = check_domain_free(&dashboard, std::slice::from_ref(&c), "example.net").unwrap_err().to_string();
+        assert!(err.contains("'c.example.net'") && err.contains("dashboard"), "{err}");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use ferry_core::tls::TlsHooks;
+use ferry_core::tls::{Certificates, TlsHooks};
 use ferry_core::{CancellationToken, Config, Engine, Store, resources};
 use tracing_subscriber::EnvFilter;
 
@@ -113,9 +113,19 @@ struct ServerArgs {
     /// Public HTTPS proxy listen address (enables TLS together with --acme-email).
     #[arg(long, env = "FERRY_HTTPS_ADDR")]
     https_addr: Option<SocketAddr>,
-    /// Services are reachable at <name>.<base-domain>.
+    /// Services are reachable at <name>.<base-domain>. More domains are
+    /// connected while the server runs (dashboard: Server → Domains, or
+    /// `ferry domains connect`).
     #[arg(long, env = "FERRY_BASE_DOMAIN", default_value = "localhost")]
     base_domain: String,
+    /// Public address of this server: the value of the DNS records shown for
+    /// a domain, and what a domain is expected to resolve to. Repeat it (or
+    /// separate with commas) for an IPv4 and an IPv6 address. Default: its
+    /// IPv4 address is found out — the address of the outbound interface
+    /// when it is a public one, else asked from api.ipify.org,
+    /// ipv4.icanhazip.com or checkip.amazonaws.com.
+    #[arg(long = "public-ip", env = "FERRY_PUBLIC_IP", value_name = "IP", value_delimiter = ',')]
+    public_ip: Vec<IpAddr>,
     /// Port shown in public URLs (defaults to the proxy port).
     #[arg(long, env = "FERRY_PUBLIC_PORT")]
     public_port: Option<u16>,
@@ -507,7 +517,9 @@ fn build_config(args: ServerArgs) -> anyhow::Result<Config> {
         api_addr: args.api_addr,
         proxy_addr: args.proxy_addr,
         proxy_https_addr: args.https_addr,
-        base_domain: args.base_domain.to_ascii_lowercase(),
+        base_domain: args.base_domain.trim().trim_end_matches('.').to_ascii_lowercase(),
+        domains: Default::default(),
+        public_ips: args.public_ip,
         public_port: args.public_port,
         dashboard_host,
         name_prefix: args.name_prefix,
@@ -631,7 +643,7 @@ fn summary(
         Some(url) => format!("Dashboard (proxy): {url}"),
         None => format!("Dashboard (proxy): disabled (enable with --dashboard-host ferry.{})", config.base_domain),
     });
-    lines.push(format!("Apps            : {}", config.url_for_host(&format!("<name>.{}", config.base_domain))));
+    lines.push(format!("Apps            : {}", config.url_for_host(&format!("<name>.{}", config.primary_domain()))));
     lines.push(format!("Docker          : {}", docker_summary(docker_version, docker_host)));
     lines.push(format!("Data            : {}", config.data_dir.display()));
     lines.push(format!("Limits          : {}", limits_summary(config, docker_host)));
@@ -684,6 +696,9 @@ async fn serve(args: ServerArgs, detached: bool) -> anyhow::Result<()> {
     // A server without an account gets the code that creating it takes
     // (the banner prints it in a link).
     ferry_api::setup::ensure_code(&config, &store).await.context("preparing the first-run setup")?;
+    // The domains services are served under: the base domain of the flag
+    // and the ones connected since (DESIGN.md §21).
+    ferry_core::domains::init(&store, &config).await.context("reading the domains")?;
     let docker =
         ferry_docker::Docker::connect().await.context("cannot connect to Docker — is the Docker daemon running?")?;
     let docker_version = docker.version().await.ok();
@@ -715,6 +730,9 @@ async fn serve(args: ServerArgs, detached: bool) -> anyhow::Result<()> {
     let shutdown = CancellationToken::new();
 
     let mut proxy_config = ferry_proxy::ProxyConfig::http(config.proxy_addr);
+    // How the engine verifies that a domain reaches this server.
+    proxy_config.domain_probe_id = Some(config.domains.probe_id().to_string());
+    let mut certificates: Option<Arc<dyn Certificates>> = None;
     if config.tls_enabled() {
         let manager = ferry_tls::CertManager::new(ferry_tls::TlsConfig {
             certs_dir: config.certs_dir(),
@@ -724,8 +742,11 @@ async fn serve(args: ServerArgs, detached: bool) -> anyhow::Result<()> {
         })
         .await
         .context("starting TLS manager")?;
+        // A host that starts being routed (a new service, a verified
+        // domain) gets its certificate at once, not at the next minute.
         let hosts_routes = routes.clone();
-        manager.spawn(Arc::new(move || hosts_routes.hosts()), shutdown.clone());
+        manager.spawn_with_wake(Arc::new(move || hosts_routes.hosts()), routes.hosts_changed(), shutdown.clone());
+        certificates = Some(manager.certificates());
         proxy_config.https_addr = config.proxy_https_addr;
         proxy_config.tls = Some(manager.server_config());
         proxy_config.tls_hooks = Some(manager.hooks() as Arc<dyn TlsHooks>);
@@ -760,6 +781,7 @@ async fn serve(args: ServerArgs, detached: bool) -> anyhow::Result<()> {
         config: config.clone(),
         store,
         engine: engine.clone() as Arc<dyn Engine>,
+        certificates,
         docker_version: docker_version.clone(),
         docker_cpus: docker_host.as_ref().and_then(|h| h.cpus),
         docker_memory_bytes: docker_host.as_ref().and_then(|h| h.memory_bytes),

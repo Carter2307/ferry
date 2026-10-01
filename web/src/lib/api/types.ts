@@ -65,6 +65,18 @@ export type GitProvider = (typeof GIT_PROVIDERS)[number]
 /** Where the tokens of a git connection come from. */
 export type GitAuth = 'github_app' | 'oauth' | 'token'
 
+/** Where a domain of the server comes from: its `--base-domain`, or connected through the API. */
+export type DomainSource = 'config' | 'connected'
+
+/** `pending`: its names don't reach the server yet; `misconfigured`: they no longer do. */
+export type DomainStatus = 'pending' | 'active' | 'misconfigured'
+
+export type DomainCheckKind = 'dns' | 'http'
+export type CheckOutcome = 'passed' | 'warning' | 'failed' | 'skipped'
+
+/** Where the certificate of a routed hostname is. */
+export type CertificateState = 'disabled' | 'local' | 'pending' | 'issuing' | 'issued' | 'failed'
+
 /** Where a service's code comes from (derived client-side, see `sourceKind`). */
 export type SourceKind = 'git' | 'image' | 'upload'
 
@@ -194,7 +206,10 @@ export interface LogLine {
 /** `GET /api/v1/info` */
 export interface ServerInfo {
   version: string
+  /** The domain the server was started with (`--base-domain`). */
   base_domain: string
+  /** The domain service URLs are shown with. Absent on servers that predate domains. */
+  default_domain?: string
   proxy_url: string
   tls_enabled: boolean
   dashboard_url: string | null
@@ -532,6 +547,77 @@ export interface BlueprintResult {
   warnings: string[]
 }
 
+// ---------------------------------------------------------------------------
+// Domains (DESIGN.md §21)
+
+/** One thing a verification looked at, and what it found. */
+export interface DomainCheck {
+  kind: DomainCheckKind
+  outcome: CheckOutcome
+  message: string
+}
+
+/** A DNS record to create where the zone of a domain is managed. */
+export interface DnsRecord {
+  /** `A` (an IPv4 address) or `AAAA` (IPv6). */
+  type: string
+  /** `*`: every name under the domain, so every service. `@`: the domain itself. */
+  name: string
+  /** The public address of the server; `null` when it could not find it out. */
+  value: string | null
+  /** `false` for what only serving the domain itself needs. */
+  required: boolean
+}
+
+/** A domain services are served under, as returned by the API. */
+export interface DomainView {
+  id: string
+  name: string
+  source: DomainSource
+  status: DomainStatus
+  /** The domain service URLs are shown with. Exactly one per server. */
+  is_default: boolean
+  /** What the last verification found (empty before the first one). */
+  checks: DomainCheck[]
+  created_at: Timestamp
+  /** When its names last reached the server. */
+  verified_at: Timestamp | null
+  /** When it was last verified. */
+  checked_at: Timestamp | null
+  /** A name that never leaves this machine or its network: nothing to verify, no certificate. */
+  local: boolean
+  /** Whether services are served at `<service>.<name>` now. */
+  served: boolean
+  /** The DNS records that point the domain at this server (none for a local domain). */
+  records: DnsRecord[]
+  /** `https://<service>.example.com` */
+  url_pattern: string
+}
+
+/** `POST /api/v1/domains` */
+export interface ConnectDomain {
+  name: string
+}
+
+/** `PATCH /api/v1/domains/{id}` */
+export interface UpdateDomain {
+  is_default?: boolean
+}
+
+/** `GET /api/v1/certificates` — the certificate of one hostname the proxy routes. */
+export interface CertificateView {
+  host: string
+  /** Name of the service the host is routed to; `null` for the dashboard. */
+  service: string | null
+  state: CertificateState
+  /** `issued`: when the certificate expires. */
+  expires_at: Timestamp | null
+  /** `failed`: what the certificate authority (or reaching it) answered. */
+  error: string | null
+  /** `failed`: when the server asks again. */
+  retry_at: Timestamp | null
+}
+
 /** Error body: `{"error": {"code": "not_found", "message": "…"}}`. */
 // ---------------------------------------------------------------------------
 // Accounts (DESIGN.md §20)
@@ -635,7 +721,7 @@ export interface ApiErrorDetail {
 // Change feed (`GET /api/v1/events`, event `change`)
 // ---------------------------------------------------------------------------
 
-export type ChangeKind = 'service' | 'deploy' | 'datastore' | 'env_group' | 'job' | 'git_connection'
+export type ChangeKind = 'service' | 'deploy' | 'datastore' | 'env_group' | 'job' | 'git_connection' | 'domain'
 export type ChangeAction = 'created' | 'updated' | 'deleted'
 
 export interface ChangeEvent {

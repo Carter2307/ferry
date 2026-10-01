@@ -12,6 +12,7 @@ import { useLive, type LiveMode } from '@/lib/api/events'
 import { keys } from '@/lib/api/keys'
 import { useDatastores, useEnvGroups, useServerInfo } from '@/lib/api/queries'
 import type { ServiceView } from '@/lib/api/types'
+import { defaultDomain } from '@/lib/domains'
 import { displayUrl } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -142,7 +143,7 @@ export function ServerPanel({ services, loading }: { services: ServiceView[] | u
             <Skeleton className="mt-1 h-3.5 w-32" />
           ) : (
             <p className="truncate text-[13px] text-foreground-light">
-              {i ? `${i.base_domain} · ${i.tls_enabled ? 'HTTPS' : 'HTTP'}` : 'Server info unavailable'}
+              {i ? `${defaultDomain(i)} · ${i.tls_enabled ? 'HTTPS' : 'HTTP'}` : 'Server info unavailable'}
             </p>
           )}
         </div>

@@ -176,7 +176,14 @@ pub async fn info(ctx: &Ctx) -> Result<()> {
         ("Version", Cell::new(format!("{} (CLI {})", i.version, env!("CARGO_PKG_VERSION")))),
         ("Proxy", Cell::new(i.proxy_url.as_str())),
         ("Base domain", Cell::new(i.base_domain.as_str())),
-        ("Apps", Cell::new(format!("<name>.{}", i.base_domain))),
+        // An older server has no default domain to tell: its base domain is the one.
+        (
+            "Apps",
+            Cell::new(format!(
+                "<name>.{}",
+                Some(i.default_domain.as_str()).filter(|d| !d.is_empty()).unwrap_or(&i.base_domain)
+            )),
+        ),
         ("TLS", on_off(i.tls_enabled)),
         ("Dashboard", Cell::new(i.dashboard_url.clone().unwrap_or_else(|| ctx.client.server().to_string()))),
         ("GitHub webhook", on_off(i.github_webhook_enabled)),

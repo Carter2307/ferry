@@ -905,6 +905,130 @@ pub fn compute_service_state(
 }
 
 // ---------------------------------------------------------------------------
+// domains (DESIGN.md §21)
+
+str_enum! {
+    /// Where a domain comes from.
+    pub enum DomainSource {
+        /// The server's `--base-domain`: always served, and only the flag
+        /// changes or removes it.
+        Config = "config",
+        /// Connected through the API (the dashboard, the CLI).
+        Connected = "connected",
+    }
+}
+
+str_enum! {
+    /// Whether the names under a domain reach this server.
+    pub enum DomainStatus {
+        /// Connected, but its DNS doesn't point at this server yet: nothing
+        /// is served under it.
+        Pending = "pending",
+        /// The names under it reach this server.
+        Active = "active",
+        /// It was active and its names stopped reaching this server. Still
+        /// served: a DNS outage must not take the routes away.
+        Misconfigured = "misconfigured",
+    }
+}
+
+str_enum! {
+    /// What a step of a domain verification looks at.
+    pub enum DomainCheckKind {
+        /// What a name under the domain resolves to.
+        Dns = "dns",
+        /// Whether this server answers an HTTP request for that name.
+        Http = "http",
+    }
+}
+
+str_enum! {
+    pub enum CheckOutcome {
+        Passed = "passed",
+        /// Not what was expected, but not what keeps the domain from working.
+        Warning = "warning",
+        Failed = "failed",
+        /// Not looked at (a local domain, or an earlier step failed).
+        Skipped = "skipped",
+    }
+}
+
+/// One step of a domain verification, and what it found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DomainCheck {
+    pub kind: DomainCheckKind,
+    pub outcome: CheckOutcome,
+    /// What was found, in a sentence a person can act on.
+    pub message: String,
+}
+
+impl DomainCheck {
+    pub fn new(kind: DomainCheckKind, outcome: CheckOutcome, message: impl Into<String>) -> Self {
+        DomainCheck { kind, outcome, message: message.into() }
+    }
+}
+
+/// A domain services are served under: `<service>.<name>`. One DNS record
+/// (`*.<name>`) points every service at the server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Domain {
+    pub id: String,
+    /// Lowercase, without a trailing dot.
+    pub name: String,
+    pub source: DomainSource,
+    pub status: DomainStatus,
+    /// The domain of the URL a service is shown and linked with. One domain
+    /// is the default.
+    pub is_default: bool,
+    /// What the last verification found (empty before the first one).
+    pub checks: Vec<DomainCheck>,
+    /// Verifications that failed in a row. An active domain is only flagged
+    /// after a few: one lost DNS answer is not a misconfiguration.
+    #[serde(skip)]
+    #[schema(ignore)]
+    pub failures: u32,
+    pub created_at: DateTime<Utc>,
+    /// When its names last reached this server.
+    pub verified_at: Option<DateTime<Utc>>,
+    /// When it was last verified.
+    pub checked_at: Option<DateTime<Utc>>,
+}
+
+impl Domain {
+    /// A domain that was just connected: `pending`, or `active` at once when
+    /// it is local (`*.localhost`, `.test`…: there is no DNS to wait for).
+    pub fn new(name: impl Into<String>, source: DomainSource) -> Self {
+        let name = name.into();
+        let local = crate::config::is_local_host(&name);
+        Domain {
+            id: ids::new_id(ids::DOMAIN),
+            status: if local { DomainStatus::Active } else { DomainStatus::Pending },
+            is_default: false,
+            checks: Vec::new(),
+            failures: 0,
+            created_at: now(),
+            verified_at: None,
+            checked_at: None,
+            name,
+            source,
+        }
+    }
+
+    /// A name that never leaves this machine or its network: nothing to
+    /// verify, and no certificate authority issues a certificate for it.
+    pub fn is_local(&self) -> bool {
+        crate::config::is_local_host(&self.name)
+    }
+
+    /// Whether the proxy serves `<service>.<name>`: always for the server's
+    /// base domain, and for a connected domain once its names reached the
+    /// server (they stay served when that stops, see [`DomainStatus`]).
+    pub fn is_served(&self) -> bool {
+        self.source == DomainSource::Config || self.status != DomainStatus::Pending
+    }
+}
+
+// ---------------------------------------------------------------------------
 // accounts (DESIGN.md §20)
 
 /// The administrator of the server: the account the dashboard is signed in

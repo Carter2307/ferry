@@ -46,7 +46,8 @@ ferryd <COMMAND>
 | `--api-addr <API_ADDR>`<br />`FERRY_API_ADDR` | API + dashboard listen address | `127.0.0.1:7878` |
 | `--proxy-addr <PROXY_ADDR>`<br />`FERRY_PROXY_ADDR` | Public HTTP proxy listen address | `0.0.0.0:8080` |
 | `--https-addr <HTTPS_ADDR>`<br />`FERRY_HTTPS_ADDR` | Public HTTPS proxy listen address (enables TLS together with --acme-email) |  |
-| `--base-domain <BASE_DOMAIN>`<br />`FERRY_BASE_DOMAIN` | Services are reachable at \<name>.\<base-domain> | `localhost` |
+| `--base-domain <BASE_DOMAIN>`<br />`FERRY_BASE_DOMAIN` | Services are reachable at \<name>.\<base-domain>. More domains are connected while the server runs (dashboard: Server → Domains, or `ferry domains connect`) | `localhost` |
+| `--public-ip <IP>`<br />`FERRY_PUBLIC_IP` | Public address of this server: the value of the DNS records shown for a domain, and what a domain is expected to resolve to. Repeat it (or separate with commas) for an IPv4 and an IPv6 address. Default: its IPv4 address is found out — the address of the outbound interface when it is a public one, else asked from api.ipify.org, ipv4.icanhazip.com or checkip.amazonaws.com |  |
 | `--public-port <PUBLIC_PORT>`<br />`FERRY_PUBLIC_PORT` | Port shown in public URLs (defaults to the proxy port) |  |
 | `--dashboard-host <DASHBOARD_HOST>`<br />`FERRY_DASHBOARD_HOST` | Host that serves the dashboard + API through the public proxy ("none" to disable). Default: ferry.\<base-domain> when the base domain is local (e.g. localhost), otherwise disabled — enable it explicitly, ideally with HTTPS, since it exposes the admin API |  |
 | `--name-prefix <NAME_PREFIX>`<br />`FERRY_NAME_PREFIX` | Prefix for Docker resources; lets several Ferry servers share one daemon | `ferry` |

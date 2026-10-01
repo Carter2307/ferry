@@ -15,6 +15,8 @@ pub const DATASTORE: &str = "dbs";
 pub const ENV_GROUP: &str = "evg";
 /// Prefix for git connections (connected GitHub / GitLab accounts).
 pub const GIT_CONNECTION: &str = "git";
+/// Prefix for domains (services are served at `<service>.<domain>`).
+pub const DOMAIN: &str = "dom";
 
 /// Prefix for accounts (the administrator of the server).
 pub const USER: &str = "usr";
