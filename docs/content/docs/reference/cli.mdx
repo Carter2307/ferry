@@ -9,7 +9,7 @@ icon: "Terminal"
 This page lists every `ferry` command with its arguments and options. It is generated from the CLI's own help (`ferry markdown-help`), so it matches the binary built from this repository. In a terminal, `ferry <command> --help` prints the same text.
 
 <Callout title="Connecting to a server">
-Every command talks to a Ferry server. `ferry login --server URL --token TOKEN` verifies both and saves them in `~/.config/ferry/config.json` (`$XDG_CONFIG_HOME/ferry/config.json` when that variable is set). The `--server` / `--token` flags, then the `FERRY_SERVER` / `FERRY_TOKEN` variables, take precedence over the saved values. See [Set up the CLI](/docs/getting-started/cli).
+Every command talks to a Ferry server. `ferry login --server URL` opens the dashboard, where you approve the terminal; it then gets an API token of its own, saved with the server in `~/.config/ferry/config.json` (`$XDG_CONFIG_HOME/ferry/config.json` when that variable is set). With `--token TOKEN`, that token is verified and saved instead. The `--server` / `--token` flags, then the `FERRY_SERVER` / `FERRY_TOKEN` variables, take precedence over the saved values. See [Set up the CLI](/docs/getting-started/cli).
 </Callout>
 
 ## Command overview
@@ -77,11 +77,11 @@ Command-line client for Ferry, a self-hosted Render alternative
 ferry [OPTIONS] <COMMAND>
 ```
 
-Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the config saved by 'ferry login'.
+Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the server and token saved by 'ferry login'.
 
 **Subcommands**
 
-* `login` — Verify the server URL and token (from --server/--token) and save them
+* `login` — Connect this terminal to a server and save the connection
 * `info` — Show server information
 * `services` — List services
 * `create` — Create a service
@@ -119,13 +119,21 @@ Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the conf
 
 ## `ferry login`
 
-Verify the server URL and token (from --server/--token) and save them
+Connect this terminal to a server and save the connection
+
+Without a token, opens the dashboard to approve the login there: sign in, check that the page shows the code the terminal prints, approve. The server then gives this terminal an API token of its own, which you can revoke in the dashboard. With --token (or FERRY_TOKEN), that token is verified and saved instead: for servers without a browser at hand, scripts and CI.
 
 **Usage**
 
 ```text
-ferry login
+ferry login [OPTIONS]
 ```
+
+**Options**
+
+| Option | Description |
+|---|---|
+| `--no-browser` | Only print the page to open, without opening a browser |
 
 ## `ferry info`
 

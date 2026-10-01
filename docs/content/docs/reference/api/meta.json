@@ -3,6 +3,7 @@
   "icon": "Braces",
   "pages": [
     "info",
+    "auth",
     "services",
     "deploys",
     "env",

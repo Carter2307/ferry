@@ -46,7 +46,7 @@ flowchart TB
 - **`ferry-proxy`** (library). The public edge: the `RouteTable`, the HTTP/1.1 and HTTP/2 reverse proxy with round-robin load balancing, websockets, error pages, TLS termination and connection limits.
 - **`ferry-tls`** (library). Automatic HTTPS: ACME HTTP-01 certificates (Let's Encrypt by default), storage and renewal, SNI resolution for the proxy.
 - **`ferry-engine`** (library). The brain: the deploy queue and pipeline, the reconciler, the cron scheduler and one-off jobs, datastores, container resource limits and the free-disk check, and log storage. It implements `ferry_core::Engine`.
-- **`ferry-api`** (library). The axum router: REST, Server-Sent Events, webhooks, blueprints, the OpenAPI document and Swagger UI, and the embedded web client from `web/dist`.
+- **`ferry-api`** (library). The axum router: REST, authentication (the account, its sessions and API tokens), Server-Sent Events, webhooks, blueprints, the OpenAPI document and Swagger UI, and the embedded web client from `web/dist`.
 - **`ferry-cli`** (binary `ferry`). The command-line client. It talks only to the REST API.
 - **`ferryd`** (binary). The wiring: parses the [server options](/docs/reference/server-options), locks the data directory, claims the Docker name prefix, then starts the engine, the proxy and the API.
 
@@ -90,7 +90,7 @@ An unknown host gets a 404 page, a suspended service a 503 page, and a service w
 
 ### An API call
 
-Every `/api/v1` request goes through the token check, then a handler that validates the input, writes to the store and, for anything that touches containers, calls the engine. Long work is queued: the handler returns `202` with the queued deploy, and the client follows its log as a stream.
+Every `/api/v1` request goes through the authentication check, which accepts an API token or the dashboard's session cookie ([Security model](/docs/architecture/security#the-account)), then a handler that validates the input, writes to the store and, for anything that touches containers, calls the engine. Long work is queued: the handler returns `202` with the queued deploy, and the client follows its log as a stream.
 
 ```mermaid
 sequenceDiagram
@@ -128,8 +128,9 @@ Everything `ferryd` knows lives in its data directory (`--data-dir`, default `./
 
 <Files>
   <Folder name="ferry-data" defaultOpen>
-    <File name="ferry.db — SQLite: services, deploys, job runs, datastores, env groups, env vars, settings" />
-    <File name="api_token — the API token (0600)" />
+    <File name="ferry.db — SQLite: services, deploys, job runs, datastores, env groups, env vars, settings, the account, sessions, API tokens" />
+    <File name="api_token — the server token (0600)" />
+    <File name="setup_code — the setup code, only while the server has no account (0600)" />
     <File name="instance_id — owner id of the Docker name prefix (0600)" />
     <File name="ferryd.lock — held while ferryd runs" />
     <Folder name="logs">
@@ -163,5 +164,5 @@ Every container carries `ferry.managed=true`, `ferry.instance=<prefix>` and `fer
   <Card icon={<Workflow />} title="Deploy pipeline" href="/docs/architecture/deploy-pipeline" description="Every step from enqueue to live, and how failures and cancels are handled." />
   <Card icon={<RefreshCw />} title="Reconciler" href="/docs/architecture/reconciler" description="The loop that converges Docker to the desired state." />
   <Card icon={<Network />} title="Networking model" href="/docs/architecture/networking-model" description="The Docker network, DNS aliases, published ports and the proxy route table." />
-  <Card icon={<ShieldCheck />} title="Security model" href="/docs/architecture/security" description="API token, secrets, data directory permissions and what the proxy exposes." />
+  <Card icon={<ShieldCheck />} title="Security model" href="/docs/architecture/security" description="The account, API tokens, secrets, data directory permissions and what the proxy exposes." />
 </Cards>

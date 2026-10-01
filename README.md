@@ -34,7 +34,7 @@ Requirements: Docker (Docker Desktop on macOS works), Rust 1.89+ and Node.js 20+
 ```bash
 (cd web && npm ci && npm run build)     # the web dashboard (embedded into ferryd at compile time)
 cargo build --release
-./target/release/ferryd                 # starts the server in the background; prints the dashboard URL and API token
+./target/release/ferryd                 # starts the server in the background; prints the dashboard URL and the link that creates your account
 ```
 
 `ferryd` gives the terminal back once the server listens, and the server keeps
@@ -42,15 +42,19 @@ running when you close it. `ferryd status` says where it listens, `ferryd logs -
 follows its log (`ferry-data/ferryd.log`), `ferryd stop` shuts it down, and
 `ferryd run` keeps it in the foreground instead (see [Running the server](#running-the-server)).
 
+Open the link `ferryd` printed (`http://127.0.0.1:7878/setup?code=…`) and create your
+account: the email and password you sign in to the dashboard with. Then connect the CLI
+and deploy:
+
 ```bash
-./target/release/ferry login --server http://127.0.0.1:7878 --token <token printed by ferryd>
+./target/release/ferry login             # opens the dashboard: approve this terminal there
 
 cd examples/node-hello
 ferry up --follow                        # creates "node-hello", uploads, builds, deploys
 curl http://node-hello.localhost:8080
 ```
 
-Open the dashboard at **http://127.0.0.1:7878** (or http://ferry.localhost:8080). The interactive
+The dashboard is at **http://127.0.0.1:7878** (or http://ferry.localhost:8080). The interactive
 API reference (Swagger UI) is at **http://127.0.0.1:7878/api/docs**, and the OpenAPI 3.1 document is at `/api/openapi.json`.
 
 ### More examples
@@ -133,11 +137,31 @@ ferry db update app-db --memory 1G                   # datastores: applied right
 | `ferryd status` | where the server listens; exit code 0 when it runs, 3 when it doesn't |
 | `ferryd logs [-f] [-n N]` | the end of the log of a server started in the background (`-f` follows it) |
 | `ferryd stop` | asks the server to shut down and waits until it has (works for a foreground server too); a second `ferryd stop` forces it, like a second Ctrl-C |
+| `ferryd reset-password` | replaces the password of the server's account (asked without echo, or read from standard input) and signs every browser out |
 
 `stop`, `status` and `logs` find the server through its data directory: run
 them where you started `ferryd`, or with the same `--data-dir` /
 `FERRY_DATA_DIR`. Apps and datastores keep running in Docker while `ferryd`
 is stopped; their public URLs answer again once it is back.
+
+### Account, sessions and API tokens
+
+A server has one account, its administrator. `ferryd` prints a link
+(`/setup?code=…`) while it has none; the code in it is also in
+`<data-dir>/setup_code`, so only someone on the server can create the account.
+
+| Who | Authenticates with |
+|---|---|
+| The dashboard | the account's email and password. The session is an `HttpOnly`, `SameSite=Strict` cookie that ends 30 days after its last use; a request that changes something must also come from the dashboard's own origin |
+| A terminal | `ferry login --server URL`: the dashboard shows who asks and a code, you approve, and the terminal gets an API token of its own |
+| Scripts and CI | an API token created under **Server → Account** (named, optionally expiring, shown once): `FERRY_TOKEN`, or `Authorization: Bearer <token>` |
+| Scripts on the server itself | the server token in `<data-dir>/api_token` (`0600`), which always works and is never printed |
+
+Tokens and sessions are stored as SHA-256 digests, the password as an Argon2id
+hash. API tokens are revoked in the dashboard; they can do everything in the
+API except change the account, its sessions and its tokens. Ten failed
+sign-ins in five minutes pause sign-ins for the whole server. A forgotten
+password is replaced on the server with `ferryd reset-password`.
 
 ### Server configuration
 
@@ -155,7 +179,7 @@ Every flag also has an environment variable. `ferryd --help` shows the full list
 | `--acme-email` `FERRY_ACME_EMAIL` | – | enables Let's Encrypt |
 | `--acme-staging` / `--acme-directory` | – | Let's Encrypt staging, or a custom ACME CA |
 | `--github-webhook-secret` | – | enables `/hooks/github` |
-| `--api-token` `FERRY_API_TOKEN` | generated | stored in `<data-dir>/api_token` (`0600`) |
+| `--api-token` `FERRY_API_TOKEN` | generated | the server token: an API token that always works, for scripts on the server itself. Stored in `<data-dir>/api_token` (`0600`), never printed |
 | `--name-prefix` `FERRY_NAME_PREFIX` | `ferry` | Docker resource prefix. Each Ferry server needs its own; a server refuses to start on a prefix owned by another data dir |
 | `--take-over` | – | adopt the Docker resources of a prefix owned by another data dir (e.g. after moving it) |
 | `--build-concurrency` `FERRY_BUILD_CONCURRENCY` | `2` | parallel builds |

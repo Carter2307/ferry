@@ -22,21 +22,48 @@ It is a single binary with no runtime dependencies: copy it to any machine you w
 
 ## Log in
 
-[`ferry login`](/docs/reference/cli#ferry-login) checks a server URL and an API token, then saves them:
+[`ferry login`](/docs/reference/cli#ferry-login) connects this terminal to a server. You approve the request in the dashboard, and the terminal gets an API token of its own:
 
 ```bash title="Terminal"
-ferry login --server http://127.0.0.1:7878 --token <token>
+ferry login --server http://127.0.0.1:7878
 ```
+
+```text title="Output" noCopy
+To connect this terminal, open this page and sign in:
+
+  http://127.0.0.1:7878/cli-login?id=d54ce0ee…
+
+Approve the request there if it shows this code:  MRDB-M7EE
+Waiting for the approval... (Ctrl-C to cancel)
+```
+
+1. `ferry login` opens the page in your browser. With `--no-browser` it only prints the URL: open it yourself.
+2. Sign in to the dashboard if you aren't signed in. The page shows who asks (the user and host of the terminal, for example `ada@laptop`) and a code.
+3. Check that the code is the one your terminal shows, then click **Approve**. **Deny** refuses the request.
+
+The terminal then finishes on its own:
 
 ```text title="Output" noCopy
 Logged in to http://127.0.0.1:7878 (Ferry 0.1.0)
 Saved to /home/you/.config/ferry/config.json
 ```
 
-- **The token** is printed by `ferryd` on first start and stored in `<data-dir>/api_token` on the server. The dashboard shows a ready-made login command under **Connect** and on **Server › Connections**.
-- **The server URL** is the API address of `ferryd`, `http://127.0.0.1:7878` by default. If you leave out `http://`, Ferry adds it. With no server given at all (no `--server`, no `FERRY_SERVER`, no saved login), `ferry login` uses `http://127.0.0.1:7878` and says so.
+- **The token** is made for this terminal and named after it (`ada@laptop`). `ferry login` verifies it, then saves it with the server URL. It appears under **Server → Account → API tokens** in the dashboard, where you can revoke it.
+- **A request expires after 10 minutes.** Run `ferry login` again.
+- **The server needs its account first.** On a new server, create it with the link `ferryd` printed: see [Create your account](/docs/getting-started/installation#create-your-account).
+- **The server URL** is the API address of `ferryd`, `http://127.0.0.1:7878` by default. If you leave out `http://`, Ferry adds it. With no server given at all (no `--server`, no `FERRY_SERVER`, no saved login), `ferry login` uses `http://127.0.0.1:7878` and says so. The dashboard shows the command for its own address under **Connect** and on **Server → Connections**.
 
-`ferry login` calls `GET /api/v1/info` with the token before saving anything, so a wrong URL or token fails right away. Check the connection at any time with `ferry info`:
+### Log in with a token
+
+For CI, scripts and machines without a browser, give `ferry login` a token and it skips the approval:
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878 --token <token>
+```
+
+The token comes from `--token` or `FERRY_TOKEN`. Create one in the dashboard under **Server → Account → API tokens**; on the server itself, the server token in `<data-dir>/api_token` works too.
+
+Either way, `ferry login` calls `GET /api/v1/info` with the token before saving anything, so a wrong URL or token fails right away. Check the connection at any time with `ferry info`:
 
 ```bash title="Terminal"
 ferry info
@@ -62,8 +89,10 @@ By default `ferryd` only listens on `127.0.0.1`. To use the CLI from your laptop
 
 ```bash title="Terminal"
 ssh -N -L 7878:127.0.0.1:7878 you@your-server &
-ferry login --server http://127.0.0.1:7878 --token <token>
+ferry login --server http://127.0.0.1:7878
 ```
+
+The approval page opens through the same tunnel, at `http://127.0.0.1:7878` in your browser.
 
 If you exposed the dashboard through the proxy with HTTPS (`--dashboard-host`), you can also log in to that URL, for example `https://ferry.apps.example.com`. See [Production setup](/docs/guides/production).
 
@@ -97,13 +126,13 @@ It holds one login. Running `ferry login` again replaces it. To work with severa
 When `--server` or `FERRY_SERVER` points at another server than the saved one, `ferry` does not send the saved token there. You must pass a token for that server too:
 
 ```text noCopy
-error: no token for http://10.0.0.5:7878: the saved login is for http://127.0.0.1:7878, and its token is only sent there; pass --token or set FERRY_TOKEN (or run 'ferry login --server http://10.0.0.5:7878 --token <TOKEN>')
+error: no token for http://10.0.0.5:7878: the saved login is for http://127.0.0.1:7878, and its token is only sent there; pass --token or set FERRY_TOKEN (or run 'ferry login --server http://10.0.0.5:7878')
 ```
 </Callout>
 
 ### Environment variables for CI
 
-In CI jobs and scripts, skip `ferry login` and set the two variables instead. They override the config file:
+In CI jobs and scripts, nobody is there to approve a login. Create an API token in the dashboard (**Server → Account → API tokens**, then **New token**: a name such as `CI` and an expiry), keep it in your CI secrets, and set the two variables. They override the config file:
 
 ```bash title="deploy.sh"
 export FERRY_SERVER=https://ferry.apps.example.com
@@ -112,7 +141,7 @@ export FERRY_TOKEN="$FERRY_API_TOKEN"   # from your CI secrets
 ferry deploy api --follow   # exits with 1 if the deploy fails
 ```
 
-For a CI job that only needs to trigger a deploy, a service's [deploy hook](/docs/concepts/deploys#triggers) needs no token at all.
+The token is shown once, when you create it. It can do everything the CLI does, and you can revoke it under **Server → Account** at any time. For a CI job that only needs to trigger a deploy, a service's [deploy hook](/docs/concepts/deploys#triggers) needs no token at all.
 
 ## Output
 
@@ -207,11 +236,17 @@ Errors are printed on stderr, with the API's error code in parentheses:
 error: service 'nope' not found (not_found)
 ```
 
-An invalid token adds a hint:
+A command run before any login says how to log in:
+
+```text noCopy
+error: not logged in: run 'ferry login --server <URL>' first (or set FERRY_SERVER and FERRY_TOKEN)
+```
+
+A token the server refuses adds a hint:
 
 ```text noCopy
 error: invalid API token (unauthorized)
-hint: check the server URL and token with 'ferry login --server <URL> --token <TOKEN>'
+hint: the token was refused (revoked or expired?): log in again with 'ferry login --server <URL>'
 ```
 
 ## Quoting environment references

@@ -50,6 +50,8 @@ ferryd --data-dir /var/lib/ferry-staging \
 
 `ferryd stop`, `ferryd status` and `ferryd logs` act on the server of the data directory you name: `ferryd stop --data-dir /var/lib/ferry-staging` stops staging and leaves production alone.
 
+Each server has its own account, sessions and API tokens, in its own data directory. On its first start, the staging server prints its own `Create your account` link, at its own API address (`http://127.0.0.1:7879/setup?code=…`).
+
 Apps of the staging server are at `http://<name>.staging.localhost:8081`. On a public server, give the second server its own base domain (`--base-domain staging.example.com`) and put it behind a different port or another IP address.
 
 The CLI saves one server in its config. Point a command at another server with flags or environment variables, which take precedence over the saved config:
@@ -58,6 +60,8 @@ The CLI saves one server in its config. Point a command at another server with f
 FERRY_SERVER=http://127.0.0.1:7879 FERRY_TOKEN=$(cat /var/lib/ferry-staging/api_token) ferry ls
 ferry --server http://127.0.0.1:7879 --token fy_… ls
 ```
+
+A token only works on the server it belongs to. The first line reads the staging server's own token from its data directory, which works on the machine that runs it. Elsewhere, create an API token under **Server → Account** in the staging dashboard. `ferry login --server http://127.0.0.1:7879` works too, but it replaces the saved login.
 
 ## The safety checks
 

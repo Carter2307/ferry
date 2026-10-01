@@ -27,7 +27,7 @@ sequenceDiagram
 - The `ferry` CLI logged in to that server.
 
 <Callout type="warning" title="The dashboard host exposes the whole API">
-`--dashboard-host` routes the dashboard, the REST API and the webhooks through the public proxy. Every API call still needs the API token, but only enable it with HTTPS, so the token never travels in clear text.
+`--dashboard-host` routes the dashboard, the REST API and the webhooks through the public proxy. Every API call still needs an API token or a signed-in session, but only enable it with HTTPS, so that the password, the session and the tokens never travel in clear text.
 </Callout>
 
 ## Set up the webhook

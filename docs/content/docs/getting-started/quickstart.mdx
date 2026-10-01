@@ -20,7 +20,7 @@ From the root of the Ferry repository:
 ferryd
 ```
 
-It starts the server in the background and prints the dashboard URL and the API token:
+It starts the server in the background and prints the dashboard URL and, on a new server, the link that creates your account:
 
 ```text title="Output" noCopy
   Ferry 0.1.0 is running in the background (pid 48213)
@@ -28,9 +28,8 @@ It starts the server in the background and prints the dashboard URL and the API 
   Dashboard (proxy): http://ferry.localhost:8080
   Apps            : http://<name>.localhost:8080
   …
-  API token       : fy_3f9c…
 
-  Log in with:  ferry login --server http://127.0.0.1:7878 --token fy_3f9c…
+  Create your account: http://127.0.0.1:7878/setup?code=5b0e…
 
   Logs            : ferryd logs -f
   Stop            : ferryd stop
@@ -40,20 +39,39 @@ The server keeps running while you use the same terminal for the next steps.
 </Step>
 
 <Step>
+### Create your account
+
+Open the `Create your account` link in your browser. Enter your email and a password of at least 8 characters; the setup code is already filled in from the link. **Create account** creates the server's administrator account and signs you in to the dashboard.
+
+If the link is gone from your terminal, `ferryd status` prints it again. A server that already has an account prints `Connect the CLI : ferry login` instead: sign in at http://127.0.0.1:7878 with your email and password. More in [Installation](/docs/getting-started/installation#create-your-account).
+</Step>
+
+<Step>
 ### Log in with the CLI
 
-Copy the `ferry login` command that `ferryd` printed:
-
 ```bash title="Terminal"
-ferry login --server http://127.0.0.1:7878 --token <token printed by ferryd>
+ferry login --server http://127.0.0.1:7878
 ```
+
+`ferry login` prints a page and a code, opens the page in your browser and waits:
+
+```text title="Output" noCopy
+To connect this terminal, open this page and sign in:
+
+  http://127.0.0.1:7878/cli-login?id=d54ce0ee…
+
+Approve the request there if it shows this code:  MRDB-M7EE
+Waiting for the approval... (Ctrl-C to cancel)
+```
+
+The page shows who asks (for example `you@laptop`) and a code. Check that it is the code in your terminal, then click **Approve**. The terminal finishes on its own:
 
 ```text title="Output" noCopy
 Logged in to http://127.0.0.1:7878 (Ferry 0.1.0)
 Saved to /home/you/.config/ferry/config.json
 ```
 
-`ferry login` checks the URL and the token against the server, then saves them so later commands don't need them. The token is also in `ferry-data/api_token`. More in [Set up the CLI](/docs/getting-started/cli).
+The terminal now has an API token of its own, saved with the server URL so later commands don't need them. More in [Set up the CLI](/docs/getting-started/cli).
 </Step>
 
 <Step>
@@ -148,7 +166,7 @@ INSTANCE   DEPLOY     STATE     PORT    CPU            MEMORY                 RE
 
 `ferry status` shows each instance's CPU and memory use next to its limits (`4.7% / 1 CPU`). Add `-f` to `ferry logs` to keep streaming new lines; press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop. Each line shows the time and the instance it came from.
 
-The same service is on the dashboard at http://127.0.0.1:7878: sign in with the API token, then open **node-hello**. See the [Dashboard tour](/docs/getting-started/dashboard).
+The same service is on the dashboard at http://127.0.0.1:7878, where you are already signed in: open **node-hello**. See the [Dashboard tour](/docs/getting-started/dashboard).
 </Step>
 
 <Step>

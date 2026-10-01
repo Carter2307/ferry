@@ -1,20 +1,46 @@
 ---
 title: "Security model"
-description: "What the API token protects, how secrets are stored and passed, data directory permissions, what the proxy exposes, how far one misbehaving service can reach, and the safety rules that keep servers apart."
+description: "The administrator account, its sessions and API tokens, how secrets are stored and passed, data directory permissions, what the proxy exposes, how far one misbehaving service can reach, and the safety rules that keep servers apart."
 icon: ShieldCheck
 ---
 
-Ferry is built for one team running its own server. Whoever holds the API token is an administrator: there are no users, roles or per-service permissions. The model below keeps that token and the secrets behind it on the server, keeps everything but the proxy off the network, keeps one runaway app from taking the server down, and keeps two Ferry servers from ever damaging each other's workloads.
+Ferry is built for one team running its own server. A server has one administrator account: whoever signs in with it, or holds one of its API tokens, controls the whole server. There are no other users, roles or per-service permissions. The model below keeps the account, the tokens and the secrets behind them on the server, keeps everything but the proxy off the network, keeps one runaway app from taking the server down, and keeps two Ferry servers from ever damaging each other's workloads.
 
-## The API token
+## The account
 
-- **One token per server.** `ferryd` generates it on first start (`fy_` followed by 40 random characters) and stores it in `<data-dir>/api_token` with mode `0600`. `--api-token` / `FERRY_API_TOKEN` sets it explicitly instead (the environment value is hidden from `ferryd --help`).
-- **Full access.** The token can read every variable and every datastore password through the API, and deploy, delete or run anything. Treat it like a root password.
-- **Checked in constant time** (both sides are hashed with SHA-256, then compared without early exit) on every `/api/v1` request, including unknown routes.
+- **One administrator account per server:** an email and a password of at least 8 characters. The server stores an Argon2id hash of the password, never the password.
+- **Created with a setup code.** While the server has no account, the `ferryd` banner and `ferryd status` end with `Create your account: http://127.0.0.1:7878/setup?code=<code>`, where the code is 24 random hex characters, also kept in `<data-dir>/setup_code` with mode `0600`. Creating the account takes the code, so only someone who can read the server's terminal or its data directory can create it. The file is deleted once the account exists, and creating the account signs that browser in.
+- **The session is a cookie the page can't read.** Signing in at `/login` sets the session cookie: `HttpOnly`, `SameSite=Strict`, and `Secure` when the dashboard is reached over HTTPS through a proxy. Its name ends with the port of the address you use (`ferry_session_7878`), so two servers on one host name, such as `127.0.0.1:7878` and `127.0.0.1:7879`, keep a session each. The dashboard's JavaScript can't read it, and nothing but UI preferences is kept in `localStorage`. The server stores only the SHA-256 of the session's secret.
+- **A session ends** 30 days after it was last used, when you sign out, or, for every other browser, when the password is changed. **Server → Account** in the dashboard lists the sessions and can sign each browser out.
+- **Changes must come from the dashboard itself.** A `POST`, `PUT`, `PATCH` or `DELETE` request authenticated by the cookie must come from the dashboard's own origin: the server checks `Sec-Fetch-Site`, or else `Origin` against the host. Otherwise it answers 403 `cross_site_request`.
+- **Failed sign-ins are limited.** After 10 failures within 5 minutes, sign-ins and setup attempts are refused with 429 `too_many_attempts` until the oldest failure is 5 minutes old. The limit counts for the whole server, not per IP address, so someone who can reach the API can delay the administrator's sign-in: one more reason to keep the API on localhost or behind HTTPS.
+- **A forgotten password is replaced on the server.** [`ferryd reset-password`](/docs/reference/server-options#ferryd-reset-password) asks for a new password twice without echo (or reads one line from standard input when it isn't a terminal), replaces the password and signs every browser out. It works while the server runs, and API tokens keep working.
+
+## API tokens
+
+The CLI, scripts and CI authenticate with API tokens: `fy_` followed by 40 hex characters.
+
+- **Named, with an optional expiry.** You create them under **Server → Account** in the dashboard. A token is shown once, when it is created: the server stores its SHA-256 digest, and lists it with its last 4 characters and when it was last used. Revoking a token stops it at once.
+- **`ferry login` gets one for its terminal.** It prints a page of the dashboard and a code such as `ABCD-EFGH`, and waits. Signed in to the dashboard, you check that the page shows the same code and who asks, then approve or deny. The terminal then receives a token of its own, named after it (`user@host`), listed and revocable like the others. A request expires after 10 minutes.
+- **Full access, except to the account.** A token can read every variable and every datastore password through the API, and deploy, delete or run anything. Treat it like a root password. It can't use the account endpoints (`/api/v1/auth/…`: the password, the sessions, the tokens, approving a `ferry login`): those only accept the dashboard's session and answer 403 `session_required` to a token.
 - **Header first.** `Authorization: Bearer <token>`. `?access_token=` is accepted on `GET` requests only, for browser `EventSource` streams; `ferryd`'s request log records paths without their query string.
-- **On the client side,** `ferry login` saves the server and token in `~/.config/ferry/config.json` (or `$XDG_CONFIG_HOME/ferry/config.json`) with mode `0600`, in a `0700` directory. The dashboard keeps the token in the browser's `localStorage`.
+- **On the client side,** `ferry login` saves the server and token in `~/.config/ferry/config.json` (or `$XDG_CONFIG_HOME/ferry/config.json`) with mode `0600`, in a `0700` directory.
 
-To rotate the token, restart `ferryd` with a new `--api-token`, or stop it, delete `<data-dir>/api_token` and start it again to generate a new one. Then run `ferry login` again.
+Every `/api/v1` request, unknown routes included, needs an API token or the session cookie. The exceptions are the `/api/v1/auth` routes a browser or a terminal calls before it is authenticated: `status`, `setup`, `login`, `logout`, and the two calls with which a terminal starts a `ferry login` and collects its token.
+
+### The server token
+
+`ferryd` also has a token of its own. It generates it on first start and stores it in `<data-dir>/api_token` with mode `0600`; `--api-token` / `FERRY_API_TOKEN` sets it explicitly instead (the environment value is hidden from `ferryd --help`).
+
+- It authenticates the API like the other tokens, so CLI logins and CI jobs that already use it keep working. It is compared in constant time (both sides are hashed with SHA-256, then compared without early exit).
+- It is never printed, isn't listed in the dashboard and can't be revoked there.
+- It is meant for scripts on the server itself:
+
+```bash title="Terminal"
+FERRY_TOKEN="$(cat /var/lib/ferry/api_token)" ferry services
+```
+
+To rotate the server token, restart `ferryd` with a new `--api-token`, or stop it, delete `<data-dir>/api_token` and start it again to generate a new one. Then give the new token to whatever used the old one.
 
 ## Exposure
 
@@ -25,14 +51,14 @@ To rotate the token, restart `ferryd` with a new `--api-token`, or stop it, dele
 | App containers | `127.0.0.1:<random>` | The server itself only; the public reaches them through the proxy ([why](/docs/architecture/networking-model#why-127001-published-ports)) |
 | Datastores | `127.0.0.1:<fixed port>` | The server itself only |
 
-The proxy can also serve the dashboard and the full API on a hostname (`--dashboard-host`). By default that is `ferry.<base-domain>` only when the base domain is local (`localhost`, `.local`, `.internal`, `.test`, an IP address), and off on a public domain, where you must enable it explicitly. Only do so with HTTPS (`--https-addr` and `--acme-email`): over plain HTTP the token would cross the network in clear text. The safer default for a production server is to keep the API on localhost and reach it through an SSH tunnel:
+The proxy can also serve the dashboard and the full API on a hostname (`--dashboard-host`). By default that is `ferry.<base-domain>` only when the base domain is local (`localhost`, `.local`, `.internal`, `.test`, an IP address), and off on a public domain, where you must enable it explicitly. Only do so with HTTPS (`--https-addr` and `--acme-email`): over plain HTTP the password, the session cookie and API tokens would cross the network in clear text. The safer default for a production server is to keep the API on localhost and reach it through an SSH tunnel:
 
 ```bash title="Terminal"
 ssh -L 7878:127.0.0.1:7878 you@your-server
-ferry login --server http://127.0.0.1:7878 --token <token>
+ferry login --server http://127.0.0.1:7878
 ```
 
-A few endpoints need no token because they reveal nothing secret: `/healthz`, the OpenAPI document (`/api/openapi.json`), Swagger UI (`/api/docs`, which asks for the token to send requests), and the dashboard's static files (the dashboard asks for the token to show anything). Dashboard and Swagger UI pages are sent with `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`. `ferryd` sends no CORS headers, so other origins can't call the API from a browser.
+A few endpoints need no authentication because they reveal nothing secret: `/healthz`, the OpenAPI document (`/api/openapi.json`), Swagger UI (`/api/docs`, which asks for an API token to send requests), and the dashboard's static files (the dashboard asks you to sign in to show anything). Dashboard and Swagger UI pages are sent with `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`. `ferryd` sends no CORS headers, so other origins can't call the API from a browser.
 
 See [Production setup](/docs/guides/production) for a complete hardened setup.
 
@@ -42,9 +68,10 @@ See [Production setup](/docs/guides/production) for a complete hardened setup.
 
 | File | Mode | Contains |
 |---|---|---|
-| `api_token` | `0600` | The API token |
+| `api_token` | `0600` | The server token |
+| `setup_code` | `0600` | The setup code, only while the server has no account |
 | `instance_id` | `0600` | This data directory's claim on its Docker name prefix |
-| `ferry.db` | inside the `0700` directory | Services, deploys, variables, datastores (with passwords), env groups, git connections (with their secrets: a GitHub App's private key, tokens, an OAuth application's secret), settings |
+| `ferry.db` | inside the `0700` directory | Services, deploys, variables, datastores (with passwords), env groups, git connections (with their secrets: a GitHub App's private key, tokens, an OAuth application's secret), settings, the account (with the hash of its password), its sessions and API tokens (as SHA-256 digests) |
 | `certs/<host>/key.pem`, `certs/accounts/*.json` | `0600` | TLS private keys and the ACME account |
 | `logs/`, `repos/`, `uploads/`, `builds/` | inside the `0700` directory | Deploy and job logs, git mirrors, uploaded archives, build scratch space |
 
@@ -63,11 +90,11 @@ How Ferry keeps secret values out of places where they tend to leak:
 - **Datastore passwords** are generated (32 random characters) and never appear in logs or error messages. Readiness probes never put them on a command line: `redis-cli` gets the password through the exec environment (`REDISCLI_AUTH`).
 - **Webhook responses** return deploys with credentials redacted and without server paths.
 
-The API returns variable values and datastore passwords to token holders: the dashboard shows them so you can copy connection strings.
+The API returns variable values and datastore passwords to whoever is authenticated, with the session or an API token: the dashboard shows them so you can copy connection strings.
 
 ## Webhooks
 
-Webhooks don't use the API token; each has its own secret:
+Webhooks don't use the account or an API token; each has its own secret:
 
 - **Deploy hooks** are secret URLs (`/hooks/deploy/<service id>?key=<key>`). The path takes the service id only, since names are guessable, and an unknown id and a wrong key get the same 401, so the hook can't be used to discover services. Anyone with the URL can trigger deploys (but nothing else): rotate it with `ferry deploy-hook rotate NAME` if it leaks.
 - **GitHub webhooks** are disabled (404) until `--github-webhook-secret` is set. Each delivery must be signed with it (`X-Hub-Signature-256`, HMAC-SHA256 over the raw body, checked in constant time), and a delivery whose body or delivery id was already processed is ignored, so a captured delivery can't be replayed.
@@ -145,8 +172,8 @@ Still **not** contained:
 
 ## Known limitations
 
-- One administrator token: no users, teams, roles or audit log.
+- One administrator account: no other users, teams, roles or audit log. Every API token has the same access.
 - Secrets are stored unencrypted in `ferry.db` (see [above](#the-data-directory)).
-- No IP allow lists, and no rate limiting beyond the connection limits above.
+- No IP allow lists, and no rate limiting beyond the connection limits above and the server-wide limit on failed sign-ins.
 - Builds have no memory or CPU limit, disks have no quotas, disk and network I/O aren't limited, and every container can reach every service and datastore on the private network (see [One misbehaving service](#one-misbehaving-service)).
 - Images must be pullable anonymously: private registry credentials are not supported.
