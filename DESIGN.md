@@ -891,7 +891,10 @@ is a SIGKILL, which may have other causes. Docker can record the kill a
 moment after it reports the exit (seen on Linux hosts): an instance or a job
 that ended with a SIGKILL and no kill on record is looked at a while longer —
 its flag, then its `oom` events for 2 s — before it is reported as a plain
-exit.
+exit. That is all the engine can do: the kill of a container that is gone at
+once (a job whose only process was killed) is not always on Docker's record
+by then (seen on Linux CI), and the job then fails with `exited with code
+137`.
 * Deploys: a new instance OOM-killed during its health check fails the
   deploy with `instance ab12cd ran out of memory (limit 512 MiB) — raise the
   service's memory limit` (§5.5), also when Docker already restarted it
@@ -1057,7 +1060,10 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   pids limit, `docker update` and real OOM kills) and
   `ferry-engine/tests/e2e.rs`
   (`resource_limits_apply_to_instances_jobs_and_datastores`,
-  `out_of_memory_kills_are_reported`).
+  `out_of_memory_kills_are_reported`). The job of the latter runs under a
+  shell that outlives the kill for a second, so that Docker records it
+  while the container is still there (§14); when its error is not the
+  expected one, the test prints Docker's events for the job's container.
 * Git connections (§18) never call the real providers in tests:
   `ferry-api/tests/git_connections.rs` runs a fake GitHub Enterprise /
   GitLab on a local socket — accounts, paginated repositories, rejected

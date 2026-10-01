@@ -1351,6 +1351,26 @@ async fn boot_removes_the_instance_of_an_interrupted_recreate_at_once() {
 }
 
 /// The lines of a job's log so far (or all of them once it is finished).
+/// Seconds since the epoch, a little early: Docker's event timestamps are its
+/// own clock's.
+fn epoch_secs() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    now.as_secs().saturating_sub(1)
+}
+
+/// Docker's events for the container of a job since `since` (seconds since
+/// the epoch), one per line: what a failed assertion shows when the engine
+/// and Docker tell how a job ended differently (`oom`: the kernel's OOM
+/// killer; `kill`: someone asked Docker to).
+fn job_events(job_id: &str, since: u64) -> String {
+    let (since, until) = (since.to_string(), (epoch_secs() + 2).to_string());
+    let label = format!("label=ferry.job={job_id}");
+    let format = "{{.TimeNano}} {{.Action}} {{.Actor.Attributes}}";
+    let args = ["events", "--since", &since, "--until", &until, "--filter", "type=container"];
+    let (ok, out) = docker_cli(&[&args[..], &["--filter", &label, "--format", format]].concat());
+    if ok && !out.is_empty() { out } else { "(none in Docker's event log)".to_string() }
+}
+
 async fn job_lines(h: &Harness, id: &str, follow: bool) -> Vec<String> {
     let stream = h.engine.job_logs(id, follow).await.unwrap().collect::<Vec<LogLine>>();
     let lines = tokio::time::timeout(Duration::from_secs(60), stream).await.expect("the job log ends");
@@ -1690,13 +1710,22 @@ async fn out_of_memory_kills_are_reported() {
         })
         .await;
     h.deploy_live(&calm, DeployRequest::new(DeployTrigger::Create)).await;
-    let job = h.engine.run_job(&calm.id, Some("tail /dev/zero".into()), JobTrigger::Manual).await.unwrap();
+    // The shell outlives the kill of `tail` for a moment, then ends with its
+    // exit code. Docker learns of an OOM kill from the container's cgroup,
+    // and on Linux CI it did not always record the kill of a container whose
+    // only process was killed and which was gone at once: the engine can
+    // then only say "exited with code 137" (DESIGN.md §14).
+    let since = epoch_secs();
+    let hungry = "tail /dev/zero; code=$?; sleep 1; exit $code";
+    let job = h.engine.run_job(&calm.id, Some(hungry.into()), JobTrigger::Manual).await.unwrap();
     let job = h.wait_job(&job.id).await;
     assert_eq!(job.status, JobStatus::Failed);
     assert_eq!(job.exit_code, Some(137));
     assert_eq!(
         job.error.as_deref(),
-        Some("the job ran out of memory (limit 32 MiB) — raise the service's memory limit")
+        Some("the job ran out of memory (limit 32 MiB) — raise the service's memory limit"),
+        "what Docker recorded for the job's container:\n{}",
+        job_events(&job.id, since)
     );
     let lines = job_lines(&h, &job.id, true).await;
     assert!(lines.last().is_some_and(|l| l.contains("ran out of memory")), "{lines:?}");
