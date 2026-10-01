@@ -8,7 +8,7 @@ use std::time::Duration;
 use ferry_build::Builder;
 use ferry_core::{
     Config, Datastore, DatastoreKind, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Engine, Error,
-    JobRun, JobStatus, JobTrigger, LogLine, Service, ServiceType, Store,
+    GitConnection, GitProvider, JobRun, JobStatus, JobTrigger, LogLine, Service, ServiceType, Store,
 };
 use ferry_docker::Docker;
 use ferry_proxy::{Resolution, RouteTable};
@@ -188,6 +188,148 @@ async fn failed_builds_record_the_checked_out_commit() {
     assert_eq!(d.commit_sha.as_deref(), Some(sha.as_str()), "{lines:?}");
     assert_eq!(d.commit_message.as_deref(), Some("broken build"));
     assert!(lines.iter().any(|l| l.starts_with("==> Build failed")), "{lines:?}");
+}
+
+/// A dumb-HTTP git server for the bare repository `repo` (at `/repo.git`)
+/// that demands the Basic credentials `user:password`. Returns its port and
+/// whether an authorized request was served.
+async fn private_git_server(
+    repo: std::path::PathBuf,
+    user: &str,
+    password: &str,
+) -> (u16, Arc<std::sync::atomic::AtomicBool>) {
+    use base64::Engine as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let expected = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}")));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let authorized = Arc::new(AtomicBool::new(false));
+    let seen = authorized.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let (repo, expected, seen) = (repo.clone(), expected.clone(), seen.clone());
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let req = String::from_utf8_lossy(&buf).into_owned();
+                let path = req.split_whitespace().nth(1).unwrap_or("/").split('?').next().unwrap_or("/");
+                let auth_ok = req.lines().any(|l| {
+                    l.split_once(':')
+                        .is_some_and(|(k, v)| k.eq_ignore_ascii_case("authorization") && v.trim() == expected)
+                });
+                let file = path.strip_prefix("/repo.git/").and_then(|rel| std::fs::read(repo.join(rel)).ok());
+                let head = |status: &str, extra: &str, len: usize| {
+                    format!("HTTP/1.1 {status}\r\n{extra}Content-Length: {len}\r\nConnection: close\r\n\r\n")
+                        .into_bytes()
+                };
+                let response = match (auth_ok, file) {
+                    (false, _) => head("401 Unauthorized", "WWW-Authenticate: Basic realm=\"git\"\r\n", 0),
+                    (true, Some(body)) => {
+                        seen.store(true, Ordering::SeqCst);
+                        let mut r = head("200 OK", "Content-Type: application/octet-stream\r\n", body.len());
+                        r.extend_from_slice(&body);
+                        r
+                    }
+                    (true, None) => head("404 Not Found", "", 0),
+                };
+                let _ = sock.write_all(&response).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    (port, authorized)
+}
+
+#[tokio::test]
+async fn git_connections_authenticate_clones_on_their_own_host() {
+    use std::sync::atomic::Ordering;
+    if std::process::Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipped: git is not installed");
+        return;
+    }
+    const TOKEN: &str = "ghp_s3cr3tT0kenOfTheConnection";
+    // The checkout is real; `docker build` can't even start, so every deploy
+    // ends `build_failed` — with its commit recorded when the clone worked.
+    let f = fixture_with(2, "/nonexistent/ferry-test-docker").await;
+    let src = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("Dockerfile"), "FROM busybox:stable\n").unwrap();
+    git(src.path(), &["init", "-q", "-b", "main"]);
+    git(src.path(), &["add", "-A"]);
+    git(src.path(), &["commit", "-q", "-m", "private app"]);
+    let sha = git(src.path(), &["rev-parse", "HEAD"]);
+    let served = tempfile::tempdir().unwrap();
+    git(served.path(), &["clone", "-q", "--bare", &src.path().display().to_string(), "repo.git"]);
+    git(&served.path().join("repo.git"), &["update-server-info"]);
+    let (port, authorized) = private_git_server(served.path().join("repo.git"), "x-access-token", TOKEN).await;
+    let repo_url = format!("http://127.0.0.1:{port}/repo.git");
+
+    let deploy = async |name: &str, connection: Option<&GitConnection>| {
+        let svc = service(&f.store, name, ServiceType::WebService, |s| {
+            s.repo_url = Some(repo_url.clone());
+            s.git_connection_id = connection.map(|c| c.id.clone());
+        })
+        .await;
+        let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+        let lines = log_lines(&f.engine, &d.id).await;
+        let d = wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
+        assert_eq!(d.status, DeployStatus::BuildFailed, "{d:?}\n{lines:?}");
+        // No token ever reaches the deploy log, the deploy's error or its source.
+        let stored = format!("{lines:?} {:?} {:?}", d.error, d.source);
+        assert!(!stored.contains("ghp_") && !stored.contains("glpat-"), "{stored}");
+        (d, lines)
+    };
+    let has = |lines: &[String], prefix: &str| lines.iter().any(|l| l.starts_with(prefix));
+
+    // Without a connection the private repository can't be cloned.
+    let (d, lines) = deploy("anonymous", None).await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    assert!(has(&lines, "==> Hint: if the repository is private, connect its GitHub or GitLab account"), "{lines:?}");
+    assert!(!authorized.load(Ordering::SeqCst));
+
+    // A connection for another host is never used for this one.
+    let elsewhere = GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "me", "glpat-0therS3cret");
+    f.store.create_git_connection(&elsewhere).await.unwrap();
+    let (d, lines) = deploy("elsewhere", Some(&elsewhere)).await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    let warning = "==> Warning: the GitLab account 'me' is connected to https://gitlab.com, which this repository is \
+                   not on: cloning without it";
+    assert!(lines.iter().any(|l| l == warning), "{lines:?}");
+    assert!(!authorized.load(Ordering::SeqCst));
+
+    // A connection whose token the remote refuses says what to do about it.
+    let stale = GitConnection::new(GitProvider::Github, format!("http://127.0.0.1:{port}"), "ghost", "ghp_expired0");
+    f.store.create_git_connection(&stale).await.unwrap();
+    let (d, lines) = deploy("stale", Some(&stale)).await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    assert!(has(&lines, "==> Hint: the token of the GitHub account 'ghost' may have expired"), "{lines:?}");
+    assert!(!authorized.load(Ordering::SeqCst));
+
+    // The connection of the repository's own host: its token clones it.
+    let connection = GitConnection::new(GitProvider::Github, format!("http://127.0.0.1:{port}"), "octocat", TOKEN);
+    f.store.create_git_connection(&connection).await.unwrap();
+    let (d, lines) = deploy("private", Some(&connection)).await;
+    assert!(authorized.load(Ordering::SeqCst), "{lines:?}");
+    assert_eq!(d.commit_sha.as_deref(), Some(sha.as_str()), "{lines:?}");
+    assert_eq!(d.commit_message.as_deref(), Some("private app"));
+    assert!(lines.iter().any(|l| l == "==> Cloning with the GitHub account 'octocat'"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == &format!("==> Cloning from {repo_url} (branch main)")), "{lines:?}");
+    assert!(!has(&lines, "==> Hint"), "{lines:?}");
+    assert_eq!(d.source, DeploySource::Git { repo_url: repo_url.clone(), branch: "main".into(), commit: None });
+
+    // Once the connection is deleted, the service clones without it again.
+    f.store.delete_git_connection(&connection.id).await.unwrap();
+    let svc = f.store.require_service("private").await.unwrap();
+    assert_eq!(svc.git_connection_id, None);
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let lines = log_lines(&f.engine, &d.id).await;
+    assert!(!has(&lines, "==> Cloning with"), "{lines:?}");
 }
 
 #[tokio::test]

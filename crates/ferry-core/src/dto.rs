@@ -5,9 +5,12 @@
 //! resource id **or** its name (an exact id match wins); errors are
 //! [`ApiErrorBody`]. Request bodies reject unknown fields.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::models::{Datastore, DatastoreKind, Deploy, EnvGroup, EnvVar, Runtime, Service, ServiceState, ServiceType};
+use crate::models::{
+    Datastore, DatastoreKind, Deploy, EnvGroup, EnvVar, GitProvider, Runtime, Service, ServiceState, ServiceType,
+};
 
 /// `GET /api/v1/info`
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -64,6 +67,9 @@ pub struct CreateService {
     #[serde(rename = "type")]
     pub service_type: Option<ServiceType>,
     pub repo_url: Option<String>,
+    /// Id of the git connection that authenticates the clones of `repo_url`
+    /// (an http(s) repository on the connection's provider instance).
+    pub git_connection_id: Option<String>,
     pub branch: Option<String>,
     pub image: Option<String>,
     pub runtime: Option<Runtime>,
@@ -99,6 +105,10 @@ pub struct CreateService {
 #[serde(deny_unknown_fields)]
 pub struct UpdateService {
     pub repo_url: Option<String>,
+    /// Id of the git connection that authenticates the clones; an empty
+    /// string removes it. Omitted: kept while `repo_url` stays on the
+    /// connection's provider instance, removed otherwise.
+    pub git_connection_id: Option<String>,
     pub branch: Option<String>,
     pub image: Option<String>,
     pub runtime: Option<Runtime>,
@@ -282,6 +292,98 @@ pub struct EnvGroupView {
     pub vars: Vec<EnvVar>,
     /// Names of linked services.
     pub services: Vec<String>,
+}
+
+/// `POST /api/v1/git/connections` — connect an account of a git provider
+/// with an access token.
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectGit {
+    pub provider: GitProvider,
+    /// A personal access token of the account: on GitHub a classic token
+    /// with the `repo` scope (or a fine-grained one with read access to
+    /// Contents and Metadata), on GitLab one with the `read_api` and
+    /// `read_repository` scopes.
+    pub token: String,
+    /// Web URL of a self-hosted instance (GitHub Enterprise Server, GitLab
+    /// self-managed), e.g. `https://gitlab.example.com`. Default:
+    /// `https://github.com` / `https://gitlab.com`.
+    pub base_url: Option<String>,
+}
+
+impl std::fmt::Debug for ConnectGit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectGit")
+            .field("provider", &self.provider)
+            .field("token", &"***")
+            .field("base_url", &self.base_url)
+            .finish()
+    }
+}
+
+/// A git connection as returned by the API. The token itself is never
+/// returned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct GitConnectionView {
+    pub id: String,
+    pub provider: GitProvider,
+    /// Web URL of the provider instance, e.g. `https://github.com`.
+    pub base_url: String,
+    /// Login of the account the token belongs to.
+    pub account: String,
+    /// Display name of the account, if it has one.
+    pub account_name: Option<String>,
+    /// The end of the stored token (`…a1b2`), to tell tokens apart.
+    pub token_hint: String,
+    /// Scopes of the token, when the provider reports them (empty otherwise).
+    pub scopes: Vec<String>,
+    /// When the token expires, when the provider reports it.
+    pub token_expires_at: Option<DateTime<Utc>>,
+    /// Names of the services cloned with this connection.
+    pub services: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A repository a git connection can access.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct GitRepository {
+    /// The provider's id of the repository.
+    pub id: String,
+    /// `owner/name` (GitLab: the full path, subgroups included).
+    pub full_name: String,
+    pub name: String,
+    /// The user, organization or group that owns it.
+    pub owner: String,
+    /// Not public (GitLab: `private` or `internal`).
+    pub private: bool,
+    pub archived: bool,
+    /// `None` for a repository without commits.
+    pub default_branch: Option<String>,
+    /// The https clone URL: use it as a service's `repo_url`.
+    pub clone_url: String,
+    /// The repository's page on the provider.
+    pub web_url: String,
+    pub description: Option<String>,
+    /// The last push (GitHub) or activity (GitLab).
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// `GET /api/v1/git/connections/{id}/repositories`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct GitRepositoryList {
+    /// Most recently updated first.
+    pub repositories: Vec<GitRepository>,
+    /// The account can access more repositories than listed (the listing
+    /// stops at 1000).
+    pub truncated: bool,
+}
+
+/// A branch of a repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct GitBranch {
+    pub name: String,
+    pub protected: bool,
 }
 
 /// `POST /api/v1/blueprints/apply` (JSON body) — or send the raw YAML with

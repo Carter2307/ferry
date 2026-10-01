@@ -72,6 +72,8 @@ export function useCreateService() {
       qc.setQueryData(keys.service(view.name), view)
       void qc.invalidateQueries({ queryKey: keys.serviceList() })
       if (view.env_groups.length > 0) void qc.invalidateQueries({ queryKey: keys.envGroups() })
+      // Git connections list the services cloned through them.
+      if (view.git_connection_id) void qc.invalidateQueries({ queryKey: keys.gitConnections() })
     },
   })
 }
@@ -81,9 +83,13 @@ export function useUpdateService(ref: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: UpdateService) => endpoints.updateService(ref, body),
-    onSuccess: (view) => {
+    onSuccess: (view, body) => {
       putService(qc, ref, view)
       void invalidateService(qc, ref)
+      // A new source can change which git connection the service uses.
+      if ('repo_url' in body || 'git_connection_id' in body) {
+        void qc.invalidateQueries({ queryKey: keys.gitConnections() })
+      }
     },
   })
 }
@@ -102,6 +108,7 @@ export function useDeleteService() {
       if (cached) qc.removeQueries({ queryKey: keys.service(cached.name) })
       void qc.invalidateQueries({ queryKey: keys.services() })
       void qc.invalidateQueries({ queryKey: keys.envGroups() })
+      void qc.invalidateQueries({ queryKey: keys.gitConnections() })
     },
   })
 }

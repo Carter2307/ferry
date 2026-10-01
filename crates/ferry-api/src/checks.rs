@@ -1,6 +1,26 @@
 //! Validation rules shared by the REST handlers and blueprints.
 
-use ferry_core::{Config, EnvVar, Error, Result, Service, Store, env, validate};
+use ferry_core::{Config, EnvVar, Error, Result, Service, Store, env, git, validate};
+
+/// The git connection a service names must exist and be for its repository:
+/// a token is only ever used on its own provider instance, for an http(s)
+/// URL that carries no credentials of its own.
+pub async fn git_connection(store: &Store, svc: &Service) -> Result<()> {
+    let Some(id) = &svc.git_connection_id else { return Ok(()) };
+    let Some(connection) = store.get_git_connection(id).await? else {
+        return Err(Error::invalid(format!("git connection '{id}' not found")));
+    };
+    let repo = svc.repo_url.as_deref().unwrap_or_default();
+    if !connection.serves(repo) {
+        return Err(Error::invalid(format!(
+            "the {} can't be used for {}: its token is only for http(s) repositories on {} (and URLs without credentials of their own)",
+            connection.describe(),
+            git::redact_url(repo),
+            connection.base_url
+        )));
+    }
+    Ok(())
+}
 
 /// Size of a set of variables as counted by [`validate::env_vars`].
 fn env_bytes(vars: &[EnvVar]) -> usize {

@@ -32,11 +32,19 @@ mod redact;
 
 use crate::git::GitError;
 
+pub use crate::git::Credentials as GitCredentials;
+
 /// Where the code comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildSource {
     /// Clone `repo_url` at `branch`, or at `commit` when given.
-    Git { repo_url: String, branch: String, commit: Option<String> },
+    ///
+    /// `credentials` authenticate an http(s) remote without being part of
+    /// its URL (the token of a connected GitHub / GitLab account). Git gets
+    /// them through its environment, for the remote's own host only; they
+    /// never appear on a command line, in the git cache or in the logs.
+    /// Ignored for ssh and local repositories.
+    Git { repo_url: String, branch: String, commit: Option<String>, credentials: Option<GitCredentials> },
     /// Extract a gzipped tarball (uploaded via `ferry up`).
     Archive { path: PathBuf },
 }
@@ -287,16 +295,16 @@ impl Builder {
     ) -> Result<BuildOutput> {
         // 1. Fetch the source into the scratch directory.
         let (export_root, commit_sha, commit_message) = match &req.source {
-            BuildSource::Git { repo_url, branch, commit } => {
+            BuildSource::Git { repo_url, branch, commit, credentials } => {
                 let lock = self.repo_lock(&req.service_id);
                 let _guard = tokio::select! {
                     g = lock.lock() => g,
                     _ = cancel.cancelled() => return Err(Error::Canceled),
                 };
                 let cache = self.repos_dir.join(&req.service_id);
-                let co = git::checkout(&cache, repo_url, branch, commit.as_deref(), source_dir, logs, cancel)
-                    .await
-                    .map_err(git_build_error)?;
+                let source =
+                    git::Source { repo_url, credentials: credentials.as_ref(), branch, commit: commit.as_deref() };
+                let co = git::checkout(&cache, source, source_dir, logs, cancel).await.map_err(git_build_error)?;
                 for s in &co.report_skipped {
                     logs.system(format!("==> Skipped {s}"));
                 }

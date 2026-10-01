@@ -148,6 +148,7 @@ describe('toCreateRequest', () => {
     const body = toCreateRequest(
       form({
         name: 'web',
+        repoMode: 'url',
         repoUrl: 'https://github.com/a/b',
         branch: '',
         port: '3000',
@@ -175,6 +176,39 @@ describe('toCreateRequest', () => {
     })
     expect(body).not.toHaveProperty('image')
     expect(body).not.toHaveProperty('schedule')
+    // A repository given by URL is cloned without a connection.
+    expect(body).not.toHaveProperty('git_connection_id')
+  })
+  it('a repository picked from a connected account is cloned through its connection', () => {
+    const picked = {
+      connectionId: 'git-0123456789abcdef0123',
+      fullName: 'octocat/app',
+      cloneUrl: 'https://github.com/octocat/app.git',
+      private: true,
+      defaultBranch: 'trunk',
+    }
+    // The URL typed in the other mode is not what gets deployed.
+    const f = form({ name: 'app', repository: picked, repoUrl: 'https://example.com/other.git', branch: 'trunk' })
+    expect(validateForm(f, none)).toEqual({})
+    expect(toCreateRequest(f, [])).toMatchObject({
+      repo_url: 'https://github.com/octocat/app.git',
+      git_connection_id: 'git-0123456789abcdef0123',
+      branch: 'trunk',
+      auto_deploy: true,
+      deploy: true,
+    })
+    // Back in URL mode the picked repository (and its connection) is left out.
+    const byUrl = toCreateRequest({ ...f, repoMode: 'url' }, [])
+    expect(byUrl.repo_url).toBe('https://example.com/other.git')
+    expect(byUrl).not.toHaveProperty('git_connection_id')
+    // Other sources never carry one.
+    expect(toCreateRequest({ ...f, source: 'image', image: 'nginx' }, [])).not.toHaveProperty('git_connection_id')
+  })
+  it('a git source needs its repository, picked or typed', () => {
+    expect(validateForm(form({ name: 'app' }), none)).toEqual({ repository: 'Select a repository.' })
+    expect(validateForm(form({ name: 'app', repoMode: 'url' }), none).repoUrl).toBeDefined()
+    expect(validateForm(form({ name: 'app', repoMode: 'url', repoUrl: 'https://github.com/a/b' }), none)).toEqual({})
+    expect(validateForm(form({ name: 'app', source: 'upload' }), none)).toEqual({})
   })
   it('sends resource limits only when set (default = the server default)', () => {
     const plain = toCreateRequest(form({ name: 'api', source: 'image', image: 'nginx' }), [])
@@ -207,6 +241,10 @@ describe('fieldForServerError', () => {
     expect(fieldForServerError("domain 'a.example.com' is already used by service 'web'")).toBe('domains')
     expect(fieldForServerError("env group 'nope' not found")).toBe('envGroups')
     expect(fieldForServerError("invalid repo_url 'x': must not be empty")).toBe('repoUrl')
+    expect(fieldForServerError("git connection 'git-0123456789abcdef0123' not found")).toBe('repository')
+    expect(
+      fieldForServerError("the GitHub account 'octocat' can't be used for https://gitlab.com/a/b: its token is only for …"),
+    ).toBe('repository')
     expect(fieldForServerError('memory limit must be between 16 MiB and 1024 GiB (got 8 MiB)')).toBe('memoryLimit')
     expect(fieldForServerError('CPU limit must be between 0.01 and 512 CPUs (got 0)')).toBe('cpuLimit')
     expect(fieldForServerError('something else entirely')).toBeNull()

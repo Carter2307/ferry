@@ -20,6 +20,7 @@ import { bytes } from '@/lib/format'
 import { defaultCpuText, defaultMemoryText, formatCpus } from '@/lib/resources'
 import { useAuth } from '@/stores/auth'
 
+import { GitAccountsSection } from './GitAccountsSection'
 import { MaskedCommand, OnOffPill, RowValue, ThemePicker } from './parts'
 
 function useOrigin(): string {
@@ -212,7 +213,10 @@ export function ConnectionsSection() {
   const hookUrl = `${origin}/hooks/github`
   return (
     <>
-      <PageHeader title="Connections" description="Connect the CLI, CI jobs and GitHub to this server." />
+      <PageHeader
+        title="Connections"
+        description="Connect the CLI, CI jobs and your GitHub or GitLab accounts to this server."
+      />
       <PageSection title="Command line">
         <FormCard asDiv>
           <FormRow
@@ -242,6 +246,8 @@ export function ConnectionsSection() {
           </FormRow>
         </FormCard>
       </PageSection>
+
+      <GitAccountsSection />
 
       <PageSection
         title="GitHub webhook"

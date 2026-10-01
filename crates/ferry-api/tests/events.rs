@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::body::{Body, BodyDataStream};
 use common::{TOKEN, TestApp};
-use ferry_core::DeployStatus;
+use ferry_core::{DeployStatus, GitConnection, GitProvider};
 use futures::StreamExt;
 use http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
@@ -157,6 +157,35 @@ async fn engine_side_changes_are_found_by_polling() {
     assert_eq!(seen.len(), 1, "{seen:?}");
     app.store.set_live_deploy(&id(&web), Some(&deploy_id)).await.unwrap();
     feed.until("service", &id(&web), "updated").await;
+}
+
+#[tokio::test]
+async fn git_connections_are_reported() {
+    let app = TestApp::new().await;
+    let mut feed = Feed::open(&app).await;
+    // Connecting asks the provider (tests/git.rs): write the store directly.
+    let conn = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "a-token");
+    app.store.create_git_connection(&conn).await.unwrap();
+    let seen = feed.until("git_connection", &conn.id, "created").await;
+    assert_eq!(
+        seen.last().unwrap(),
+        &json!({"kind": "git_connection", "id": conn.id, "service_id": null, "action": "created"})
+    );
+    // disconnecting: the services that used it change, then it goes
+    let web = app
+        .create_service(json!({
+            "name": "web", "repo_url": "https://github.com/octocat/web", "git_connection_id": conn.id,
+        }))
+        .await;
+    feed.until("service", &id(&web), "created").await;
+    let disconnect = app.delete(&format!("/api/v1/git/connections/{}?force=true", conn.id)).await;
+    assert_eq!(disconnect.status, StatusCode::NO_CONTENT);
+    let seen = feed.until("git_connection", &conn.id, "deleted").await;
+    let web_id = id(&web);
+    assert!(
+        seen.iter().any(|c| c["kind"] == "service" && c["id"] == web_id.as_str() && c["action"] == "updated"),
+        "{seen:?}"
+    );
 }
 
 #[tokio::test]

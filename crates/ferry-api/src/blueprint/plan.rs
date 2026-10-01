@@ -856,6 +856,15 @@ fn desired_service(spec: &ServiceSpec, existing: Option<&Service>) -> Result<Ser
             s.repo_url = spec.repo_url.clone();
             s.image = spec.image.clone();
             s.branch = spec.branch.clone().unwrap_or_else(|| "main".to_string());
+            // A git connection (selected outside blueprints) follows the
+            // repository for as long as it stays on the connection's host.
+            let same_host = match (existing.and_then(|e| e.repo_url.as_deref()), s.repo_url.as_deref()) {
+                (Some(old), Some(new)) => old == new || git::same_http_origin(old, new),
+                _ => false,
+            };
+            if !same_host {
+                s.git_connection_id = None;
+            }
         }
     }
     s.runtime = spec.runtime.unwrap_or(if s.image.is_some() {
@@ -927,6 +936,7 @@ fn diff_service(old: &Service, sp: &mut ServicePlan) -> Vec<String> {
         show(&new.repo_url.as_deref().map(git::redact_url)),
         true,
     );
+    field("git_connection_id", show(&old.git_connection_id), show(&new.git_connection_id), true);
     field("branch", old.branch.clone(), new.branch.clone(), true);
     field("image", show(&old.image), show(&new.image), true);
     field("runtime", old.runtime.to_string(), new.runtime.to_string(), true);

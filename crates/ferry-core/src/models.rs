@@ -236,6 +236,134 @@ str_enum! {
     }
 }
 
+str_enum! {
+    /// Git hosting providers whose accounts can be connected.
+    pub enum GitProvider {
+        Github = "github" | "gh",
+        Gitlab = "gitlab" | "gl",
+    }
+}
+
+impl GitProvider {
+    /// Name shown to users.
+    pub fn label(&self) -> &'static str {
+        match self {
+            GitProvider::Github => "GitHub",
+            GitProvider::Gitlab => "GitLab",
+        }
+    }
+
+    /// Web URL of the provider's public instance.
+    pub fn default_base_url(&self) -> &'static str {
+        match self {
+            GitProvider::Github => "https://github.com",
+            GitProvider::Gitlab => "https://gitlab.com",
+        }
+    }
+
+    /// The username git sends over http(s) with an access token as the
+    /// password (both providers only look at the token).
+    pub fn git_username(&self) -> &'static str {
+        match self {
+            GitProvider::Github => "x-access-token",
+            GitProvider::Gitlab => "oauth2",
+        }
+    }
+}
+
+/// An account of a git provider connected with an access token. The
+/// dashboard lists the account's repositories through it, and the services
+/// that use it ([`Service::git_connection_id`]) clone with its token.
+///
+/// The token never leaves the server: this type is deliberately not
+/// serializable (the API returns `dto::GitConnectionView`).
+#[derive(Clone, PartialEq)]
+pub struct GitConnection {
+    pub id: String,
+    pub provider: GitProvider,
+    /// Web URL of the provider instance without a trailing slash:
+    /// `https://github.com`, `https://gitlab.com` or a self-hosted one.
+    pub base_url: String,
+    /// Login of the account the token belongs to.
+    pub account: String,
+    /// Display name of the account, if it has one.
+    pub account_name: Option<String>,
+    /// The access token (a personal access token).
+    pub token: String,
+    /// Scopes of the token, when the provider reports them.
+    pub scopes: Vec<String>,
+    /// When the token expires, when the provider reports it.
+    pub token_expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for GitConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitConnection")
+            .field("id", &self.id)
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("account", &self.account)
+            .field("token", &"***")
+            .finish_non_exhaustive()
+    }
+}
+
+impl GitConnection {
+    pub fn new(
+        provider: GitProvider,
+        base_url: impl Into<String>,
+        account: impl Into<String>,
+        token: impl Into<String>,
+    ) -> Self {
+        let now = now();
+        GitConnection {
+            id: ids::new_id(ids::GIT_CONNECTION),
+            provider,
+            base_url: base_url.into(),
+            account: account.into(),
+            account_name: None,
+            token: token.into(),
+            scopes: Vec::new(),
+            token_expires_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// `GitHub account 'octocat'`, for messages.
+    pub fn describe(&self) -> String {
+        format!("{} account '{}'", self.provider.label(), self.account)
+    }
+
+    /// The end of the token (`…a1b2`), enough to tell two tokens apart.
+    pub fn token_hint(&self) -> String {
+        let chars: Vec<char> = self.token.chars().collect();
+        // Never more than a third of a (suspiciously short) token.
+        let shown = (chars.len() / 3).min(4);
+        format!("…{}", chars[chars.len() - shown..].iter().collect::<String>())
+    }
+
+    /// Whether the token is meant for `repo_url`: an http(s) repository on
+    /// this connection's provider instance (same scheme, host and port, and
+    /// below the instance's path when it has one). Everything else (other
+    /// hosts, ssh, local paths, URLs that carry credentials of their own)
+    /// is cloned without it.
+    pub fn serves(&self, repo_url: &str) -> bool {
+        let (Some(base), Some(repo)) =
+            (crate::git::parse_http_url(&self.base_url), crate::git::parse_http_url(repo_url))
+        else {
+            return false;
+        };
+        if (base.scheme, &base.host, base.port) != (repo.scheme, &repo.host, repo.port) {
+            return false;
+        }
+        let prefix = base.path.trim_end_matches('/');
+        prefix.is_empty() || repo.path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+    }
+}
+
 /// Where a service's code comes from (derived from its fields).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -258,6 +386,11 @@ pub struct Service {
     pub service_type: ServiceType,
     /// Git URL (https, ssh, or local path / file://). Mutually exclusive with `image`.
     pub repo_url: Option<String>,
+    /// The git connection (a connected GitHub / GitLab account) whose token
+    /// authenticates the clones of `repo_url`. `None` = clone without it
+    /// (public repositories, credentials in the URL, ssh).
+    #[serde(default)]
+    pub git_connection_id: Option<String>,
     /// Branch to build and to watch for auto-deploys.
     pub branch: String,
     /// Prebuilt image reference (`runtime` = image).
@@ -317,6 +450,7 @@ impl Service {
             name: name.into(),
             service_type,
             repo_url: None,
+            git_connection_id: None,
             branch: "main".to_string(),
             image: None,
             runtime: Runtime::Auto,
@@ -658,6 +792,47 @@ mod tests {
         let mut r = Datastore::new("cache", DatastoreKind::Redis);
         r.password = "pw".into();
         assert_eq!(r.internal_url(), "redis://default:pw@cache:6379");
+    }
+
+    #[test]
+    fn git_connections_serve_their_own_host_only() {
+        assert_eq!("GitHub".parse::<GitProvider>().unwrap(), GitProvider::Github);
+        assert_eq!(serde_json::to_string(&GitProvider::Gitlab).unwrap(), "\"gitlab\"");
+        let gh = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "ghp_0123456789abcdefWXYZ");
+        assert!(ids::has_prefix(&gh.id, ids::GIT_CONNECTION));
+        assert_eq!(gh.describe(), "GitHub account 'octocat'");
+        for yes in ["https://github.com/octocat/app.git", "https://GitHub.com:443/octocat/app", "https://github.com/a"]
+        {
+            assert!(gh.serves(yes), "{yes}");
+        }
+        for no in [
+            "http://github.com/octocat/app.git",
+            "https://gitlab.com/octocat/app.git",
+            "https://github.com.evil.example/octocat/app.git",
+            "https://github.com@evil.example/octocat/app.git",
+            "https://user:pw@github.com/octocat/app.git",
+            "git@github.com:octocat/app.git",
+            "ssh://git@github.com/octocat/app.git",
+            "/srv/repos/app",
+        ] {
+            assert!(!gh.serves(no), "{no}");
+        }
+        // A self-hosted instance below a path only serves that path.
+        let gl = GitConnection::new(GitProvider::Gitlab, "https://dev.example.com/gitlab", "me", "glpat-xyz");
+        assert!(gl.serves("https://dev.example.com/gitlab/group/sub/app.git"));
+        assert!(!gl.serves("https://dev.example.com/gitlabx/group/app.git"));
+        assert!(!gl.serves("https://dev.example.com/other/app.git"));
+    }
+
+    #[test]
+    fn git_connection_tokens_stay_out_of_debug_output() {
+        let c = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "ghp_0123456789abcdefWXYZ");
+        assert_eq!(c.token_hint(), "…WXYZ");
+        let debug = format!("{c:?}");
+        assert!(debug.contains("octocat") && !debug.contains("ghp_") && !debug.contains("WXYZ"), "{debug}");
+        // Short tokens reveal at most a third of themselves.
+        let short = |t: &str| GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "me", t).token_hint();
+        assert_eq!((short("abcdef").as_str(), short("ab").as_str(), short("").as_str()), ("…ef", "…", "…"));
     }
 
     #[test]

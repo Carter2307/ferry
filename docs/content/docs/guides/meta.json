@@ -2,6 +2,7 @@
   "title": "Guides",
   "icon": "BookOpen",
   "pages": [
+    "git-accounts",
     "github-auto-deploy",
     "language-guides",
     "postgres-app",

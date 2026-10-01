@@ -67,9 +67,11 @@ src/
   lib/api/useLogStream.ts        log stream hook
   lib/format.ts  lib/dotenv.ts   pure helpers (tested)
   lib/resources.ts               memory / CPU limits: parse + format (mirror of ferry-core resources.rs), presets, form model
+  lib/git.ts                     git connections: which repositories an account serves (mirror of GitConnection::serves), token scopes / expiry, repository search
   stores/auth.ts  stores/ui.ts   zustand
   components/ui/*                shadcn primitives (customized)
   components/shell/*             AppShell, TopBar, IconRail, InnerMenu, CommandMenu, ConnectPopover
+  components/git/*               ConnectGitDialog (connect a GitHub / GitLab account, replace its token)
   components/patterns/*          PageHeader, FormCard, InfoTile, MetricCard, EmptyState, LogViewer, …
   pages/**                       routed pages (each file exports a named `XxxPage`)
 ```

@@ -8,9 +8,10 @@
 //! data: {"kind":"deploy","id":"dep-…","service_id":"srv-…","action":"updated"}
 //! ```
 //!
-//! `kind` is `service`, `deploy`, `datastore`, `env_group` or `job`; `action`
-//! is `created`, `updated` or `deleted`; `service_id` is set for services
-//! (their own id), deploys and jobs, `null` otherwise. A subscriber that falls
+//! `kind` is `service`, `deploy`, `datastore`, `env_group`, `job` or
+//! `git_connection`; `action` is `created`, `updated` or `deleted`;
+//! `service_id` is set for services (their own id), deploys and jobs, `null`
+//! otherwise. A subscriber that falls
 //! behind gets `{"kind":"all","id":"*","service_id":null,"action":"resync"}`
 //! and should refetch everything. `ready` is sent once the feed watches the
 //! store: changes after it are reported, so a client (re)fetches its data
@@ -22,9 +23,9 @@
 //! the feed **polls** the store: one shared detector task (started with the
 //! first subscriber, stopped when the last one leaves) fingerprints every
 //! service (row, own variables, env group links), datastore, env group (row,
-//! variables, linked services) and the recent / active deploys and job runs
-//! every [`POLL`], and broadcasts the differences. Every mutating request
-//! also nudges it, so API-driven changes are reported at once.
+//! variables, linked services), git connection and the recent / active
+//! deploys and job runs every [`POLL`], and broadcasts the differences. Every
+//! mutating request also nudges it, so API-driven changes are reported at once.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap};
@@ -295,6 +296,7 @@ struct Snapshot {
     services: HashMap<String, u64>,
     datastores: HashMap<String, u64>,
     env_groups: HashMap<String, u64>,
+    git_connections: HashMap<String, u64>,
     deploys: Window,
     jobs: Window,
 }
@@ -333,6 +335,7 @@ impl Snapshot {
         let services = rows_by_id(&mut tx, "services").await?;
         let datastores = rows_by_id(&mut tx, "datastores").await?;
         let env_groups = rows_by_id(&mut tx, "env_groups").await?;
+        let git_connections = rows_by_id(&mut tx, "git_connections").await?;
         let deploys = window(&mut tx, "deploys", "('queued', 'building', 'deploying')").await?;
         let jobs = window(&mut tx, "job_runs", "('pending', 'running')").await?;
         tx.rollback().await?;
@@ -352,18 +355,19 @@ impl Snapshot {
                 (id, fp)
             })
             .collect();
-        Ok(Snapshot { services, datastores, env_groups, deploys, jobs })
+        Ok(Snapshot { services, datastores, env_groups, git_connections, deploys, jobs })
     }
 
     /// What changed from `self` to `next`, in a stable order: env groups,
-    /// datastores, services, deploys, jobs; creations and updates before
-    /// deletions.
+    /// datastores, git connections, services, deploys, jobs; creations and
+    /// updates before deletions.
     fn diff(&self, next: &Snapshot) -> Vec<Change> {
         let mut out = Vec::new();
         let mut deleted = Vec::new();
         for (kind, before, after) in [
             ("env_group", &self.env_groups, &next.env_groups),
             ("datastore", &self.datastores, &next.datastores),
+            ("git_connection", &self.git_connections, &next.git_connections),
             ("service", &self.services, &next.services),
         ] {
             let service_id = |id: &str| (kind == "service").then(|| id.to_string());
@@ -460,12 +464,15 @@ mod tests {
         a.services.insert("srv-a".into(), 1);
         a.services.insert("srv-gone".into(), 1);
         a.datastores.insert("ds-1".into(), 1);
+        a.git_connections.insert("git-gone".into(), 1);
         a.deploys.rows.insert("dep-1".into(), ("srv-a".into(), "queued".into(), "2026-01-01T00:00:01Z".into()));
         let mut b = a.clone();
         b.services.insert("srv-a".into(), 2);
         b.services.remove("srv-gone");
         b.services.insert("srv-new".into(), 1);
         b.env_groups.insert("grp-1".into(), 1);
+        b.git_connections.remove("git-gone");
+        b.git_connections.insert("git-new".into(), 1);
         b.deploys.rows.insert("dep-1".into(), ("srv-a".into(), "building".into(), "2026-01-01T00:00:01Z".into()));
         b.deploys.rows.insert("dep-2".into(), ("srv-new".into(), "queued".into(), "2026-01-01T00:00:02Z".into()));
         b.jobs.rows.insert("job-1".into(), ("srv-a".into(), "pending".into(), "2026-01-01T00:00:03Z".into()));
@@ -476,11 +483,13 @@ mod tests {
             got,
             vec![
                 ("env_group", "grp-1", None, "created"),
+                ("git_connection", "git-new", None, "created"),
                 ("service", "srv-a", Some("srv-a"), "updated"),
                 ("service", "srv-new", Some("srv-new"), "created"),
                 ("deploy", "dep-1", Some("srv-a"), "updated"),
                 ("deploy", "dep-2", Some("srv-new"), "created"),
                 ("job", "job-1", Some("srv-a"), "created"),
+                ("git_connection", "git-gone", None, "deleted"),
                 ("service", "srv-gone", Some("srv-gone"), "deleted"),
             ]
         );

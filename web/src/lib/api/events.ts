@@ -42,7 +42,7 @@ export function usePollInterval(ms: number, opts: { always?: boolean } = {}): nu
   return mode === 'live' ? false : ms
 }
 
-const CHANGE_KINDS: readonly ChangeKind[] = ['service', 'deploy', 'datastore', 'env_group', 'job']
+const CHANGE_KINDS: readonly ChangeKind[] = ['service', 'deploy', 'datastore', 'env_group', 'job', 'git_connection']
 
 function isChangeEvent(v: unknown): v is ChangeEvent {
   if (typeof v !== 'object' || v === null) return false
@@ -68,6 +68,11 @@ export function invalidationsForChange(change: ChangeEvent): Invalidation[] {
       return [keys.datastores()]
     case 'env_group':
       return change.action === 'deleted' ? [keys.envGroups(), keys.services()] : [keys.envGroups()]
+    case 'git_connection':
+      // a replaced token may see other repositories; a removed account has none
+      return change.action === 'created'
+        ? [keys.gitConnections()]
+        : [keys.gitConnections(), keys.gitProvider(change.id)]
   }
 }
 

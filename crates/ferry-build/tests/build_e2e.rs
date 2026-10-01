@@ -104,7 +104,7 @@ fn image_label(tag: &str, label: &str) -> String {
 }
 
 fn git_source(dir: &std::path::Path, commit: Option<String>) -> BuildSource {
-    BuildSource::Git { repo_url: dir.to_string_lossy().into_owned(), branch: "main".into(), commit }
+    BuildSource::Git { repo_url: dir.to_string_lossy().into_owned(), branch: "main".into(), commit, credentials: None }
 }
 
 #[tokio::test]

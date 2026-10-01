@@ -1223,7 +1223,7 @@
         "operationId": "streamEvents",
         "responses": {
           "200": {
-            "description": "Server-Sent Events. First `event: ready` (`data: {}`) once the feed watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: `kind` is `service`, `deploy`, `datastore`, `env_group` or `job`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts down.",
+            "description": "Server-Sent Events. First `event: ready` (`data: {}`) once the feed watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: `kind` is `service`, `deploy`, `datastore`, `env_group`, `job` or `git_connection`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts down.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -1235,6 +1235,494 @@
           },
           "401": {
             "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/connections": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "List git connections",
+        "description": "The connected GitHub / GitLab accounts, with the names of the services cloned through each. Tokens are never returned: `token_hint` is the end of the stored one.",
+        "operationId": "listGitConnections",
+        "responses": {
+          "200": {
+            "description": "All git connections.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GitConnectionView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Connect a git account",
+        "description": "Connects the account an access token belongs to: Ferry asks the provider who the token is, then stores it to list the account's repositories and to clone them (also the private ones) for the services that use the connection. On GitHub use a classic personal access token with the `repo` scope, or a fine-grained one with read access to Contents and Metadata; on GitLab one with the `read_api` and `read_repository` scopes. `base_url` selects a self-hosted instance (GitHub Enterprise Server, GitLab self-managed). Connecting an account that is already connected replaces its token (200 instead of 201). The token is never returned by the API.",
+        "operationId": "connectGit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectGit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The account was already connected: its token was replaced.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitConnectionView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitConnectionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed token or `base_url`, or the provider rejected the token (code `git_token_rejected`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached, or answered an error (code `git_provider_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/connections/{id}": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Get a git connection",
+        "operationId": "getGitConnection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Git connection id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Disconnect a git account",
+        "description": "Deletes the connection and its stored token (the token itself stays valid on the provider: revoke it there). Refused while services use it, unless `force=true`: those services keep their repository and clone without credentials from then on, which fails for private repositories.",
+        "operationId": "deleteGitConnection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Git connection id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Disconnect even though services use the connection.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected."
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Services use it (the message lists them).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/connections/{id}/branches": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "List the branches of a repository",
+        "description": "The branches of a repository the connection can access, asked from the provider on every call (at most 500).",
+        "operationId": "listGitBranches",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Git connection id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repository",
+            "in": "query",
+            "description": "Full name of the repository, as listed (`owner/name`; GitLab subgroups included).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branches.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GitBranch"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed repository name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection, or no such repository for its token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The provider rejected the stored token (code `git_token_rejected`). Connect the account again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached, or answered an error (code `git_provider_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/connections/{id}/repositories": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "List the repositories of a git connection",
+        "description": "The repositories the connection's token can access, asked from the provider on every call: the account's own, its organizations' / groups' and those it collaborates on, most recently updated first. At most 1000 are listed (`truncated` says when there are more). Use a repository's `clone_url` as the `repo_url` of a service, with this connection as its `git_connection_id`.",
+        "operationId": "listGitRepositories",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Git connection id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The repositories.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepositoryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The provider rejected the stored token: expired, revoked or lacking access (code `git_token_rejected`). Connect the account again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached, or answered an error (code `git_provider_unavailable`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1594,7 +2082,7 @@
           "services"
         ],
         "summary": "Create a service",
-        "description": "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance and job run of the service; omitted or `0` = the server default (see `GET /api/v1/info`).",
+        "description": "Creates the service with its own variables and env group links, then queues a first deploy (trigger `create`) when it has a repository or an image, unless `deploy` is `false`. Services and datastores share one namespace of names. `git_connection_id` names the git connection (a connected GitHub / GitLab account, see the `git` operations) whose token clones `repo_url`, which must then be an http(s) repository on that connection's provider instance. `memory_limit_mb` (MiB, 16 MiB to 1 TiB) and `cpu_limit` (CPUs, 0.01 to 512, rounded to 0.01) limit every instance and job run of the service; omitted or `0` = the server default (see `GET /api/v1/info`).",
         "operationId": "createService",
         "requestBody": {
           "content": {
@@ -1618,7 +2106,7 @@
             }
           },
           "400": {
-            "description": "Invalid settings (including resource limits out of range), name, variables or domains, or an unknown env group.",
+            "description": "Invalid settings (including resource limits out of range), name, variables or domains, an unknown env group, or a git connection that is unknown or not for the repository.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1824,7 +2312,7 @@
           "services"
         ],
         "summary": "Update a service",
-        "description": "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0` = back to the server default) are only saved: they take effect with the next deploy or restart, this request doesn't redeploy. Switching between a git repository and an image requires clearing the other source in the same request. When a side effect fails after the settings were saved, the error message says so.",
+        "description": "Every field is optional; for optional string settings an empty string clears the value. `instances` scales, `suspended` suspends or resumes, `custom_domains` refreshes the routes; build settings take effect on the next deploy. Resource limits (`memory_limit_mb`, `cpu_limit`; `0` = back to the server default) are only saved: they take effect with the next deploy or restart, this request doesn't redeploy. Switching between a git repository and an image requires clearing the other source in the same request. `git_connection_id` selects the git connection whose token clones the repository (an empty string removes it); when it is omitted, the service keeps its connection as long as `repo_url` stays on the connection's provider instance and loses it otherwise. When a side effect fails after the settings were saved, the error message says so.",
         "operationId": "updateService",
         "parameters": [
           {
@@ -1859,7 +2347,7 @@
             }
           },
           "400": {
-            "description": "Invalid settings (including resource limits out of range).",
+            "description": "Invalid settings (including resource limits out of range, and a git connection that is unknown or not for the repository).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4190,8 +4678,34 @@
           "datastore",
           "env_group",
           "job",
+          "git_connection",
           "all"
         ]
+      },
+      "ConnectGit": {
+        "type": "object",
+        "description": "`POST /api/v1/git/connections` — connect an account of a git provider\nwith an access token.",
+        "required": [
+          "provider",
+          "token"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Web URL of a self-hosted instance (GitHub Enterprise Server, GitLab\nself-managed), e.g. `https://gitlab.example.com`. Default:\n`https://github.com` / `https://gitlab.com`."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/GitProvider"
+          },
+          "token": {
+            "type": "string",
+            "description": "A personal access token of the account: on GitHub a classic token\nwith the `repo` scope (or a fine-grained one with read access to\nContents and Metadata), on GitLab one with the `read_api` and\n`read_repository` scopes."
+          }
+        },
+        "additionalProperties": false
       },
       "CreateDatastore": {
         "type": "object",
@@ -4347,6 +4861,13 @@
               "type": "string"
             },
             "description": "Env groups to link (ids or names)."
+          },
+          "git_connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id of the git connection that authenticates the clones of `repo_url`\n(an http(s) repository on the connection's provider instance)."
           },
           "health_check_path": {
             "type": [
@@ -4872,6 +5393,189 @@
           }
         },
         "additionalProperties": false
+      },
+      "GitBranch": {
+        "type": "object",
+        "description": "A branch of a repository.",
+        "required": [
+          "name",
+          "protected"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GitConnectionView": {
+        "type": "object",
+        "description": "A git connection as returned by the API. The token itself is never\nreturned.",
+        "required": [
+          "id",
+          "provider",
+          "base_url",
+          "account",
+          "token_hint",
+          "scopes",
+          "services",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account": {
+            "type": "string",
+            "description": "Login of the account the token belongs to."
+          },
+          "account_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name of the account, if it has one."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Web URL of the provider instance, e.g. `https://github.com`."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/GitProvider"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Scopes of the token, when the provider reports them (empty otherwise)."
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of the services cloned with this connection."
+          },
+          "token_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the token expires, when the provider reports it."
+          },
+          "token_hint": {
+            "type": "string",
+            "description": "The end of the stored token (`…a1b2`), to tell tokens apart."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GitProvider": {
+        "type": "string",
+        "enum": [
+          "github",
+          "gitlab"
+        ]
+      },
+      "GitRepository": {
+        "type": "object",
+        "description": "A repository a git connection can access.",
+        "required": [
+          "id",
+          "full_name",
+          "name",
+          "owner",
+          "private",
+          "archived",
+          "clone_url",
+          "web_url"
+        ],
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "clone_url": {
+            "type": "string",
+            "description": "The https clone URL: use it as a service's `repo_url`."
+          },
+          "default_branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`None` for a repository without commits."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "full_name": {
+            "type": "string",
+            "description": "`owner/name` (GitLab: the full path, subgroups included)."
+          },
+          "id": {
+            "type": "string",
+            "description": "The provider's id of the repository."
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string",
+            "description": "The user, organization or group that owns it."
+          },
+          "private": {
+            "type": "boolean",
+            "description": "Not public (GitLab: `private` or `internal`)."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last push (GitHub) or activity (GitLab)."
+          },
+          "web_url": {
+            "type": "string",
+            "description": "The repository's page on the provider."
+          }
+        }
+      },
+      "GitRepositoryList": {
+        "type": "object",
+        "description": "`GET /api/v1/git/connections/{id}/repositories`",
+        "required": [
+          "repositories",
+          "truncated"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GitRepository"
+            },
+            "description": "Most recently updated first."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "The account can access more repositories than listed (the listing\nstops at 1000)."
+          }
+        }
       },
       "GithubHookResponse": {
         "type": "object",
@@ -5400,6 +6104,13 @@
             ],
             "description": "Dockerfile path relative to `root_dir` (default `Dockerfile`)."
           },
+          "git_connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The git connection (a connected GitHub / GitLab account) whose token\nauthenticates the clones of `repo_url`. `None` = clone without it\n(public repositories, credentials in the URL, ssh)."
+          },
           "health_check_path": {
             "type": [
               "string",
@@ -5700,6 +6411,13 @@
               "null"
             ]
           },
+          "git_connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id of the git connection that authenticates the clones; an empty\nstring removes it. Omitted: kept while `repo_url` stays on the\nconnection's provider instance, removed otherwise."
+          },
           "health_check_path": {
             "type": [
               "string",
@@ -5829,6 +6547,10 @@
     {
       "name": "datastores",
       "description": "Managed Postgres and Redis instances with their connection strings and resource limits."
+    },
+    {
+      "name": "git",
+      "description": "Git connections: GitHub / GitLab accounts connected with an access token, to pick a repository from a list and to clone private repositories. A service uses one through its `git_connection_id`."
     },
     {
       "name": "blueprints",

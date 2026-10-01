@@ -10,6 +10,7 @@
     "domains",
     "jobs",
     "datastores",
+    "git",
     "blueprints",
     "events",
     "hooks"

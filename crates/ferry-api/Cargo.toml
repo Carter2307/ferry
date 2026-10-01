@@ -30,6 +30,9 @@ sha2.workspace = true
 hex.workspace = true
 subtle = "2.6"
 form_urlencoded = "1.2"
+# Calls to the GitHub / GitLab REST APIs for git connections (accounts,
+# repositories, branches).
+reqwest.workspace = true
 # OpenAPI document (`/api/openapi.json`) and Swagger UI (`/api/docs`, assets vendored).
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true

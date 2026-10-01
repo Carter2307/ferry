@@ -31,6 +31,7 @@ mod extract;
 mod locks;
 pub mod openapi;
 mod ops;
+mod providers;
 mod routes;
 mod runtime;
 mod sse;
@@ -106,6 +107,11 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/env-groups", get(env_groups::list).post(env_groups::create))
         .route("/v1/env-groups/{id}", get(env_groups::get).delete(env_groups::delete))
         .route("/v1/env-groups/{id}/env", axum::routing::put(env_groups::replace_env).patch(env_groups::patch_env))
+        // git connections
+        .route("/v1/git/connections", get(git::list).post(git::connect))
+        .route("/v1/git/connections/{id}", get(git::get).delete(git::delete))
+        .route("/v1/git/connections/{id}/repositories", get(git::repositories))
+        .route("/v1/git/connections/{id}/branches", get(git::branches))
         // blueprints
         .route("/v1/blueprints/apply", post(blueprints::apply))
         .method_not_allowed_fallback(info::method_not_allowed)

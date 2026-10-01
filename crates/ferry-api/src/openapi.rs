@@ -20,7 +20,7 @@ use utoipa::openapi::{ContentBuilder, Ref, RefOr};
 use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_swagger_ui::{Config, SwaggerUi};
 
-use crate::routes::{blueprints, datastores, deploys, domains, env, env_groups, hooks, info, jobs, services};
+use crate::routes::{blueprints, datastores, deploys, domains, env, env_groups, git, hooks, info, jobs, services};
 
 /// Where the document is served.
 pub const OPENAPI_PATH: &str = "/api/openapi.json";
@@ -68,8 +68,8 @@ comments every 15 s while idle.";
 pub(crate) const SSE_EVENTS: &str = "Server-Sent Events. First `event: ready` (`data: {}`) once the feed \
 watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one \
 `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: \
-`kind` is `service`, `deploy`, `datastore`, `env_group` or `job`; `action` is `created`, `updated` or \
-`deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber \
+`kind` is `service`, `deploy`, `datastore`, `env_group`, `job` or `git_connection`; `action` is `created`, \
+`updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber \
 that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and \
 should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts \
 down.";
@@ -126,6 +126,12 @@ down.";
         env_groups::delete,
         env_groups::replace_env,
         env_groups::patch_env,
+        git::list,
+        git::connect,
+        git::get,
+        git::delete,
+        git::repositories,
+        git::branches,
         blueprints::apply,
         hooks::deploy_hook_get,
         hooks::deploy_hook,
@@ -151,6 +157,11 @@ down.";
         ferry_core::dto::DatastoreView,
         ferry_core::dto::CreateEnvGroup,
         ferry_core::dto::EnvGroupView,
+        ferry_core::dto::ConnectGit,
+        ferry_core::dto::GitConnectionView,
+        ferry_core::dto::GitRepository,
+        ferry_core::dto::GitRepositoryList,
+        ferry_core::dto::GitBranch,
         ferry_core::dto::ApplyBlueprint,
         ferry_core::dto::BlueprintAction,
         ferry_core::dto::BlueprintResult,
@@ -173,6 +184,7 @@ down.";
         ferry_core::DatastoreStatus,
         ferry_core::EnvVar,
         ferry_core::EnvGroup,
+        ferry_core::GitProvider,
         ferry_core::LogLine,
         ferry_core::LogStreamKind,
         crate::events::Change,
@@ -191,6 +203,7 @@ down.";
         (name = "domains", description = "Custom domains of web services and static sites (unique across services)."),
         (name = "jobs", description = "Job runs: cron runs and one-off commands, with their logs."),
         (name = "datastores", description = "Managed Postgres and Redis instances with their connection strings and resource limits."),
+        (name = "git", description = "Git connections: GitHub / GitLab accounts connected with an access token, to pick a repository from a list and to clone private repositories. A service uses one through its `git_connection_id`."),
         (name = "blueprints", description = "Infrastructure as code: apply a `ferry.yaml` / `render.yaml` (idempotent, with a dry run)."),
         (name = "events", description = "The change feed (Server-Sent Events) the web client uses to stay current without polling."),
         (name = "hooks", description = "Webhooks: secret deploy hook URLs and GitHub push events. They authenticate with their own secrets, never the API token."),
@@ -275,6 +288,7 @@ pub enum ChangeKind {
     Datastore,
     EnvGroup,
     Job,
+    GitConnection,
     /// Everything: sent with `resync` when a subscriber fell behind.
     All,
 }

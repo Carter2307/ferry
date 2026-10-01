@@ -21,6 +21,7 @@ code).
 |---|---|
 | Web services, private services, background workers, cron jobs, static sites | ✅ `ServiceType` |
 | Deploy from Git (auto-deploy on push) | ✅ GitHub webhook `/hooks/github`, any git URL incl. local paths |
+| Connect GitHub / GitLab, pick a repository, deploy private repositories | ✅ git connections: an account connected with an access token (§18) |
 | Deploy prebuilt Docker image | ✅ `image` / runtime `image` |
 | Native runtimes (Node, Python, Go, Rust, Ruby, static) + Dockerfile | ✅ builder detection + generated Dockerfiles |
 | Zero-downtime deploys + health checks | ✅ blue/green per deploy, `health_check_path` |
@@ -64,13 +65,13 @@ auth, secret files, IP allow lists, teams/RBAC.
 
 | crate | kind | depends on | responsibility |
 |---|---|---|---|
-| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers. **Frozen.** |
+| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers, git connections (§18). **Frozen.** |
 | `ferry-docker` | lib | core | typed Docker wrapper (containers, images, volumes, networks, logs, stats, exec) |
 | `ferry-build` | lib | core | git fetch / archive extract, runtime detection, Dockerfile generation, `docker build` |
 | `ferry-proxy` | lib | core | `RouteTable`, HTTP/HTTPS reverse proxy, websockets, error pages |
 | `ferry-tls` | lib | core | ACME certificates, SNI resolver, `TlsHooks` impl |
 | `ferry-engine` | lib | core, docker, build, proxy | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs |
-| `ferry-api` | lib | core | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, serves the embedded web client (`web/dist`) |
+| `ferry-api` | lib | core | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, GitHub / GitLab REST clients for git connections (`providers`, §18), serves the embedded web client (`web/dist`) |
 | `ferry-cli` | bin `ferry` | core | CLI client |
 | `ferryd` | bin | all | wiring (already written) |
 
@@ -126,7 +127,10 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    nor pull, and must keep working on a host that is short on disk.
    Git/Archive → `Builder::build` with image tag
    `naming.image_tag(name, deploy_id)`, build args = the service's resolved env,
-   labels `naming.service_labels`. Image → `docker.ensure_image` (pull; always
+   labels `naming.service_labels`. A Git deploy of a service with a git
+   connection (§18) clones with the connection's token
+   (`BuildSource::Git.credentials`), after `==> Cloning with the GitHub
+   account 'octocat'`. Image → `docker.ensure_image` (pull; always
    pull when the tag is `latest`/untagged). Reuse → verify the image exists.
    Record `image`, `commit_sha`, `commit_message` on the deploy (the commit is
    recorded as soon as it is checked out — `BuildEvent::CheckedOut` — so failed
@@ -361,7 +365,7 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /api/openapi.json` | the OpenAPI 3.1 document (no auth) |
 | `GET /api/docs` | Swagger UI (no auth; redirects to `/api/docs/`, its **Authorize** takes the API token) |
 | `GET /api/v1/info` | `ServerInfo` (including the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
-| `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
+| `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`/`git_connection`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
 | `GET /api/v1/services` | `[ServiceView]` |
 | `POST /api/v1/services` | `CreateService` → 201 `ServiceView` (queues a `create` deploy when it has a repo/image, unless `deploy:false`) |
 | `GET /api/v1/services/{id}` | `ServiceView` |
@@ -400,6 +404,11 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /api/v1/env-groups` · `POST` | `[EnvGroupView]` · `CreateEnvGroup` → 201 `EnvGroupView` |
 | `GET /api/v1/env-groups/{id}` · `DELETE ?force=&restart=` | `EnvGroupView` · 204 (409 while linked, unless `force=true`; `restart=true` restarts the linked live services) |
 | `PUT` / `PATCH /api/v1/env-groups/{id}/env?restart=` | `ReplaceEnv` / `PatchEnv` → `EnvGroupView` (restart linked live services) |
+| `GET /api/v1/git/connections` | `[GitConnectionView]` (§18; the token is never returned, only `token_hint`) |
+| `POST /api/v1/git/connections` | `ConnectGit` `{provider, token, base_url?}` → 201 `GitConnectionView`: asks the provider whose token it is, then stores it. 200 when that account was already connected (its token is replaced). 400 `git_token_rejected` when the provider rejects the token, 502 `git_provider_unavailable` when it can't be reached |
+| `GET /api/v1/git/connections/{id}` · `DELETE ?force=` | `GitConnectionView` · 204 (409 while services use it, unless `force=true`: they keep their repository and lose the connection). `{id}` is the id only |
+| `GET /api/v1/git/connections/{id}/repositories` | `GitRepositoryList` `{repositories, truncated}`: what the token can access, most recently updated first, asked from the provider on every call (at most 1000). 409 `git_token_rejected` when the stored token is no longer accepted, 502 `git_provider_unavailable` |
+| `GET /api/v1/git/connections/{id}/branches?repository=` | `[GitBranch]` of `repository` (`owner/name`; at most 500). Same errors, 404 for an unknown repository |
 | `POST /api/v1/blueprints/apply` | `ApplyBlueprint` JSON, or raw YAML (`Content-Type: application/yaml` / `text/yaml`, `?dry_run=`) → `BlueprintResult` |
 | `GET\|POST /hooks/deploy/{service_id}?key=` | 202 minimal deploy summary (trigger `deploy_hook`, credentials redacted); service **id** only; unknown id or wrong key → the same 401 (no enumeration) |
 | `POST /hooks/github` | GitHub webhook. 404 unless `github_webhook_secret` set; verify `X-Hub-Signature-256` (HMAC-SHA256, constant-time) → 401; `ping` → 200; `push` → deploy (trigger `webhook`, commit = `after`) every service with `auto_deploy`, matching `git::normalize_repo_url` of `repository.clone_url`/`ssh_url`/`html_url`, and `refs/heads/<branch>`; deleted-branch pushes ignored → 200 `{"deploys": [...]}` |
@@ -415,7 +424,11 @@ limit or `0` means the server default, as on PATCH. Request bodies reject
 unknown fields.
 Git inputs are validated up front (`validate::repo_url` — absolute local
 paths only —, `branch`, `commit`). Switching a service between git and image
-requires clearing the other source in the same PATCH. Cron jobs always have
+requires clearing the other source in the same PATCH. A service's
+`git_connection_id` (`CreateService`, `UpdateService`; §18) must name a
+connection that serves its `repo_url`; in a PATCH an empty string removes
+it, and when it is omitted the service keeps its connection for as long as
+`repo_url` stays on the connection's host. Cron jobs always have
 exactly 1 instance. Writes to one service are serialized, and custom-domain
 claims are globally serialized. GitHub webhooks also accept form-encoded
 deliveries and ignore replayed payloads.
@@ -516,6 +529,9 @@ services:
   datastore's status (§8; a failure becomes a warning). Blueprint applies
   also take the row locks of the existing datastores they name.
   Services with neither repo nor image produce a warning ("deploy with `ferry up <name>`").
+* Blueprints don't select git connections (§18): an existing service keeps
+  its connection while its `repo` stays on the connection's host, and loses
+  it otherwise (`git_connection_id: git-… → (none)` in the `changes`).
 * `dry_run: true` computes the same result without writing anything.
 
 ## 12. CLI (`ferry`)
@@ -590,8 +606,21 @@ Rust build never runs Node.
   (variables, env group links, "save & restart"), Settings (build & deploy,
   resources, custom domains, deploy hook) · datastores (+ detail,
   connection strings, resources) · env groups (+ detail) · blueprints (paste
-  YAML → dry run → apply) · server (incl. default container limits and the
-  Docker host's size).
+  YAML → dry run → apply) · server (incl. default container limits, the
+  Docker host's size, and the connected git accounts).
+* **Git connections in the UI** (§18): a new service's Git source is either
+  a repository picked from a "Connected account" (the default) or a
+  "Repository URL". The picker connects an account in a dialog (provider,
+  a link to the provider's token page with the scopes filled in, the token,
+  the address of a self-hosted instance), lists the account's repositories
+  with a search (private / archived badges; one without commits can't be
+  picked), then offers its branches (a searchable list that also takes a
+  typed name); picking a repository fills in its default branch and, unless
+  one was typed, the service name. Server → Connections → "Git accounts"
+  lists the accounts (token hint, expiry, the services using each) with
+  "Replace token" and "Disconnect"; a service's Settings → Build & deploy
+  has a "Git account" select. `src/lib/git.ts` mirrors
+  `GitConnection::serves`.
 * **Resource limits in the UI** (§14): "Memory limit" / "CPU limit" selects
   (`Server default (512 MiB)` from `/api/v1/info`, presets, Custom…) in the
   service's Settings → Resources ("Changes apply on the next deploy or
@@ -778,7 +807,12 @@ are never checked; on non-Unix systems the check does nothing.
 ## 15. Operational safety
 
 * The data directory is created `0700` (it holds env values, datastore
-  passwords, credentialed repo URLs); `api_token` and `instance_id` are `0600`.
+  passwords, credentialed repo URLs, the access tokens of git connections);
+  `api_token` and `instance_id` are `0600`.
+* Git credentials (in a repository URL, or a git connection's token, §18)
+  reach `git` through its environment only, never a command line, the git
+  cache or a log, and only for the host of the remote: a host the remote
+  redirects to gets none.
 * `ferryd` holds an exclusive lock on `<data-dir>/ferryd.lock`, and records
   ownership of its Docker name prefix on a marker volume `<prefix>-owner`.
   A server refuses to start on a prefix owned by another data dir (or when an
@@ -881,3 +915,94 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   `ferry-engine/tests/e2e.rs`
   (`resource_limits_apply_to_instances_jobs_and_datastores`,
   `out_of_memory_kills_are_reported`).
+* Git connections (§18) never call the real providers in tests:
+  `ferry-api/tests/git.rs` runs a fake GitHub Enterprise / GitLab API on a
+  local socket (accounts, paginated repositories, branches, rejected and
+  rate-limited tokens), and `ferry-build` / `ferry-engine` clone from a
+  local HTTP server that demands the token (also through a redirect, which
+  must not get it).
+
+## 18. Git connections
+
+A **git connection** is an account of a git provider — GitHub or GitLab,
+their public instances or a self-hosted one — connected with a **personal
+access token**. It does two things: the dashboard lists the account's
+repositories (and their branches) so a repository is picked instead of
+typed, and the services that name the connection are cloned with its token,
+so private repositories deploy without credentials in their URL.
+
+Tokens rather than OAuth: a self-hosted server has no provider application
+of its own (each operator would have to register one, with a callback URL
+that changes with the server's address), while a token works on any server,
+`localhost` included, and for self-hosted providers.
+
+**Data model.** `GitConnection { id (git-…), provider, base_url, account,
+account_name, token, scopes, token_expires_at }` (migration
+`0003_git_connections.sql`; one row per `(provider, base_url, account)`,
+the account compared case-insensitively). `base_url` is the instance's web
+URL without a trailing slash (`https://github.com`, `https://gitlab.com`,
+`https://gitlab.example.com`), validated by `validate::git_base_url`. The
+type is not serializable: the API returns `GitConnectionView`, with
+`token_hint` (the end of the token) and the names of the `services` using
+it. `Service.git_connection_id` (nullable, `ON DELETE SET NULL`) names the
+connection that clones `repo_url`; `validate::normalize_service` drops it
+when the service has no repository.
+
+**Which repositories a token is for.** `GitConnection::serves(repo_url)`: an
+http(s) URL of the same scheme, host and port as `base_url` (below its path
+when it has one), read by `git::parse_http_url`, which refuses anything
+that isn't a plain URL: credentials, unusual characters, other schemes. A
+URL with credentials of its own, an ssh URL and a local path are never
+served. The API refuses a `git_connection_id` that doesn't serve the
+service's `repo_url` (400), and the engine checks again before every clone
+(a connection that doesn't serve the deploy's URL is skipped with a
+`==> Warning:` line), so a token is never sent anywhere but to its own
+provider.
+
+**Connecting** (`POST /api/v1/git/connections`): the token is checked by
+asking the provider whose it is — GitHub `GET /user` (`api.github.com`, or
+`<base_url>/api/v3` on GitHub Enterprise Server), GitLab `GET
+<base_url>/api/v4/user` — always as `Authorization: Bearer`. The answer
+gives the account, and what is known about the token: its scopes (GitHub's
+`x-oauth-scopes`, for classic tokens; GitLab's `GET
+/personal_access_tokens/self`) and its expiry
+(`github-authentication-token-expiration`; `expires_at`). Needed: on GitHub
+a classic token with `repo` (or a fine-grained one with read access to
+Contents and Metadata), on GitLab `read_api` + `read_repository`.
+Connecting an account that is already connected replaces its token.
+
+**Listing.** Repositories: GitHub `GET /user/repos?sort=pushed` (owned,
+collaborator and organization repositories), GitLab `GET
+/projects?membership=true&order_by=last_activity_at`; 100 per page, at most
+10 pages (`truncated` says when there are more), the pages after the first
+fetched 4 at a time when the provider says how many there are. Branches:
+`GET /repos/{owner}/{repo}/branches`, `GET
+/projects/{path}/repository/branches` (at most 5 pages). Nothing is cached
+on the server; the dashboard keeps a listing for a minute and has a
+Refresh button.
+
+**Provider failures** never answer 401 (which means "wrong Ferry token" to
+API clients: the dashboard signs out). A token the provider rejects is 400
+when it was just given, 409 when it is a connection's stored one — both
+with code `git_token_rejected` — and an unreachable, failing or
+rate-limiting provider is 502 `git_provider_unavailable`. Messages name the
+provider and never contain the token.
+
+**Cloning** (§5.3). The pipeline looks up the service's connection, logs
+`==> Cloning with the GitHub account 'octocat'` and hands
+`BuildSource::Git` the credentials: the token as the password, with the
+username `x-access-token` (GitHub) or `oauth2` (GitLab). `ferry-build`
+gives them to git like credentials embedded in a URL (§15). When the remote
+refuses the clone, the deploy log gets a hint: the connection's token may
+have expired or lack access to the repository; or, without a connection,
+that a private repository needs one. A deploy's `source` and the git cache
+only ever hold the plain URL.
+
+**Removing.** `DELETE /api/v1/git/connections/{id}` is refused (409) while
+services use the connection, unless `force=true`; those services keep
+their repository and clone without credentials from then on. The token
+stays valid on the provider until it is revoked there.
+
+Not covered: OAuth / GitHub App sign-in, registering webhooks on the
+provider (auto-deploy still needs the GitHub webhook of §10 or a deploy
+hook), and connections in the CLI and in blueprints.

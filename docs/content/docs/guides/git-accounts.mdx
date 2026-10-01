@@ -1,0 +1,145 @@
+---
+title: "Connect GitHub or GitLab"
+description: "Connect a GitHub or GitLab account with an access token, pick the repository to deploy from a list in the dashboard, and deploy private repositories."
+icon: Plug
+---
+
+A **git connection** is a GitHub or GitLab account connected to your Ferry server with a personal access token. It does two things:
+
+- the dashboard lists the account's repositories and branches, so you pick the repository to deploy instead of pasting its URL;
+- the services created this way are cloned with the account's token, so **private repositories** deploy without credentials in their URL.
+
+It works with github.com, gitlab.com, GitHub Enterprise Server and self-managed GitLab.
+
+<Callout title="Why a token and not a login button">
+A "Sign in with GitHub" button needs an OAuth application registered with the provider, with a callback URL that points at your server. A self-hosted Ferry has no such application, and its address is yours. An access token works on any server, `localhost` included.
+</Callout>
+
+## Connect an account
+
+<Steps>
+<Step>
+
+### Open the connect dialog
+
+In the dashboard, either:
+
+- open **+ New service**, choose **Git repository** as the source and, under **Connected account**, click **Connect GitHub** or **Connect GitLab**; or
+- open **Server → Connections → Git accounts**.
+
+</Step>
+<Step>
+
+### Create an access token
+
+**Create a token on GitHub** (or GitLab) in the dialog opens the provider's token page with a name and the scopes filled in:
+
+| Provider | Token | It needs |
+|---|---|---|
+| GitHub | personal access token (classic) | the `repo` scope |
+| GitHub | fine-grained personal access token | read access to **Contents** and **Metadata** of the repositories to deploy |
+| GitLab | personal access token | the `read_api` and `read_repository` scopes |
+
+A classic GitHub token without `repo` only sees public repositories. Pick an expiry you'll remember: when the token expires, deploys of private repositories fail until you [replace it](#replace-a-token-or-disconnect).
+
+</Step>
+<Step>
+
+### Paste it
+
+Paste the token and click **Connect**. Ferry asks the provider whose token it is and stores it under that account. For a self-hosted provider, open **Self-hosted GitHub** / **Self-hosted GitLab** first and enter its address, such as `https://gitlab.example.com`.
+
+</Step>
+</Steps>
+
+Connecting an account that is already connected replaces its token.
+
+## Deploy a repository
+
+With an account connected, the **Connected account** tab of a new service lists its repositories, most recently updated first:
+
+1. choose the account when you connected several;
+2. search by owner or name, and click the repository: private ones have a **Private** badge, and a repository without commits can't be picked;
+3. the **Branch** list starts on the repository's default branch. It lists the branches, and also takes a name you type.
+
+Picking a repository fills in the service's name unless you typed one. **Create and deploy** then clones the repository with the account's token; the deploy log says so:
+
+```text title="Deploy log"
+==> Cloning with the GitHub account 'you'
+==> Cloning from https://github.com/you/api.git (branch main)
+==> Checked out d258434: Initial commit
+```
+
+The **Repository URL** tab still takes any git URL: a public repository, an SSH URL, or a path on the server.
+
+<Callout title="Auto-deploy is separate">
+A connection lets Ferry read repositories; it doesn't make the provider notify Ferry of pushes. To deploy on every push, set up the [GitHub webhook](/docs/guides/github-auto-deploy) or call the service's deploy hook from your CI.
+</Callout>
+
+## An existing service
+
+A service's **Settings → Build & deploy** has a **Git account** select: choose the account that clones its repository, or **None**. An account only offers itself for repositories of its own host: a GitHub account can't clone a GitLab URL.
+
+When you change a service's repository URL, it keeps its account as long as the new URL is on the same host, and loses it otherwise.
+
+## Replace a token or disconnect
+
+**Server → Connections → Git accounts** lists the connected accounts, with the end of each stored token, when it expires (if the provider says) and the services that use it.
+
+- **Replace token** stores a new token for the same account. Services clone with it from their next deploy.
+- **Disconnect** deletes Ferry's copy of the token. Services that used the account keep their repository and clone without credentials from then on, which fails for private repositories. The token itself stays valid until you revoke it on the provider.
+
+## What Ferry does with the token
+
+- It is stored in the server's database, in the data directory (mode `0700`), like datastore passwords and env values. See [Security model](/docs/architecture/security).
+- The API never returns it: a connection shows `token_hint`, the last characters of the token.
+- It is sent to the provider's API to list repositories and branches, and to the provider's git server when a service is cloned: never to another host, even when the provider answers with a redirect.
+- It never appears on a command line, in the git cache, in a deploy log or in an error message.
+
+## With the API
+
+The dashboard uses these endpoints of the [API](/docs/reference/api/git):
+
+```bash title="Connect an account"
+curl -s -X POST http://127.0.0.1:7878/api/v1/git/connections \
+  -H "Authorization: Bearer $FERRY_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"provider": "github", "token": "<access token>"}'
+```
+
+```json title="Response"
+{
+  "id": "git-4db07471b4a74da2a889",
+  "provider": "github",
+  "base_url": "https://github.com",
+  "account": "you",
+  "account_name": "Your Name",
+  "token_hint": "…a1b2",
+  "scopes": ["repo"],
+  "token_expires_at": "2027-01-01T00:00:00Z",
+  "services": [],
+  "created_at": "2026-10-01T09:45:04.121655Z",
+  "updated_at": "2026-10-01T09:45:04.121655Z"
+}
+```
+
+```bash title="List its repositories, then create a service from one"
+curl -s -H "Authorization: Bearer $FERRY_TOKEN" \
+  http://127.0.0.1:7878/api/v1/git/connections/git-4db07471b4a74da2a889/repositories
+
+curl -s -X POST http://127.0.0.1:7878/api/v1/services \
+  -H "Authorization: Bearer $FERRY_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "api", "repo_url": "https://github.com/you/api.git", "branch": "main",
+       "git_connection_id": "git-4db07471b4a74da2a889"}'
+```
+
+For a self-hosted provider, add `"base_url": "https://gitlab.example.com"` when you connect. The `ferry` CLI and [blueprints](/docs/reference/blueprint) don't select connections: a service created with them clones without one until you choose its **Git account** in the dashboard or `PATCH` its `git_connection_id`.
+
+## Troubleshooting
+
+| What you see | Why, and what to do |
+|---|---|
+| **GitHub rejected the token: Bad credentials** when connecting | The token was copied incompletely, has expired or was revoked. Create a new one. |
+| **… no longer accepts this token** in the repository list | The stored token expired or was revoked. Click **Replace the token**. |
+| A repository is missing from the list | The token can't see it. Classic GitHub token: it needs `repo` for private repositories, and your organization may require you to authorize it for SSO. Fine-grained token: add the repository to the token. GitLab: you must be a member of the project. Only the 1000 most recently updated repositories are listed: use the **Repository URL** tab, with the account selected later in the service's settings, for an older one. |
+| A deploy fails with **Authentication failed** or **repository not found**, followed by a `==> Hint` line | The remote refused the clone. With an account: its token expired or lost access to the repository. Without one: the repository is private, so select its account in the service's settings. |
+| **cannot reach GitLab at https://…** | The server can't reach the provider at that address. An address without a scheme is read as `https://`: for a provider that only speaks http, write `http://…`. |

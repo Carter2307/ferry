@@ -59,6 +59,9 @@ export type DatastoreStatus = (typeof DATASTORE_STATUSES)[number]
 export const SERVICE_STATES = ['not_deployed', 'deploying', 'live', 'failed', 'suspended', 'degraded'] as const
 export type ServiceState = (typeof SERVICE_STATES)[number]
 
+export const GIT_PROVIDERS = ['github', 'gitlab'] as const
+export type GitProvider = (typeof GIT_PROVIDERS)[number]
+
 /** Where a service's code comes from (derived client-side, see `sourceKind`). */
 export type SourceKind = 'git' | 'image' | 'upload'
 
@@ -73,6 +76,11 @@ export interface Service {
   name: string
   type: ServiceType
   repo_url: string | null
+  /**
+   * The git connection (a connected GitHub / GitLab account) whose token clones
+   * `repo_url`. `null` = cloned without one.
+   */
+  git_connection_id: string | null
   branch: string
   image: string | null
   runtime: Runtime
@@ -221,6 +229,8 @@ export interface CreateService {
   name: string
   type?: ServiceType | null
   repo_url?: string | null
+  /** Git connection that clones `repo_url` (an http(s) repository on its provider instance). */
+  git_connection_id?: string | null
   branch?: string | null
   image?: string | null
   runtime?: Runtime | null
@@ -251,6 +261,8 @@ export interface CreateService {
  */
 export interface UpdateService {
   repo_url?: string | null
+  /** '' removes the connection; omitted = kept while `repo_url` stays on its host. */
+  git_connection_id?: string | null
   branch?: string | null
   image?: string | null
   runtime?: Runtime | null
@@ -383,6 +395,65 @@ export interface EnvGroupView extends EnvGroup {
   services: string[]
 }
 
+/** `POST /api/v1/git/connections` — connect the account an access token belongs to. */
+export interface ConnectGit {
+  provider: GitProvider
+  token: string
+  /** Web URL of a self-hosted instance; default github.com / gitlab.com. */
+  base_url?: string | null
+}
+
+/** A connected GitHub / GitLab account. The token itself is never returned. */
+export interface GitConnectionView {
+  id: string
+  provider: GitProvider
+  /** Web URL of the provider instance, e.g. `https://github.com`. */
+  base_url: string
+  /** Login of the account the token belongs to. */
+  account: string
+  account_name: string | null
+  /** The end of the stored token (`…a1b2`). */
+  token_hint: string
+  /** Scopes of the token, when the provider reports them. */
+  scopes: string[]
+  token_expires_at: Timestamp | null
+  /** Names of the services cloned with this connection. */
+  services: string[]
+  created_at: Timestamp
+  updated_at: Timestamp
+}
+
+/** A repository a git connection can access. */
+export interface GitRepository {
+  id: string
+  /** `owner/name` (GitLab: the full path, subgroups included). */
+  full_name: string
+  name: string
+  owner: string
+  private: boolean
+  archived: boolean
+  /** `null` for a repository without commits. */
+  default_branch: string | null
+  /** The https clone URL: a service's `repo_url`. */
+  clone_url: string
+  web_url: string
+  description: string | null
+  updated_at: Timestamp | null
+}
+
+/** `GET /api/v1/git/connections/{id}/repositories` */
+export interface GitRepositoryList {
+  /** Most recently updated first. */
+  repositories: GitRepository[]
+  /** The account can access more repositories than listed. */
+  truncated: boolean
+}
+
+export interface GitBranch {
+  name: string
+  protected: boolean
+}
+
 /** `POST /api/v1/blueprints/apply` */
 export interface ApplyBlueprint {
   yaml: string
@@ -420,7 +491,7 @@ export interface ApiErrorDetail {
 // Change feed (`GET /api/v1/events`, event `change`)
 // ---------------------------------------------------------------------------
 
-export type ChangeKind = 'service' | 'deploy' | 'datastore' | 'env_group' | 'job'
+export type ChangeKind = 'service' | 'deploy' | 'datastore' | 'env_group' | 'job' | 'git_connection'
 export type ChangeAction = 'created' | 'updated' | 'deleted'
 
 export interface ChangeEvent {

@@ -17,12 +17,12 @@ pub const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 /// Keeps process environments and `docker build` well under OS `ARG_MAX`.
 pub const MAX_ENV_TOTAL_BYTES: usize = 256 * 1024;
 
-/// True if `s` has the shape of a Ferry id (`srv-`, `dep-`, `job-`, `dbs-` or
-/// `evg-` followed by 20 hex chars). Such names are rejected so id-or-name
-/// lookups can never be ambiguous.
+/// True if `s` has the shape of a Ferry id (`srv-`, `dep-`, `job-`, `dbs-`,
+/// `evg-` or `git-` followed by 20 hex chars). Such names are rejected so
+/// id-or-name lookups can never be ambiguous.
 pub fn looks_like_id(s: &str) -> bool {
     use crate::ids;
-    [ids::SERVICE, ids::DEPLOY, ids::JOB, ids::DATASTORE, ids::ENV_GROUP].iter().any(|p| {
+    [ids::SERVICE, ids::DEPLOY, ids::JOB, ids::DATASTORE, ids::ENV_GROUP, ids::GIT_CONNECTION].iter().any(|p| {
         ids::has_prefix(s, p) && s[p.len() + 1..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     })
 }
@@ -180,6 +180,61 @@ pub fn repo_url(url: &str) -> Result<()> {
     invalid("local repositories must be given as an absolute path (or file:// URL)")
 }
 
+/// Validate and normalize the web URL of a git provider instance, e.g.
+/// `https://gitlab.example.com` (a path below the host is kept): lowercase
+/// host, default port dropped, no trailing slash. Credentials, query strings
+/// and fragments are refused.
+pub fn git_base_url(url: &str) -> Result<String> {
+    let u = url.trim();
+    let invalid = |why: &str| Err(Error::invalid(format!("invalid base_url '{}': {why}", crate::git::redact_url(u))));
+    if u.contains(['?', '#']) {
+        return invalid("it must not have a query string or a fragment");
+    }
+    let Some(parsed) = crate::git::parse_http_url(u) else {
+        return invalid("expected an http(s) URL without credentials, such as https://gitlab.example.com");
+    };
+    let path = parsed.path.trim_end_matches('/');
+    let plain = path.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b'~'));
+    if !plain || path.split('/').skip(1).any(|seg| seg.is_empty() || seg == "." || seg == "..") {
+        return invalid("its path may only use letters, digits, '.', '_', '-' and '~'");
+    }
+    Ok(format!("{}{path}", parsed.origin()))
+}
+
+/// An access token of a git provider: printable ASCII without spaces, at
+/// most 1024 characters. Returns it trimmed.
+pub fn git_token(token: &str) -> Result<&str> {
+    let t = token.trim();
+    if t.is_empty() {
+        return Err(Error::invalid("the access token is empty"));
+    }
+    if t.len() > 1024 || !t.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(Error::invalid(
+            "invalid access token: expected at most 1024 printable characters without spaces (check that it was copied completely)",
+        ));
+    }
+    Ok(t)
+}
+
+/// The full name of a repository on a provider (`owner/name`, GitLab
+/// subgroups included: `group/sub/name`): 2 to 20 path segments of letters,
+/// digits, `.`, `_` and `-`.
+pub fn git_repository_name(name: &str) -> Result<()> {
+    let segments: Vec<&str> = name.split('/').collect();
+    let segment_ok = |s: &&str| {
+        !s.is_empty()
+            && *s != "."
+            && *s != ".."
+            && s.len() <= 255
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    if (2..=20).contains(&segments.len()) && segments.iter().all(segment_ok) {
+        Ok(())
+    } else {
+        Err(Error::invalid(format!("invalid repository '{name}': expected its full name, such as owner/name")))
+    }
+}
+
 /// Validate and normalize (lowercase, no trailing dot) a custom domain.
 pub fn domain(d: &str) -> Result<String> {
     let d = d.trim().trim_end_matches('.').to_ascii_lowercase();
@@ -310,6 +365,7 @@ pub fn normalize_service(svc: &mut Service) {
     }
     for f in [
         &mut svc.repo_url,
+        &mut svc.git_connection_id,
         &mut svc.image,
         &mut svc.root_dir,
         &mut svc.dockerfile_path,
@@ -331,6 +387,10 @@ pub fn normalize_service(svc: &mut Service) {
         svc.runtime = Runtime::Image;
     } else if svc.runtime == Runtime::Image {
         // runtime image without an image is caught by `service()`.
+    }
+    // A git connection authenticates clones: no repository, no connection.
+    if svc.repo_url.is_none() {
+        svc.git_connection_id = None;
     }
     let mut domains: Vec<String> = Vec::new();
     for d in &svc.custom_domains {
@@ -398,6 +458,42 @@ mod tests {
     }
 
     #[test]
+    fn git_connection_inputs() {
+        assert_eq!(git_base_url(" https://GitLab.Example.com/ ").unwrap(), "https://gitlab.example.com");
+        assert_eq!(git_base_url("https://example.com:443/gitlab/").unwrap(), "https://example.com/gitlab");
+        assert_eq!(git_base_url("http://127.0.0.1:8929").unwrap(), "http://127.0.0.1:8929");
+        for bad in [
+            "",
+            "gitlab.example.com",
+            "ssh://git@gitlab.example.com",
+            "https://user:glpat-secret@gitlab.example.com",
+            "https://gitlab.example.com/?next=x",
+            "https://gitlab.example.com/#x",
+            "https://gitlab.example.com/a/../b",
+            "https://gitlab.example.com/a//b",
+            "https://gitlab.example.com/a b",
+        ] {
+            let err = git_base_url(bad).unwrap_err().to_string();
+            assert!(err.starts_with("invalid base_url") && !err.contains("glpat-secret"), "{bad}: {err}");
+        }
+
+        assert_eq!(git_token("  ghp_abcDEF123  ").unwrap(), "ghp_abcDEF123");
+        assert!(git_token("   ").is_err());
+        assert!(git_token("ghp_abc def").is_err());
+        assert!(git_token("ghp_abc\ndef").is_err());
+        assert!(git_token(&"a".repeat(1025)).is_err());
+        // The message never repeats the token.
+        assert!(!git_token("tok\u{e9}n-s3cret").unwrap_err().to_string().contains("s3cret"));
+
+        for ok in ["octocat/hello-world", "group/sub.group/my_app", "a/b"] {
+            assert!(git_repository_name(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "app", "a/", "/a", "a//b", "a/../b", "a/b c", "a/b?x", "a/b#x", "a/b%2F"] {
+            assert!(git_repository_name(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn domains_and_keys() {
         assert_eq!(domain("App.Example.COM.").unwrap(), "app.example.com");
         assert!(domain("localhost").is_err());
@@ -427,5 +523,14 @@ mod tests {
         let mut worker = Service::new("bg", ServiceType::BackgroundWorker);
         worker.custom_domains = vec!["x.com".into()];
         assert!(service(&worker).is_err());
+        // A git connection only makes sense with a repository.
+        let mut git = Service::new("app", ServiceType::WebService);
+        git.repo_url = Some("https://github.com/a/b".into());
+        git.git_connection_id = Some(" git-0123456789abcdef0123 ".into());
+        normalize_service(&mut git);
+        assert_eq!(git.git_connection_id.as_deref(), Some("git-0123456789abcdef0123"));
+        git.repo_url = Some("  ".into());
+        normalize_service(&mut git);
+        assert_eq!((git.repo_url, git.git_connection_id), (None, None));
     }
 }
