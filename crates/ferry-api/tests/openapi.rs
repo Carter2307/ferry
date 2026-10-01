@@ -175,7 +175,8 @@ async fn the_document_is_openapi_3_1_with_info_schemas_and_security() {
     for field in ["kind", "id", "service_id", "action"] {
         assert!(change["properties"].get(field).is_some(), "ChangeEvent.{field}: {change}");
     }
-    assert!(serde_json::to_string(&schemas["ChangeKind"]).unwrap().contains("env_group"));
+    let kinds = serde_json::to_string(&schemas["ChangeKind"]).unwrap();
+    assert!(kinds.contains("env_group") && kinds.contains("git_connection"), "{kinds}");
 
     // One bearer scheme, which Swagger UI's Authorize button fills in.
     let schemes = doc["components"]["securitySchemes"].as_object().unwrap();

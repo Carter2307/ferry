@@ -124,10 +124,11 @@ impl<'a> Provider<'a> {
         match request.send().await {
             Ok(response) if response.status().is_success() => Ok(response),
             Ok(response) => Err(self.failure(response).await),
+            // Scheme and port included: a bare host was read as https.
             Err(e) => Err(ProviderError::Unavailable(format!(
                 "cannot reach {} at {}: {}",
                 self.label(),
-                url.host_str().unwrap_or(self.base_url),
+                url.origin().ascii_serialization(),
                 root_cause(&e)
             ))),
         }

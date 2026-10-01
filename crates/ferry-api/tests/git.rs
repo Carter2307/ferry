@@ -360,7 +360,7 @@ async fn tokens_the_provider_rejects_are_not_stored() {
     // Not a provider at all: nothing listens / no such API.
     let r = post(json!({"provider": "gitlab", "token": GL_TOKEN, "base_url": "http://127.0.0.1:9"})).await;
     assert_eq!((r.status, r.code().as_str()), (StatusCode::BAD_GATEWAY, "git_provider_unavailable"), "{}", r.text());
-    assert!(r.text().contains("cannot reach GitLab at 127.0.0.1"), "{}", r.text());
+    assert!(r.text().contains("cannot reach GitLab at http://127.0.0.1:9: "), "{}", r.text());
     let r = post(json!({"provider": "gitlab", "token": GL_TOKEN, "base_url": format!("{base}/nothing-here")})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
     assert!(r.text().contains("doesn't look like a GitLab instance"), "{}", r.text());

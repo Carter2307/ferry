@@ -68,8 +68,8 @@ comments every 15 s while idle.";
 pub(crate) const SSE_EVENTS: &str = "Server-Sent Events. First `event: ready` (`data: {}`) once the feed \
 watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one \
 `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: \
-`kind` is `service`, `deploy`, `datastore`, `env_group` or `job`; `action` is `created`, `updated` or \
-`deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber \
+`kind` is `service`, `deploy`, `datastore`, `env_group`, `job` or `git_connection`; `action` is `created`, \
+`updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber \
 that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and \
 should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts \
 down.";
@@ -288,6 +288,7 @@ pub enum ChangeKind {
     Datastore,
     EnvGroup,
     Job,
+    GitConnection,
     /// Everything: sent with `resync` when a subscriber fell behind.
     All,
 }
