@@ -30,4 +30,12 @@ describe('invalidationsForChange', () => {
       keys.datastores(),
     ])
   })
+  it('maps git connection changes to the accounts, and to what their token sees once it changed', () => {
+    expect(
+      invalidationsForChange({ kind: 'git_connection', id: 'git-1', service_id: null, action: 'created' }),
+    ).toEqual([keys.gitConnections()])
+    expect(
+      invalidationsForChange({ kind: 'git_connection', id: 'git-1', service_id: null, action: 'updated' }),
+    ).toEqual([keys.gitConnections(), keys.gitProvider('git-1')])
+  })
 })

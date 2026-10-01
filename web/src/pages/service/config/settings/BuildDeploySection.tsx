@@ -1,19 +1,22 @@
 import * as React from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { Info } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { CodeBlock } from '@/components/patterns/Copy'
 import { Callout } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
+import { GitProviderIcon } from '@/components/patterns/icons'
 import { PageSection } from '@/components/patterns/Page'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { errorMessage } from '@/lib/api/client'
-import { useServerInfo, useTriggerDeploy, useUpdateService } from '@/lib/api/queries'
+import { useGitConnections, useServerInfo, useTriggerDeploy, useUpdateService } from '@/lib/api/queries'
 import type { ServiceView, SourceKind } from '@/lib/api/types'
 import { RUNTIME_LABELS } from '@/lib/format'
+import { connectionLabel, connectionServes } from '@/lib/git'
 
 import { servicePath } from '../../context'
 import { useReportDirty, useSyncedForm } from '../hooks'
@@ -30,6 +33,9 @@ import { CommandInput, FormError, SaveFooter, SourcePicker, StaleCallout } from 
 
 const SOURCE_NAMES: Record<SourceKind, string> = { git: 'the git repository', image: 'the image', upload: 'uploads' }
 
+/** Select value for "no git account" (Radix items can't have an empty value). */
+const NO_ACCOUNT = 'none'
+
 /** Build & deploy: source (git / image / upload), runtime, paths, commands, port, health check, auto-deploy. */
 export function BuildDeploySection({
   service,
@@ -43,6 +49,7 @@ export function BuildDeploySection({
   const update = useUpdateService(name)
   const deploy = useTriggerDeploy(name)
   const info = useServerInfo()
+  const accounts = useGitConnections()
   const server = React.useMemo(() => buildFormFrom(service), [service])
   const form = useSyncedForm<BuildForm>(server, sameForm)
   const [submitted, setSubmitted] = React.useState(false)
@@ -54,9 +61,11 @@ export function BuildDeploySection({
 
   const f = form.value
   const show = buildFields(service.type, f)
-  const errors = validateBuildForm(f, service.type)
+  const errors = validateBuildForm(f, service.type, accounts.data)
   const invalid = Object.keys(errors).length > 0
   const err = (k: keyof BuildForm) => (submitted || f[k] !== form.base[k] ? errors[k] : undefined)
+  // The account stops matching when the repository moves to another host, too.
+  const accountError = err('git_connection_id') ?? (f.repo_url !== form.base.repo_url ? errors.git_connection_id : undefined)
   const isCron = service.type === 'cron_job'
   const switching = f.source !== form.base.source
 
@@ -161,6 +170,46 @@ export function BuildDeploySection({
               error={err('repo_url')}
             >
               <Input mono placeholder="https://github.com/acme/app.git" autoComplete="off" spellCheck={false} {...text('repo_url')} />
+            </FormRow>
+            <FormRow
+              label="Git account"
+              htmlFor={id('git_connection_id')}
+              description={
+                <>
+                  Clones with the token of a connected GitHub or GitLab account, which a private repository needs.
+                  Accounts are connected in{' '}
+                  <Link
+                    to="/server?section=connections"
+                    className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Server → Connections
+                  </Link>
+                  .
+                </>
+              }
+              error={accountError}
+            >
+              {accounts.isPending ? (
+                <Skeleton className="h-[34px] w-full" />
+              ) : (
+                <Select
+                  value={f.git_connection_id || NO_ACCOUNT}
+                  onValueChange={(v) => set('git_connection_id')(v === NO_ACCOUNT ? '' : v)}
+                >
+                  <SelectTrigger id={id('git_connection_id')} className="w-full" aria-invalid={accountError ? true : undefined}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_ACCOUNT}>None (public repository, or an SSH key on the server)</SelectItem>
+                    {(accounts.data ?? []).map((c) => (
+                      <SelectItem key={c.id} value={c.id} disabled={!connectionServes(c, f.repo_url)}>
+                        <GitProviderIcon provider={c.provider} className="size-3.5 text-foreground-light" />
+                        <span className="truncate">{connectionLabel(c)}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </FormRow>
             <FormRow label="Branch" htmlFor={id('branch')} description="Deploys build the tip of this branch." error={err('branch')}>
               <Input mono placeholder="main" autoComplete="off" spellCheck={false} {...text('branch')} />

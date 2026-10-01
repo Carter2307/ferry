@@ -15,15 +15,18 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { errorMessage } from '@/lib/api/client'
 import { useCreateService, useDatastores, useServerInfo, useServices } from '@/lib/api/queries'
-import { RUNTIMES, type Runtime, type ServiceType } from '@/lib/api/types'
+import { RUNTIMES, type GitRepository, type Runtime, type ServiceType } from '@/lib/api/types'
 import { RUNTIME_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
+import { serviceNameFromRepository } from '@/lib/git'
 import { LIMIT_DEFAULT, limitValue, memoryHostWarning, type LimitField } from '@/lib/resources'
 import { cn } from '@/lib/utils'
 import { servicePath } from '@/pages/service/context'
 
 import { previewServiceUrl } from './lib'
+import { BranchSelect } from './new/BranchSelect'
 import { ChoiceCards, type Choice } from './new/ChoiceCards'
 import { CronField } from './new/CronField'
 import { DatastoreRefMenu } from './new/DatastoreRefMenu'
@@ -39,8 +42,10 @@ import {
   visibleFields,
   type FieldKey,
   type NewServiceForm,
+  type PickedRepository,
   type SourceMode,
 } from './new/form'
+import { RepositoryPicker } from './new/RepositoryPicker'
 
 const TYPE_CHOICES: Choice<ServiceType>[] = [
   {
@@ -130,6 +135,8 @@ export function NewServicePage() {
   const [serverError, setServerError] = React.useState<{ field: FieldKey | null; message: string } | null>(null)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   const serverAlertRef = React.useRef<HTMLDivElement | null>(null)
+  /** The name last filled in from a picked repository (replaced by the next pick, never a typed one). */
+  const suggestedName = React.useRef('')
 
   const taken = React.useMemo(
     () => ({
@@ -147,6 +154,28 @@ export function NewServicePage() {
     setServerError((e) => (e && (e.field === key || e.field === null) ? null : e))
   }
   const touch = (k: FieldKey) => setTouched((t) => (t.has(k) ? t : new Set(t).add(k)))
+  /**
+   * A repository was picked from a connected account (or the pick was
+   * cleared): deploy its default branch, and name the service after it
+   * unless a name was typed.
+   */
+  const pickRepository = (picked: PickedRepository | null, repository?: GitRepository) => {
+    let name = form.name
+    if (repository) {
+      const suggestion = serviceNameFromRepository(repository.name)
+      if (suggestion && (form.name.trim() === '' || form.name === suggestedName.current)) {
+        name = suggestion
+        suggestedName.current = suggestion
+      }
+    }
+    setForm((f) => ({
+      ...f,
+      repository: picked,
+      name,
+      branch: repository ? (repository.default_branch ?? 'main') : f.branch,
+    }))
+    setServerError((e) => (e && (e.field === 'repository' || e.field === null) ? null : e))
+  }
   const errorFor = (k: FieldKey): string | undefined => {
     if (serverError && serverError.field === k) return serverError.message
     const e = errors[k]
@@ -156,7 +185,16 @@ export function NewServicePage() {
   const bind = (
     k: Exclude<
       keyof NewServiceForm,
-      'domains' | 'envGroups' | 'autoDeploy' | 'type' | 'source' | 'runtime' | 'memoryLimit' | 'cpuLimit'
+      | 'domains'
+      | 'envGroups'
+      | 'autoDeploy'
+      | 'type'
+      | 'source'
+      | 'repoMode'
+      | 'repository'
+      | 'runtime'
+      | 'memoryLimit'
+      | 'cpuLimit'
     >,
   ) => {
     const err = errorFor(k)
@@ -252,9 +290,10 @@ export function NewServicePage() {
   }
 
   const typeLabel = SERVICE_TYPE_LABELS[form.type]
+  const picked = form.repoMode === 'account' ? form.repository : null
   const summary = [
     typeLabel,
-    form.source === 'git' ? 'Git' : form.source === 'image' ? 'Docker image' : 'Upload via CLI',
+    form.source === 'git' ? (picked?.fullName ?? 'Git') : form.source === 'image' ? 'Docker image' : 'Upload via CLI',
     vis.instances && form.instances.trim() ? `×${form.instances.trim()}` : null,
   ]
     .filter(Boolean)
@@ -335,14 +374,63 @@ export function NewServicePage() {
               <>
                 <FormRow
                   label="Repository"
-                  htmlFor={fieldId('repoUrl')}
-                  description="HTTPS or SSH URL, or the absolute path of a git repository on the server."
-                  error={errNode('repoUrl')}
+                  htmlFor={fieldId(form.repoMode === 'account' ? 'repository' : 'repoUrl')}
+                  description="Pick it from a connected GitHub or GitLab account, or give the URL of any git repository."
+                  layout="vertical"
+                  error={errNode(form.repoMode === 'account' ? 'repository' : 'repoUrl')}
                 >
-                  <Input {...bind('repoUrl')} mono placeholder="https://github.com/you/app.git" />
+                  <Tabs
+                    value={form.repoMode}
+                    onValueChange={(m) => update('repoMode', m === 'url' ? 'url' : 'account')}
+                    className="gap-3"
+                  >
+                    <TabsList variant="pills" aria-label="How to choose the repository">
+                      <TabsTrigger value="account">Connected account</TabsTrigger>
+                      <TabsTrigger value="url">Repository URL</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="account">
+                      <RepositoryPicker
+                        id={fieldId('repository')}
+                        value={form.repository}
+                        onChange={pickRepository}
+                        invalid={Boolean(errorFor('repository'))}
+                        describedBy={errorFor('repository') ? errorId('repository') : undefined}
+                      />
+                    </TabsContent>
+                    <TabsContent value="url" className="flex flex-col gap-1.5">
+                      <Input {...bind('repoUrl')} mono placeholder="https://github.com/you/app.git" />
+                      <p className="text-[12.5px] text-foreground-lighter">
+                        HTTPS or SSH URL, or the absolute path of a git repository on the server. A private repository
+                        needs an SSH key on the server — or pick it from a connected account.
+                      </p>
+                    </TabsContent>
+                  </Tabs>
                 </FormRow>
-                <FormRow label="Branch" htmlFor={fieldId('branch')} description="Deployed branch. Defaults to main." error={errNode('branch')}>
-                  <Input {...bind('branch')} mono placeholder="main" />
+                <FormRow
+                  label="Branch"
+                  htmlFor={fieldId('branch')}
+                  description={
+                    picked
+                      ? 'Deployed branch. Starts on the repository’s default branch.'
+                      : 'Deployed branch. Defaults to main.'
+                  }
+                  error={errNode('branch')}
+                >
+                  {picked ? (
+                    <BranchSelect
+                      id={fieldId('branch')}
+                      connectionId={picked.connectionId}
+                      repository={picked.fullName}
+                      defaultBranch={picked.defaultBranch}
+                      value={form.branch}
+                      onChange={(b) => update('branch', b)}
+                      onBlur={() => touch('branch')}
+                      invalid={Boolean(errorFor('branch'))}
+                      describedBy={errorFor('branch') ? errorId('branch') : undefined}
+                    />
+                  ) : (
+                    <Input {...bind('branch')} mono placeholder="main" />
+                  )}
                 </FormRow>
                 <FormRow
                   label="Auto-deploy"

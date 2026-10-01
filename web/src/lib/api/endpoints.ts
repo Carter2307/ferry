@@ -7,6 +7,7 @@ import { api, seg } from './client'
 import type {
   ApplyBlueprint,
   BlueprintResult,
+  ConnectGit,
   CreateDatastore,
   CreateEnvGroup,
   CreateService,
@@ -14,6 +15,9 @@ import type {
   Deploy,
   EnvGroupView,
   EnvVar,
+  GitBranch,
+  GitConnectionView,
+  GitRepositoryList,
   JobRun,
   PatchEnv,
   ReplaceEnv,
@@ -108,6 +112,17 @@ export const endpoints = {
     api.put<EnvGroupView>(`${V1}/env-groups/${seg(ref)}/env`, body, restart ? { restart: true } : undefined),
   patchEnvGroupEnv: (ref: string, body: PatchEnv, restart = false) =>
     api.patch<EnvGroupView>(`${V1}/env-groups/${seg(ref)}/env`, body, restart ? { restart: true } : undefined),
+
+  // git connections
+  listGitConnections: (signal?: AbortSignal) =>
+    api.get<GitConnectionView[]>(`${V1}/git/connections`, undefined, signal),
+  connectGit: (body: ConnectGit) => api.post<GitConnectionView>(`${V1}/git/connections`, body),
+  deleteGitConnection: (id: string, force = false) =>
+    api.delete(`${V1}/git/connections/${seg(id)}`, force ? { force: true } : undefined),
+  listGitRepositories: (id: string, signal?: AbortSignal) =>
+    api.get<GitRepositoryList>(`${V1}/git/connections/${seg(id)}/repositories`, undefined, signal),
+  listGitBranches: (id: string, repository: string, signal?: AbortSignal) =>
+    api.get<GitBranch[]>(`${V1}/git/connections/${seg(id)}/branches`, { repository }, signal),
 
   // blueprints
   applyBlueprint: (body: ApplyBlueprint) => api.post<BlueprintResult>(`${V1}/blueprints/apply`, body),

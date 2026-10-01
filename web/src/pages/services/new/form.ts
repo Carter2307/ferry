@@ -18,10 +18,27 @@ import { DEFAULT_LIMIT, limitError, limitValue, type LimitField } from '@/lib/re
 
 export type SourceMode = 'git' | 'image' | 'upload'
 
+/** How the repository of a git source is given: picked from a connected account, or by URL. */
+export type RepoMode = 'account' | 'url'
+
+/** A repository picked from a connected GitHub / GitLab account. */
+export interface PickedRepository {
+  /** The git connection it was listed through (its token clones it). */
+  connectionId: string
+  fullName: string
+  cloneUrl: string
+  private: boolean
+  defaultBranch: string | null
+}
+
 export interface NewServiceForm {
   type: ServiceType
   name: string
   source: SourceMode
+  repoMode: RepoMode
+  /** The repository picked from a connected account (`repoMode` = account). */
+  repository: PickedRepository | null
+  /** The repository's URL (`repoMode` = url). */
   repoUrl: string
   branch: string
   image: string
@@ -55,6 +72,8 @@ export const INITIAL_FORM: NewServiceForm = {
   type: 'web_service',
   name: '',
   source: 'git',
+  repoMode: 'account',
+  repository: null,
   repoUrl: '',
   branch: 'main',
   image: '',
@@ -79,7 +98,7 @@ export const INITIAL_FORM: NewServiceForm = {
 
 export const MAX_INSTANCES = 50
 const RESERVED_NAMES = ['ferry', 'localhost']
-const ID_PREFIXES = ['srv', 'dep', 'job', 'dbs', 'evg']
+const ID_PREFIXES = ['srv', 'dep', 'job', 'dbs', 'evg', 'git']
 
 /** Which settings apply to the current type and source. */
 export function visibleFields(f: Pick<NewServiceForm, 'type' | 'source' | 'runtime'>) {
@@ -294,7 +313,8 @@ export function validateForm(
   }
   set('name', validateName(f.name, taken))
   if (v.repo) {
-    set('repoUrl', validateRepoUrl(f.repoUrl))
+    if (f.repoMode === 'account') set('repository', f.repository ? null : 'Select a repository.')
+    else set('repoUrl', validateRepoUrl(f.repoUrl))
     set('branch', validateBranch(f.branch))
   }
   if (v.image) set('image', validateImage(f.image))
@@ -322,6 +342,7 @@ export const FIELD_ORDER: FieldKey[] = [
   'type',
   'name',
   'source',
+  'repository',
   'repoUrl',
   'branch',
   'image',
@@ -353,7 +374,13 @@ export function toCreateRequest(f: NewServiceForm, env: EnvVar[]): CreateService
   const v = visibleFields(f)
   const body: CreateService = { name: f.name.trim(), type: f.type }
   if (v.repo) {
-    body.repo_url = f.repoUrl.trim()
+    if (f.repoMode === 'account' && f.repository) {
+      // Cloned with the token of the account it was picked from.
+      body.repo_url = f.repository.cloneUrl
+      body.git_connection_id = f.repository.connectionId
+    } else {
+      body.repo_url = f.repoUrl.trim()
+    }
     body.branch = opt(f.branch) ?? 'main'
     body.auto_deploy = f.autoDeploy
   }
@@ -398,6 +425,7 @@ export function fieldForServerError(message: string): FieldKey | null {
     [/environment variable|variables total|value of /, 'env'],
     [/domain '/, 'domains'],
     [/custom domain|host '/, 'name'],
+    [/git connection|can't be used for/, 'repository'],
     [/repo_url|either repo_url or image/, 'repoUrl'],
     [/branch/, 'branch'],
     [/image/, 'image'],

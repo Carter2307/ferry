@@ -24,7 +24,7 @@ const LINKS = [
 
 /**
  * `/server` — Studio "Settings"-style page with an inner menu:
- * General (server info + theme), Connections (CLI, GitHub webhook), API.
+ * General (server info + theme), Connections (CLI, git accounts, GitHub webhook), API.
  * The section lives in `?section=` (the route has no sub-paths).
  */
 export function ServerPage() {
