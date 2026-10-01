@@ -41,6 +41,11 @@ export const keys = {
   envGroupList: () => ['env-groups', 'list'] as const,
   envGroup: (ref: string) => ['env-groups', 'detail', ref] as const,
 
+  /** The server's domains, and the certificates of the hosts they give services. */
+  domains: () => ['domains'] as const,
+  domainList: () => ['domains', 'list'] as const,
+  certificates: () => ['domains', 'certificates'] as const,
+
   /** Everything about git connections: what they can read changes with them. */
   git: () => ['git'] as const,
   gitConnections: () => ['git', 'connections'] as const,

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useServerInfo } from '@/lib/api/queries'
+import { defaultDomain } from '@/lib/domains'
 import { cn } from '@/lib/utils'
 import { signOut } from '@/lib/api/session'
 import { useUi, type ThemePreference } from '@/stores/ui'
@@ -27,7 +28,7 @@ export function MobileNav({ open, onOpenChange }: { open: boolean; onOpenChange:
           <SheetTitle className="flex items-center gap-2">
             <FerryLogo className="size-5" /> Ferry
           </SheetTitle>
-          <SheetDescription>{info ? `${info.base_domain} · v${info.version}` : 'Self-hosted deploys'}</SheetDescription>
+          <SheetDescription>{info ? `${defaultDomain(info)} · v${info.version}` : 'Self-hosted deploys'}</SheetDescription>
         </SheetHeader>
         <nav aria-label="Main" className="flex flex-1 flex-col gap-4 overflow-y-auto px-3 py-4">
           {NAV_ITEMS.map((group, gi) => (

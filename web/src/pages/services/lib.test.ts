@@ -98,6 +98,10 @@ describe('services list helpers', () => {
     expect(previewServiceUrl('api', info)).toBe('http://api.localhost:19801')
     expect(previewServiceUrl('api', { ...info, base_domain: 'example.com', tls_enabled: true })).toBe('https://api.example.com')
     expect(previewServiceUrl('api', { ...info, proxy_url: 'http://0.0.0.0:80' })).toBe('http://api.localhost')
+    // a connected domain that became the default is the one new services are shown with
+    expect(previewServiceUrl('api', { ...info, default_domain: 'example.com', tls_enabled: true })).toBe(
+      'https://api.example.com',
+    )
   })
 
   it('never shows future times for fresh deploys', () => {

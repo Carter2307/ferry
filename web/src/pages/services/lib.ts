@@ -2,7 +2,15 @@
  * Pure helpers of the services list (search, filter, sort, display strings).
  */
 
-import { isLongRunning, sourceKind, type ServiceState, type ServiceType, type ServiceView } from '@/lib/api/types'
+import {
+  isLongRunning,
+  sourceKind,
+  type ServerInfo,
+  type ServiceState,
+  type ServiceType,
+  type ServiceView,
+} from '@/lib/api/types'
+import { defaultDomain } from '@/lib/domains'
 import { displayUrl, relativeTime, repoName, RUNTIME_LABELS, SERVICE_STATE_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
 
 export type ServicesSort = 'name' | 'last_deploy'
@@ -114,10 +122,10 @@ function isLocalHost(host: string): boolean {
  */
 export function previewServiceUrl(
   name: string,
-  info: { base_domain: string; proxy_url: string; tls_enabled: boolean; dashboard_url: string | null } | undefined,
+  info: Pick<ServerInfo, 'base_domain' | 'default_domain' | 'proxy_url' | 'tls_enabled' | 'dashboard_url'> | undefined,
 ): string | null {
   if (!info || !name) return null
-  const host = `${name}.${info.base_domain}`
+  const host = `${name}.${defaultDomain(info)}`
   if (info.tls_enabled && !isLocalHost(host)) return `https://${host}`
   try {
     // The dashboard URL (when configured) carries the public port; else the proxy's.

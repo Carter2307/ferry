@@ -16,6 +16,7 @@ import { errorMessage, request } from '@/lib/api/client'
 import { useLive, type LiveMode } from '@/lib/api/events'
 import { useOpenApiSpec, useServerInfo } from '@/lib/api/queries'
 import type { ServerInfo } from '@/lib/api/types'
+import { defaultDomain } from '@/lib/domains'
 import { bytes } from '@/lib/format'
 import { defaultCpuText, defaultMemoryText, formatCpus } from '@/lib/resources'
 
@@ -116,14 +117,23 @@ function ServerInfoCard({ info }: { info: ServerInfo }) {
         )}
       </FormRow>
       <FormRow
-        label="Base domain"
+        label="Default domain"
         description={
           <>
-            Services are served at <span className="font-mono text-[12.5px]">&lt;name&gt;.{info.base_domain}</span>.
+            Services are shown at{' '}
+            <span className="font-mono text-[12.5px]">&lt;name&gt;.{defaultDomain(info)}</span>. Connect a domain of
+            yours under{' '}
+            <Link
+              to="/server?section=domains"
+              className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Domains
+            </Link>
+            .
           </>
         }
       >
-        <CopyField value={info.base_domain} what="base domain" aria-label="Base domain" />
+        <CopyField value={defaultDomain(info)} what="default domain" aria-label="Default domain" />
       </FormRow>
       <FormRow label="Proxy URL" description="Public entry point of the reverse proxy that routes to your services.">
         <div className="flex gap-2">
@@ -139,11 +149,12 @@ function ServerInfoCard({ info }: { info: ServerInfo }) {
         label="TLS"
         description={
           info.tls_enabled ? (
-            'Automatic HTTPS (Let’s Encrypt) for custom domains.'
+            'Automatic HTTPS (Let’s Encrypt) for every public hostname.'
           ) : (
             <>
               Start ferryd with <code className="font-mono text-[12.5px]">--acme-email</code> and{' '}
-              <code className="font-mono text-[12.5px]">--https-addr</code> to get certificates for custom domains.
+              <code className="font-mono text-[12.5px]">--https-addr</code> to get a certificate for every public
+              hostname.
             </>
           )
         }
