@@ -533,6 +533,95 @@ export interface BlueprintResult {
 }
 
 /** Error body: `{"error": {"code": "not_found", "message": "…"}}`. */
+// ---------------------------------------------------------------------------
+// Accounts (DESIGN.md §20)
+
+/** How a request is authenticated: the dashboard's session, or an API token. */
+export type AuthKind = 'session' | 'token'
+
+/** The account the dashboard is signed in to. */
+export interface UserView {
+  id: string
+  email: string
+  created_at: Timestamp
+}
+
+/** `GET /api/v1/auth/status` */
+export interface AuthStatus {
+  /** The server has no account yet: it is created first. */
+  setup_required: boolean
+  auth: AuthKind | null
+  user: UserView | null
+}
+
+/** `POST /api/v1/auth/setup` */
+export interface SetupAccount {
+  email: string
+  password: string
+  /** The setup code of the link ferryd prints while the server has no account. */
+  code: string
+}
+
+/** `POST /api/v1/auth/login` */
+export interface Login {
+  email: string
+  password: string
+}
+
+/** `POST /api/v1/auth/password` */
+export interface ChangePassword {
+  current_password: string
+  new_password: string
+}
+
+/** A browser signed in to the dashboard. */
+export interface SessionView {
+  id: string
+  user_agent: string | null
+  created_at: Timestamp
+  last_used_at: Timestamp
+  expires_at: Timestamp
+  /** The session of this browser. */
+  current: boolean
+}
+
+/** A named API token. The token itself is only in the answer that creates it. */
+export interface ApiTokenView {
+  id: string
+  name: string
+  /** The last characters of the token. */
+  hint: string
+  created_at: Timestamp
+  last_used_at: Timestamp | null
+  expires_at: Timestamp | null
+}
+
+/** `POST /api/v1/auth/tokens` */
+export interface CreateApiToken {
+  name: string
+  expires_in_days?: number | null
+}
+
+/** Answer of `POST /api/v1/auth/tokens`: the only time the token is shown. */
+export interface CreatedApiToken {
+  token: string
+  api_token: ApiTokenView
+}
+
+export type CliLoginStatus = 'pending' | 'approved' | 'denied'
+
+/** `GET /api/v1/auth/cli/{id}` — a `ferry login` waiting for its approval. */
+export interface CliLoginView {
+  id: string
+  /** Who asks, e.g. `ada@laptop`. */
+  name: string
+  /** What the terminal shows too. */
+  code: string
+  status: CliLoginStatus
+  created_at: Timestamp
+  expires_at: Timestamp
+}
+
 export interface ApiErrorBody {
   error: ApiErrorDetail
 }

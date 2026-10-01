@@ -370,20 +370,25 @@ log (runtime logs are Docker's container logs).
 
 ## 10. HTTP API (`ferry-api`)
 
-Auth: `Authorization: Bearer <token>` on `/api/*` (except the OpenAPI
-document and Swagger UI below); GET requests may use `?access_token=<token>`
-instead (EventSource can't set headers). Constant-time compare. Errors:
-`ApiErrorBody` with `Error::status()`. `{id}` = id or name. JSON bodies; 404
-JSON for unknown `/api` routes (behind the token, like every `/api` path).
+Auth (§20): every `/api/*` request — except the OpenAPI document, Swagger
+UI and the public `/api/v1/auth` calls below — carries an API token as
+`Authorization: Bearer <token>` (GET requests may use `?access_token=<token>`
+instead: EventSource can't set headers) or the dashboard's session cookie.
+The account's own operations (`/api/v1/auth/...`) only take the session.
+Errors: `ApiErrorBody` with `Error::status()`. `{id}` = id or name. JSON
+bodies; 404 JSON for unknown `/api` routes (behind the authentication, like
+every `/api` path).
 
 **OpenAPI.** Every handler carries a `#[utoipa::path]` (method, path, tag,
 params, bodies, responses with `ApiErrorBody` errors); `openapi::ApiDoc`
 (`#[derive(OpenApi)]`, OpenAPI **3.1**) gathers them with every DTO schema,
-a `bearer` HTTP security scheme (required by every `/api/v1` operation, none
-for `/healthz`, the webhooks and the document) and one tag per resource. It is
+two security schemes — `bearer` (an API token) and `session` (the
+session cookie) — either of which every `/api/v1` operation
+requires, except the account's (`session` only) and the public ones (none,
+like `/healthz`, the webhooks and the document), and one tag per resource. It is
 served at `GET /api/openapi.json`, and Swagger UI (`utoipa-swagger-ui`, assets
 vendored into the binary: works offline, no validator call) at `/api/docs`;
-both without auth, and outside the token-checking API router so neither
+both without auth, and outside the authenticating API router so neither
 fallback can shadow them. `tests/openapi.rs` keeps one authoritative list of
 routes and checks that the document, the router and `lib.rs` agree.
 
@@ -393,6 +398,20 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /` (and any other non-API path) | the web client (§13; SPA fallback, no auth) |
 | `GET /api/openapi.json` | the OpenAPI 3.1 document (no auth) |
 | `GET /api/docs` | Swagger UI (no auth; redirects to `/api/docs/`, its **Authorize** takes the API token) |
+| `GET /api/v1/auth/status` | `AuthStatus` `{setup_required, auth, user}` (no auth): is there an account, and how this request is authenticated (`session`, `token`, or `null` — wrong credentials count as none) |
+| `POST /api/v1/auth/setup` | `SetupAccount` `{email, password, code}` → 201 `AuthStatus` + the session cookie (no auth; only while the server has no account). 403 `invalid_setup_code`, 409 when the account exists, 429 `too_many_attempts` |
+| `POST /api/v1/auth/login` | `Login` `{email, password}` → `AuthStatus` + the session cookie (no auth). 401 `invalid_credentials`, 429 `too_many_attempts` |
+| `POST /api/v1/auth/logout` | 204, ends the session of the cookie and clears it (no auth: fine without a session) |
+| `POST /api/v1/auth/password` | `ChangePassword` `{current_password, new_password}` → 204; the other sessions end. 401 `invalid_credentials` |
+| `GET /api/v1/auth/sessions` | `[SessionView]` `{id, user_agent, created_at, last_used_at, expires_at, current}`, the last used first |
+| `DELETE /api/v1/auth/sessions/{id}` | 204 (its own: also clears the cookie) |
+| `GET /api/v1/auth/tokens` | `[ApiTokenView]` `{id, name, hint, created_at, last_used_at, expires_at}`: never a token |
+| `POST /api/v1/auth/tokens` | `CreateApiToken` `{name, expires_in_days?}` → 201 `CreatedApiToken` `{token, api_token}`: the only time the token is shown |
+| `DELETE /api/v1/auth/tokens/{id}` | 204 |
+| `POST /api/v1/auth/cli` | `StartCliLogin` `{name?}` → 201 `CliLoginStarted` `{id, code, secret, expires_in, interval}` (no auth): a `ferry login` asks to be connected. 409 while the server has no account |
+| `GET /api/v1/auth/cli/{id}` | `CliLoginView` `{id, name, code, status, created_at, expires_at}`: what the approval page shows |
+| `POST /api/v1/auth/cli/{id}/approve` · `/deny` | `CliLoginView`; approving creates the API token the terminal collects |
+| `POST /api/v1/auth/cli/{id}/token` | `CliLoginPoll` `{secret}` → `CliLoginResult` `{status, token?}` (no auth): `pending`, `denied`, or `approved` with the token, once. 401 for another secret, 404 once expired or collected |
 | `GET /api/v1/info` | `ServerInfo` (including the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
 | `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`/`git_connection`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
 | `GET /api/v1/services` | `[ServiceView]` |
@@ -565,13 +584,16 @@ services:
 
 ## 12. CLI (`ferry`)
 
-Config: `~/.config/ferry/config.json` `{server, token}` (0600). Overrides:
+Config: `~/.config/ferry/config.json` `{server, token}` (0600), written by
+`ferry login`. Overrides:
 `--server/--token` flags, `FERRY_SERVER`/`FERRY_TOKEN` env. Global `--json`
 prints raw API JSON. Tables are aligned plain text; colors only on a TTY and
 never with `NO_COLOR`. Exit code 1 with the API error message on failure.
 
 ```
-ferry login --server URL --token TOKEN     # verifies with /api/v1/info, saves config
+ferry login [--server URL] [--no-browser]   # approved in the dashboard (§20): prints a page and a code,
+      # opens the page, polls until it is answered, then verifies (/api/v1/info) and saves the token it got
+ferry login --server URL --token TOKEN     # (or FERRY_TOKEN) verifies and saves a given token: CI, no browser
 ferry info                                 # incl. default limits and the Docker host's CPUs / memory
 ferry services | ferry ls
 ferry create NAME [--type web|pserv|worker|cron|static] [--repo URL] [--branch B] [--image IMG]
@@ -629,14 +651,25 @@ Rust build never runs Node.
   (`createBrowserRouter`, history URLs, code-split pages); Vitest for the pure
   helpers (SSE parser, formatting, `.env` parsing, resource limits) and a few
   components (rendered with `react-dom/server`). Light and dark themes.
-* **Views:** login (token, validated with `GET /api/v1/info`) · services
+* **Views:** setup (`/setup?code=…`, the first run: create the account) ·
+  login (email + password) · the approval of a `ferry login`
+  (`/cli-login?id=…`, outside the shell) · services
   (list, new) · service detail: Overview, Deploys (+ deploy detail with live
   build logs, rollback, cancel), Logs, Jobs (+ job detail), Environment
   (variables, env group links, "save & restart"), Settings (build & deploy,
   resources, custom domains, deploy hook) · datastores (+ detail,
   connection strings, resources) · env groups (+ detail) · blueprints (paste
   YAML → dry run → apply) · server (incl. default container limits, the
-  Docker host's size, and the connected git accounts).
+  Docker host's size, the connected git accounts, and **Account**: the
+  email, changing the password, the API tokens — created with a name and
+  an expiry, shown once, revoked — and the sessions).
+* **Signing in** (§20): on load, `GET /api/v1/auth/status` decides between
+  the setup page, the login page and the app (`src/stores/auth.ts`:
+  `loading` / `unreachable` / `setup` / `signed-out` / `signed-in`). The
+  session is an `HttpOnly` cookie the page never reads; a 401
+  `unauthorized` on any request means it ended and returns to `/login`
+  (`?next=` brings the user back; a wrong password is 401
+  `invalid_credentials` and changes nothing).
 * **Git connections in the UI** (§18):
   * *Asking for one.* As long as the server has no connected account, the
     services page (the home page) asks to connect GitHub or GitLab — or to
@@ -686,14 +719,15 @@ Rust build never runs Node.
   when Docker's `oom_killed` is set, an "OOM killed" badge linking to the
   settings.
 * **Transport: REST + SSE** (no gRPC, no WebSocket). Queries and mutations
-  are the JSON REST API of §10 on the same origin (no CORS), with
-  `Authorization: Bearer`. Push uses Server-Sent Events read with `fetch()`
-  and a streaming parser, so the token stays in a header: log streams
+  are the JSON REST API of §10 on the same origin (no CORS), authenticated
+  by the session cookie. Push uses Server-Sent Events read with `fetch()`
+  and a streaming parser, with the same cookie: log streams
   (`event: log` … `event: end`) and the change feed `GET /api/v1/events`,
   whose `change` events become TanStack Query invalidations; it reconnects
   with exponential backoff (1 s → 15 s) and, while the feed is down (or 404
   on an older server), falls back to polling.
-* **Storage:** the token in `localStorage` under `ferry.token`, UI
+* **Storage:** nothing about the session (the cookie is the browser's; the
+  `ferry.token` of earlier versions is removed on load). UI
   preferences under `ferry.ui` (theme applied before first paint by
   `public/theme-init.js`, so a strict `script-src 'self'` CSP works). While
   a git account is being authorized: `ferry.git.authorizing` (where to go
@@ -865,7 +899,11 @@ are never checked; on non-Unix systems the check does nothing.
 * The data directory is created `0700` (it holds env values, datastore
   passwords, credentialed repo URLs, the secrets of git connections: access
   and refresh tokens, GitHub App private keys, OAuth client secrets);
-  `api_token` and `instance_id` are `0600`.
+  `api_token`, `setup_code`, `ferryd.json` and `instance_id` are `0600`.
+* The account's password is stored as an Argon2id hash, sessions and API
+  tokens as SHA-256 digests (§20): reading the database gives none of them
+  away. The server token (`api_token`) is the one credential kept as it
+  is, in the data directory.
 * Git credentials (in a repository URL, or a git connection's token, §18)
   reach `git` through its environment only, never a command line, the git
   cache or a log, and only for the host of the remote: a host the remote
@@ -988,6 +1026,13 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   skipped without `openssl`). `ferry-build` / `ferry-engine` clone and list
   branches from a local HTTP server that demands the token (also through a
   redirect, which must not get it).
+* Accounts (§20): `ferry-api/tests/auth.rs` drives the router as a browser
+  would (cookies, `Origin` / `Sec-Fetch-Site`) and as a terminal — setup
+  with and without the code, sign-in and its limits, what a session may
+  change and from where, password changes, sessions, API tokens and the
+  whole `ferry login` exchange; `ferry-cli/tests/cli.rs` runs `ferry login`
+  against a fake server (approved, denied, expired, an older server). No
+  password is written in a test: each one is made up when the test runs.
 * The background commands of `ferryd` (§19) are tested on the real binary
   in `ferryd/tests/background.rs`: without Docker, a start that fails
   before the server listens (its error reaches the terminal, exit code 1)
@@ -1254,8 +1299,130 @@ never signals a process it can't name.
    the warnings and errors it logged while starting, and how to follow and
    stop it; after 60 s → exits 1, saying the server keeps starting.
 
+The banner ends with what to do next, decided when it is printed (`start`,
+`status` and `run` alike): `Create your account: <api_url>/setup?code=…`
+while `<data-dir>/setup_code` exists (§20), else `Connect the CLI : ferry
+login`. It never prints a token.
+
 The server logs with colors only when its stdout is a terminal (and
 `NO_COLOR` is unset): never into `ferryd.log`, a pipe or the journal.
 Nothing rotates `ferryd.log` while a server runs; a long-lived server
 belongs under a service manager with `ferryd run` (README, "Running the
 server").
+
+## 20. Accounts, sessions and API tokens
+
+A server has **one account**: its administrator (`users`, one row). There
+are no teams or roles (§1): whoever is authenticated can do everything.
+What differs is how each client proves who it is.
+
+| client | proves it with | lives |
+|---|---|---|
+| the dashboard | the session cookie (`ferry_session_<port>`), got by signing in with the account's email and password | 30 days after its last use |
+| the CLI, scripts, CI | an API token, `Authorization: Bearer fy_…` | until revoked, or its `expires_at` |
+| scripts on the server | the server token (`<data-dir>/api_token`, `--api-token`) | until the file is replaced |
+
+**Data model** (migration `0005_accounts.sql`). `User { id (usr-…), email
+(lowercase, unique), password_hash, created_at, updated_at }`; `Session {
+id (ses-…), user_id, token_hash, user_agent, created_at, last_used_at,
+expires_at }`; `ApiToken { id (tok-…), name, token_hash, hint, created_at,
+last_used_at, expires_at? }`. `password_hash` is an Argon2id PHC string
+(`ferry_core::auth`, the crate's default cost, a salt per hash, computed on
+a blocking thread). A session secret (`fys_` + 48 hex) and an API token
+(`fy_` + 40 hex, like the server token) are random, so the store keeps
+their SHA-256 only (`token_hash`): a fast digest is enough when there is
+nothing to guess, and a copy of the database authenticates nobody. `hint`
+is the end of a token, to tell tokens apart. None of the three types is
+serializable: the API answers with `UserView`, `SessionView` and
+`ApiTokenView`.
+
+**First run.** While `users` is empty, creating the account takes the
+**setup code**: 24 hex characters in `<data-dir>/setup_code` (`0600`),
+written by `ferryd` at startup (`ferry_api::setup::ensure_code`) and
+printed in a link by the banner (§19). `POST /api/v1/auth/setup` compares
+it in constant time, creates the account only if none exists (one `INSERT
+… WHERE NOT EXISTS`: of two setups at once, one wins), deletes the file
+and signs the browser in. Without the code a server reachable by others —
+`--api-addr 0.0.0.0`, the dashboard host of the proxy — could be claimed by
+whoever opens it first. A server upgraded from a version without accounts
+is in the same state: its next start prints the link.
+
+**Authenticating a request** (`ferry_api::auth::authenticate`, the
+middleware of the `/api` router):
+
+1. A bearer token (or `?access_token=` on GET): the server token, compared
+   in constant time, else the API token with that digest, unless expired.
+   Anything else is 401 `invalid API token`.
+2. Else the cookie: the session with that digest, unless expired (401
+   `your session has ended`). For a method that changes something the
+   request must also come from the dashboard's own pages
+   (`same_origin`): `Sec-Fetch-Site: same-origin` when the browser sends
+   it, else an `Origin` whose host is the request's `X-Forwarded-Host` /
+   `Host`, else (no browser sent the cookie on its own) allowed. Otherwise
+   403 `cross_site_request`. With the cookie's `SameSite=Strict`, this is
+   the whole CSRF defence: there is no CSRF token to carry.
+3. Else 401 `not signed in`.
+
+The handler gets an `Identity` (`Session { session, user }`, `ApiToken`,
+`ServerToken`). The account's routes sit behind a second middleware
+(`require_session`): 403 `session_required` for a token, before the body is
+even read — a token makes no tokens, changes no password and approves no
+terminal. Using a session or a token records `last_used_at` at most every
+5 minutes; for a session it also pushes `expires_at` 30 days ahead.
+
+**The cookie**: `ferry_session_7878=<secret>; Path=/; HttpOnly;
+SameSite=Strict; Max-Age=34560000`, plus `Secure` when the request says
+`X-Forwarded-Proto: https` (the proxy of §3 sets it). Its name ends with
+the port of the address the browser used — of `X-Forwarded-Host` behind a
+proxy, else of `Host`; plain `ferry_session` when there is none
+(`session_cookie_name`) — because browsers keep cookies per host name, not
+per port: two servers reached at `127.0.0.1:7878` and `127.0.0.1:7879`
+(§4's several servers on one machine, or two SSH tunnels) would otherwise
+overwrite each other's session. The long `Max-Age`
+only keeps the browser from dropping it first: the server decides when the
+session ends. `SameSite=Strict` doesn't get in the way of links that
+arrive from elsewhere (the setup link, a provider's redirect to
+`/git/callback`, the page of a `ferry login`): the page is static, and its
+own requests are same-site.
+
+**Signing in** verifies the password against the stored hash — or against
+a throwaway hash when no account has the email, so both refusals take as
+long and say the same (`invalid_credentials`). **Failed attempts** (wrong
+password, wrong setup code, wrong current password) are counted for the
+whole server, in memory: 10 within 5 minutes refuse further attempts with
+429 `too_many_attempts` until the oldest is 5 minutes old. It is not per
+client address — behind the proxy that would trust a header — so someone
+who can reach the API can delay the administrator: one more reason to keep
+the API on localhost or behind HTTPS (§15). Changing the password ends
+every other session; `ferryd reset-password` (the forgotten password:
+asked twice without echo, or one line of standard input) replaces it in
+the database directly — whoever can run it can read the data directory —
+and ends every session. API tokens are untouched by both.
+
+**`ferry login` in the browser** (a device-style flow; the requests live
+in memory, `auth::Runtime`, at most 100, 10 minutes each):
+
+1. The terminal: `POST /api/v1/auth/cli {name: "ada@laptop"}` → `{id,
+   code, secret}`. It prints `<server>/cli-login?id=<id>` and `code`
+   (`ABCD-EFGH`, 8 characters without look-alikes), opens the page, and
+   polls `POST /api/v1/auth/cli/{id}/token {secret}` every 2 s.
+2. The dashboard, signed in (signing in comes back to the page): `GET
+   /api/v1/auth/cli/{id}` shows who asks and the code. The person checks
+   that it is the code of their own terminal — a link someone else sent
+   shows another one — and approves or denies.
+3. Approving creates an API token named after the terminal and keeps it
+   for the next poll, which hands it over **once**; the page never sees it.
+   A token nobody collected before the request expired is revoked.
+
+The terminal then verifies the token and saves it (§12). `--token` /
+`FERRY_TOKEN` skip all of this.
+
+**The server token** (`api_token`) stays what it was — it authenticates
+every API route but the account's — because existing CLI logins, CI and
+scripts on the server use it. It is no longer printed, shown in the
+dashboard or accepted by it; it is as exposed as the data directory.
+
+Not covered: several accounts, roles, an audit log, single sign-on,
+passkeys or a second factor, sessions shown with their address, limiting
+attempts per client, and the scopes of API tokens (each is an
+administrator).

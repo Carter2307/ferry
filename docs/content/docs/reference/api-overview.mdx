@@ -9,6 +9,7 @@ import { Braces, FileJson } from 'lucide-react';
 Everything the dashboard and the `ferry` CLI do goes through one JSON REST API served by `ferryd`. This page covers the conventions shared by every endpoint; the [API reference](/docs/reference/api) documents each one.
 
 ```bash title="Terminal"
+# On the server itself: the server token. Elsewhere, an API token created in the dashboard.
 export FERRY_TOKEN="$(cat ferry-data/api_token)"
 curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/info
 ```
@@ -33,34 +34,72 @@ curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/info
 
 The API listens on `ferryd --api-addr`, `http://127.0.0.1:7878` by default, and every resource lives under `/api/v1`. When the dashboard host is enabled (by default `ferry.localhost` for a local base domain), the same API is also reachable through the public proxy, for example `http://ferry.localhost:8080/api/v1`. See [server options](/docs/reference/server-options) and [Security model](/docs/architecture/security) before exposing it.
 
-| Path | What it is | Token |
+| Path | What it is | Authentication |
 |---|---|---|
-| `/api/v1/…` | The REST API | required |
+| `/api/v1/…` | The REST API | an API token or the dashboard's session (a few [account endpoints](#account-endpoints) need none) |
 | `/api/openapi.json` | The OpenAPI 3.1 document | none |
-| `/api/docs` | Swagger UI for your server | none (its **Authorize** button takes the token) |
+| `/api/docs` | Swagger UI for your server | none (its **Authorize** button takes an API token) |
 | `/hooks/deploy/{service_id}` | [Deploy hooks](#deploy-hooks) | the hook's key |
 | `/hooks/github` | [GitHub webhook](#github-webhook) | the webhook signature |
 | `/healthz` | Liveness probe, answers `ok` | none |
-| anything else | The web dashboard | none (it asks for the token) |
+| anything else | The web dashboard | none (it asks you to sign in) |
 
 ## Authentication
 
-Send the server's API token as a bearer token on every `/api/v1` request:
+A `/api/v1` request is authenticated in one of two ways:
+
+- **An API token**, sent as a bearer token. This is what the CLI, scripts and CI use.
+- **The session cookie** (`ferry_session_<port>`, named after the port of the address the browser uses) that the dashboard gets when you sign in with the email and password of the server's account.
 
 ```bash title="Terminal"
 curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/services
 ```
 
-`ferryd` prints the token at startup and stores it in `<data-dir>/api_token` (mode `0600`). It generates one on first start, or uses `--api-token` / `FERRY_API_TOKEN` when set. There is one token per server, with full access: Ferry has no users or roles.
+An API token is `fy_` followed by 40 hex characters. There are three kinds, all with the same access:
+
+- **Named tokens**, created in the dashboard under **Server → Account**, with an optional expiry. A token is shown once, when it is created; the server keeps its SHA-256 digest.
+- **A terminal's token**, which [`ferry login`](/docs/reference/cli#ferry-login) receives once you approve it in the dashboard. It is listed with the named tokens and revoked the same way.
+- **The server token** in `<data-dir>/api_token` (mode `0600`), generated on first start or set with `--api-token` / `FERRY_API_TOKEN`. It is meant for scripts on the server itself; it isn't listed in the dashboard and can't be revoked there.
+
+A token can do everything in the API except use the [account endpoints](#account-endpoints). Ferry has one administrator account and no roles: see [Security model](/docs/architecture/security#the-account).
 
 `GET` requests may pass the token as `?access_token=<token>` instead, because the browser's `EventSource` can't set headers. Other methods only accept the header. Prefer the header whenever you can: URLs end up in browser history and in the logs of any proxy in front of the server.
 
-| Response | Message |
-|---|---|
-| 401 `unauthorized` | `missing API token (use 'Authorization: Bearer <token>')` |
-| 401 `unauthorized` | `invalid API token` |
+A request authenticated by the session cookie that changes something (`POST`, `PUT`, `PATCH`, `DELETE`) must come from the dashboard's own origin: the server checks `Sec-Fetch-Site`, or else `Origin` against the host.
 
-The token check runs before routing, so an unknown path under `/api` answers 401 without a token and 404 with one.
+| Response | Message | When |
+|---|---|---|
+| 401 `unauthorized` | `not signed in: send an API token as 'Authorization: Bearer <token>', or sign in to the dashboard` | The request has no credentials |
+| 401 `unauthorized` | `invalid API token` | The token is wrong, revoked or expired |
+| 401 `unauthorized` | `your session has ended: sign in again` | The session of the cookie has ended |
+| 403 `session_required` | `this is only possible from the dashboard, signed in to the account (not with an API token)` | An account endpoint was called with an API token |
+| 403 `cross_site_request` | `this request doesn't come from the dashboard` | A change sent with the session cookie from another origin |
+
+The check runs before routing, so an unknown path under `/api` answers 401 without credentials and 404 with them.
+
+### Account endpoints
+
+Everything about the account lives under `/api/v1/auth`. The first six need no authentication, because a browser or a terminal calls them before it has any. The others only accept the dashboard's session, and answer 403 `session_required` to an API token. The [API reference](/docs/reference/api/auth) documents each one.
+
+| Endpoint | Authentication | What it does |
+|---|---|---|
+| `GET /api/v1/auth/status` | none | Answers `{setup_required, auth, user}`: whether the server still has no account, and how the request is authenticated (`"session"`, `"token"` or `null`) |
+| `POST /api/v1/auth/setup` | none | Creates the account from `{email, password, code}`, where `code` is the setup code, and signs the browser in (201) |
+| `POST /api/v1/auth/login` | none | Signs in with `{email, password}`: the answer sets the session cookie |
+| `POST /api/v1/auth/logout` | none | Signs out |
+| `POST /api/v1/auth/cli` | none | Starts a `ferry login` |
+| `POST /api/v1/auth/cli/{id}/token` | none | What the terminal polls until its `ferry login` is answered |
+| `POST /api/v1/auth/password` | session | Changes the password |
+| `GET /api/v1/auth/sessions` | session | Lists the sessions |
+| `DELETE /api/v1/auth/sessions/{id}` | session | Ends a session: that browser is signed out |
+| `GET /api/v1/auth/tokens` | session | Lists the API tokens |
+| `POST /api/v1/auth/tokens` | session | Creates an API token; `expires_in_days` is optional, from 1 to 3650 |
+| `DELETE /api/v1/auth/tokens/{id}` | session | Revokes an API token |
+| `GET /api/v1/auth/cli/{id}` | session | Shows a `ferry login` request |
+| `POST /api/v1/auth/cli/{id}/approve` | session | Approves it |
+| `POST /api/v1/auth/cli/{id}/deny` | session | Denies it |
+
+After 10 failed sign-ins within 5 minutes, `login` and `setup` answer 429 `too_many_attempts` until the oldest failure is 5 minutes old. The limit counts for the whole server, not per IP address.
 
 ## Requests
 
@@ -91,12 +130,17 @@ Every error has the same body:
 |---|---|---|
 | 400 | `invalid_request` | Malformed JSON, unknown field, invalid query string, failed validation (`invalid name 'Bad_Name': use 1-40 lowercase letters, digits or '-', starting with a letter`). |
 | 400 | `git_application_required` | GitLab needs an OAuth application created for this server before an account can authorize it: send its `client_id` and `client_secret` with `POST /api/v1/git/authorize`. See [Connect GitHub or GitLab](/docs/guides/git-accounts). |
-| 400, 409 | `git_authorization_rejected` | GitHub or GitLab refused an authorization: `400` for the one being made (a rejected token or code, a user who said no), `409` for what a [git connection](/docs/guides/git-accounts) has stored (expired, revoked, uninstalled, or not finished). Never `401`, which is about Ferry's own token. |
-| 401 | `unauthorized` | Missing or wrong token, wrong deploy hook key, bad webhook signature. |
+| 400, 409 | `git_authorization_rejected` | GitHub or GitLab refused an authorization: `400` for the one being made (a rejected token or code, a user who said no), `409` for what a [git connection](/docs/guides/git-accounts) has stored (expired, revoked, uninstalled, or not finished). Never `401`, which is about Ferry's own authentication. |
+| 401 | `unauthorized` | No credentials, a wrong, revoked or expired API token, a session that has ended, a wrong deploy hook key, a bad webhook signature. |
+| 401 | `invalid_credentials` | Wrong email or password. |
+| 403 | `session_required` | An [account endpoint](#account-endpoints) was called with an API token. |
+| 403 | `cross_site_request` | A request authenticated by the session cookie changes something and doesn't come from the dashboard's own origin. |
+| 403 | `invalid_setup_code` | The setup code sent to create the account is wrong. |
 | 404 | `not_found` | No such resource, or no such route (`no API route for /api/v1/nope`). |
 | 405 | `method_not_allowed` | The path exists but not with this method. |
 | 409 | `conflict`, `canceled` | The request conflicts with the current state: a name already in use, a deploy that is already finished (`deploy dep-… is already deactivated`), a suspended service, a resource still referenced by others (retry with `force=true`). |
 | 413 | `payload_too_large` | The body exceeds the endpoint's limit. |
+| 429 | `too_many_attempts` | Too many failed sign-ins: 10 within 5 minutes, for the whole server. |
 | 500 | `database_error`, `io_error`, `build_failed`, `internal_error` | A server-side failure; details are in the `ferryd` log. |
 | 502 | `docker_error` | The Docker daemon failed or is unreachable. |
 | 502 | `git_provider_unavailable` | GitHub or GitLab could not be reached, or answered an error, while an account was being authorized or a git connection's repositories listed. |
@@ -197,7 +241,7 @@ data: {"kind":"env_group","id":"evg-c15c37b6f91044ff920b","service_id":null,"act
 
 The streams send no event ids, so there is nothing to resume from: after a reconnect, wait for `ready` and refetch, or replay the log. The web dashboard reconnects with an exponential backoff from 1 to 15 seconds, and falls back to polling while the feed is down.
 
-In a browser, `EventSource` reconnects on its own and needs the token in the URL:
+In a browser, `EventSource` reconnects on its own. It can't set headers, so an API token goes in the URL:
 
 ```js title="events.js"
 const events = new EventSource(`/api/v1/events?access_token=${encodeURIComponent(token)}`);
@@ -209,11 +253,11 @@ events.addEventListener('change', (e) => {
 });
 ```
 
-`ferryd` sends no CORS headers, so a page can only call the API from the server's own origin (the dashboard does, and reads streams with `fetch()` to keep the token in a header). From other origins, go through a same-origin proxy or call the API from a backend.
+`ferryd` sends no CORS headers, so a page can only call the API from the server's own origin (the dashboard does, authenticated by its session cookie). From other origins, go through a same-origin proxy or call the API from a backend.
 
 ## Webhooks
 
-Webhooks live outside `/api` and never take the API token: each one checks its own secret.
+Webhooks live outside `/api` and never take an API token: each one checks its own secret.
 
 ### Deploy hooks
 
@@ -265,4 +309,4 @@ Repositories match whatever URL form the service uses: the push's `clone_url`, `
   <Card icon={<FileJson />} title="OpenAPI and Swagger UI" description="Your server serves the OpenAPI 3.1 document at /api/openapi.json and an interactive Swagger UI at /api/docs." />
 </Cards>
 
-The reference pages have no "try it" button, because `ferryd` sends no CORS headers. To send requests from a browser, open `http://127.0.0.1:7878/api/docs` on your server and paste the token under **Authorize**.
+The reference pages have no "try it" button, because `ferryd` sends no CORS headers. To send requests from a browser, open `http://127.0.0.1:7878/api/docs` on your server and paste an API token under **Authorize**.

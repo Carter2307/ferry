@@ -1,4 +1,4 @@
-import { getToken, useAuth } from '@/stores/auth'
+import { useAuth } from '@/stores/auth'
 
 import type { ApiErrorBody } from './types'
 
@@ -46,9 +46,7 @@ export interface RequestOptions {
   body?: unknown
   headers?: Record<string, string>
   signal?: AbortSignal
-  /** Use this token instead of the stored one (login validation). */
-  token?: string
-  /** Don't sign out on 401 (login validation). */
+  /** Don't treat a 401 as the end of the session (asking whether there is one). */
   skipAuthRedirect?: boolean
 }
 
@@ -79,11 +77,6 @@ export function seg(value: string): string {
   return encodeURIComponent(value)
 }
 
-export function authHeaders(token?: string | null): Record<string, string> {
-  const t = token ?? getToken()
-  return t ? { Authorization: `Bearer ${t}` } : {}
-}
-
 /** Turn a non-2xx response into an ApiError (reads the JSON error body when present). */
 export async function errorFromResponse(res: Response): Promise<ApiError> {
   let code = `http_${res.status}`
@@ -107,18 +100,23 @@ export async function errorFromResponse(res: Response): Promise<ApiError> {
   return new ApiError(res.status, code, message)
 }
 
-/** Sign out when the stored token is rejected (expired/rotated). */
-export function handleUnauthorized(usedStoredToken: boolean): void {
-  if (usedStoredToken && useAuth.getState().token) useAuth.getState().signOut()
+/**
+ * The server no longer knows this browser's session (it expired, or was ended
+ * elsewhere): back to the sign-in page. Other 401s, such as a wrong password,
+ * say nothing about the session.
+ */
+export function handleUnauthorized(err: ApiError): void {
+  if (err.status === 401 && err.code === 'unauthorized') useAuth.getState().signedOut()
 }
 
 /**
  * Perform an API request and decode the JSON response (`undefined` for 204).
+ * The browser sends the session cookie itself (same origin).
  * Throws ApiError / NetworkError.
  */
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', query, body, signal, token, skipAuthRedirect } = opts
-  const headers: Record<string, string> = { Accept: 'application/json', ...authHeaders(token), ...opts.headers }
+  const { method = 'GET', query, body, signal, skipAuthRedirect } = opts
+  const headers: Record<string, string> = { Accept: 'application/json', ...opts.headers }
   let payload: BodyInit | undefined
   if (body !== undefined) {
     if (typeof body === 'string' || body instanceof Blob) {
@@ -139,7 +137,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 
   if (!res.ok) {
     const err = await errorFromResponse(res)
-    if (res.status === 401 && !skipAuthRedirect) handleUnauthorized(token === undefined)
+    if (!skipAuthRedirect) handleUnauthorized(err)
     throw err
   }
   if (res.status === 204 || res.status === 205) return undefined as T

@@ -904,6 +904,114 @@ pub fn compute_service_state(
     }
 }
 
+// ---------------------------------------------------------------------------
+// accounts (DESIGN.md §20)
+
+/// The administrator of the server: the account the dashboard is signed in
+/// to. A server has one, created by its first-run setup.
+///
+/// Not serializable: the API returns `dto::UserView`.
+#[derive(Clone, PartialEq)]
+pub struct User {
+    pub id: String,
+    /// Lowercase.
+    pub email: String,
+    /// Argon2id PHC string (`crate::auth::hash_password`).
+    pub password_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl User {
+    pub fn new(email: &str, password_hash: &str) -> Self {
+        let now = now();
+        User {
+            id: ids::new_id(ids::USER),
+            email: email.to_string(),
+            password_hash: password_hash.to_string(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+impl std::fmt::Debug for User {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("User").field("id", &self.id).field("email", &self.email).finish_non_exhaustive()
+    }
+}
+
+/// A browser signed in to the dashboard. The cookie holds the secret;
+/// the store only its digest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Session {
+    pub id: String,
+    pub user_id: String,
+    /// `crate::auth::digest` of the cookie's value.
+    pub token_hash: String,
+    /// The browser that signed in, as it named itself.
+    pub user_agent: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: DateTime<Utc>,
+    /// Pushed back while the session is used.
+    pub expires_at: DateTime<Utc>,
+}
+
+impl Session {
+    /// A session for `secret` (the cookie's value), valid for
+    /// [`crate::auth::SESSION_DAYS`].
+    pub fn new(user_id: &str, secret: &str, user_agent: Option<&str>) -> Self {
+        let now = now();
+        Session {
+            id: ids::new_id(ids::SESSION),
+            user_id: user_id.to_string(),
+            token_hash: crate::auth::digest(secret),
+            user_agent: user_agent.map(|ua| ua.chars().take(300).collect()),
+            created_at: now,
+            last_used_at: now,
+            expires_at: now + chrono::Duration::days(crate::auth::SESSION_DAYS),
+        }
+    }
+
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at <= now
+    }
+}
+
+/// A named API token, for the CLI and automation. Like a session, only the
+/// digest of the token is stored: the token itself is shown once.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiToken {
+    pub id: String,
+    pub name: String,
+    /// `crate::auth::digest` of the token.
+    pub token_hash: String,
+    /// The last characters of the token.
+    pub hint: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// `None`: until it is revoked.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl ApiToken {
+    pub fn new(name: &str, token: &str, expires_at: Option<DateTime<Utc>>) -> Self {
+        ApiToken {
+            id: ids::new_id(ids::API_TOKEN),
+            name: name.to_string(),
+            token_hash: crate::auth::digest(token),
+            hint: crate::auth::hint(token),
+            created_at: now(),
+            last_used_at: None,
+            expires_at,
+        }
+    }
+
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at.is_some_and(|at| at <= now)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

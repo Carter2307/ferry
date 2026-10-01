@@ -107,7 +107,7 @@ data:
 | `instance` | string, runtime logs only | The instance (last 6 characters of the container name) |
 | `line` | string | The text, without the newline |
 
-Like every `/api` request, streams need the API token. Browsers' `EventSource` can't send an `Authorization` header, so `GET` requests also accept the token as `?access_token=`. Prefer the header wherever you can: a token in a URL can end up in logs and browser history.
+Like every `/api/v1` request, streams need an API token (the dashboard uses its session instead). Browsers' `EventSource` can't send an `Authorization` header, so `GET` requests also accept the token as `?access_token=`. Prefer the header wherever you can: a token in a URL can end up in logs and browser history.
 
 ## The change feed
 

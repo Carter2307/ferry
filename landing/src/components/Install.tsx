@@ -12,7 +12,7 @@ const SERVER = [
 
 const FIRST_APP = [
   'export PATH="$PWD/target/release:$PATH"',
-  'ferry login --server http://127.0.0.1:7878 --token <token>',
+  'ferry login',
   'cd examples/node-hello && ferry up --follow',
   'curl http://node-hello.localhost:8080',
 ]
@@ -32,16 +32,16 @@ export function Install() {
             <li>
               <h3 className="text-base font-semibold">Build and start the server</h3>
               <p className="mt-1 mb-3 text-sm text-foreground-lighter">
-                <code className="inline-code">ferryd</code> starts in the background and prints the dashboard’s address and
-                an API token. <code className="inline-code">ferryd stop</code> stops it.
+                <code className="inline-code">ferryd</code> starts in the background and prints a link: open it to create
+                your account. <code className="inline-code">ferryd stop</code> stops the server.
               </p>
               <CommandBlock lines={SERVER} label="Copy the server commands" />
             </li>
             <li>
               <h3 className="text-base font-semibold">Deploy the example app</h3>
               <p className="mt-1 mb-3 text-sm text-foreground-lighter">
-                Paste the token in place of <code className="inline-code">&lt;token&gt;</code>. The dashboard is at{' '}
-                <code className="inline-code">http://127.0.0.1:7878</code>.
+                <code className="inline-code">ferry login</code> opens the dashboard, where you approve the terminal.
+                The dashboard is at <code className="inline-code">http://127.0.0.1:7878</code>.
               </p>
               <CommandBlock lines={FIRST_APP} label="Copy the deploy commands" />
             </li>

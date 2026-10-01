@@ -6,6 +6,12 @@
 export const keys = {
   info: () => ['info'] as const,
 
+  /** The account: its sessions, its API tokens, pending `ferry login` requests. */
+  auth: () => ['auth'] as const,
+  authSessions: () => ['auth', 'sessions'] as const,
+  authTokens: () => ['auth', 'tokens'] as const,
+  authCliLogin: (id: string) => ['auth', 'cli', id] as const,
+
   services: () => ['services'] as const,
   serviceList: () => ['services', 'list'] as const,
   service: (ref: string) => ['services', 'detail', ref] as const,

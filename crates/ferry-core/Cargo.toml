@@ -20,6 +20,10 @@ uuid.workspace = true
 sqlx.workspace = true
 croner.workspace = true
 utoipa.workspace = true
+# Accounts: password hashes (Argon2id) and the digests of session / API tokens.
+argon2 = "0.5"
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

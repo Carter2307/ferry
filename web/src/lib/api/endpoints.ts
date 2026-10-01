@@ -3,12 +3,18 @@
  * `queries/*` wrap these. `ref` = resource id or name.
  */
 
-import { api, seg } from './client'
+import { api, request, seg } from './client'
 import type {
+  ApiTokenView,
   ApplyBlueprint,
   AuthorizeGit,
+  AuthStatus,
   BlueprintResult,
+  ChangePassword,
+  CliLoginView,
   ConnectGit,
+  CreateApiToken,
+  CreatedApiToken,
   CreateDatastore,
   CreateEnvGroup,
   CreateService,
@@ -22,12 +28,15 @@ import type {
   GitConnectionView,
   GitRepositoryList,
   JobRun,
+  Login,
   PatchEnv,
   ReplaceEnv,
   RunJobRequest,
   RuntimeStatus,
   ServerInfo,
   ServiceView,
+  SessionView,
+  SetupAccount,
   TriggerDeploy,
   UpdateDatastore,
   UpdateService,
@@ -36,6 +45,25 @@ import type {
 const V1 = '/api/v1'
 
 export const endpoints = {
+  // the account, its sessions and API tokens (the answers of the first three
+  // say whether there is a session: a 401 of theirs ends none)
+  authStatus: (signal?: AbortSignal) =>
+    request<AuthStatus>(`${V1}/auth/status`, { signal, skipAuthRedirect: true }),
+  setupAccount: (body: SetupAccount) =>
+    request<AuthStatus>(`${V1}/auth/setup`, { method: 'POST', body, skipAuthRedirect: true }),
+  login: (body: Login) => request<AuthStatus>(`${V1}/auth/login`, { method: 'POST', body, skipAuthRedirect: true }),
+  logout: () => request<void>(`${V1}/auth/logout`, { method: 'POST', skipAuthRedirect: true }),
+  changePassword: (body: ChangePassword) => api.post<void>(`${V1}/auth/password`, body),
+  listSessions: (signal?: AbortSignal) => api.get<SessionView[]>(`${V1}/auth/sessions`, undefined, signal),
+  endSession: (id: string) => api.delete(`${V1}/auth/sessions/${seg(id)}`),
+  listApiTokens: (signal?: AbortSignal) => api.get<ApiTokenView[]>(`${V1}/auth/tokens`, undefined, signal),
+  createApiToken: (body: CreateApiToken) => api.post<CreatedApiToken>(`${V1}/auth/tokens`, body),
+  revokeApiToken: (id: string) => api.delete(`${V1}/auth/tokens/${seg(id)}`),
+  getCliLogin: (id: string, signal?: AbortSignal) =>
+    api.get<CliLoginView>(`${V1}/auth/cli/${seg(id)}`, undefined, signal),
+  approveCliLogin: (id: string) => api.post<CliLoginView>(`${V1}/auth/cli/${seg(id)}/approve`),
+  denyCliLogin: (id: string) => api.post<CliLoginView>(`${V1}/auth/cli/${seg(id)}/deny`),
+
   // info
   info: (signal?: AbortSignal) => api.get<ServerInfo>(`${V1}/info`, undefined, signal),
 

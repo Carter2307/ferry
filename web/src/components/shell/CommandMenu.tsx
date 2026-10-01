@@ -42,7 +42,7 @@ import {
   useTriggerDeploy,
 } from '@/lib/api/queries'
 import { DATASTORE_KIND_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
-import { useAuth } from '@/stores/auth'
+import { signOut } from '@/lib/api/session'
 import { useUi } from '@/stores/ui'
 
 import { NAV_ITEMS } from './nav'
@@ -54,7 +54,6 @@ export function CommandMenu() {
   const setOpen = useUi((s) => s.setCommandOpen)
   const setTheme = useUi((s) => s.setTheme)
   const toggleRail = useUi((s) => s.toggleRail)
-  const signOut = useAuth((s) => s.signOut)
   const navigate = useNavigate()
   const resource = useRouteResource()
   const current = resource.kind === 'service' ? resource.name : undefined
@@ -261,7 +260,7 @@ export function CommandMenu() {
             <PanelLeft /> Toggle sidebar labels
           </CommandItem>
           <CommandItem value="Sign out"
-            keywords={['logout', 'log out']} onSelect={() => run(signOut)}>
+            keywords={['logout', 'log out']} onSelect={() => run(() => void signOut())}>
             <LogOut /> Sign out
           </CommandItem>
         </CommandGroup>

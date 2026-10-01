@@ -22,6 +22,22 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/openapi.json"),
     ("GET", "/api/v1/info"),
     ("GET", "/api/v1/events"),
+    // the account, its sessions and API tokens, `ferry login`
+    ("GET", "/api/v1/auth/status"),
+    ("POST", "/api/v1/auth/setup"),
+    ("POST", "/api/v1/auth/login"),
+    ("POST", "/api/v1/auth/logout"),
+    ("POST", "/api/v1/auth/password"),
+    ("GET", "/api/v1/auth/sessions"),
+    ("DELETE", "/api/v1/auth/sessions/{id}"),
+    ("GET", "/api/v1/auth/tokens"),
+    ("POST", "/api/v1/auth/tokens"),
+    ("DELETE", "/api/v1/auth/tokens/{id}"),
+    ("POST", "/api/v1/auth/cli"),
+    ("GET", "/api/v1/auth/cli/{id}"),
+    ("POST", "/api/v1/auth/cli/{id}/approve"),
+    ("POST", "/api/v1/auth/cli/{id}/deny"),
+    ("POST", "/api/v1/auth/cli/{id}/token"),
     // services
     ("GET", "/api/v1/services"),
     ("POST", "/api/v1/services"),
@@ -92,8 +108,19 @@ const ROUTES: &[(&str, &str)] = &[
 /// Documented routes that aren't `.route(...)` lines of `src/lib.rs`.
 const NOT_IN_LIB_RS: &[(&str, &str)] = &[("GET", "/api/openapi.json")];
 
+/// The `/api/v1` operations that need no authentication.
+const PUBLIC: &[&str] = &[
+    "/api/v1/auth/status",
+    "/api/v1/auth/setup",
+    "/api/v1/auth/login",
+    "/api/v1/auth/logout",
+    "/api/v1/auth/cli",
+    "/api/v1/auth/cli/{id}/token",
+];
+
 const TAGS: &[&str] = &[
     "info",
+    "auth",
     "services",
     "deploys",
     "env",
@@ -180,11 +207,14 @@ async fn the_document_is_openapi_3_1_with_info_schemas_and_security() {
     let kinds = serde_json::to_string(&schemas["ChangeKind"]).unwrap();
     assert!(kinds.contains("env_group") && kinds.contains("git_connection"), "{kinds}");
 
-    // One bearer scheme, which Swagger UI's Authorize button fills in.
+    // The bearer scheme, which Swagger UI's Authorize button fills in, and
+    // the dashboard's session cookie.
     let schemes = doc["components"]["securitySchemes"].as_object().unwrap();
-    assert_eq!(schemes.keys().collect::<Vec<_>>(), ["bearer"]);
+    assert_eq!(schemes.keys().collect::<Vec<_>>(), ["bearer", "session"]);
     assert_eq!(schemes["bearer"]["type"], "http");
     assert_eq!(schemes["bearer"]["scheme"], "bearer");
+    assert_eq!(schemes["session"]["type"], "apiKey");
+    assert_eq!((&schemes["session"]["in"], &schemes["session"]["name"]), (&json!("cookie"), &json!("ferry_session")));
 
     let tags: Vec<&str> = doc["tags"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(tags, TAGS);
@@ -253,10 +283,19 @@ async fn every_route_is_documented_and_nothing_else() {
             }
         }
 
-        // The API needs the bearer token (and says 401 without it); the rest needs none.
-        if path.starts_with("/api/v1/") {
-            assert_eq!(op["security"], serde_json::json!([{"bearer": []}]), "{what}");
+        // The API needs an API token or the dashboard's session (and says 401
+        // without); the account itself only takes the session; the rest needs none.
+        if path.starts_with("/api/v1/") && !PUBLIC.contains(&path.as_str()) {
+            let expected = if path.starts_with("/api/v1/auth/") {
+                json!([{"session": []}])
+            } else {
+                json!([{"bearer": []}, {"session": []}])
+            };
+            assert_eq!(op["security"], expected, "{what}");
             assert!(responses.contains_key("401"), "{what}: no 401");
+            if path.starts_with("/api/v1/auth/") {
+                assert!(responses.contains_key("403"), "{what}: no 403 for an API token");
+            }
         } else {
             assert!(op.get("security").is_none(), "{what}: {}", op["security"]);
         }
@@ -415,6 +454,51 @@ async fn resource_limits_are_documented() {
     assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
     let description = op("POST", "/api/v1/datastores")["description"].as_str().unwrap().to_string();
     assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
+}
+
+#[tokio::test]
+async fn accounts_are_documented_without_their_secrets() {
+    let app = TestApp::new().await;
+    let doc = document(&app).await;
+    let ops = operations(&doc);
+    let op = |m: &str, p: &str| ops[&(m.to_string(), p.to_string())].clone();
+    let schemas = &doc["components"]["schemas"];
+    let body = |op: &Value, status: &str| op["responses"][status]["content"]["application/json"]["schema"].clone();
+    let request = |op: &Value| op["requestBody"]["content"]["application/json"]["schema"]["$ref"].clone();
+
+    for (method, path, takes, status, gives) in [
+        ("POST", "/api/v1/auth/setup", "SetupAccount", "201", "AuthStatus"),
+        ("POST", "/api/v1/auth/login", "Login", "200", "AuthStatus"),
+        ("POST", "/api/v1/auth/tokens", "CreateApiToken", "201", "CreatedApiToken"),
+        ("POST", "/api/v1/auth/cli", "StartCliLogin", "201", "CliLoginStarted"),
+        ("POST", "/api/v1/auth/cli/{id}/token", "CliLoginPoll", "200", "CliLoginResult"),
+    ] {
+        let operation = op(method, path);
+        assert_eq!(request(&operation), format!("#/components/schemas/{takes}"), "{path}");
+        assert_eq!(body(&operation, status)["$ref"], format!("#/components/schemas/{gives}"), "{path}");
+    }
+    assert_eq!(body(&op("GET", "/api/v1/auth/status"), "200")["$ref"], "#/components/schemas/AuthStatus");
+    assert_eq!(schemas["AuthKind"]["enum"], json!(["session", "token"]));
+    assert_eq!(schemas["CliLoginStatus"]["enum"], json!(["pending", "approved", "denied"]));
+    assert_eq!(schemas["SetupAccount"]["required"], json!(["email", "password", "code"]));
+    for status in ["401", "429"] {
+        assert!(op("POST", "/api/v1/auth/login")["responses"].get(status).is_some(), "{status}");
+    }
+    for status in ["403", "409", "429"] {
+        assert!(op("POST", "/api/v1/auth/setup")["responses"].get(status).is_some(), "{status}");
+    }
+
+    // What the API says about an account, a session or a token is never a secret.
+    let fields = |schema: &str| schemas[schema]["properties"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(fields("UserView"), ["created_at", "email", "id"]);
+    for view in ["SessionView", "ApiTokenView", "CliLoginView"] {
+        for secret in ["token", "token_hash", "secret", "password_hash"] {
+            assert!(!fields(view).iter().any(|f| f == secret), "{view}.{secret}");
+        }
+    }
+    // The token itself only where it is handed over.
+    assert!(fields("CreatedApiToken").iter().any(|f| f == "token"));
+    assert!(fields("CliLoginResult").iter().any(|f| f == "token"));
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useServerInfo } from '@/lib/api/queries'
 import { cn } from '@/lib/utils'
-import { useAuth } from '@/stores/auth'
+import { signOut } from '@/lib/api/session'
 import { useUi, type ThemePreference } from '@/stores/ui'
 
 import { ConnectPopover } from './ConnectPopover'
@@ -18,7 +18,6 @@ import { NAV_ITEMS } from './nav'
 export function MobileNav({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const theme = useUi((s) => s.theme)
   const setTheme = useUi((s) => s.setTheme)
-  const signOut = useAuth((s) => s.signOut)
   const { data: info } = useServerInfo()
 
   return (
@@ -80,7 +79,7 @@ export function MobileNav({ open, onOpenChange }: { open: boolean; onOpenChange:
           </div>
         </nav>
         <div className="border-t p-3">
-          <Button className="w-full" icon={<LogOut />} onClick={signOut}>
+          <Button className="w-full" icon={<LogOut />} onClick={() => void signOut()}>
             Sign out
           </Button>
         </div>

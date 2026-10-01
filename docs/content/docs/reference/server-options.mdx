@@ -35,6 +35,7 @@ ferryd <COMMAND>
 * `run` — Run the server in the foreground
 * `stop` — Stop the server
 * `status` — Say whether the server runs
+* `reset-password` — Replace the password of the server's account
 * `logs` — Print the log of a server started in the background
 
 **Options**
@@ -49,7 +50,7 @@ ferryd <COMMAND>
 | `--public-port <PUBLIC_PORT>`<br />`FERRY_PUBLIC_PORT` | Port shown in public URLs (defaults to the proxy port) |  |
 | `--dashboard-host <DASHBOARD_HOST>`<br />`FERRY_DASHBOARD_HOST` | Host that serves the dashboard + API through the public proxy ("none" to disable). Default: ferry.\<base-domain> when the base domain is local (e.g. localhost), otherwise disabled — enable it explicitly, ideally with HTTPS, since it exposes the admin API |  |
 | `--name-prefix <NAME_PREFIX>`<br />`FERRY_NAME_PREFIX` | Prefix for Docker resources; lets several Ferry servers share one daemon | `ferry` |
-| `--api-token <API_TOKEN>`<br />`FERRY_API_TOKEN` | API token. Default: read from / generated into \<data-dir>/api_token |  |
+| `--api-token <API_TOKEN>`<br />`FERRY_API_TOKEN` | The server token: an API token that always works, for the CLI and automation on the server itself. Default: read from / generated into \<data-dir>/api_token |  |
 | `--github-webhook-secret <GITHUB_WEBHOOK_SECRET>`<br />`FERRY_GITHUB_WEBHOOK_SECRET` | Secret for GitHub webhook signatures (enables POST /hooks/github) |  |
 | `--acme-email <ACME_EMAIL>`<br />`FERRY_ACME_EMAIL` | Email for Let's Encrypt; enables automatic HTTPS with --https-addr |  |
 | `--acme-staging`<br />`FERRY_ACME_STAGING` | Use the Let's Encrypt staging environment |  |
@@ -130,6 +131,24 @@ Prints where the server that uses the data directory listens. The exit code is 0
 
 ```text
 ferryd status [OPTIONS]
+```
+
+**Options**
+
+| Option and environment variable | Description | Default |
+|---|---|---|
+| `--data-dir <DATA_DIR>`<br />`FERRY_DATA_DIR` | Data directory of the server | `./ferry-data` |
+
+## `ferryd reset-password`
+
+Replace the password of the server's account.
+
+For an administrator who forgot it: asks for the new password (or reads it from standard input when that isn't a terminal) and signs every browser out. Works while the server runs.
+
+**Usage**
+
+```text
+ferryd reset-password [OPTIONS]
 ```
 
 **Options**

@@ -1,6 +1,6 @@
 ---
 title: "Troubleshooting"
-description: "Common errors when you start ferryd, connect the CLI, build, deploy or open an app: what each message means and how to fix it."
+description: "Common errors when you start ferryd, sign in, connect the CLI, build, deploy or open an app: what each message means and how to fix it."
 icon: LifeBuoy
 ---
 
@@ -92,6 +92,48 @@ A variant says `found N Docker container(s) with prefix 'ferry' that this (empty
 A data directory you moved keeps its `instance_id` and starts with the same `--name-prefix` without any extra flag. Use `--take-over` only for a data directory that lost its `instance_id`, and never while another server uses the prefix: the server that takes over removes the other server's containers.
 </Callout>
 
+## Signing in to the dashboard
+
+### The dashboard asks for a setup code
+
+The dashboard opens on **Create your account**, with an empty **Setup code** field, or refuses the code:
+
+```text title="Dashboard" noCopy
+This is not the setup code of this server.
+```
+
+**Cause:** the server has no account yet, and creating it takes the setup code, so that only someone who can read the server's terminal or data directory can do it. The link `ferryd` prints fills the code in; the dashboard was opened without that link, or with the link of another server.
+
+**Fix:** on the server, run `ferryd status` (with the same `--data-dir` as the server). While there is no account, it ends with the link:
+
+```text title="ferryd status" noCopy
+  Create your account: http://127.0.0.1:7878/setup?code=5b0e…
+```
+
+Open the link, or copy its code into the field. The code is also in `<data-dir>/setup_code`. See [Create your account](/docs/getting-started/installation#create-your-account).
+
+### I forgot the password
+
+**Cause:** the password can't be read back: the server only stores a hash of it.
+
+**Fix:** choose a new one on the server, with [`ferryd reset-password`](/docs/reference/server-options#ferryd-reset-password). Run it as the user that runs `ferryd`, with the server's data directory:
+
+```bash title="Terminal"
+sudo -u ferry ferryd reset-password --data-dir /var/lib/ferry
+```
+
+It asks for the new password twice, without showing it, then signs every browser out. It works while the server runs, and API tokens keep working. When its input isn't a terminal, it reads the new password from one line of standard input instead.
+
+### Too many failed attempts
+
+```text title="Dashboard" noCopy
+too many failed attempts: try again in 4 minutes
+```
+
+**Cause:** 10 sign-ins failed within 5 minutes. The limit counts for the whole server, not per address, so the failures may not be yours.
+
+**Fix:** wait: sign-ins are accepted again once the oldest failure is 5 minutes old. If it keeps happening, someone else is trying to sign in: keep the API on `127.0.0.1` and reach it through an SSH tunnel. See [Security model](/docs/architecture/security#the-account).
+
 ## Connecting the CLI
 
 ### The CLI can't reach the server
@@ -107,16 +149,35 @@ Error: cannot reach Ferry server at http://127.0.0.1:7878 — is ferryd running?
 ### Not logged in, or the token is wrong
 
 ```text title="ferry" noCopy
-error: not logged in: run 'ferry login --server <URL> --token <TOKEN>' first (or set FERRY_SERVER and FERRY_TOKEN)
+error: not logged in: run 'ferry login --server <URL>' first (or set FERRY_SERVER and FERRY_TOKEN)
 ```
 
 ```text title="ferry" noCopy
 error: invalid API token (unauthorized)
+hint: the token was refused (revoked or expired?): log in again with 'ferry login --server <URL>'
 ```
 
-**Cause:** there is no saved login and no `--token` or `FERRY_TOKEN`, or the token doesn't match the server's. That happens when the token file was deleted and regenerated, or when the server runs with another data directory.
+**Cause:** there is no saved login and no `--token` or `FERRY_TOKEN`, or the server refuses the token: it was revoked in the dashboard, it has expired, or it belongs to another server (for example, the server now runs with another data directory).
 
-**Fix:** read the current token from `<data-dir>/api_token` and run `ferry login` again. See [Set up the CLI](/docs/getting-started/cli). A direct API call without the token gets `401` with `missing API token (use 'Authorization: Bearer <token>')`: send `-H "Authorization: Bearer $FERRY_TOKEN"`.
+**Fix:** run `ferry login --server <URL>` again and approve the request in the dashboard. For CI and scripts, create a new API token under **Server → Account** and put it in `FERRY_TOKEN`. See [Set up the CLI](/docs/getting-started/cli#log-in). A direct API call without credentials gets `401` with `not signed in: send an API token as 'Authorization: Bearer <token>', or sign in to the dashboard`: send `-H "Authorization: Bearer $FERRY_TOKEN"`.
+
+### ferry login doesn't finish
+
+```text title="ferry" noCopy
+error: the login request expired before it was approved: run 'ferry login' again
+```
+
+**Cause:** `ferry login` waits until you approve its request in the dashboard, and a request expires after 10 minutes.
+
+**Fix:** run `ferry login` again, open the page it prints, sign in, check that the page shows the code of your terminal and click **Approve**. Where nobody can open the dashboard (CI, a script), log in with a token instead: see [Log in with a token](/docs/getting-started/cli#log-in-with-a-token).
+
+On a new server, `ferry login` stops at once instead:
+
+```text title="ferry" noCopy
+error: this server has no account yet: create it in the dashboard first (`ferryd status` prints the link) (conflict)
+```
+
+Create the account first: see [Create your account](/docs/getting-started/installation#create-your-account).
 
 ## Builds
 

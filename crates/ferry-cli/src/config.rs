@@ -59,14 +59,13 @@ impl Settings {
         self.token.as_deref().ok_or_else(|| match &self.saved_login_server {
             Some(saved) => anyhow!(
                 "no token for {}: the saved login is for {saved}, and its token is only sent there; \
-                 pass --token or set {ENV_TOKEN} (or run 'ferry login --server {} --token <TOKEN>')",
+                 pass --token or set {ENV_TOKEN} (or run 'ferry login --server {}')",
                 self.server,
                 self.server
             ),
-            None => anyhow!(
-                "not logged in: run 'ferry login --server <URL> --token <TOKEN>' first \
-                 (or set {ENV_SERVER} and {ENV_TOKEN})"
-            ),
+            None => {
+                anyhow!("not logged in: run 'ferry login --server <URL>' first (or set {ENV_SERVER} and {ENV_TOKEN})")
+            }
         })
     }
 }

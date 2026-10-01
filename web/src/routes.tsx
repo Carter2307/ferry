@@ -15,6 +15,21 @@ import { RequireAuth } from './RequireAuth'
 export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage />, errorElement: <RouteError /> },
   {
+    // The first run of a server: the link ferryd prints leads here.
+    path: '/setup',
+    errorElement: <RouteError />,
+    hydrateFallbackElement: <FullPageLoader />,
+    lazy: async () => ({ Component: (await import('@/pages/login/SetupPage')).SetupPage }),
+  },
+  {
+    // Where `ferry login` sends the browser: outside the shell, it is one
+    // decision; it checks the session itself.
+    path: '/cli-login',
+    errorElement: <RouteError />,
+    hydrateFallbackElement: <FullPageLoader />,
+    lazy: async () => ({ Component: (await import('@/pages/login/CliLoginPage')).CliLoginPage }),
+  },
+  {
     // Where GitHub / GitLab send the browser back: outside the shell (it is
     // often a small window of its own); it checks the session itself.
     path: '/git/callback',

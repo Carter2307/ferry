@@ -1,0 +1,170 @@
+---
+title: "auth"
+description: "The account of the server (its administrator), signing in and out of the dashboard, the sessions and the API tokens, and ferry login (a terminal asks, the dashboard approves). The status, the first-run setup, signing in and out, and the two calls of a terminal need no authentication; the others only accept the dashboard's session, never an API token."
+full: true
+_openapi:
+  preload:
+    - ferry
+  toc:
+    - depth: 2
+      title: Start a `ferry login`
+      url: '#start-a-ferry-login'
+    - depth: 2
+      title: Show a `ferry login` request
+      url: '#show-a-ferry-login-request'
+    - depth: 2
+      title: Approve a `ferry login`
+      url: '#approve-a-ferry-login'
+    - depth: 2
+      title: Deny a `ferry login`
+      url: '#deny-a-ferry-login'
+    - depth: 2
+      title: Collect the token of a `ferry login`
+      url: '#collect-the-token-of-a-ferry-login'
+    - depth: 2
+      title: Sign in to the dashboard
+      url: '#sign-in-to-the-dashboard'
+    - depth: 2
+      title: Sign out
+      url: '#sign-out'
+    - depth: 2
+      title: Change the password
+      url: '#change-the-password'
+    - depth: 2
+      title: List the sessions
+      url: '#list-the-sessions'
+    - depth: 2
+      title: End a session
+      url: '#end-a-session'
+    - depth: 2
+      title: Create the administrator's account
+      url: '#create-the-administrators-account'
+    - depth: 2
+      title: Is there an account, and is this request signed in
+      url: '#is-there-an-account-and-is-this-request-signed-in'
+    - depth: 2
+      title: List the API tokens
+      url: '#list-the-api-tokens'
+    - depth: 2
+      title: Create an API token
+      url: '#create-an-api-token'
+    - depth: 2
+      title: Revoke an API token
+      url: '#revoke-an-api-token'
+  structuredData:
+    headings:
+      - content: Start a `ferry login`
+        id: start-a-ferry-login
+      - content: Show a `ferry login` request
+        id: show-a-ferry-login-request
+      - content: Approve a `ferry login`
+        id: approve-a-ferry-login
+      - content: Deny a `ferry login`
+        id: deny-a-ferry-login
+      - content: Collect the token of a `ferry login`
+        id: collect-the-token-of-a-ferry-login
+      - content: Sign in to the dashboard
+        id: sign-in-to-the-dashboard
+      - content: Sign out
+        id: sign-out
+      - content: Change the password
+        id: change-the-password
+      - content: List the sessions
+        id: list-the-sessions
+      - content: End a session
+        id: end-a-session
+      - content: Create the administrator's account
+        id: create-the-administrators-account
+      - content: Is there an account, and is this request signed in
+        id: is-there-an-account-and-is-this-request-signed-in
+      - content: List the API tokens
+        id: list-the-api-tokens
+      - content: Create an API token
+        id: create-an-api-token
+      - content: Revoke an API token
+        id: revoke-an-api-token
+    contents:
+      - content: What `ferry login` calls first. The terminal then shows `code` and
+          opens `/cli-login?id=<id>` of the dashboard, where the signed-in
+          administrator checks the code and approves; meanwhile the terminal
+          polls `POST /api/v1/auth/cli/{id}/token` with `secret`. A request
+          waits 10 minutes, and a restart of the server forgets it. No token
+          needed.
+        heading: start-a-ferry-login
+      - content: "What the approval page shows: who asks and the code the terminal
+          displays. Needs the dashboard's session."
+        heading: show-a-ferry-login-request
+      - content: Creates an API token named after the request and hands it to the
+          terminal that asked, the next time it polls. Approve only when the
+          code on the page is the one your terminal shows. Needs the dashboard's
+          session.
+        heading: approve-a-ferry-login
+      - content: The terminal that asked is told so the next time it polls. Needs the
+          dashboard's session.
+        heading: deny-a-ferry-login
+      - content: 'What the terminal polls, every `interval` seconds, with the `secret`
+          it got when it started the request. `pending` until the request is
+          answered; `approved` comes with the API token, once: the request is
+          gone afterwards, like after `denied`. No token needed.'
+        heading: collect-the-token-of-a-ferry-login
+      - content: "Checks the email and password of the account and starts a session: the
+          answer sets the session cookie (`HttpOnly`, `SameSite=Strict`; named
+          `ferry_session_<port>` after the port of the address the browser uses,
+          so that servers sharing a host name keep a session each), which
+          authenticates the dashboard's requests from then on. A session ends 30
+          days after it was last used. After 10 failed attempts in 5 minutes,
+          sign-ins are refused until the oldest is 5 minutes old. No token
+          needed."
+        heading: sign-in-to-the-dashboard
+      - content: Ends the session of the request's cookie and clears the cookie.
+          Succeeds without a session too.
+        heading: sign-out
+      - content: Needs the dashboard's session and the current password. Every other
+          session of the account ends; this one stays. (A forgotten password is
+          replaced on the server with `ferryd reset-password`.)
+        heading: change-the-password
+      - content: The browsers signed in to the account, the last used first; `current`
+          marks the one of this request. Needs the dashboard's session.
+        heading: list-the-sessions
+      - content: Signs that browser out. Ending the session of this request is signing
+          out. Needs the dashboard's session.
+        heading: end-a-session
+      - content: 'Only while the server has no account (`setup_required`). `code` is the
+          setup code: `ferryd` prints it in a link (`/setup?code=…`) when it
+          starts without an account, and keeps it in `<data-dir>/setup_code`, so
+          only someone on the server can create the account. The answer signs
+          the browser in (it sets the session cookie). No token needed.'
+        heading: create-the-administrators-account
+      - content: "What the dashboard asks first. `setup_required` is true while the
+          server has no account: it is then created with `POST
+          /api/v1/auth/setup`. `auth` says how the request is authenticated
+          (`session` for the dashboard's cookie, `token` for an API token), or
+          is `null` when it isn't; credentials that are wrong or expired count
+          as none. No token needed."
+        heading: is-there-an-account-and-is-this-request-signed-in
+      - content: "The named API tokens, the newest first: their name, the end of the
+          token and when they were last used. Never the tokens themselves. The
+          server token of `<data-dir>/api_token` isn't listed. Needs the
+          dashboard's session."
+        heading: list-the-api-tokens
+      - content: "A token for the CLI, a script or CI: it authenticates as
+          `Authorization: Bearer <token>` and can do everything the API offers
+          except manage the account and its tokens. The answer is the only time
+          the token is shown; the server keeps its SHA-256. Needs the
+          dashboard's session."
+        heading: create-an-api-token
+      - content: The token stops working at once. Needs the dashboard's session.
+        heading: revoke-an-api-token
+---
+
+{/* This file was generated by Fumadocs. Do not edit this file directly. Any changes should be made by running the generation command again. */}
+
+export default function Layout(props) {
+  const { OpenAPIPage } = props.components ?? {};
+  return (
+    <>
+      {props.children}
+      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/auth/cli","method":"post"},{"path":"/api/v1/auth/cli/{id}","method":"get"},{"path":"/api/v1/auth/cli/{id}/approve","method":"post"},{"path":"/api/v1/auth/cli/{id}/deny","method":"post"},{"path":"/api/v1/auth/cli/{id}/token","method":"post"},{"path":"/api/v1/auth/login","method":"post"},{"path":"/api/v1/auth/logout","method":"post"},{"path":"/api/v1/auth/password","method":"post"},{"path":"/api/v1/auth/sessions","method":"get"},{"path":"/api/v1/auth/sessions/{id}","method":"delete"},{"path":"/api/v1/auth/setup","method":"post"},{"path":"/api/v1/auth/status","method":"get"},{"path":"/api/v1/auth/tokens","method":"get"},{"path":"/api/v1/auth/tokens","method":"post"},{"path":"/api/v1/auth/tokens/{id}","method":"delete"}]} showTitle showDescription />
+    </>
+  );
+}

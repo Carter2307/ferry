@@ -49,7 +49,7 @@ impl std::error::Error for Exit {}
 pub async fn run(cli: Cli, settings: Settings) -> Result<()> {
     let json = cli.global.json;
     match cli.command {
-        Command::Login => auth::login(&settings, json).await,
+        Command::Login(args) => auth::login(&settings, &args, json).await,
         command => {
             let token = settings.require_token()?;
             let ctx = Ctx { client: Client::new(&settings.server, token)?, json };
@@ -63,7 +63,7 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         BlueprintCommand, DbCommand, DeployHookCommand, DomainsCommand, EnvCommand, EnvGroupCommand, JobsCommand,
     };
     match command {
-        Command::Login => bail!("internal error: 'login' needs no API client"),
+        Command::Login(_) => bail!("internal error: 'login' needs no API client"),
         Command::MarkdownHelp => bail!("internal error: 'markdown-help' needs no API client"),
         Command::Info => auth::info(ctx).await,
         Command::Services => services::list(ctx).await,

@@ -106,7 +106,11 @@ async fn bad_token_gets_a_login_hint() {
     let out = ferry_in(None, h.path(), Some(&url), Some("wrong"), &["info"]).await;
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("error: invalid or missing API token (unauthorized)"), "{}", out.stderr);
-    assert!(out.stderr.contains("hint: check the server URL and token with 'ferry login"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("hint: the token was refused") && out.stderr.contains("'ferry login"),
+        "{}",
+        out.stderr
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -182,12 +186,112 @@ async fn login_verifies_and_saves_config_then_commands_use_it() {
     );
     let out = ferry_in(Some(h.path()), h.path(), Some(&other_url), None, &["services"]).await;
     assert_eq!(out.code, 1);
-    let out = ferry_in(None, h.path(), None, None, &["login", "--server", &other_url]).await;
-    assert_eq!(out.code, 1);
-    assert!(out.stderr.contains(&format!("missing token for {other_url}")), "{}", out.stderr);
     assert!(other.requests().is_empty(), "the saved token leaked: {:?}", other.requests());
+    // Logging in to the other server asks it for a login of its own, without the saved token.
+    let out = ferry_in(None, h.path(), None, None, &["login", "--server", &other_url, "--no-browser"]).await;
+    assert_eq!(out.code, 1);
+    assert_eq!(other.find("POST", "/api/v1/auth/cli").len(), 1, "{:?}", other.requests());
+    assert!(other.requests().iter().all(|r| r.header("authorization").is_none()), "the saved token leaked");
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(saved, json!({ "server": url, "token": TOKEN }), "a failed login keeps the saved config");
+}
+
+/// What the terminal polls with, in the fake's answer to `POST /api/v1/auth/cli`.
+const POLL_WITH: &str = "polled-by-the-terminal";
+
+/// What the fake answers to `POST /api/v1/auth/cli`.
+fn cli_login_started() -> Value {
+    json!({ "id": "req123", "code": "ABCD-EFGH", "secret": POLL_WITH, "expires_in": 600, "interval": 2 })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn login_without_a_token_is_approved_in_the_dashboard() {
+    let (fake, url) = Fake::start().await;
+    let info = json!({
+        "version": "0.1.0", "base_domain": "localhost", "proxy_url": "http://localhost:8080",
+        "tls_enabled": false, "dashboard_url": null, "github_webhook_enabled": false, "docker_version": "27.3.1"
+    });
+    fake.on("GET", "/api/v1/info", Reply::ok(info));
+    fake.on("POST", "/api/v1/auth/cli", Reply::json(201, cli_login_started()));
+    // Pending twice, then approved: the token the terminal keeps.
+    let poll = "/api/v1/auth/cli/req123/token";
+    fake.on("POST", poll, Reply::ok(json!({ "status": "pending", "token": null })));
+    fake.on("POST", poll, Reply::ok(json!({ "status": "pending", "token": null })));
+    fake.on("POST", poll, Reply::ok(json!({ "status": "approved", "token": TOKEN })));
+    let h = home();
+
+    let args = ["login", "--server", &url, "--no-browser", "--poll-ms", "10"];
+    let out = ferry_in(None, h.path(), None, None, &args).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    // The page to open and the code to check are on stderr; stdout keeps the result.
+    assert!(out.stderr.contains(&format!("{url}/cli-login?id=req123")), "{}", out.stderr);
+    assert!(out.stderr.contains("ABCD-EFGH"), "{}", out.stderr);
+    assert!(!out.stderr.contains(POLL_WITH) && !out.stdout.contains(POLL_WITH), "{out:?}");
+    assert!(out.stdout.contains(&format!("Logged in to {url} (Ferry 0.1.0)")), "{}", out.stdout);
+    assert!(!out.stdout.contains(TOKEN) && !out.stderr.contains(TOKEN), "the token is saved, not printed: {out:?}");
+
+    // The terminal said who it is, and polled with its secret, before it had any token.
+    let started = fake.find("POST", "/api/v1/auth/cli");
+    assert_eq!(started.len(), 1);
+    assert!(started[0].header("authorization").is_none());
+    assert!(started[0].json().get("name").is_some(), "{}", started[0].json());
+    let polls = fake.find("POST", poll);
+    assert_eq!(polls.len(), 3);
+    assert!(polls.iter().all(|p| p.json() == json!({ "secret": POLL_WITH }) && p.header("authorization").is_none()));
+
+    let path = h.path().join("xdg").join("ferry").join("config.json");
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(saved, json!({ "server": url, "token": TOKEN }));
+    let out = ferry_in(None, h.path(), None, None, &["info"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+
+    // `ferry login` again asks again: a saved token is not a login.
+    let out = ferry_in(None, h.path(), None, None, &args).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(fake.find("POST", "/api/v1/auth/cli").len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_login_that_is_denied_expires_or_is_not_offered_fails() {
+    let h = home();
+    let path = h.path().join("xdg").join("ferry").join("config.json");
+    let login = |url: &str| {
+        let args = ["login", "--server", url, "--no-browser", "--poll-ms", "10"].map(str::to_string);
+        let home = h.path().to_path_buf();
+        async move { ferry_in(None, &home, None, None, &args.iter().map(String::as_str).collect::<Vec<_>>()).await }
+    };
+
+    // Denied in the dashboard.
+    let (fake, url) = Fake::start().await;
+    fake.on("POST", "/api/v1/auth/cli", Reply::json(201, cli_login_started()));
+    fake.on("POST", "/api/v1/auth/cli/req123/token", Reply::ok(json!({ "status": "denied", "token": null })));
+    let out = login(&url).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("error: the login request was denied in the dashboard"), "{}", out.stderr);
+
+    // Nobody answered before it expired.
+    let (fake, url) = Fake::start().await;
+    fake.on("POST", "/api/v1/auth/cli", Reply::json(201, cli_login_started()));
+    fake.on("POST", "/api/v1/auth/cli/req123/token", Reply::error(404, "not_found", "this login request has expired"));
+    let out = login(&url).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("expired before it was approved: run 'ferry login' again"), "{}", out.stderr);
+
+    // A server without an account yet says what to do first.
+    let (fake, url) = Fake::start().await;
+    fake.on("POST", "/api/v1/auth/cli", Reply::error(409, "conflict", "this server has no account yet"));
+    let out = login(&url).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("this server has no account yet"), "{}", out.stderr);
+
+    // An older server only knows tokens.
+    let (fake, url) = Fake::start().await;
+    fake.on("POST", "/api/v1/auth/cli", Reply::error(404, "not_found", "no API route for /api/v1/auth/cli"));
+    let out = login(&url).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("can't approve a login in the browser: upgrade ferryd"), "{}", out.stderr);
+    assert!(out.stderr.contains(&format!("ferry login --server {url} --token <TOKEN>")), "{}", out.stderr);
+    assert!(!path.exists(), "nothing is saved by a login that failed");
 }
 
 #[tokio::test(flavor = "multi_thread")]

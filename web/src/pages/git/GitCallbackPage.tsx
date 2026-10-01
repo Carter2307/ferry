@@ -19,7 +19,7 @@ import {
   readPending,
   safeReturnTo,
 } from '@/lib/gitAuthorize'
-import { useAuth } from '@/stores/auth'
+import { useAuthRedirect } from '@/lib/useAuthRedirect'
 
 /**
  * `/git/callback` — where GitHub / GitLab send the browser back while an
@@ -28,13 +28,10 @@ import { useAuth } from '@/stores/auth'
  * was. Shown without the app shell: it is only passed through.
  */
 export function GitCallbackPage() {
-  const token = useAuth((s) => s.token)
   const location = useLocation()
-  if (!token) {
-    // Signing in comes back here with the same parameters.
-    const next = `${location.pathname}${location.search}`
-    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />
-  }
+  // Signing in comes back here with the same parameters.
+  const redirect = useAuthRedirect()
+  if (redirect) return <Navigate to={redirect} replace />
   return <GitCallback search={location.search} />
 }
 

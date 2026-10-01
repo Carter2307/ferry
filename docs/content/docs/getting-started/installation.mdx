@@ -103,7 +103,7 @@ Run `ferryd`. It needs access to the Docker daemon, so run it as a user that can
 ferryd
 ```
 
-On first start, `ferryd` creates its data directory and generates an API token. It starts the server in the background, waits until it listens and prints where everything is:
+On first start, `ferryd` creates its data directory. It starts the server in the background, waits until it listens and prints where everything is, then what to do next:
 
 ```text title="Output" noCopy
   Ferry 0.1.0 is running in the background (pid 48213)
@@ -114,9 +114,8 @@ On first start, `ferryd` creates its data directory and generates an API token. 
   Data            : /home/you/ferry-data
   Limits          : 512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3
   Free disk check : deploys need 1 GiB free
-  API token       : fy_3f9c…
 
-  Log in with:  ferry login --server http://127.0.0.1:7878 --token fy_3f9c…
+  Create your account: http://127.0.0.1:7878/setup?code=5b0e…
 
   Logs            : ferryd logs -f
   Stop            : ferryd stop
@@ -133,16 +132,51 @@ curl http://127.0.0.1:7878/healthz
 # ok
 ```
 
-### The API token
+### Create your account
 
-The token protects the API and the dashboard. `ferryd` generates it on first start and stores it in `<data-dir>/api_token` (mode `0600`); later starts reuse it. To use a token of your choice, start `ferryd` with `--api-token` or `FERRY_API_TOKEN`: it then takes precedence over the file.
+A Ferry server has one administrator account: an email and a password. There are no other users, teams or roles.
 
-```bash title="Terminal"
-cat ferry-data/api_token
+While the server has no account, the banner ends with the `Create your account` link. Open it in a browser:
+
+1. The page **Create your account** asks for your email and a password of at least 8 characters. The setup code is already filled in from the link.
+2. **Create account** creates the account and signs that browser in to the dashboard.
+
+Creating the account takes the setup code, so only someone who can read the server's terminal or its data directory can do it. The code is also in `<data-dir>/setup_code` (mode `0600`), and `ferryd status` prints the link again. The file is deleted once the account exists.
+
+From then on, the banner ends with this line instead, and you sign in to the dashboard with your email and password:
+
+```text title="Output" noCopy
+  Connect the CLI : ferry login
 ```
 
-<Callout type="warning" title="Treat the token like a root password">
-Anyone with the token can deploy code and read every environment variable on the server. Don't commit it, and don't expose the API to the internet without HTTPS. See [Security model](/docs/architecture/security).
+When the API isn't at the default `http://127.0.0.1:7878`, the line reads `ferry login --server <url>`. The banner never prints a token.
+
+If you forget the password, run [`ferryd reset-password`](/docs/reference/server-options#ferryd-reset-password) on the server: it asks for a new password twice and signs every browser out.
+
+<Callout type="warning" title="The account controls the whole server">
+Whoever signs in can deploy code and read every environment variable on the server. Don't expose the API to the internet without HTTPS. See [Security model](/docs/architecture/security).
+</Callout>
+
+### API tokens
+
+The dashboard signs in with the account. The CLI, scripts and CI authenticate with an API token (`fy_` followed by 40 hex characters), sent as `Authorization: Bearer <token>`. There are three ways to get one:
+
+| Token | Where it comes from | Use it for |
+|---|---|---|
+| A terminal's token | [`ferry login`](/docs/getting-started/cli#log-in) asks for one, and you approve the request in the dashboard | The CLI on your machine |
+| A named token | **Server → Account → API tokens** in the [dashboard](/docs/getting-started/dashboard#server): a name, an optional expiry, and the token shown once | CI, scripts and machines without a browser |
+| The server token | `<data-dir>/api_token` (mode `0600`), generated on first start and reused by later starts | Scripts on the server itself |
+
+The first two are listed under **Server → Account**, with their last 4 characters and when they were last used, and can be revoked there at once. The server token is never printed, isn't listed in the dashboard and can't be revoked there. To use a server token of your choice, start `ferryd` with `--api-token` or `FERRY_API_TOKEN`: it then takes precedence over the file.
+
+```bash title="Terminal"
+# On the server itself, without logging in
+export FERRY_TOKEN="$(cat ferry-data/api_token)"
+ferry services
+```
+
+<Callout type="warning" title="Treat a token like a root password">
+An API token can do everything in the API except manage the account, its sessions and its tokens. Don't commit one, and revoke a token you no longer use. See [Security model](/docs/architecture/security#api-tokens).
 </Callout>
 
 ### The data directory
@@ -151,8 +185,9 @@ By default the data directory is `./ferry-data`, relative to where you start `fe
 
 | Path | Contents |
 |---|---|
-| `ferry.db` | SQLite database: services, deploys, variables, env groups, datastores, job runs |
-| `api_token` | The generated API token (mode `0600`) |
+| `ferry.db` | SQLite database: services, deploys, variables, env groups, datastores, job runs, the account, its sessions and API tokens |
+| `api_token` | The server token, for scripts on the server itself (mode `0600`) |
+| `setup_code` | The code that creates the account (mode `0600`); only while the server has no account |
 | `instance_id` | Identifies this data directory to Docker (mode `0600`) |
 | `ferryd.lock` | Held while `ferryd` runs |
 | `ferryd.json` | The running server's process id and addresses, read by `ferryd status` and `ferryd stop`; removed when it stops |
@@ -177,7 +212,7 @@ With the defaults:
 
 - **Dashboard:** http://127.0.0.1:7878, or http://ferry.localhost:8080 through the proxy.
 - **Your apps:** `http://<name>.localhost:8080`. Browsers resolve every `*.localhost` name to `127.0.0.1`, so there is no DNS to set up on your machine.
-- **API reference of your server:** Swagger UI at http://127.0.0.1:7878/api/docs (its **Authorize** button takes the API token) and the OpenAPI 3.1 document at `/api/openapi.json`. Both are served without a token.
+- **API reference of your server:** Swagger UI at http://127.0.0.1:7878/api/docs (its **Authorize** button takes an API token) and the OpenAPI 3.1 document at `/api/openapi.json`. Both are served without a token.
 - **Liveness probe:** `/healthz` answers `ok`, without a token.
 
 By default the API listens on `127.0.0.1` only. Reach it from another machine over SSH (`ssh -L 7878:127.0.0.1:7878 your-server`) rather than binding it publicly. See [Production setup](/docs/guides/production).
@@ -193,13 +228,14 @@ By default the API listens on `127.0.0.1` only. Reach it from another machine ov
 |---|---|
 | `ferryd start` | Starts the server in the background and returns once it listens. Takes the same options as `ferryd`. |
 | `ferryd run` | Runs the server in the foreground and logs to the terminal, until <kbd>Ctrl</kbd>+<kbd>C</kbd> or `SIGTERM`. Takes the same options as `ferryd`. |
-| `ferryd status` | Says whether the server runs and where it listens. The exit code is 0 when it runs and 3 when it doesn't. |
+| `ferryd status` | Says whether the server runs and where it listens, and prints the `Create your account` link while there is no account. The exit code is 0 when it runs and 3 when it doesn't. |
 | `ferryd logs` | Prints the last 100 lines of the server's log. `-n N` changes the number, and `-f` keeps printing new lines. |
 | `ferryd stop` | Shuts the server down and waits until it has stopped. |
+| `ferryd reset-password` | Replaces the account's password and signs every browser out. Works while the server runs. |
 
 A server started in the background writes its output to `<data-dir>/ferryd.log`. When that file is larger than 10 MiB, the next `ferryd start` moves it to `ferryd.log.1` and starts a new one. A server in the foreground has no log file: its output goes to the terminal, or to the journal under systemd.
 
-`ferryd stop`, `ferryd status` and `ferryd logs` find the server through its data directory. Run them from the directory where you started `ferryd`, or pass the same `--data-dir` (or `FERRY_DATA_DIR`):
+`ferryd stop`, `ferryd status`, `ferryd logs` and `ferryd reset-password` find the server through its data directory. Run them from the directory where you started `ferryd`, or pass the same `--data-dir` (or `FERRY_DATA_DIR`):
 
 ```bash title="Terminal"
 ferryd status --data-dir /var/lib/ferry
@@ -235,7 +271,7 @@ The [Production setup](/docs/guides/production) guide walks through a full setup
 ## Next steps
 
 <Cards>
-  <Card icon={<Rocket />} title="Quickstart" href="/docs/getting-started/quickstart" description="Log in with the CLI and deploy your first app." />
+  <Card icon={<Rocket />} title="Quickstart" href="/docs/getting-started/quickstart" description="Create your account, connect the CLI and deploy your first app." />
   <Card icon={<Terminal />} title="Set up the CLI" href="/docs/getting-started/cli" description="Config file, environment variables, JSON output and exit codes." />
   <Card icon={<LayoutDashboard />} title="Dashboard tour" href="/docs/getting-started/dashboard" description="Find your way around the web dashboard." />
   <Card icon={<ShieldCheck />} title="Production setup" href="/docs/guides/production" description="Base domain, HTTPS, systemd and GitHub webhooks." />

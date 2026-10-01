@@ -1,6 +1,7 @@
 //! `ferryd` — the Ferry server. Wires together the store, Docker, builder,
 //! proxy, optional TLS manager, engine and API.
 
+mod account;
 mod daemon;
 
 use std::ffi::OsString;
@@ -70,6 +71,12 @@ enum Command {
     /// Prints where the server that uses the data directory listens. The
     /// exit code is 0 when a server runs and 3 when none does.
     Status(DataDir),
+    /// Replace the password of the server's account.
+    ///
+    /// For an administrator who forgot it: asks for the new password (or
+    /// reads it from standard input when that isn't a terminal) and signs
+    /// every browser out. Works while the server runs.
+    ResetPassword(DataDir),
     /// Print the log of a server started in the background.
     Logs {
         #[command(flatten)]
@@ -121,7 +128,9 @@ struct ServerArgs {
     /// Prefix for Docker resources; lets several Ferry servers share one daemon.
     #[arg(long, env = "FERRY_NAME_PREFIX", default_value = "ferry")]
     name_prefix: String,
-    /// API token. Default: read from / generated into <data-dir>/api_token.
+    /// The server token: an API token that always works, for the CLI and
+    /// automation on the server itself. Default: read from / generated into
+    /// <data-dir>/api_token.
     #[arg(long, env = "FERRY_API_TOKEN", hide_env_values = true)]
     api_token: Option<String>,
     /// Secret for GitHub webhook signatures (enables POST /hooks/github).
@@ -599,6 +608,7 @@ fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Stop(dir)) => daemon::stop(&dir.data_dir),
         Some(Command::Status(dir)) => daemon::status(&dir.data_dir, &hint(&dir.data_dir)),
         Some(Command::Logs { data_dir, follow, lines }) => daemon::logs(&data_dir.data_dir, lines, follow),
+        Some(Command::ResetPassword(dir)) => account::reset_password(&dir.data_dir),
     }
 }
 
@@ -632,10 +642,6 @@ fn summary(
             resources::format_memory_mb(u32::try_from(mb).unwrap_or(u32::MAX))
         ),
     });
-    lines.push(format!("API token       : {}", config.api_token));
-    lines.push(String::new());
-    lines.push(format!("Log in with:  ferry login --server {api_url} --token {}", config.api_token));
-    lines.push(String::new());
     lines
 }
 
@@ -675,6 +681,9 @@ async fn serve(args: ServerArgs, detached: bool) -> anyhow::Result<()> {
     }
 
     let store = Store::open(&config.db_path()).await.context("opening database")?;
+    // A server without an account gets the code that creating it takes
+    // (the banner prints it in a link).
+    ferry_api::setup::ensure_code(&config, &store).await.context("preparing the first-run setup")?;
     let docker =
         ferry_docker::Docker::connect().await.context("cannot connect to Docker — is the Docker daemon running?")?;
     let docker_version = docker.version().await.ok();
@@ -762,12 +771,11 @@ async fn serve(args: ServerArgs, detached: bool) -> anyhow::Result<()> {
 
     let api_url = format!("http://{}", loopback_of(config.api_addr));
     let summary = summary(&config, &api_url, docker_version.as_deref(), docker_host.as_ref());
+    let ready = daemon::Ready { api_url, summary };
     println!();
     println!("  Ferry {} is running", ferry_core::VERSION);
-    for line in &summary {
-        println!("{}", if line.is_empty() { String::new() } else { format!("  {line}") });
-    }
-    state.set_ready(daemon::Ready { api_url, summary })?;
+    daemon::print_summary(&config.data_dir, &ready);
+    state.set_ready(ready)?;
 
     // First signal: graceful shutdown. Second signal: exit immediately.
     let signal_token = shutdown.clone();
@@ -870,6 +878,10 @@ mod tests {
                 assert_eq!((follow, lines), (true, 20));
                 assert_eq!(data_dir.data_dir, Path::new("/x"));
             }
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&["reset-password", "--data-dir", "/var/lib/ferry"]).unwrap().command {
+            Some(Command::ResetPassword(dir)) => assert_eq!(dir.data_dir, Path::new("/var/lib/ferry")),
             other => panic!("{other:?}"),
         }
         assert!(parse_cli(&["stop", "--api-addr", "127.0.0.1:9000"]).is_err());

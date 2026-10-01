@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 import { AlertTriangle, Download, ExternalLink, FileJson, Info, Webhook } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { CopyField } from '@/components/patterns/Copy'
+import { CodeBlock, CopyField } from '@/components/patterns/Copy'
 import { API_DOCS_URL, OPENAPI_URL } from '@/components/shell/nav'
 import { Callout, ErrorState } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
@@ -18,7 +18,6 @@ import { useOpenApiSpec, useServerInfo } from '@/lib/api/queries'
 import type { ServerInfo } from '@/lib/api/types'
 import { bytes } from '@/lib/format'
 import { defaultCpuText, defaultMemoryText, formatCpus } from '@/lib/resources'
-import { useAuth } from '@/stores/auth'
 
 import { GitAccountsSection } from './GitAccountsSection'
 import { MaskedCommand, OnOffPill, RowValue, ThemePicker } from './parts'
@@ -27,9 +26,16 @@ function useOrigin(): string {
   return typeof window === 'undefined' ? '' : window.location.origin
 }
 
-function useMaskedToken(): { token: string; masked: string } {
-  const token = useAuth((s) => s.token) ?? ''
-  return { token, masked: token ? `${'•'.repeat(8)}${token.slice(-4)}` : '<token>' }
+/** Link to Server → Account, where API tokens are created. */
+function AccountLink({ children }: { children: React.ReactNode }) {
+  return (
+    <Link
+      to="/server?section=account"
+      className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {children}
+    </Link>
+  )
 }
 
 const LIVE_LABELS: Record<LiveMode, { label: string; hint: string }> = {
@@ -208,7 +214,6 @@ export function GeneralSection() {
 
 export function ConnectionsSection() {
   const origin = useOrigin()
-  const { token, masked } = useMaskedToken()
   const { data: info, isLoading } = useServerInfo()
   const hookUrl = `${origin}/hooks/github`
   return (
@@ -222,23 +227,24 @@ export function ConnectionsSection() {
           <FormRow
             layout="vertical"
             label="Log in with the CLI"
-            description="Verifies the server, then saves it and your token to ~/.config/ferry/config.json."
+            description="Opens this dashboard to approve the terminal. The terminal then gets an API token of its own, saved in ~/.config/ferry/config.json; revoke it under Account."
           >
-            <MaskedCommand
-              display={`ferry login --server ${origin} --token ${masked}`}
-              value={`ferry login --server ${origin} --token ${token}`}
-              what="login command (includes your token)"
-            />
+            <CodeBlock code={`ferry login --server ${origin}`} prompt />
           </FormRow>
           <FormRow
             layout="vertical"
             label="Environment variables"
-            description="For CI and scripts: these override the saved config."
+            description={
+              <>
+                For CI and scripts, where nobody can approve a login: create an API token under{' '}
+                <AccountLink>Account</AccountLink> and export it. These override the saved config.
+              </>
+            }
           >
             <MaskedCommand
-              display={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=${masked}`}
-              value={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=${token}`}
-              what="environment variables (include your token)"
+              display={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=<token>`}
+              value={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=<token>`}
+              what="environment variables"
             />
           </FormRow>
           <FormRow label="Server URL" description="What the CLI and API clients connect to.">
@@ -342,7 +348,7 @@ function ApiReferenceCard() {
       <FormCard asDiv>
         <FormRow
           label="Interactive docs"
-          description="Swagger UI: browse every endpoint and try requests with your token."
+          description="Swagger UI: browse every endpoint and try requests with an API token."
         >
           <RowValue>
             {missing ? (
@@ -395,7 +401,6 @@ function ApiReferenceCard() {
 
 export function ApiSection() {
   const origin = useOrigin()
-  const { token, masked } = useMaskedToken()
   return (
     <>
       <PageHeader title="API" description="Everything the dashboard and the CLI do goes through this HTTP API." />
@@ -407,21 +412,17 @@ export function ApiSection() {
           <FormRow
             layout="vertical"
             label="Authentication"
-            description="Send your API token as a bearer token on every request."
+            description={
+              <>
+                Send an API token as a bearer token on every request. Create one under{' '}
+                <AccountLink>Account</AccountLink>.
+              </>
+            }
           >
-            <MaskedCommand
-              prompt={false}
-              display={`Authorization: Bearer ${masked}`}
-              value={`Authorization: Bearer ${token}`}
-              what="authorization header (includes your token)"
-            />
+            <CodeBlock code="Authorization: Bearer <token>" />
           </FormRow>
           <FormRow layout="vertical" label="Example" description="List the services on this server.">
-            <MaskedCommand
-              display={`curl -H "Authorization: Bearer ${masked}" ${origin}/api/v1/services`}
-              value={`curl -H "Authorization: Bearer ${token}" ${origin}/api/v1/services`}
-              what="curl command (includes your token)"
-            />
+            <CodeBlock code={`curl -H "Authorization: Bearer <token>" ${origin}/api/v1/services`} prompt />
           </FormRow>
         </FormCard>
       </PageSection>
@@ -436,7 +437,7 @@ export function ApiSection() {
       </PageSection>
       <PageSection
         title="Server-sent events"
-        description="Streams read with fetch() so the token stays in the Authorization header."
+        description="Read them with fetch(), so the token stays in the Authorization header."
       >
         <FormCard asDiv>
           <FormRow label="Change feed" description="One event per created, updated or deleted resource.">

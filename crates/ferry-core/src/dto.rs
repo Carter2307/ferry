@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::models::{
-    Datastore, DatastoreKind, Deploy, EnvGroup, EnvVar, GitAuth, GitProvider, Runtime, Service, ServiceState,
-    ServiceType,
+    ApiToken, Datastore, DatastoreKind, Deploy, EnvGroup, EnvVar, GitAuth, GitProvider, Runtime, Service, ServiceState,
+    ServiceType, User,
 };
 
 /// `GET /api/v1/info`
@@ -585,6 +585,208 @@ pub struct BlueprintResult {
     /// Non-fatal problems (unsupported keys ignored, etc.).
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// accounts (DESIGN.md §20)
+
+/// How a request is authenticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthKind {
+    /// The session cookie of the dashboard.
+    Session,
+    /// An API token (`Authorization: Bearer`).
+    Token,
+}
+
+/// The account the dashboard is signed in to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UserView {
+    pub id: String,
+    pub email: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<&User> for UserView {
+    fn from(u: &User) -> Self {
+        UserView { id: u.id.clone(), email: u.email.clone(), created_at: u.created_at }
+    }
+}
+
+/// `GET /api/v1/auth/status` — what the dashboard needs to know before
+/// anything else: is there an account, and is this browser signed in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AuthStatus {
+    /// The server has no account yet: it must be created first
+    /// (`POST /api/v1/auth/setup`).
+    pub setup_required: bool,
+    /// How this request is authenticated; `null` when it isn't.
+    pub auth: Option<AuthKind>,
+    /// The account, for a request with a session.
+    pub user: Option<UserView>,
+}
+
+/// `POST /api/v1/auth/setup` — create the administrator's account of a
+/// server that has none.
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetupAccount {
+    pub email: String,
+    /// At least 8 characters.
+    pub password: String,
+    /// The setup code: the `code` of the link `ferryd` prints while the
+    /// server has no account (also in `<data-dir>/setup_code`).
+    pub code: String,
+}
+
+/// `POST /api/v1/auth/login`
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Login {
+    pub email: String,
+    pub password: String,
+}
+
+/// `POST /api/v1/auth/password`
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePassword {
+    pub current_password: String,
+    /// At least 8 characters.
+    pub new_password: String,
+}
+
+/// Bodies with a password say nothing about it in logs.
+macro_rules! opaque_debug {
+    ($($name:ident),+) => {$(
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct(stringify!($name)).finish_non_exhaustive()
+            }
+        }
+    )+};
+}
+opaque_debug!(SetupAccount, Login, ChangePassword, CreatedApiToken, CliLoginStarted, CliLoginPoll, CliLoginResult);
+
+/// A browser signed in to the dashboard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SessionView {
+    pub id: String,
+    /// The browser, as it named itself when it signed in.
+    pub user_agent: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: DateTime<Utc>,
+    /// A session ends 30 days after it was last used.
+    pub expires_at: DateTime<Utc>,
+    /// The session of this request.
+    pub current: bool,
+}
+
+/// A named API token. The token itself is only in the answer that creates it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ApiTokenView {
+    pub id: String,
+    pub name: String,
+    /// The last characters of the token.
+    pub hint: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// `null`: valid until it is revoked.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl From<&ApiToken> for ApiTokenView {
+    fn from(t: &ApiToken) -> Self {
+        ApiTokenView {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            hint: t.hint.clone(),
+            created_at: t.created_at,
+            last_used_at: t.last_used_at,
+            expires_at: t.expires_at,
+        }
+    }
+}
+
+/// `POST /api/v1/auth/tokens`
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateApiToken {
+    /// What the token is for, e.g. `CI` or `laptop` (1 to 100 characters).
+    pub name: String,
+    /// Days until the token expires (1 to 3650). Default: it doesn't.
+    pub expires_in_days: Option<u32>,
+}
+
+/// Answer of `POST /api/v1/auth/tokens`: the only time the token is shown.
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CreatedApiToken {
+    /// The token, to send as `Authorization: Bearer <token>`. Keep it: the
+    /// server only stores its digest.
+    pub token: String,
+    pub api_token: ApiTokenView,
+}
+
+/// `POST /api/v1/auth/cli` — a terminal asks to be connected (`ferry login`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartCliLogin {
+    /// Who asks, e.g. `ada@laptop`: shown on the approval page, and the name
+    /// of the API token that approving creates.
+    pub name: Option<String>,
+}
+
+/// Answer of `POST /api/v1/auth/cli`.
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CliLoginStarted {
+    /// Names the request: the approval page is `/cli-login?id=<id>` of the dashboard.
+    pub id: String,
+    /// Shown by the terminal and by the approval page: the person approving
+    /// checks that both match.
+    pub code: String,
+    /// What the terminal collects the token with. It is never shown.
+    pub secret: String,
+    /// Seconds until the request expires.
+    pub expires_in: u64,
+    /// Seconds to wait between two polls.
+    pub interval: u64,
+}
+
+/// Where a `ferry login` request stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CliLoginStatus {
+    Pending,
+    Approved,
+    Denied,
+}
+
+/// `GET /api/v1/auth/cli/{id}` — what the approval page shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CliLoginView {
+    pub id: String,
+    pub name: String,
+    pub code: String,
+    pub status: CliLoginStatus,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// `POST /api/v1/auth/cli/{id}/token`
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CliLoginPoll {
+    /// The `secret` of the answer that started the request.
+    pub secret: String,
+}
+
+/// Answer of `POST /api/v1/auth/cli/{id}/token`.
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CliLoginResult {
+    pub status: CliLoginStatus,
+    /// The API token, once: with `approved`, the first time it is collected.
+    pub token: Option<String>,
 }
 
 /// Error body: `{"error": {"code": "not_found", "message": "service 'x' not found"}}`.

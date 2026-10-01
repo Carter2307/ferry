@@ -5,9 +5,12 @@ import { RouterProvider } from 'react-router'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ApiError } from '@/lib/api/client'
+import { loadAuthStatus } from '@/lib/api/session'
+import { ServerUnreachable } from '@/pages/login/ServerUnreachable'
 import { useAuth } from '@/stores/auth'
 import { useResolvedTheme } from '@/stores/ui'
 
+import { FullPageLoader } from './FullPageLoader'
 import { createRouter } from './routes'
 
 const ReactQueryDevtools = import.meta.env.DEV
@@ -53,27 +56,43 @@ function ThemeSync() {
   return null
 }
 
-/** Drop every cached response when the user signs out (or the token changes). */
+/** Drop every cached response when the user signs out (or another account signs in). */
 function useClearCacheOnSignOut(qc: QueryClient) {
   React.useEffect(
     () =>
       useAuth.subscribe((state, prev) => {
-        if (state.token !== prev.token) qc.clear()
+        if (state.user?.id !== prev.user?.id) qc.clear()
       }),
     [qc],
   )
+}
+
+/** Ask the server once whether it has an account and whether this browser is signed in. */
+function useAuthStatus() {
+  React.useEffect(() => {
+    void loadAuthStatus()
+  }, [])
+}
+
+/** The pages, once the server said where this browser stands. */
+function Pages({ router }: { router: ReturnType<typeof createRouter> }) {
+  const phase = useAuth((s) => s.phase)
+  if (phase === 'loading') return <FullPageLoader />
+  if (phase === 'unreachable') return <ServerUnreachable />
+  return <RouterProvider router={router} />
 }
 
 export function App() {
   const [queryClient] = React.useState(makeQueryClient)
   const [router] = React.useState(createRouter)
   useClearCacheOnSignOut(queryClient)
+  useAuthStatus()
 
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ThemeSync />
-        <RouterProvider router={router} />
+        <Pages router={router} />
         <Toaster />
       </TooltipProvider>
       {ReactQueryDevtools && (

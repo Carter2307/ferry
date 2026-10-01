@@ -16,6 +16,13 @@ pub const ENV_GROUP: &str = "evg";
 /// Prefix for git connections (connected GitHub / GitLab accounts).
 pub const GIT_CONNECTION: &str = "git";
 
+/// Prefix for accounts (the administrator of the server).
+pub const USER: &str = "usr";
+/// Prefix for sessions (a browser signed in to the dashboard).
+pub const SESSION: &str = "ses";
+/// Prefix for API tokens.
+pub const API_TOKEN: &str = "tok";
+
 /// Generate a new id with the given prefix.
 pub fn new_id(prefix: &str) -> String {
     let raw = uuid::Uuid::new_v4().simple().to_string();

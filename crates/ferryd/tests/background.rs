@@ -78,6 +78,10 @@ fn status_and_stop_without_a_server() {
     let logs = ferryd(&["logs", "--data-dir", dir]);
     assert_eq!(logs.code, 1);
     assert!(logs.stderr.contains("no log at") && logs.stderr.contains("ferryd start"), "{}", logs.stderr);
+    // No database: nothing to reset a password in.
+    let reset = ferryd(&["reset-password", "--data-dir", dir]);
+    assert_eq!(reset.code, 1);
+    assert!(reset.stderr.contains("no Ferry database"), "{}", reset.stderr);
     // A data directory that doesn't exist is the same.
     let missing = data.path().join("missing");
     assert_eq!(ferryd(&["status", "--data-dir", missing.to_str().unwrap()]).code, 3);
@@ -143,11 +147,23 @@ fn start_status_logs_stop() {
     assert!(start.stdout.contains(&format!("Dashboard + API : http://{api_addr}")), "{}", start.stdout);
     assert!(start.stdout.contains(&format!("ferryd stop --data-dir {dir}")), "{}", start.stdout);
     assert!(healthz(api_port).contains("200 OK"), "the API answers");
+    // A new server has no account: the banner links to the page that creates
+    // it, with the setup code, and no longer prints any token.
+    let code = std::fs::read_to_string(Path::new(dir).join("setup_code")).expect("a setup code");
+    let link = format!("Create your account: http://{api_addr}/setup?code={code}");
+    assert!(start.stdout.contains(&link), "{}", start.stdout);
+    let server_token = std::fs::read_to_string(Path::new(dir).join("api_token")).unwrap();
+    assert!(!start.stdout.contains(server_token.trim()) && !start.stdout.contains("API token"), "{}", start.stdout);
 
     let status = ferryd(&["status", "--data-dir", dir]);
     assert_eq!(status.code, 0, "{}", status.stderr);
     assert!(status.stdout.contains("is running in the background (pid "), "{}", status.stdout);
     assert!(status.stdout.contains(&format!("http://{api_addr}")), "{}", status.stdout);
+    assert!(status.stdout.contains(&link), "{}", status.stdout);
+    // No account to give a password to yet.
+    let reset = ferryd(&["reset-password", "--data-dir", dir]);
+    assert_eq!(reset.code, 1);
+    assert!(reset.stderr.contains("no account yet"), "{}", reset.stderr);
 
     // A second `start` leaves the server alone.
     let again = ferryd(&[&["start"], &server[..]].concat());

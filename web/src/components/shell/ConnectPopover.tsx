@@ -1,12 +1,12 @@
 import * as React from 'react'
+import { Link } from 'react-router'
 import { Plug } from 'lucide-react'
 
-import { CopyButton, CopyField, SecretField } from '@/components/patterns/Copy'
+import { CodeBlock, CopyField, SecretField } from '@/components/patterns/Copy'
 import { MonoLabel } from '@/components/patterns/MonoLabel'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useService } from '@/lib/api/queries'
-import { useAuth } from '@/stores/auth'
 
 import { useRouteResource } from './useRouteResource'
 
@@ -22,13 +22,11 @@ function Section({ label, children, hint }: { label: string; children: React.Rea
 
 /** Pill "Connect" button: CLI login command, API URL and (on a service) its URLs + deploy hook. */
 export function ConnectPopover({ compact = false }: { compact?: boolean }) {
-  const token = useAuth((s) => s.token) ?? ''
   const resource = useRouteResource()
   const serviceName = resource.kind === 'service' ? resource.name : undefined
   const { data: service } = useService(serviceName)
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
-  const masked = token ? `${'•'.repeat(8)}${token.slice(-4)}` : '<token>'
-  const loginCmd = `ferry login --server ${origin} --token ${token}`
+  const loginCmd = `ferry login --server ${origin}`
   const hookUrl = service ? `${origin}${service.deploy_hook_path}` : null
 
   return (
@@ -57,22 +55,31 @@ export function ConnectPopover({ compact = false }: { compact?: boolean }) {
       >
         <div className="border-b px-4 py-3">
           <p className="text-sm font-medium text-foreground">Connect to this server</p>
-          <p className="text-[13px] text-foreground-light">Use the CLI or the HTTP API with your token.</p>
+          <p className="text-[13px] text-foreground-light">Use the CLI, or the HTTP API with an API token.</p>
         </div>
         <div className="flex flex-col gap-4 px-4 py-4">
-          <Section label="CLI login" hint="Saves the server and token to ~/.config/ferry/config.json.">
-            {/* Copy sits beside the scroll area, so the command never scrolls under it. */}
-            <div className="flex items-start rounded-md border bg-surface-200">
-              <pre className="min-w-0 flex-1 overflow-x-auto py-2.5 pl-3 font-mono text-[12px] leading-relaxed text-foreground">
-                <span className="text-foreground-muted select-none">$ </span>
-                ferry login --server {origin} --token {masked}
-              </pre>
-              <div className="shrink-0 p-1.5">
-                <CopyButton value={loginCmd} what="login command (includes your token)" />
-              </div>
-            </div>
+          <Section
+            label="CLI login"
+            hint="Opens this dashboard to approve the terminal, which then gets an API token of its own."
+          >
+            <CodeBlock code={loginCmd} prompt />
           </Section>
-          <Section label="API URL" hint={<>Send <code className="font-mono">Authorization: Bearer &lt;token&gt;</code>.</>}>
+          <Section
+            label="API URL"
+            hint={
+              <>
+                Send an API token as <code className="font-mono">Authorization: Bearer &lt;token&gt;</code>. Create one
+                under{' '}
+                <Link
+                  to="/server?section=account"
+                  className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  Server → Account
+                </Link>
+                .
+              </>
+            }
+          >
             <CopyField value={`${origin}/api/v1`} size="sm" what="API URL" aria-label="API URL" />
           </Section>
           {service && (

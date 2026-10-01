@@ -128,25 +128,39 @@ sudo journalctl -u ferryd -n 30
   Data            : /var/lib/ferry
   Limits          : 512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3
   Free disk check : deploys need 1 GiB free
-  API token       : fy_…
+
+  Create your account: http://127.0.0.1:7878/setup?code=5b0e…
 ```
 
-The token is also in `/var/lib/ferry/api_token` (mode `0600`). The `Docker` line shows the CPUs and memory the Docker host has, and the `Limits` and `Free disk check` lines the guards Ferry applies: see [Size the container limits](#size-the-container-limits) and [Disk space and logs](#disk-space-and-logs). When a default limit is more than the host has, or the host's kernel can't enforce CPU limits, `ferryd` logs a warning at startup.
+The last line is the link that creates the server's account: you open it in the next step. The `Docker` line shows the CPUs and memory the Docker host has, and the `Limits` and `Free disk check` lines the guards Ferry applies: see [Size the container limits](#size-the-container-limits) and [Disk space and logs](#disk-space-and-logs). When a default limit is more than the host has, or the host's kernel can't enforce CPU limits, `ferryd` logs a warning at startup.
 
 </Step>
 <Step>
 
-### Connect the CLI and the dashboard
+### Create your account and connect the CLI
 
-The API only listens on the server's loopback interface. From your machine, open an SSH tunnel and log in through it:
+The API only listens on the server's loopback interface. From your machine, open an SSH tunnel:
 
 ```bash title="Terminal"
 ssh -N -L 7878:127.0.0.1:7878 you@your-server &
-ferry login --server http://127.0.0.1:7878 --token fy_…
+```
+
+With the tunnel open, the dashboard is at `http://127.0.0.1:7878` on your machine. Open the `Create your account` link from the server's log in your browser, and enter your email and a password of at least 8 characters: this creates the server's administrator account and signs you in. If you no longer have the link, `sudo ferryd status --data-dir /var/lib/ferry` on the server prints it again. Once the account exists, the link is replaced by `Connect the CLI : ferry login`.
+
+Then log in with the CLI, through the same tunnel:
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878
 ferry info
 ```
 
-With the tunnel open, the dashboard is at `http://127.0.0.1:7878`.
+`ferry login` prints a code and opens a page of the dashboard: check that the page shows the same code, then click **Approve**. Your terminal gets an API token of its own, which you can revoke under **Server → Account**. See [Set up the CLI](/docs/getting-started/cli#log-in).
+
+To use the CLI on the server itself, where there is no browser, log in with the server token instead:
+
+```bash title="Terminal (on the server)"
+ferry login --token "$(sudo cat /var/lib/ferry/api_token)"
+```
 
 To reach the dashboard, the API and the webhooks without a tunnel (GitHub webhooks and deploy hooks need this), serve them through the proxy on their own hostname, over HTTPS:
 
@@ -154,7 +168,7 @@ To reach the dashboard, the API and the webhooks without a tunnel (GitHub webhoo
 ferryd … --dashboard-host ferry.apps.example.com
 ```
 
-Every API call still needs the token. On a public base domain, the dashboard host is off unless you set it.
+Every API call still needs an API token or a signed-in session. On a public base domain, the dashboard host is off unless you set it.
 
 </Step>
 <Step>
@@ -349,15 +363,17 @@ Build the new version, replace the binaries in `/usr/local/bin` and restart the 
 
 ## Security checklist
 
-- [ ] **Keep the API private.** Leave `--api-addr` on `127.0.0.1` and use an SSH tunnel, or expose it only through `--dashboard-host` **with HTTPS**. The API token gives full control of every app on the server: treat it like a root password.
-- [ ] **Protect the data directory.** It holds variable values, datastore passwords and credentials embedded in repository URLs. Ferry creates it with mode `0700` and `api_token` and `instance_id` with mode `0600`; keep it that way, and restrict who can log in as the `ferry` user.
-- [ ] **Rotate a leaked token.** Stop `ferryd`, delete `<data-dir>/api_token` and start it again: it generates and prints a new token. (With `--api-token` or `FERRY_API_TOKEN`, change the value instead.)
+- [ ] **Keep the API private.** Leave `--api-addr` on `127.0.0.1` and use an SSH tunnel, or expose it only through `--dashboard-host` **with HTTPS**. The account's password and every API token give full control of every app on the server: treat them like root passwords. Failed sign-ins are limited for the whole server, not per address, so whoever can reach the API can also delay your own sign-in.
+- [ ] **Create the account right after the first start.** Until it exists, whoever can read the setup link (the server's log, or `<data-dir>/setup_code`) can create it.
+- [ ] **Protect the data directory.** It holds variable values, datastore passwords and credentials embedded in repository URLs. Ferry creates it with mode `0700` and `api_token`, `setup_code` and `instance_id` with mode `0600`; keep it that way, and restrict who can log in as the `ferry` user.
+- [ ] **Revoke a leaked token.** Revoke an API token under **Server → Account** in the dashboard: it stops working at once. For the server token, stop `ferryd`, delete `<data-dir>/api_token` and start it again: it generates a new one. (With `--api-token` or `FERRY_API_TOKEN`, change the value instead.) If the password leaked, change it under **Server → Account**: every other browser is signed out.
+- [ ] **Give CI its own token.** Create a named API token with an expiry for each pipeline or script, instead of sharing the server token, so you can revoke one without touching the others.
 - [ ] **Use secrets for hooks.** Set a random `--github-webhook-secret`, and rotate a leaked deploy hook with `ferry deploy-hook rotate NAME`.
 - [ ] **Open only ports 22, 80 and 443.** Datastore ports are bound to `127.0.0.1` and are never public; reach them over SSH.
 - [ ] **Trust the forwarding headers.** The proxy drops client-supplied `X-Forwarded-*`, `Forwarded` and `X-Real-IP` headers and sets `X-Forwarded-For` to the connecting address only, so apps can use them. See [Networking](/docs/concepts/networking#request-headers-your-app-receives).
 - [ ] **Give each server its own data directory and name prefix.** Ferry refuses to start on a prefix another data directory owns; don't override that with `--take-over`. A moved data directory keeps its `instance_id` and needs no flag; `--take-over` is only for a data directory whose `instance_id` was lost. See [Multiple servers](/docs/guides/multiple-servers).
 - [ ] **Keep a misbehaving app contained.** Leave the container limits on (a limit of `0` turns its guard off), [size them](#size-the-container-limits) for the host, and keep `OOMScoreAdjust=` in the unit so the kernel kills a container before `ferryd` when memory runs out.
-- [ ] **Know the limits.** One API token, no users or roles; no IP allow lists. Everyone who can deploy can run any code on the server. Containers have memory, CPU and process limits, but builds don't, disks have no quotas, and every container can reach every service and datastore on the private network. See [Security model](/docs/architecture/security#one-misbehaving-service).
+- [ ] **Know the limits.** One administrator account, no other users or roles, and every API token has full access; no IP allow lists. Everyone who can deploy can run any code on the server. Containers have memory, CPU and process limits, but builds don't, disks have no quotas, and every container can reach every service and datastore on the private network. See [Security model](/docs/architecture/security#one-misbehaving-service).
 
 <Cards cols={3}>
   <Card icon={<Globe />} title="Custom domains & HTTPS" href="/docs/guides/custom-domains-https" description="Serve apps on your own domains." />
