@@ -232,3 +232,64 @@ async fn spawn_runs_immediately_then_every_minute_until_shutdown() {
     handle.await.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 4);
 }
+
+#[tokio::test]
+async fn certificate_status_follows_the_manager() {
+    let f = fixture().await;
+    let m = &f.manager;
+    assert_eq!(m.certificate("a.example.com"), CertificateStatus::Pending);
+    // An order in flight (or waiting for its turn).
+    let picked = m.select_candidates(&hosts(&["a.example.com"]), Utc::now());
+    assert_eq!(m.certificate("A.Example.com:443"), CertificateStatus::Issuing);
+    drop(picked);
+    // A failed order: why, and when it is made again.
+    m.ensure_certificates(&hosts(&["a.example.com"])).await;
+    match m.certificate("a.example.com") {
+        CertificateStatus::Failed { error, retry_at } => {
+            assert!(error.contains("CA offline"), "{error}");
+            let wait = retry_at.expect("a failed order is retried") - Utc::now();
+            assert!(wait > ChronoDuration::minutes(4) && wait <= ChronoDuration::minutes(5), "{wait}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // A valid certificate is what browsers get, whatever happens to its renewal.
+    let cert = issued("a.example.com", 10);
+    let not_after = cert.not_after;
+    m.store.insert_issued("a.example.com", cert);
+    assert_eq!(m.certificate("a.example.com"), CertificateStatus::Issued { not_after });
+    // An expired one is none.
+    m.store.insert_issued("old.example.com", issued("old.example.com", -1));
+    assert_eq!(m.certificate("old.example.com"), CertificateStatus::Pending);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wake_brings_the_next_pass_forward() {
+    let f = fixture().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let (wake, shutdown) = (Arc::new(Notify::new()), CancellationToken::new());
+    let handle = f.manager.spawn_with_wake(
+        Arc::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            vec!["web.localhost".to_string()]
+        }),
+        wake.clone(),
+        shutdown.clone(),
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // Woken: the next pass comes once the routes settled, not a minute later.
+    wake.notify_one();
+    tokio::time::sleep(WAKE_DELAY + Duration::from_secs(1)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    // Several wakes during the wait are one pass.
+    wake.notify_one();
+    wake.notify_one();
+    tokio::time::sleep(WAKE_DELAY + Duration::from_secs(1)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    // Left alone: the next minute.
+    tokio::time::sleep(CHECK_INTERVAL).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
+    shutdown.cancel();
+    handle.await.unwrap();
+}

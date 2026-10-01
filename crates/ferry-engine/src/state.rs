@@ -57,6 +57,8 @@ pub(crate) struct Inner {
     pub started: AtomicBool,
     pub worker_generation: AtomicU64,
     pub rt: StdMutex<Runtime>,
+    /// Domain verification (see `domains`).
+    pub domains: crate::domains::State,
     /// CPUs / memory / data directory of the Docker host, read once (see
     /// [`Inner::host_info`]).
     host: OnceCell<HostInfo>,
@@ -249,6 +251,7 @@ impl Inner {
             started: AtomicBool::new(false),
             worker_generation: AtomicU64::new(1),
             rt: StdMutex::new(Runtime::default()),
+            domains: crate::domains::State::default(),
             host: OnceCell::new(),
         }
     }

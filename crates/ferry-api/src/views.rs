@@ -2,9 +2,16 @@
 
 use std::collections::HashMap;
 
-use ferry_core::dto::{DatastoreView, EnvGroupView, GitConnectionStatus, GitConnectionView, ServiceView};
+use std::net::IpAddr;
+
+use ferry_core::config::is_local_host;
+use ferry_core::dto::{
+    CertificateState, CertificateView, DatastoreView, DomainView, EnvGroupView, GitConnectionStatus, GitConnectionView,
+    ServiceView,
+};
+use ferry_core::tls::{CertificateStatus, Certificates};
 use ferry_core::{
-    Config, Datastore, Deploy, DeploySource, EnvGroup, GitAuth, GitConnection, Result, Service, Store,
+    Config, Datastore, Deploy, DeploySource, Domain, EnvGroup, GitAuth, GitConnection, Result, Service, Store,
     compute_service_state, git, git_connection_for,
 };
 
@@ -133,6 +140,57 @@ pub async fn git_connection_view_of(store: &Store, connection: GitConnection) ->
     let all = store.list_git_connections().await?;
     let services = git_connection_users(store, &all).await?.remove(&connection.id).unwrap_or_default();
     Ok(git_connection_view(connection, services))
+}
+
+/// Build the [`DomainView`] of a domain. `addresses` are the server's public
+/// addresses, for the DNS records to create (none are needed for a local
+/// domain).
+pub fn domain_view(config: &Config, domain: Domain, addresses: &[IpAddr]) -> DomainView {
+    let local = domain.is_local();
+    DomainView {
+        local,
+        served: domain.is_served(),
+        records: if local { Vec::new() } else { ferry_core::domains::dns_records(addresses) },
+        url_pattern: config.url_for_host(&format!("<service>.{}", domain.name)),
+        domain,
+    }
+}
+
+/// Build the [`CertificateView`] of a hostname the proxy routes (`service`:
+/// the name of its service, `None` for the dashboard). `certificates` is the
+/// certificate manager, `None` when the server runs without HTTPS.
+pub fn certificate_view(
+    certificates: Option<&dyn Certificates>,
+    host: String,
+    service: Option<String>,
+) -> CertificateView {
+    let mut view = CertificateView {
+        state: CertificateState::Disabled,
+        expires_at: None,
+        error: None,
+        retry_at: None,
+        host,
+        service,
+    };
+    if is_local_host(&view.host) {
+        view.state = CertificateState::Local;
+        return view;
+    }
+    let Some(certificates) = certificates else { return view };
+    match certificates.certificate(&view.host) {
+        CertificateStatus::Issued { not_after } => {
+            view.state = CertificateState::Issued;
+            view.expires_at = Some(not_after);
+        }
+        CertificateStatus::Issuing => view.state = CertificateState::Issuing,
+        CertificateStatus::Pending => view.state = CertificateState::Pending,
+        CertificateStatus::Failed { error, retry_at } => {
+            view.state = CertificateState::Failed;
+            view.error = Some(error);
+            view.retry_at = retry_at;
+        }
+    }
+    view
 }
 
 /// Build the [`EnvGroupView`] of an env group.

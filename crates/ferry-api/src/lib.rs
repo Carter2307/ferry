@@ -19,6 +19,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
+use ferry_core::tls::Certificates;
 use ferry_core::{CancellationToken, Config, Engine, Store};
 use tower_http::trace::TraceLayer;
 
@@ -53,6 +54,9 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub store: Store,
     pub engine: Arc<dyn Engine>,
+    /// Where the certificate of each host stands (for `/api/v1/certificates`).
+    /// `None` when the server runs without HTTPS.
+    pub certificates: Option<Arc<dyn Certificates>>,
     /// Docker server version (for `/api/v1/info`).
     pub docker_version: Option<String>,
     /// CPUs of the Docker host (for `/api/v1/info`).
@@ -107,8 +111,13 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/services/{id}/env-groups", post(env::link_group))
         .route("/v1/services/{id}/env-groups/{group}", axum::routing::delete(env::unlink_group))
         // custom domains
-        .route("/v1/services/{id}/domains", get(domains::list).post(domains::add))
-        .route("/v1/services/{id}/domains/{domain}", axum::routing::delete(domains::remove))
+        .route("/v1/services/{id}/domains", get(custom_domains::list).post(custom_domains::add))
+        .route("/v1/services/{id}/domains/{domain}", axum::routing::delete(custom_domains::remove))
+        // the domains services are served under, and certificates
+        .route("/v1/domains", get(domains::list).post(domains::connect))
+        .route("/v1/domains/{id}", get(domains::get).patch(domains::update).delete(domains::disconnect))
+        .route("/v1/domains/{id}/verify", post(domains::verify))
+        .route("/v1/certificates", get(domains::certificates))
         // jobs
         .route("/v1/services/{id}/jobs", get(jobs::list).post(jobs::run))
         .route("/v1/jobs/{job_id}", get(jobs::get))

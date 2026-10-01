@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod blueprints;
+pub mod custom_domains;
 pub mod datastores;
 pub mod deploys;
 pub mod domains;

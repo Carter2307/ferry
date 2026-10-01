@@ -84,11 +84,12 @@ pub(crate) fn redirect(location: HeaderValue, head: bool) -> Response<ProxyBody>
     finish(builder, "Redirecting to HTTPS\n", head)
 }
 
-/// `200 text/plain` with an ACME HTTP-01 key authorization.
-pub(crate) fn acme_answer(key_authorization: String, head: bool) -> Response<ProxyBody> {
+/// `200 text/plain`, never cached: an ACME HTTP-01 key authorization, or the
+/// answer to a domain verification.
+pub(crate) fn plain_answer(text: String, head: bool) -> Response<ProxyBody> {
     let builder =
         Response::builder().status(StatusCode::OK).header(CONTENT_TYPE, "text/plain").header(CACHE_CONTROL, "no-store");
-    finish(builder, key_authorization, head)
+    finish(builder, text, head)
 }
 
 /// Attach `content`, or for `HEAD` only its `Content-Length` (RFC 9110 §9.3.2).
@@ -206,7 +207,7 @@ mod tests {
         let resp = redirect(HeaderValue::from_static("https://a.test/x?y=1"), false);
         assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(resp.headers()[LOCATION], "https://a.test/x?y=1");
-        let resp = acme_answer("tok.thumb".into(), false);
+        let resp = plain_answer("tok.thumb".into(), false);
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers()[CONTENT_TYPE], "text/plain");
         assert_eq!(body_text(resp).await, "tok.thumb");

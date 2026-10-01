@@ -192,6 +192,35 @@ async fn git_connections_are_reported() {
 }
 
 #[tokio::test]
+async fn domains_are_reported_with_what_the_engine_finds() {
+    let app = TestApp::new().await;
+    let mut feed = Feed::open(&app).await;
+    let d = app.post("/api/v1/domains", json!({"name": "example.com"})).await.json();
+    let domain_id = id(&d);
+    let seen = feed.until("domain", &domain_id, "created").await;
+    assert_eq!(
+        seen.last().unwrap(),
+        &json!({"kind": "domain", "id": domain_id, "service_id": null, "action": "created"})
+    );
+    // A verification the engine makes on its own (it writes the store): found by polling.
+    let mut row = app.store.require_domain(&domain_id).await.unwrap();
+    row.status = ferry_core::DomainStatus::Active;
+    row.checked_at = Some(ferry_core::now());
+    app.store.record_domain_check(&row).await.unwrap();
+    feed.until("domain", &domain_id, "updated").await;
+    // The default domain changes two rows.
+    assert_eq!(app.patch("/api/v1/domains/example.com", json!({"is_default": true})).await.status, StatusCode::OK);
+    let base_id = app.store.require_domain("localhost").await.unwrap().id;
+    let seen = feed.until("domain", &domain_id, "updated").await;
+    if !seen.iter().any(|c| c["kind"] == "domain" && c["id"] == base_id.as_str()) {
+        // Changes of one kind come in the order of their ids.
+        feed.until("domain", &base_id, "updated").await;
+    }
+    assert_eq!(app.delete("/api/v1/domains/example.com").await.status, StatusCode::NO_CONTENT);
+    feed.until("domain", &domain_id, "deleted").await;
+}
+
+#[tokio::test]
 async fn every_subscriber_gets_every_change() {
     let app = TestApp::new().await;
     let mut a = Feed::open(&app).await;

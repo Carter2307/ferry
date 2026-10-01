@@ -13,6 +13,10 @@
 //! Request handling, in order:
 //! 1. `GET /.well-known/acme-challenge/<token>` on plain HTTP (when
 //!    `tls_hooks` is set) → the key authorization (200 `text/plain`) or 404.
+//!    `GET /.well-known/ferry-domain-check/<token>` (when `domain_probe_id`
+//!    is set, on either listener, whatever the host) → `<token>.<probe id>`
+//!    (200 `text/plain`): how a server verifies that a name reaches it
+//!    (`ferry_core::domains`).
 //! 2. Host = HTTP/2 `:authority` / absolute-form URI authority, else `Host`;
 //!    missing or invalid → 400.
 //! 3. `redirect_https` + plain HTTP + `has_certificate(host)` → 308 to HTTPS.
@@ -90,6 +94,10 @@ pub struct ProxyConfig {
     pub tls_hooks: Option<Arc<dyn TlsHooks>>,
     /// Redirect HTTP → HTTPS for hosts where `tls_hooks.has_certificate(host)`.
     pub redirect_https: bool,
+    /// What this server answers the verification of a domain with
+    /// (`Config::domains.probe_id()`); `None` = the path is routed like any
+    /// other.
+    pub domain_probe_id: Option<String>,
     /// Connection caps and timeouts (both listeners).
     pub limits: ConnectionLimits,
 }
@@ -115,6 +123,7 @@ impl ProxyConfig {
             tls: None,
             tls_hooks: None,
             redirect_https: false,
+            domain_probe_id: None,
             limits: ConnectionLimits::default(),
         }
     }

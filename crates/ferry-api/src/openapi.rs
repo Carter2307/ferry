@@ -25,7 +25,7 @@ use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_swagger_ui::{Config, SwaggerUi};
 
 use crate::routes::{
-    auth, blueprints, datastores, deploys, domains, env, env_groups, git, hooks, info, jobs, services,
+    auth, blueprints, custom_domains, datastores, deploys, domains, env, env_groups, git, hooks, info, jobs, services,
 };
 
 /// Where the document is served.
@@ -95,8 +95,8 @@ comments every 15 s while idle.";
 pub(crate) const SSE_EVENTS: &str = "Server-Sent Events. First `event: ready` (`data: {}`) once the feed \
 watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one \
 `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: \
-`kind` is `service`, `deploy`, `datastore`, `env_group`, `job` or `git_connection`; `action` is `created`, \
-`updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber \
+`kind` is `service`, `deploy`, `datastore`, `env_group`, `job`, `git_connection` or `domain`; `action` is \
+`created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber \
 that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and \
 should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts \
 down.";
@@ -149,9 +149,16 @@ down.";
         env::patch,
         env::link_group,
         env::unlink_group,
+        custom_domains::list,
+        custom_domains::add,
+        custom_domains::remove,
         domains::list,
-        domains::add,
-        domains::remove,
+        domains::connect,
+        domains::get,
+        domains::update,
+        domains::verify,
+        domains::disconnect,
+        domains::certificates,
         jobs::list,
         jobs::run,
         jobs::get,
@@ -229,6 +236,18 @@ down.";
         ferry_core::dto::GitRepository,
         ferry_core::dto::GitRepositoryList,
         ferry_core::dto::GitBranches,
+        ferry_core::dto::ConnectDomain,
+        ferry_core::dto::UpdateDomain,
+        ferry_core::dto::DomainView,
+        ferry_core::dto::DnsRecord,
+        ferry_core::dto::CertificateView,
+        ferry_core::dto::CertificateState,
+        ferry_core::Domain,
+        ferry_core::DomainSource,
+        ferry_core::DomainStatus,
+        ferry_core::DomainCheck,
+        ferry_core::DomainCheckKind,
+        ferry_core::CheckOutcome,
         ferry_core::dto::ApplyBlueprint,
         ferry_core::dto::BlueprintAction,
         ferry_core::dto::BlueprintResult,
@@ -268,7 +287,7 @@ down.";
         (name = "deploys", description = "Deploy history, manual deploys, source uploads (`ferry up`), cancellation and build logs."),
         (name = "env", description = "A service's own environment variables. `?restart=true` restarts the live service when its effective environment changed."),
         (name = "env-groups", description = "Shared variable sets linked to services (a service's own variables win over its groups'), and linking / unlinking them."),
-        (name = "domains", description = "Custom domains of web services and static sites (unique across services)."),
+        (name = "domains", description = "The domains services are served under — `<service>.<domain>` for every web service and static site: the server's base domain and the domains connected to it, each pointed at the server with one wildcard DNS record and verified by the server — the certificates of the routed hostnames, and the custom domains of one service (unique across services)."),
         (name = "jobs", description = "Job runs: cron runs and one-off commands, with their logs."),
         (name = "datastores", description = "Managed Postgres and Redis instances with their connection strings and resource limits."),
         (name = "git", description = "Git connections: the GitHub / GitLab accounts this server is authorized to read the repositories of, to pick a repository and a branch from a list and to clone private repositories. An account is authorized in the browser (a GitHub App on GitHub, an OAuth application on GitLab) or with an access token. Connections belong to the server, not to a service: a repository is cloned with the connection that serves its URL."),
@@ -377,6 +396,7 @@ pub enum ChangeKind {
     EnvGroup,
     Job,
     GitConnection,
+    Domain,
     /// Everything: sent with `resync` when a subscriber fell behind.
     All,
 }

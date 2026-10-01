@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use crate::Result;
 use crate::dto::RuntimeStatus;
 use crate::logs::LogStream;
-use crate::models::{Deploy, DeploySource, DeployTrigger, JobRun, JobTrigger};
+use crate::models::{Deploy, DeploySource, DeployTrigger, Domain, JobRun, JobTrigger};
 
 /// Parameters for [`Engine::deploy`].
 #[derive(Debug, Clone)]
@@ -123,5 +123,29 @@ pub trait Engine: Send + Sync + 'static {
     async fn update_datastore_limits(&self, datastore_id: &str) -> Result<()> {
         let _ = datastore_id;
         Err(crate::Error::invalid("changing datastore limits is not supported by this engine"))
+    }
+
+    /// The domains in the store changed (one was connected, removed or made
+    /// the default): read them again, so every service is served — proxy
+    /// routes, certificate requests — under the domains that are served now,
+    /// and a domain that waits for its DNS is verified soon (§21).
+    async fn refresh_domains(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Verify now whether the names under a domain reach this server, store
+    /// what was found and return the updated domain. Called by
+    /// `POST /api/v1/domains/{id}/verify`; the engine also does it on its
+    /// own, on a schedule.
+    async fn verify_domain(&self, domain_id: &str) -> Result<Domain> {
+        let _ = domain_id;
+        Err(crate::Error::invalid("verifying domains is not supported by this engine"))
+    }
+
+    /// The addresses this server is reached at from the internet, for the
+    /// DNS records of a domain: `Config::public_ips`, else what the engine
+    /// finds out (and remembers). Empty when it can't tell.
+    async fn public_addresses(&self) -> Vec<std::net::IpAddr> {
+        Vec::new()
     }
 }

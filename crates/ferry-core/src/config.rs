@@ -1,9 +1,10 @@
 //! Server configuration (built by `ferryd` from CLI flags / env vars).
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::{Arc, PoisonError, RwLock};
 
-use crate::models::Service;
+use crate::models::{Domain, Service};
 use crate::naming::Naming;
 use crate::resources::Limits;
 
@@ -19,8 +20,16 @@ pub struct Config {
     /// Public HTTPS listen address (only used when TLS is enabled).
     pub proxy_https_addr: Option<SocketAddr>,
     /// Services get `<name>.<base_domain>`. `localhost` works out of the box
-    /// because browsers resolve `*.localhost` to 127.0.0.1.
+    /// because browsers resolve `*.localhost` to 127.0.0.1. More domains are
+    /// connected while the server runs: see `domains`.
     pub base_domain: String,
+    /// The domains services are served under, as the running server knows
+    /// them (DESIGN.md §21). `base_domain` alone until the store was read.
+    pub domains: ServedDomains,
+    /// The addresses this server is reached at from the internet
+    /// (`--public-ip`), for the DNS records of a domain. Empty = found out
+    /// by the engine.
+    pub public_ips: Vec<IpAddr>,
     /// Port shown in public URLs. `None` = derived from `proxy_addr`
     /// (omitted when 80, or when TLS is on).
     pub public_port: Option<u16>,
@@ -82,6 +91,8 @@ impl Default for Config {
             proxy_addr: "0.0.0.0:8080".parse().unwrap(),
             proxy_https_addr: None,
             base_domain: "localhost".to_string(),
+            domains: ServedDomains::default(),
+            public_ips: Vec::new(),
             public_port: None,
             dashboard_host: Some("ferry.localhost".to_string()),
             name_prefix: "ferry".to_string(),
@@ -153,9 +164,38 @@ impl Config {
         self.data_dir.join("certs")
     }
 
-    /// Default hostname of a service: `<name>.<base_domain>`.
+    /// The domain of a service's URL: the default domain while it is served,
+    /// else the base domain.
+    pub fn primary_domain(&self) -> String {
+        self.domains.read().map_or_else(|| self.base_domain.to_ascii_lowercase(), |s| s.primary)
+    }
+
+    /// Every domain services are served under, the primary one first.
+    pub fn served_domains(&self) -> Vec<String> {
+        self.domains.read().map_or_else(|| vec![self.base_domain.to_ascii_lowercase()], |s| s.served)
+    }
+
+    /// The served domains plus the ones still waiting for their DNS: the
+    /// hostnames under all of them are spoken for.
+    pub fn claimed_domains(&self) -> Vec<String> {
+        self.domains.read().map_or_else(|| vec![self.base_domain.to_ascii_lowercase()], |s| s.claimed)
+    }
+
+    /// Default hostname of a service: `<name>.<primary domain>`.
     pub fn default_host(&self, service_name: &str) -> String {
-        format!("{}.{}", service_name, self.base_domain).to_ascii_lowercase()
+        format!("{}.{}", service_name, self.primary_domain()).to_ascii_lowercase()
+    }
+
+    /// The hostnames of a service under every served domain, the default
+    /// host first.
+    pub fn default_hosts(&self, service_name: &str) -> Vec<String> {
+        self.served_domains().iter().map(|d| format!("{service_name}.{d}").to_ascii_lowercase()).collect()
+    }
+
+    /// [`default_hosts`](Self::default_hosts) plus the hostnames under the
+    /// domains that are not served yet: no other service may take them.
+    pub fn claimed_hosts(&self, service_name: &str) -> Vec<String> {
+        self.claimed_domains().iter().map(|d| format!("{service_name}.{d}").to_ascii_lowercase()).collect()
     }
 
     /// All hostnames the proxy routes to this service (empty unless public HTTP).
@@ -163,7 +203,7 @@ impl Config {
         if !service.is_public_http() {
             return Vec::new();
         }
-        let mut hosts = vec![self.default_host(&service.name)];
+        let mut hosts = self.default_hosts(&service.name);
         for d in &service.custom_domains {
             let d = d.trim().trim_end_matches('.').to_ascii_lowercase();
             if !d.is_empty() && !hosts.contains(&d) {
@@ -206,6 +246,82 @@ impl Config {
     }
 }
 
+/// The domains services are served under, shared by everything that holds
+/// the server's [`Config`] — its clones share it too: the API, the engine,
+/// the environment of a deploy.
+///
+/// It starts empty, which means "the base domain alone": the whole story for
+/// a `Config` that never sees a store. `domains::reload` replaces it with
+/// what the store holds whenever a domain is connected, verified, made the
+/// default or removed (DESIGN.md §21).
+#[derive(Debug, Clone)]
+pub struct ServedDomains {
+    state: Arc<RwLock<Option<Served>>>,
+    /// What this server answers a domain verification with (`domains::probe_answer`).
+    probe_id: Arc<str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Served {
+    primary: String,
+    served: Vec<String>,
+    claimed: Vec<String>,
+}
+
+impl Default for ServedDomains {
+    fn default() -> Self {
+        ServedDomains { state: Arc::default(), probe_id: crate::ids::random_secret(32).into() }
+    }
+}
+
+impl ServedDomains {
+    /// A value made up when the server starts: a verification request that
+    /// comes back with it reached this very process.
+    pub fn probe_id(&self) -> &str {
+        &self.probe_id
+    }
+
+    fn read(&self) -> Option<Served> {
+        // A poisoned lock still holds a valid value (it is replaced whole).
+        self.state.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Replace the set with the rows of the store. The base domain is served
+    /// whatever its row says (or without one); the default domain is the
+    /// primary one while it is served. Returns whether anything changed.
+    pub fn replace(&self, base_domain: &str, domains: &[Domain]) -> bool {
+        fn push(list: &mut Vec<String>, name: &str) {
+            if !list.iter().any(|n| n == name) {
+                list.push(name.to_string());
+            }
+        }
+        let base = base_domain.to_ascii_lowercase();
+        let (mut served, mut claimed, mut primary) = (Vec::new(), Vec::new(), None);
+        for d in domains {
+            push(&mut claimed, &d.name);
+            if d.is_served() || d.name == base {
+                push(&mut served, &d.name);
+                if d.is_default {
+                    primary = Some(d.name.clone());
+                }
+            }
+        }
+        push(&mut served, &base);
+        push(&mut claimed, &base);
+        let primary = primary.unwrap_or(base);
+        // The primary first (the others keep their order): a service's first
+        // host is the one of its URL.
+        served.sort_by_key(|name| *name != primary);
+        let next = Served { primary, served, claimed };
+        let mut state = self.state.write().unwrap_or_else(PoisonError::into_inner);
+        if state.as_ref() == Some(&next) {
+            return false;
+        }
+        *state = Some(next);
+        true
+    }
+}
+
 /// Hosts that can never get a public certificate.
 pub fn is_local_host(host: &str) -> bool {
     let h = host.to_ascii_lowercase();
@@ -232,6 +348,53 @@ mod tests {
         let worker = Service::new("w", ServiceType::BackgroundWorker);
         assert!(cfg.service_hosts(&worker).is_empty());
         assert!(cfg.service_url(&worker).is_none());
+    }
+
+    #[test]
+    fn hosts_follow_the_served_domains() {
+        use crate::models::{Domain, DomainSource, DomainStatus};
+        let cfg = Config::default();
+        let web = Service::new("web", ServiceType::WebService);
+        // Before the store is read: the base domain alone.
+        assert_eq!(cfg.primary_domain(), "localhost");
+        assert_eq!(cfg.claimed_hosts("web"), vec!["web.localhost"]);
+
+        let base = Domain { is_default: true, ..Domain::new("localhost", DomainSource::Config) };
+        let pending = Domain::new("example.com", DomainSource::Connected);
+        assert!(cfg.domains.replace("localhost", &[base.clone(), pending.clone()]));
+        // Unchanged rows change nothing.
+        assert!(!cfg.domains.replace("localhost", &[base.clone(), pending.clone()]));
+        // A pending domain is not served, but its names are spoken for.
+        assert_eq!(cfg.service_hosts(&web), vec!["web.localhost"]);
+        assert_eq!(cfg.claimed_hosts("web"), vec!["web.localhost", "web.example.com"]);
+
+        // Verified: served next to the base domain, which is still the default.
+        let active = Domain { status: DomainStatus::Active, ..pending.clone() };
+        assert!(cfg.domains.replace("localhost", &[base.clone(), active.clone()]));
+        assert_eq!(cfg.service_hosts(&web), vec!["web.localhost", "web.example.com"]);
+        assert_eq!(cfg.service_url(&web).unwrap(), "http://web.localhost:8080");
+
+        // The default domain is the one of the URL, and comes first.
+        let base = Domain { is_default: false, ..base };
+        let default = Domain { is_default: true, ..active };
+        assert!(cfg.domains.replace("localhost", &[default.clone(), base.clone()]));
+        assert_eq!(cfg.primary_domain(), "example.com");
+        assert_eq!(cfg.service_hosts(&web), vec!["web.example.com", "web.localhost"]);
+        assert_eq!(cfg.service_url(&web).unwrap(), "http://web.example.com:8080");
+        // A clone of the configuration sees the same domains.
+        assert_eq!(cfg.clone().default_host("api"), "api.example.com");
+
+        // It stays served when its DNS breaks later...
+        let broken = Domain { status: DomainStatus::Misconfigured, ..default.clone() };
+        cfg.domains.replace("localhost", &[broken, base.clone()]);
+        assert_eq!(cfg.default_host("web"), "web.example.com");
+        // ...and a default domain that is not served is not the primary one.
+        let unverified = Domain { status: DomainStatus::Pending, ..default };
+        cfg.domains.replace("localhost", &[unverified, base]);
+        assert_eq!(cfg.primary_domain(), "localhost");
+        // The base domain is served even without its row.
+        cfg.domains.replace("localhost", &[]);
+        assert_eq!(cfg.served_domains(), vec!["localhost"]);
     }
 
     #[test]

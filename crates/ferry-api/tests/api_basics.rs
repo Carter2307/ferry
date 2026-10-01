@@ -191,6 +191,7 @@ async fn server_info() {
     let v = r.json();
     assert_eq!(v["version"], ferry_core::VERSION);
     assert_eq!(v["base_domain"], "localhost");
+    assert_eq!(v["default_domain"], "localhost");
     assert_eq!(v["proxy_url"], "http://localhost:8080");
     assert_eq!(v["tls_enabled"], false);
     assert_eq!(v["dashboard_url"], "http://ferry.localhost:8080");

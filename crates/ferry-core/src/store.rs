@@ -20,6 +20,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0003_git_connections.sql"),
     include_str!("../migrations/0004_git_authorization.sql"),
     include_str!("../migrations/0005_accounts.sql"),
+    include_str!("../migrations/0006_domains.sql"),
 ];
 
 /// Handle to the Ferry database.
@@ -214,6 +215,22 @@ fn row_to_git_connection(r: &SqliteRow) -> Result<GitConnection> {
         installation,
         created_at: get_ts(r, "created_at")?,
         updated_at: get_ts(r, "updated_at")?,
+    })
+}
+
+fn row_to_domain(r: &SqliteRow) -> Result<Domain> {
+    let checks: String = r.try_get("checks")?;
+    Ok(Domain {
+        id: r.try_get("id")?,
+        name: r.try_get("name")?,
+        source: get_enum(r, "source")?,
+        status: get_enum(r, "status")?,
+        is_default: r.try_get("is_default")?,
+        checks: serde_json::from_str(&checks).map_err(|e| Error::internal(format!("bad domain checks json: {e}")))?,
+        failures: get_u32_opt(r, "failures")?.unwrap_or(0),
+        created_at: get_ts(r, "created_at")?,
+        verified_at: get_ts_opt(r, "verified_at")?,
+        checked_at: get_ts_opt(r, "checked_at")?,
     })
 }
 
@@ -1236,6 +1253,174 @@ impl Store {
     }
 
     // -----------------------------------------------------------------------
+    // domains (DESIGN.md §21)
+
+    /// Insert a domain. Conflict if a domain of that name is already there.
+    pub async fn create_domain(&self, d: &Domain) -> Result<()> {
+        let res = sqlx::query(
+            "INSERT INTO domains (id, name, source, status, is_default, checks, failures, created_at, verified_at,
+                checked_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&d.id)
+        .bind(&d.name)
+        .bind(d.source.as_str())
+        .bind(d.status.as_str())
+        .bind(d.is_default)
+        .bind(serde_json::to_string(&d.checks).unwrap_or_else(|_| "[]".into()))
+        .bind(i64::from(d.failures))
+        .bind(ts(&d.created_at))
+        .bind(ts_opt(&d.verified_at))
+        .bind(ts_opt(&d.checked_at))
+        .execute(&self.pool)
+        .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) if is_unique_violation(&e) => {
+                Err(Error::conflict(format!("domain '{}' is already connected", d.name)))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub async fn get_domain(&self, id: &str) -> Result<Option<Domain>> {
+        sqlx::query("SELECT * FROM domains WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_domain(&r))
+            .transpose()
+    }
+
+    /// A domain by id, else by name (names are stored in lowercase).
+    pub async fn find_domain(&self, id_or_name: &str) -> Result<Option<Domain>> {
+        if let Some(d) = self.get_domain(id_or_name).await? {
+            return Ok(Some(d));
+        }
+        let name = id_or_name.trim().trim_end_matches('.').to_ascii_lowercase();
+        sqlx::query("SELECT * FROM domains WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_domain(&r))
+            .transpose()
+    }
+
+    pub async fn require_domain(&self, id_or_name: &str) -> Result<Domain> {
+        self.find_domain(id_or_name).await?.ok_or_else(|| Error::not_found("domain", id_or_name))
+    }
+
+    /// Every domain: the default one first, then in the order they were added.
+    pub async fn list_domains(&self) -> Result<Vec<Domain>> {
+        sqlx::query("SELECT * FROM domains ORDER BY is_default DESC, created_at, rowid")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(row_to_domain)
+            .collect()
+    }
+
+    /// Store what a verification found: `status`, `checks`, `failures`,
+    /// `verified_at` and `checked_at` of `d`. Returns the stored row.
+    pub async fn record_domain_check(&self, d: &Domain) -> Result<Domain> {
+        let res = sqlx::query(
+            "UPDATE domains SET status = ?, checks = ?, failures = ?, verified_at = ?, checked_at = ? WHERE id = ?",
+        )
+        .bind(d.status.as_str())
+        .bind(serde_json::to_string(&d.checks).unwrap_or_else(|_| "[]".into()))
+        .bind(i64::from(d.failures))
+        .bind(ts_opt(&d.verified_at))
+        .bind(ts_opt(&d.checked_at))
+        .bind(&d.id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("domain", &d.id));
+        }
+        self.get_domain(&d.id).await?.ok_or_else(|| Error::not_found("domain", &d.id))
+    }
+
+    /// Make `id` the default domain, and no other.
+    pub async fn set_default_domain(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let found: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM domains WHERE id = ?").bind(id).fetch_one(&mut *tx).await?;
+        if found == 0 {
+            return Err(Error::not_found("domain", id));
+        }
+        sqlx::query("UPDATE domains SET is_default = 0 WHERE is_default = 1").execute(&mut *tx).await?;
+        sqlx::query("UPDATE domains SET is_default = 1 WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Delete a domain. When it was the default one, the base domain is again.
+    pub async fn delete_domain(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query("DELETE FROM domains WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("domain", id));
+        }
+        sqlx::query(
+            "UPDATE domains SET is_default = 1
+             WHERE source = ? AND NOT EXISTS (SELECT 1 FROM domains WHERE is_default = 1)",
+        )
+        .bind(DomainSource::Config.as_str())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Keep the row of the server's `--base-domain` in step with the flag,
+    /// at every start: the row of a previous value goes, a domain of that
+    /// name connected earlier becomes the base domain, and the base domain
+    /// is the default one unless another domain is. Returns its row.
+    pub async fn sync_base_domain(&self, base_domain: &str) -> Result<Domain> {
+        let name = base_domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        let config = DomainSource::Config.as_str();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM domains WHERE source = ? AND name != ?")
+            .bind(config)
+            .bind(&name)
+            .execute(&mut *tx)
+            .await?;
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT id FROM domains WHERE name = ?").bind(&name).fetch_optional(&mut *tx).await?;
+        let id = match existing {
+            Some(id) => {
+                sqlx::query("UPDATE domains SET source = ? WHERE id = ?")
+                    .bind(config)
+                    .bind(&id)
+                    .execute(&mut *tx)
+                    .await?;
+                id
+            }
+            None => {
+                let d = Domain::new(name.clone(), DomainSource::Config);
+                sqlx::query("INSERT INTO domains (id, name, source, status, created_at) VALUES (?, ?, ?, ?, ?)")
+                    .bind(&d.id)
+                    .bind(&d.name)
+                    .bind(config)
+                    .bind(d.status.as_str())
+                    .bind(ts(&d.created_at))
+                    .execute(&mut *tx)
+                    .await?;
+                d.id
+            }
+        };
+        let defaults: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM domains WHERE is_default = 1").fetch_one(&mut *tx).await?;
+        if defaults == 0 {
+            sqlx::query("UPDATE domains SET is_default = 1 WHERE id = ?").bind(&id).execute(&mut *tx).await?;
+        }
+        let row = sqlx::query("SELECT * FROM domains WHERE id = ?").bind(&id).fetch_one(&mut *tx).await?;
+        let domain = row_to_domain(&row)?;
+        tx.commit().await?;
+        Ok(domain)
+    }
+
+    // -----------------------------------------------------------------------
     // accounts, sessions and API tokens (DESIGN.md §20)
 
     /// The administrator's account, once the server is set up.
@@ -1924,5 +2109,69 @@ mod tests {
         // Reopen: migrations must be idempotent.
         let store = Store::open(&dir.path().join("sub/ferry.db")).await.unwrap();
         assert_eq!(store.get_setting("k").await.unwrap().as_deref(), Some("v2"));
+    }
+
+    #[tokio::test]
+    async fn domains_roundtrip() {
+        let store = Store::open_in_memory().await.unwrap();
+        // The base domain: one row, the default one until another is.
+        let base = store.sync_base_domain("LocalHost.").await.unwrap();
+        assert_eq!(
+            (base.name.as_str(), base.source, base.status),
+            ("localhost", DomainSource::Config, DomainStatus::Active)
+        );
+        assert!(base.is_default && base.is_served());
+        assert_eq!(store.sync_base_domain("localhost").await.unwrap(), base);
+
+        let mut d = Domain::new("example.com", DomainSource::Connected);
+        assert_eq!(d.status, DomainStatus::Pending);
+        store.create_domain(&d).await.unwrap();
+        assert_eq!(store.require_domain("Example.com.").await.unwrap(), d);
+        assert_eq!(store.require_domain(&d.id).await.unwrap(), d);
+        let dup = Domain::new("example.com", DomainSource::Connected);
+        assert!(matches!(store.create_domain(&dup).await, Err(Error::Conflict(_))));
+        assert!(matches!(store.require_domain("nope.example.com").await, Err(Error::NotFound(_))));
+
+        // What a verification found.
+        d.status = DomainStatus::Active;
+        d.checks = vec![DomainCheck::new(DomainCheckKind::Dns, CheckOutcome::Passed, "resolves to 203.0.113.10")];
+        d.failures = 2;
+        d.verified_at = Some(now());
+        d.checked_at = d.verified_at;
+        assert_eq!(store.record_domain_check(&d).await.unwrap(), d);
+
+        // One default at a time; the default one is listed first.
+        store.set_default_domain(&d.id).await.unwrap();
+        let names: Vec<(String, bool)> =
+            store.list_domains().await.unwrap().into_iter().map(|d| (d.name, d.is_default)).collect();
+        assert_eq!(names, vec![("example.com".to_string(), true), ("localhost".to_string(), false)]);
+        assert!(matches!(store.set_default_domain("dom-nope").await, Err(Error::NotFound(_))));
+
+        // Removing the default domain gives the default back to the base domain.
+        let other = Domain::new("example.org", DomainSource::Connected);
+        store.create_domain(&other).await.unwrap();
+        store.set_default_domain(&other.id).await.unwrap();
+        store.delete_domain(&other.id).await.unwrap();
+        assert!(store.require_domain("localhost").await.unwrap().is_default);
+        store.set_default_domain(&d.id).await.unwrap();
+
+        // Another `--base-domain`: the old row goes, a connected domain of
+        // that name becomes the base domain and keeps what it had.
+        let base = store.sync_base_domain("example.com").await.unwrap();
+        assert_eq!(
+            (base.id.as_str(), base.source, base.status),
+            (d.id.as_str(), DomainSource::Config, DomainStatus::Active)
+        );
+        assert!(base.is_default);
+        assert_eq!(store.list_domains().await.unwrap().len(), 1);
+        // And when the default domain was the old base domain, the new one is.
+        let base = store.sync_base_domain("apps.example.org").await.unwrap();
+        assert!(base.is_default && base.is_served());
+        assert_eq!(base.status, DomainStatus::Pending);
+        assert_eq!(store.list_domains().await.unwrap(), vec![base.clone()]);
+
+        store.delete_domain(&base.id).await.unwrap();
+        assert!(matches!(store.delete_domain(&base.id).await, Err(Error::NotFound(_))));
+        assert!(matches!(store.record_domain_check(&base).await, Err(Error::NotFound(_))));
     }
 }

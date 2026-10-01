@@ -416,6 +416,38 @@ async fn answers_acme_challenges() {
 }
 
 #[tokio::test]
+async fn domain_probes_are_answered_for_any_host() {
+    let up = echo_upstream("a").await;
+    let proxy = TestProxy::start_with(Options { probe_id: Some("probe1".into()), ..Options::default() }).await;
+    proxy.route("srv", &["app.test"], &[up.addr]);
+    let c = client_for(&["app.test", "ferry-check-0a1b2c.example.test", "nobody.test"]).build().unwrap();
+    // A host nobody routes is answered too: the request asks which server it reached.
+    for host in ["ferry-check-0a1b2c.example.test", "app.test"] {
+        let r = c.get(proxy.url(host, "/.well-known/ferry-domain-check/tok123")).send().await.unwrap();
+        assert_eq!(r.status(), 200, "{host}");
+        assert_eq!(r.headers()["content-type"], "text/plain");
+        assert_eq!(r.headers()["cache-control"], "no-store");
+        assert_eq!(r.text().await.unwrap(), "tok123.probe1");
+    }
+    let r = c.head(proxy.url("app.test", "/.well-known/ferry-domain-check/tok123")).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.bytes().await.unwrap().is_empty());
+    // Only a token is echoed; anything else, and other methods, are routed as usual.
+    let r = c.get(proxy.url("app.test", "/.well-known/ferry-domain-check/a.b")).send().await.unwrap();
+    assert_eq!(r.headers()["x-upstream"], "a");
+    let r = c.post(proxy.url("app.test", "/.well-known/ferry-domain-check/tok123")).send().await.unwrap();
+    assert_eq!(r.headers()["x-upstream"], "a");
+    let r = c.get(proxy.url("nobody.test", "/.well-known/ferry-domain-check/")).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+
+    // Without a probe id the path belongs to the app.
+    let plain = TestProxy::start().await;
+    plain.route("srv", &["app.test"], &[up.addr]);
+    let r = c.get(plain.url("app.test", "/.well-known/ferry-domain-check/tok123")).send().await.unwrap();
+    assert_eq!(r.headers()["x-upstream"], "a");
+}
+
+#[tokio::test]
 async fn acme_paths_pass_through_without_tls_hooks() {
     let up = echo_upstream("a").await;
     let proxy = TestProxy::start().await;
