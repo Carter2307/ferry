@@ -1,8 +1,9 @@
 //! Assembling API views (stored rows + computed fields).
 
-use ferry_core::dto::{DatastoreView, EnvGroupView, ServiceView};
+use ferry_core::dto::{DatastoreView, EnvGroupView, GitConnectionView, ServiceView};
 use ferry_core::{
-    Config, Datastore, Deploy, DeploySource, EnvGroup, Result, Service, Store, compute_service_state, git,
+    Config, Datastore, Deploy, DeploySource, EnvGroup, GitConnection, Result, Service, Store, compute_service_state,
+    git,
 };
 
 use crate::runtime;
@@ -66,6 +67,25 @@ pub fn datastore_view(config: &Config, datastore: Datastore) -> DatastoreView {
         external_url: datastore.external_url(&config.advertise_host),
         datastore,
     }
+}
+
+/// Build the [`GitConnectionView`] of a git connection: everything but the
+/// token, of which only a hint is shown.
+pub async fn git_connection_view(store: &Store, connection: GitConnection) -> Result<GitConnectionView> {
+    let services = store.git_connection_services(&connection.id).await?.into_iter().map(|s| s.name).collect();
+    Ok(GitConnectionView {
+        token_hint: connection.token_hint(),
+        id: connection.id,
+        provider: connection.provider,
+        base_url: connection.base_url,
+        account: connection.account,
+        account_name: connection.account_name,
+        scopes: connection.scopes,
+        token_expires_at: connection.token_expires_at,
+        services,
+        created_at: connection.created_at,
+        updated_at: connection.updated_at,
+    })
 }
 
 /// Build the [`EnvGroupView`] of an env group.

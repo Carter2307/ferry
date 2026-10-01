@@ -14,8 +14,11 @@ use crate::env::{self, ServiceRef};
 use crate::models::*;
 use crate::{Error, Result};
 
-const MIGRATIONS: &[&str] =
-    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_resource_limits.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_resource_limits.sql"),
+    include_str!("../migrations/0003_git_connections.sql"),
+];
 
 /// Handle to the Ferry database.
 #[derive(Clone, Debug)]
@@ -71,6 +74,7 @@ fn row_to_service(r: &SqliteRow) -> Result<Service> {
         name: r.try_get("name")?,
         service_type: get_enum(r, "service_type")?,
         repo_url: r.try_get("repo_url")?,
+        git_connection_id: r.try_get("git_connection_id")?,
         branch: r.try_get("branch")?,
         image: r.try_get("image")?,
         runtime: get_enum(r, "runtime")?,
@@ -164,6 +168,33 @@ fn row_to_env(r: &SqliteRow) -> Result<EnvVar> {
     Ok(EnvVar { key: r.try_get("key")?, value: r.try_get("value")? })
 }
 
+fn row_to_git_connection(r: &SqliteRow) -> Result<GitConnection> {
+    let scopes: String = r.try_get("scopes")?;
+    Ok(GitConnection {
+        id: r.try_get("id")?,
+        provider: get_enum(r, "provider")?,
+        base_url: r.try_get("base_url")?,
+        account: r.try_get("account")?,
+        account_name: r.try_get("account_name")?,
+        token: r.try_get("token")?,
+        scopes: serde_json::from_str(&scopes)
+            .map_err(|e| Error::internal(format!("bad git connection scopes json: {e}")))?,
+        token_expires_at: get_ts_opt(r, "token_expires_at")?,
+        created_at: get_ts(r, "created_at")?,
+        updated_at: get_ts(r, "updated_at")?,
+    })
+}
+
+/// A foreign-key violation (e.g. a service row naming a git connection that
+/// doesn't exist).
+fn is_foreign_key_violation(e: &sqlx::Error) -> bool {
+    matches!(e, sqlx::Error::Database(db) if db.is_foreign_key_violation())
+}
+
+fn unknown_git_connection(s: &Service) -> Error {
+    Error::invalid(format!("git connection '{}' not found", s.git_connection_id.as_deref().unwrap_or_default()))
+}
+
 impl Store {
     // -----------------------------------------------------------------------
     // lifecycle
@@ -252,16 +283,17 @@ impl Store {
             return Err(Error::conflict(format!("name '{}' is already in use", s.name)));
         }
         let res = sqlx::query(
-            "INSERT INTO services (id, name, service_type, repo_url, branch, image, runtime, root_dir, dockerfile_path,
-                build_command, start_command, publish_dir, port, health_check_path, schedule, instances, auto_deploy,
-                suspended, disk_mount_path, memory_limit_mb, cpu_limit, custom_domains, deploy_hook_key, live_deploy_id,
-                created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO services (id, name, service_type, repo_url, git_connection_id, branch, image, runtime, root_dir,
+                dockerfile_path, build_command, start_command, publish_dir, port, health_check_path, schedule, instances,
+                auto_deploy, suspended, disk_mount_path, memory_limit_mb, cpu_limit, custom_domains, deploy_hook_key,
+                live_deploy_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&s.id)
         .bind(&s.name)
         .bind(s.service_type.as_str())
         .bind(&s.repo_url)
+        .bind(&s.git_connection_id)
         .bind(&s.branch)
         .bind(&s.image)
         .bind(s.runtime.as_str())
@@ -289,6 +321,7 @@ impl Store {
         match res {
             Ok(_) => Ok(()),
             Err(e) if is_unique_violation(&e) => Err(Error::conflict(format!("name '{}' is already in use", s.name))),
+            Err(e) if is_foreign_key_violation(&e) => Err(unknown_git_connection(s)),
             Err(e) => Err(e.into()),
         }
     }
@@ -302,15 +335,16 @@ impl Store {
     /// revert a scale, suspend or deploy. `name` and `id` are immutable.
     pub async fn update_service(&self, s: &Service) -> Result<Service> {
         let res = sqlx::query(
-            "UPDATE services SET service_type = ?, repo_url = ?, branch = ?, image = ?, runtime = ?, root_dir = ?,
-                dockerfile_path = ?, build_command = ?, start_command = ?, publish_dir = ?, port = ?,
-                health_check_path = ?, schedule = ?, auto_deploy = ?,
+            "UPDATE services SET service_type = ?, repo_url = ?, git_connection_id = ?, branch = ?, image = ?,
+                runtime = ?, root_dir = ?, dockerfile_path = ?, build_command = ?, start_command = ?, publish_dir = ?,
+                port = ?, health_check_path = ?, schedule = ?, auto_deploy = ?,
                 disk_mount_path = ?, memory_limit_mb = ?, cpu_limit = ?, custom_domains = ?, deploy_hook_key = ?,
                 updated_at = ?
              WHERE id = ?",
         )
         .bind(s.service_type.as_str())
         .bind(&s.repo_url)
+        .bind(&s.git_connection_id)
         .bind(&s.branch)
         .bind(&s.image)
         .bind(s.runtime.as_str())
@@ -331,7 +365,12 @@ impl Store {
         .bind(ts(&Utc::now()))
         .bind(&s.id)
         .execute(&self.pool)
-        .await?;
+        .await;
+        let res = match res {
+            Ok(res) => res,
+            Err(e) if is_foreign_key_violation(&e) => return Err(unknown_git_connection(s)),
+            Err(e) => return Err(e.into()),
+        };
         if res.rows_affected() == 0 {
             return Err(Error::not_found("service", &s.id));
         }
@@ -976,6 +1015,133 @@ impl Store {
     }
 
     // -----------------------------------------------------------------------
+    // git connections
+
+    /// Insert a git connection. Conflict if the same account of the same
+    /// provider instance is already connected.
+    pub async fn create_git_connection(&self, c: &GitConnection) -> Result<()> {
+        let res = sqlx::query(
+            "INSERT INTO git_connections (id, provider, base_url, account, account_name, token, scopes,
+                token_expires_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&c.id)
+        .bind(c.provider.as_str())
+        .bind(&c.base_url)
+        .bind(&c.account)
+        .bind(&c.account_name)
+        .bind(&c.token)
+        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(ts_opt(&c.token_expires_at))
+        .bind(ts(&c.created_at))
+        .bind(ts(&c.updated_at))
+        .execute(&self.pool)
+        .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) if is_unique_violation(&e) => {
+                Err(Error::conflict(format!("the {} is already connected", c.describe())))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Persist what a new token changes — the token itself, the account's
+    /// names, the token's scopes and expiry — and bump `updated_at`. Returns
+    /// the stored row. Provider and instance are immutable.
+    pub async fn update_git_connection(&self, c: &GitConnection) -> Result<GitConnection> {
+        let res = sqlx::query(
+            "UPDATE git_connections SET account = ?, account_name = ?, token = ?, scopes = ?, token_expires_at = ?,
+                updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&c.account)
+        .bind(&c.account_name)
+        .bind(&c.token)
+        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(ts_opt(&c.token_expires_at))
+        .bind(ts(&Utc::now()))
+        .bind(&c.id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("git connection", &c.id));
+        }
+        self.require_git_connection(&c.id).await
+    }
+
+    pub async fn get_git_connection(&self, id: &str) -> Result<Option<GitConnection>> {
+        sqlx::query("SELECT * FROM git_connections WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_git_connection(&r))
+            .transpose()
+    }
+
+    pub async fn require_git_connection(&self, id: &str) -> Result<GitConnection> {
+        self.get_git_connection(id).await?.ok_or_else(|| Error::not_found("git connection", id))
+    }
+
+    /// The connection of an account (its login compared case-insensitively)
+    /// on a provider instance, if any.
+    pub async fn find_git_connection(
+        &self,
+        provider: GitProvider,
+        base_url: &str,
+        account: &str,
+    ) -> Result<Option<GitConnection>> {
+        sqlx::query("SELECT * FROM git_connections WHERE provider = ? AND base_url = ? AND account = ?")
+            .bind(provider.as_str())
+            .bind(base_url)
+            .bind(account)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_git_connection(&r))
+            .transpose()
+    }
+
+    /// All git connections, ordered by provider, instance and account.
+    pub async fn list_git_connections(&self) -> Result<Vec<GitConnection>> {
+        sqlx::query("SELECT * FROM git_connections ORDER BY provider, base_url, account")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(row_to_git_connection)
+            .collect()
+    }
+
+    /// Services cloned with a git connection (ordered by name).
+    pub async fn git_connection_services(&self, id: &str) -> Result<Vec<Service>> {
+        sqlx::query("SELECT * FROM services WHERE git_connection_id = ? ORDER BY name")
+            .bind(id)
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(row_to_service)
+            .collect()
+    }
+
+    /// Delete a git connection. The services that used it keep their
+    /// repository and clone without credentials from then on.
+    pub async fn delete_git_connection(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        // Explicit (the foreign key would do it too): `updated_at` tells the
+        // change feed that these services changed.
+        sqlx::query("UPDATE services SET git_connection_id = NULL, updated_at = ? WHERE git_connection_id = ?")
+            .bind(ts(&Utc::now()))
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let res = sqlx::query("DELETE FROM git_connections WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("git connection", id));
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // settings (small key/value store for server-level state)
 
     pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -1145,6 +1311,116 @@ mod tests {
         for got in futures::future::join_all(reads).await {
             assert_eq!(got.unwrap().memory_limit_mb, Some(256));
         }
+    }
+
+    /// A database written before git connections existed (schema v2) gets
+    /// the new table and column; its services have no connection.
+    #[tokio::test]
+    async fn upgrades_a_database_without_git_connections() {
+        use sqlx::Connection;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferry.db");
+        {
+            let opts = SqliteConnectOptions::new().filename(&path).create_if_missing(true).foreign_keys(true);
+            let mut conn = sqlx::SqliteConnection::connect_with(&opts).await.unwrap();
+            for sql in &MIGRATIONS[..2] {
+                sqlx::raw_sql(sql).execute(&mut conn).await.unwrap();
+            }
+            sqlx::raw_sql(
+                "PRAGMA user_version = 2;
+                 INSERT INTO services (id, name, service_type, repo_url, deploy_hook_key, created_at, updated_at)
+                 VALUES ('srv-00000000000000000001', 'old', 'web_service', 'https://github.com/a/b', 'k',
+                         '2026-01-01T00:00:00.000000Z', '2026-01-01T00:00:00.000000Z');",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            conn.close().await.unwrap();
+        }
+        let store = Store::open(&path).await.unwrap();
+        let old = store.require_service("old").await.unwrap();
+        assert_eq!((old.repo_url.as_deref(), old.git_connection_id.as_deref()), (Some("https://github.com/a/b"), None));
+        assert!(store.list_git_connections().await.unwrap().is_empty());
+        let conn = GitConnection::new(GitProvider::Github, "https://github.com", "a", "tok");
+        store.create_git_connection(&conn).await.unwrap();
+        let mut linked = old.clone();
+        linked.git_connection_id = Some(conn.id.clone());
+        assert_eq!(store.update_service(&linked).await.unwrap().git_connection_id, Some(conn.id));
+    }
+
+    #[tokio::test]
+    async fn git_connections() {
+        let store = Store::open_in_memory().await.unwrap();
+        let mut gh = GitConnection::new(GitProvider::Github, "https://github.com", "Octocat", "ghp_first");
+        gh.scopes = vec!["repo".into(), "read:org".into()];
+        gh.token_expires_at = Some(now() + chrono::Duration::days(30));
+        store.create_git_connection(&gh).await.unwrap();
+        let gl = GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "octocat", "glpat-1");
+        store.create_git_connection(&gl).await.unwrap();
+        assert_eq!(store.require_git_connection(&gh.id).await.unwrap(), gh);
+        // One connection per account of a provider instance, whatever the case of its login.
+        let again = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "ghp_other");
+        let err = store.create_git_connection(&again).await.unwrap_err();
+        assert!(
+            matches!(&err, Error::Conflict(m) if m == "the GitHub account 'octocat' is already connected"),
+            "{err}"
+        );
+        let found = store.find_git_connection(GitProvider::Github, "https://github.com", "OCTOCAT").await.unwrap();
+        assert_eq!(found.unwrap().id, gh.id);
+        assert!(
+            store
+                .find_git_connection(GitProvider::Github, "https://ghe.example.com", "octocat")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let listed: Vec<String> = store.list_git_connections().await.unwrap().into_iter().map(|c| c.id).collect();
+        assert_eq!(listed, vec![gh.id.clone(), gl.id.clone()]);
+
+        // A new token replaces the old one (and what the provider said about it).
+        let mut renewed = gh.clone();
+        renewed.token = "ghp_second".into();
+        renewed.account_name = Some("The Octocat".into());
+        renewed.scopes = vec![];
+        renewed.token_expires_at = None;
+        let saved = store.update_git_connection(&renewed).await.unwrap();
+        assert_eq!((saved.token.as_str(), saved.account_name.as_deref()), ("ghp_second", Some("The Octocat")));
+        assert!(saved.scopes.is_empty() && saved.token_expires_at.is_none() && saved.updated_at >= gh.updated_at);
+        assert!(matches!(
+            store.update_git_connection(&GitConnection::new(GitProvider::Github, "x", "y", "z")).await,
+            Err(Error::NotFound(_))
+        ));
+
+        // Services name their connection; an unknown one is refused.
+        let mut svc = Service::new("app", ServiceType::WebService);
+        svc.repo_url = Some("https://github.com/octocat/app.git".into());
+        svc.git_connection_id = Some("git-00000000000000000000".into());
+        let err = store.create_service(&svc).await.unwrap_err();
+        assert!(
+            matches!(&err, Error::Invalid(m) if m == "git connection 'git-00000000000000000000' not found"),
+            "{err}"
+        );
+        svc.git_connection_id = Some(gh.id.clone());
+        store.create_service(&svc).await.unwrap();
+        assert_eq!(store.require_service("app").await.unwrap().git_connection_id.as_deref(), Some(gh.id.as_str()));
+        let mut other = svc.clone();
+        other.git_connection_id = Some("git-00000000000000000000".into());
+        assert!(matches!(store.update_service(&other).await, Err(Error::Invalid(_))));
+        other.git_connection_id = Some(gl.id.clone());
+        assert_eq!(store.update_service(&other).await.unwrap().git_connection_id.as_deref(), Some(gl.id.as_str()));
+        let users: Vec<String> =
+            store.git_connection_services(&gl.id).await.unwrap().into_iter().map(|s| s.name).collect();
+        assert_eq!(users, vec!["app"]);
+        assert!(store.git_connection_services(&gh.id).await.unwrap().is_empty());
+
+        // Deleting a connection keeps its services, without the connection.
+        let before = store.require_service("app").await.unwrap();
+        store.delete_git_connection(&gl.id).await.unwrap();
+        let after = store.require_service("app").await.unwrap();
+        assert_eq!((after.git_connection_id, after.repo_url), (None, svc.repo_url.clone()));
+        assert!(after.updated_at >= before.updated_at);
+        assert!(matches!(store.delete_git_connection(&gl.id).await, Err(Error::NotFound(_))));
+        assert_eq!(store.list_git_connections().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

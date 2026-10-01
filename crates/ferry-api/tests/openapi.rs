@@ -72,6 +72,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/env-groups/{id}"),
     ("PUT", "/api/v1/env-groups/{id}/env"),
     ("PATCH", "/api/v1/env-groups/{id}/env"),
+    // git connections
+    ("GET", "/api/v1/git/connections"),
+    ("POST", "/api/v1/git/connections"),
+    ("GET", "/api/v1/git/connections/{id}"),
+    ("DELETE", "/api/v1/git/connections/{id}"),
+    ("GET", "/api/v1/git/connections/{id}/repositories"),
+    ("GET", "/api/v1/git/connections/{id}/branches"),
     // blueprints
     ("POST", "/api/v1/blueprints/apply"),
     // webhooks
@@ -92,6 +99,7 @@ const TAGS: &[&str] = &[
     "domains",
     "jobs",
     "datastores",
+    "git",
     "blueprints",
     "events",
     "hooks",
@@ -404,6 +412,53 @@ async fn resource_limits_are_documented() {
     assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
     let description = op("POST", "/api/v1/datastores")["description"].as_str().unwrap().to_string();
     assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
+}
+
+#[tokio::test]
+async fn git_connections_are_documented_without_their_token() {
+    let app = TestApp::new().await;
+    let doc = document(&app).await;
+    let ops = operations(&doc);
+    let op = |m: &str, p: &str| ops[&(m.to_string(), p.to_string())].clone();
+    let schemas = &doc["components"]["schemas"];
+    let body = |op: &Value, status: &str| op["responses"][status]["content"]["application/json"]["schema"].clone();
+
+    // Connecting takes a token; nothing ever returns one.
+    let connect = op("POST", "/api/v1/git/connections");
+    assert_eq!(connect["operationId"], "connectGit");
+    assert_eq!(
+        connect["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ConnectGit"
+    );
+    for status in ["200", "201"] {
+        assert_eq!(body(&connect, status)["$ref"], "#/components/schemas/GitConnectionView", "{status}");
+    }
+    for status in ["400", "502"] {
+        assert!(connect["responses"].get(status).is_some(), "{status}: {connect}");
+    }
+    assert!(schemas["ConnectGit"]["properties"].get("token").is_some());
+    let view = schemas["GitConnectionView"]["properties"].as_object().unwrap();
+    assert!(view.contains_key("token_hint") && !view.contains_key("token"), "{view:?}");
+    assert_eq!(schemas["GitProvider"]["enum"], serde_json::json!(["github", "gitlab"]));
+
+    let repositories = op("GET", "/api/v1/git/connections/{id}/repositories");
+    assert_eq!(body(&repositories, "200")["$ref"], "#/components/schemas/GitRepositoryList");
+    let branches = op("GET", "/api/v1/git/connections/{id}/branches");
+    assert_eq!(body(&branches, "200")["items"]["$ref"], "#/components/schemas/GitBranch");
+    let repository = branches["parameters"].as_array().unwrap().iter().find(|p| p["name"] == "repository").unwrap();
+    assert_eq!((&repository["in"], &repository["required"]), (&serde_json::json!("query"), &serde_json::json!(true)));
+    for operation in [&repositories, &branches] {
+        for status in ["404", "409", "502"] {
+            assert!(operation["responses"].get(status).is_some(), "{status}: {operation}");
+        }
+    }
+    let delete = op("DELETE", "/api/v1/git/connections/{id}");
+    assert!(delete["parameters"].as_array().unwrap().iter().any(|p| p["name"] == "force" && p["in"] == "query"));
+
+    // Services name the connection that clones their repository.
+    for schema in ["Service", "CreateService", "UpdateService"] {
+        assert!(schemas[schema]["properties"].get("git_connection_id").is_some(), "{schema}.git_connection_id");
+    }
 }
 
 /// `.route("<path>", <method routers>)` calls of `src/lib.rs` (each on one

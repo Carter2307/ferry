@@ -837,6 +837,7 @@ dependencies = [
  "hmac",
  "http",
  "http-body-util",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -939,6 +940,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bollard",
  "chrono",
  "ferry-build",

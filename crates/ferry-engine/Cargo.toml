@@ -32,5 +32,7 @@ libc = "0.2.189"
 
 [dev-dependencies]
 tempfile.workspace = true
+# The Basic credentials the test git server expects.
+base64.workspace = true
 # E2E tests print engine logs when RUST_LOG is set.
 tracing-subscriber.workspace = true
