@@ -141,6 +141,13 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    `:latest` moves. Build-time env reaches builds as **BuildKit secrets**
    (`--secret id=KEY,env=KEY`; generated Dockerfiles mount them per `RUN`),
    never as `ARG`s, so values don't end up in the image history.
+   A generated Dockerfile's build log says which command the image starts
+   and where it comes from (`GeneratedDockerfile.start`): `==> Start
+   command: npm start (the "start" script of package.json)` — the service's
+   start command, the Procfile, or the runtime's fallback, e.g. `node
+   ./dist/index.js (package.json has no "start" script: its "main" file is
+   run)`. A command nobody chose is the first thing to look at when an
+   instance doesn't stay up.
    Cron jobs stop here: log their limits (`==> Limits: … per run`), mark
    `live`, set `live_deploy_id`, deactivate previous.
 4. **Start** (`deploying`): port = `env::choose_port(service.port, user_env,
@@ -174,6 +181,19 @@ failures `build_failed` / `deploy_failed`; `canceled`.
      (`die` with its `exitCode`, `oom`; a bounded query with `until` = now):
      an app that runs a while before each OOM kill is still reported as out
      of memory;
+   * exit code 0 is explained (`health::clean_exit`): nothing crashed and
+     often nothing was printed, so the error names what ran (read from
+     Docker before the instance is removed: its command, a shell wrapper
+     shown as its script) and why ending is a failure —
+     `instance ab12cd exited with code 0: its command `node ./dist/index.js`
+     ended without an error, but a web service must keep running and listen
+     on port 10000` — and the failure carries a hint that depends on where
+     the command comes from: the service's start command, the image's own
+     command (`docker` / `image` runtimes), or picked from the project for a
+     service without a start command (then: set the start command of an
+     app; create a project that only builds files as a static site).
+     Workers are told that what runs and ends belongs in a cron job or a
+     one-off job;
    * web/private/static with `health_check_path`: `GET http://127.0.0.1:<host_port><path>`
      with `Host: <default host>` → success on status < 400;
    * without path: TCP connect to `127.0.0.1:<host_port>` succeeds;
@@ -193,7 +213,13 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    only through a deploy or restart (like Render), and a failed env-change
    deploy can't break self-healing.
 7. **Failure**: remove new containers, keep old ones serving, status
-   `build_failed`/`deploy_failed` with a concise `error`.
+   `build_failed`/`deploy_failed` with a concise `error`. When the engine
+   can tell what to do (a clone the remote refused, §18; an instance whose
+   command ended), a `==> Hint: …` line follows the failure line. The
+   server log gets one line per failed deploy, at `WARN`, with the same
+   content: `deploy failed: <error>` and the fields `service` (its name),
+   `deploy`, `status` and `hint` (`-` when there is none); canceled deploys
+   are logged at `INFO`. The app's own output stays in the deploy log.
 8. **Cleanup**: keep the newest `config.keep_images` images of this service
    (never the live one; only images whose repo is `naming.image_repo(name)` —
    never delete pulled public images); delete scratch dirs.
@@ -202,7 +228,9 @@ failures `build_failed` / `deploy_failed`; `canceled`.
 
 Log conventions (deploy log): system lines start with `==> ` (e.g.
 `==> Cloning from https://github.com/a/b (branch main)`,
-`==> Using Dockerfile at ./Dockerfile`, `==> Build successful 🎉`,
+`==> Using Dockerfile at ./Dockerfile`,
+`==> Start command: npm start (the "start" script of package.json)`,
+`==> Build successful 🎉`,
 `==> Limits: 512 MiB memory, 1 CPU per instance`, `==> Starting 2 instance(s)`,
 `==> Health check passed`, `==> Your service is live 🎉`).
 

@@ -153,6 +153,27 @@ pub struct DockerfileOptions {
 pub struct GeneratedDockerfile {
     pub contents: String,
     pub port_hint: Option<u16>,
+    /// The command the image starts (`None`: static sites run nginx, and a
+    /// cron job may get its command at run time).
+    pub start: Option<StartCommand>,
+}
+
+/// The start command of a generated image, for the build log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartCommand {
+    /// As it would be typed: `npm start`, `node ./dist/index.js`.
+    pub command: String,
+    /// Where it comes from: `the service's start command`, `the Procfile`,
+    /// `the "start" script of package.json`…
+    pub source: String,
+}
+
+impl StartCommand {
+    /// The line of the build log: a command nobody chose is the first thing
+    /// to look at when an instance doesn't stay up.
+    pub fn log_line(&self) -> String {
+        format!("==> Start command: {} ({})", self.command, self.source)
+    }
 }
 
 /// Name of the Dockerfile the builder writes for native runtimes.
@@ -665,6 +686,9 @@ fn prepare_context(req: &PrepareRequest) -> std::result::Result<Prepared, String
         .map_err(|e| format!("writing the generated Dockerfile: {e}"))?;
     let name = dockerfile.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     messages.push(format!("==> Generated {name} for the {} runtime", runtime_label(used_runtime)));
+    if let Some(start) = &generated.start {
+        messages.push(start.log_line());
+    }
     let digest_line = format!("ARG {}", dockerfile::ENV_DIGEST_ARG);
     let env_digest_arg = generated.contents.lines().any(|l| l.trim() == digest_line);
     Ok(Prepared {

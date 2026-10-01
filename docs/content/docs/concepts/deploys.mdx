@@ -152,7 +152,7 @@ Ferry decides that a new instance is healthy in one of three ways:
 | The same **without** a path | The instance's port must accept a TCP connection and keep it open |
 | Background worker | The process must still be running 5 seconds after it started |
 
-Ferry probes each new instance every second until every instance passes, or until the timeout: 120 seconds by default, set with `--health-check-timeout` on `ferryd`. Every 10 seconds, the log says why an instance isn't healthy yet. If an instance exits during the check, the deploy fails at once, and its last 50 lines of output are copied into the deploy log.
+Ferry probes each new instance every second until every instance passes, or until the timeout: 120 seconds by default, set with `--health-check-timeout` on `ferryd`. Every 10 seconds, the log says why an instance isn't healthy yet. If an instance exits during the check, the deploy fails at once, and its last 50 lines of output are copied into the deploy log. An instance that exits *without* an error (exit code 0) is explained: the error names the command that ran, and a hint says what to change. See [The app exits right away](/docs/guides/troubleshooting#the-app-exits-right-away).
 
 Set a path with `--health` (or **Health check path** in the settings). A dedicated endpoint that answers quickly once the app can serve is best:
 
