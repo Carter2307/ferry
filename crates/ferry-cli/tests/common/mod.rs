@@ -155,9 +155,11 @@ async fn handle(State(fake): State<Arc<Fake>>, req: Request) -> Response {
         body,
     });
 
+    // What `ferry login` calls before it has a token needs none.
+    let public = path.starts_with("/api/v1/auth/cli");
     let authorized =
         headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) == Some(&format!("Bearer {TOKEN}"));
-    let reply = if !authorized {
+    let reply = if !authorized && !public {
         Reply::error(401, "unauthorized", "invalid or missing API token")
     } else {
         fake.reply_for(&method, &path)

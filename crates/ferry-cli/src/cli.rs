@@ -10,7 +10,7 @@ use ferry_core::{DatastoreKind, EnvVar, Runtime, ServiceType, resources, validat
     name = "ferry",
     version,
     about = "Command-line client for Ferry, a self-hosted Render alternative",
-    after_help = "Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the config saved by 'ferry login'."
+    after_help = "Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the server and token saved by 'ferry login'."
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -33,13 +33,30 @@ pub struct GlobalArgs {
     pub json: bool,
 }
 
+#[derive(Debug, Clone, Default, Args)]
+pub struct LoginArgs {
+    /// Only print the page to open, without opening a browser
+    #[arg(long)]
+    pub no_browser: bool,
+    /// Milliseconds between two checks of the approval (default: what the server asks)
+    #[arg(long, hide = true, value_name = "MS")]
+    pub poll_ms: Option<u64>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Print this command-line reference as Markdown (used to generate the docs site)
     #[command(name = "markdown-help", hide = true)]
     MarkdownHelp,
-    /// Verify the server URL and token (from --server/--token) and save them
-    Login,
+    /// Connect this terminal to a server and save the connection
+    ///
+    /// Without a token, opens the dashboard to approve the login there: sign
+    /// in, check that the page shows the code the terminal prints, approve.
+    /// The server then gives this terminal an API token of its own, which
+    /// you can revoke in the dashboard. With --token (or FERRY_TOKEN), that
+    /// token is verified and saved instead: for servers without a browser
+    /// at hand, scripts and CI.
+    Login(LoginArgs),
     /// Show server information
     Info,
     /// List services
@@ -788,7 +805,11 @@ mod tests {
         assert!(c.global.json);
         assert!(matches!(c.command, Command::Services));
         assert!(matches!(parse(&["ls"]).command, Command::Services));
-        assert!(matches!(parse(&["login", "--server", "u", "--token", "t"]).command, Command::Login));
+        assert!(matches!(parse(&["login", "--server", "u", "--token", "t"]).command, Command::Login(_)));
+        match parse(&["login", "--no-browser"]).command {
+            Command::Login(args) => assert!(args.no_browser && args.poll_ms.is_none()),
+            other => panic!("{other:?}"),
+        }
         assert!(matches!(parse(&["info"]).command, Command::Info));
     }
 

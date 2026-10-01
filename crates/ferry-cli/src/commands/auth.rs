@@ -1,28 +1,110 @@
 //! `ferry login` and `ferry info`.
 
-use anyhow::{Context, Result, anyhow};
-use ferry_core::dto::ServerInfo;
+use std::io::IsTerminal;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, anyhow, bail};
+use ferry_core::dto::{CliLoginPoll, CliLoginResult, CliLoginStarted, CliLoginStatus, ServerInfo, StartCliLogin};
 
 use super::{Ctx, DefaultLimits, print_json};
-use crate::client::{Client, Json};
+use crate::cli::LoginArgs;
+use crate::client::{self, Client, Json};
 use crate::config::{self, FileConfig, Settings, Source};
 use crate::output::{self, Cell, Color, errln, outln};
 
-/// Verify the resolved server + token with `GET /api/v1/info` and save them.
-pub async fn login(settings: &Settings, json: bool) -> Result<()> {
-    let token = settings.token.as_deref().ok_or_else(|| {
-        let hint = "ferryd prints the token at startup and stores it in <data-dir>/api_token";
-        match &settings.saved_login_server {
-            // Never reuse the token saved for another server.
-            Some(saved) => anyhow!(
-                "missing token for {}: the saved token belongs to {saved} and is only sent there; \
-                 run 'ferry login --server {} --token <TOKEN>' ({hint})",
-                settings.server,
-                settings.server
-            ),
-            None => anyhow!("missing token: run 'ferry login --server <URL> --token <TOKEN>' ({hint})"),
+/// `ada@laptop`: who asks, as the approval page and the list of API tokens
+/// show it.
+fn terminal_name() -> Option<String> {
+    let user = ["USER", "USERNAME", "LOGNAME"].iter().find_map(|k| std::env::var(k).ok()).filter(|u| !u.is_empty());
+    let host = std::process::Command::new("hostname")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|h| !h.is_empty() && h.len() <= 64);
+    match (user, host) {
+        (Some(u), Some(h)) => Some(format!("{u}@{h}")),
+        (Some(name), None) | (None, Some(name)) => Some(name),
+        (None, None) => None,
+    }
+}
+
+/// Open `url` in the default browser. Best effort: the URL is printed too.
+fn open_in_browser(url: &str) {
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("open", &[])
+    } else if cfg!(windows) {
+        ("cmd", &["/C", "start", ""])
+    } else {
+        ("xdg-open", &[])
+    };
+    let _ = std::process::Command::new(program)
+        .args(args)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// Get an API token by asking the dashboard: start a request, show its code
+/// and the page that approves it, and wait for the answer.
+async fn browser_login(settings: &Settings, args: &LoginArgs) -> Result<String> {
+    let anonymous = Client::new(&settings.server, "")?;
+    let start = StartCliLogin { name: terminal_name() };
+    let started = match anonymous.post::<_, CliLoginStarted>(&["auth", "cli"], &[], &start).await {
+        Ok(s) => s.data,
+        Err(e) if client::is_unsupported_route(&e) => bail!(
+            "this Ferry server can't approve a login in the browser: upgrade ferryd, or log in with a token \
+             ('ferry login --server {} --token <TOKEN>')",
+            settings.server
+        ),
+        Err(e) => return Err(e),
+    };
+    let url = format!("{}/cli-login?id={}", settings.server, started.id);
+    errln!("To connect this terminal, open this page and sign in:");
+    errln!();
+    errln!("  {url}");
+    errln!();
+    errln!("Approve the request there if it shows this code:  {}", output::err(Color::Green, &started.code));
+    if !args.no_browser && std::io::stderr().is_terminal() {
+        open_in_browser(&url);
+    }
+    errln!("Waiting for the approval... (Ctrl-C to cancel)");
+
+    let poll = CliLoginPoll { secret: started.secret.clone() };
+    let deadline = Instant::now() + Duration::from_secs(started.expires_in.max(1));
+    let interval = Duration::from_millis(args.poll_ms.unwrap_or(started.interval.clamp(1, 30) * 1000));
+    let expired = || anyhow!("the login request expired before it was approved: run 'ferry login' again");
+    loop {
+        let result = match anonymous.post::<_, CliLoginResult>(&["auth", "cli", &started.id, "token"], &[], &poll).await
+        {
+            Ok(r) => r.data,
+            Err(e) if client::is_not_found(&e) => return Err(expired()),
+            Err(e) => return Err(e),
+        };
+        match (result.status, result.token) {
+            (CliLoginStatus::Approved, Some(token)) => return Ok(token),
+            (CliLoginStatus::Approved, None) => bail!("the server approved the login without a token"),
+            (CliLoginStatus::Denied, _) => bail!("the login request was denied in the dashboard"),
+            (CliLoginStatus::Pending, _) if Instant::now() >= deadline => return Err(expired()),
+            (CliLoginStatus::Pending, _) => tokio::time::sleep(interval).await,
         }
-    })?;
+    }
+}
+
+/// `ferry login`: get a token — the one given with `--token` / `FERRY_TOKEN`,
+/// else one approved in the dashboard — verify it with `GET /api/v1/info`
+/// and save it with the server.
+pub async fn login(settings: &Settings, args: &LoginArgs, json: bool) -> Result<()> {
+    // A saved token is never what `login` means: log in again.
+    let given = matches!(settings.token_source, Some(Source::Flag | Source::Env));
+    let token = match settings.token.as_deref().filter(|_| given) {
+        Some(token) => token.to_string(),
+        None => browser_login(settings, args).await?,
+    };
+    let token = token.as_str();
     let client = Client::new(&settings.server, token)?;
     let info = client.get::<ServerInfo>(&["info"], &[]).await?;
 
