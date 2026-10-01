@@ -39,6 +39,7 @@ const TAG_TITLES = {
   domains: 'Custom domains',
   jobs: 'Jobs',
   datastores: 'Datastores',
+  git: 'Git connections',
   blueprints: 'Blueprints',
   events: 'Change feed',
   hooks: 'Webhooks',
@@ -79,6 +80,10 @@ const PATH_ORDER = [
   '/api/v1/env-groups/{id}/env',
   '/api/v1/services/{id}/env-groups',
   '/api/v1/services/{id}/env-groups/{group}',
+  '/api/v1/git/connections',
+  '/api/v1/git/connections/{id}',
+  '/api/v1/git/connections/{id}/repositories',
+  '/api/v1/git/connections/{id}/branches',
 ];
 
 /** The document with its paths in PATH_ORDER (only used to lay out the pages). */
