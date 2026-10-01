@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use ferry_core::{LogSink, Service};
+use ferry_core::{LogSink, Runtime, Service, ServiceType};
 use ferry_docker::{ContainerInfo, ContainerState};
 use futures::StreamExt;
 use tokio::io::AsyncReadExt;
@@ -117,6 +117,9 @@ pub(crate) struct InstanceFailure {
     pub message: String,
     /// The process exited (its last output is worth showing).
     pub crashed: bool,
+    /// It exited with code 0: nothing failed, its command just ended. What
+    /// ran, and what to run instead, is worth saying (see [`clean_exit`]).
+    pub clean_exit: bool,
 }
 
 /// How the new instances of a deploy are checked.
@@ -175,6 +178,140 @@ pub(crate) fn exit_message(instance: &str, code: Option<i64>, worker: bool) -> S
         Some(c) => format!("instance {instance} crashed (exit code {c}{})", exit_code_hint(c)),
         None => format!("instance {instance} crashed"),
     }
+}
+
+/// Where the command of an instance comes from: what there is to change
+/// when it is not the right one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandSource {
+    /// The service's start command.
+    Service,
+    /// The image's own command (the project's Dockerfile, a prebuilt image).
+    Image,
+    /// Picked from the project, for a service without a start command (the
+    /// build log's `==> Start command` line says how).
+    Project,
+}
+
+impl CommandSource {
+    /// `runtime`: what the deploy's image was built for, when known.
+    pub(crate) fn of(svc: &Service, runtime: Option<Runtime>) -> Self {
+        if svc.start_command.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+            CommandSource::Service
+        } else if matches!(runtime, Some(Runtime::Docker | Runtime::Image)) {
+            CommandSource::Image
+        } else {
+            CommandSource::Project
+        }
+    }
+}
+
+/// A failure, and what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Explained {
+    pub message: String,
+    pub hint: String,
+}
+
+fn service_kind(t: ServiceType) -> &'static str {
+    match t {
+        ServiceType::WebService => "web service",
+        ServiceType::PrivateService => "private service",
+        ServiceType::BackgroundWorker => "background worker",
+        ServiceType::CronJob => "cron job",
+        ServiceType::StaticSite => "static site",
+    }
+}
+
+/// An instance whose command ended without an error (exit code 0) before it
+/// was healthy. Nothing crashed and nothing was printed, so the exit code
+/// alone explains nothing: say what ran (`command`, when Docker told), why
+/// ending is a failure for this kind of service, and what to change.
+pub(crate) fn clean_exit(
+    instance: &str,
+    command: Option<&str>,
+    svc: &Service,
+    port: Option<u16>,
+    source: CommandSource,
+) -> Explained {
+    let worker = svc.service_type == ServiceType::BackgroundWorker;
+    let ran = match command {
+        Some(c) => format!("its command `{c}` ended"),
+        None => "its command ended".to_string(),
+    };
+    let kind = service_kind(svc.service_type);
+    let must = match port {
+        Some(p) if !worker => format!("a {kind} must keep running and listen on port {p}"),
+        _ => format!("a {kind} must keep running"),
+    };
+    let message = format!("instance {instance} exited with code 0: {ran} without an error, but {must}");
+
+    let one_off = "a task that runs and ends belongs in a cron job or a one-off job (`ferry run`)";
+    let hint = match (source, worker) {
+        (CommandSource::Project, false) => {
+            "the service has no start command, so Ferry picked this one from the project (see \"==> Start command\" \
+             in the build log). If the project is an app, set the start command that runs its server. If it only \
+             builds files (a static site, a component library), create it as a static site instead."
+                .to_string()
+        }
+        (CommandSource::Project, true) => format!(
+            "the service has no start command, so Ferry picked this one from the project (see \"==> Start \
+             command\" in the build log). Set a start command that keeps running; {one_off}."
+        ),
+        (CommandSource::Service, false) => {
+            "this is the service's start command: it must start a server and stay in the foreground. Steps that \
+             only build belong in the build command, and a project that only builds files (a static site, a \
+             component library) is deployed as a static site."
+                .to_string()
+        }
+        (CommandSource::Service, true) => {
+            format!("this is the service's start command: it must keep running; {one_off}.")
+        }
+        (CommandSource::Image, false) => {
+            "this is the image's own command (its CMD or ENTRYPOINT): it must start a server and stay in the \
+             foreground. Set a start command on the service to run something else."
+                .to_string()
+        }
+        (CommandSource::Image, true) => format!(
+            "this is the image's own command (its CMD or ENTRYPOINT): it must keep running. Set a start command \
+             on the service to run something else; {one_off}."
+        ),
+    };
+    Explained { message, hint }
+}
+
+/// What a container runs, as it would be typed, from what Docker reports:
+/// its command (`cmd`), else the whole process (`path` and `args`: images
+/// that only have an entrypoint). A shell wrapper (`/bin/sh -c …`, how start
+/// commands are run) shows as its script.
+pub(crate) fn display_command(cmd: &[String], path: Option<&str>, args: &[String]) -> Option<String> {
+    /// Long enough for a real command, short enough for one log line.
+    const MAX_CHARS: usize = 200;
+    let words: Vec<&str> = if cmd.is_empty() {
+        path.into_iter().chain(args.iter().map(String::as_str)).collect()
+    } else {
+        cmd.iter().map(String::as_str).collect()
+    };
+    let shown = match words.as_slice() {
+        [shell, "-c", script] if matches!(*shell, "/bin/sh" | "sh" | "/bin/bash" | "bash") => script.to_string(),
+        other => other.join(" "),
+    };
+    // One line: a script's line breaks would cut the message in two.
+    let shown = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+    if shown.is_empty() {
+        return None;
+    }
+    Some(match shown.char_indices().nth(MAX_CHARS) {
+        Some((cut, _)) => format!("{}…", &shown[..cut]),
+        None => shown,
+    })
+}
+
+/// The command instance `id` runs, when Docker can tell.
+pub(crate) async fn container_command(inner: &Inner, id: &str) -> Option<String> {
+    let resp = inner.docker.bollard().inspect_container(id, None).await.ok()?;
+    let cmd = resp.config.and_then(|c| c.cmd).unwrap_or_default();
+    display_command(&cmd, resp.path.as_deref(), &resp.args.unwrap_or_default())
 }
 
 /// How a container that Docker restarts (the restart policy brings crashed
@@ -278,7 +415,15 @@ pub(crate) async fn wait_healthy(
     started: Instant,
 ) -> Result<Option<u16>, InstanceFailure> {
     let instance = crate::util::instance_id(&container.name);
-    let fail = |message: String, crashed: bool| InstanceFailure { container: container.clone(), message, crashed };
+    let fail =
+        |message: String| InstanceFailure { container: container.clone(), message, crashed: false, clean_exit: false };
+    // The process ended: out of memory, with an error, or without one.
+    let exited = |exit: LastExit| InstanceFailure {
+        container: container.clone(),
+        message: crash_message(&instance, exit, check.worker),
+        crashed: true,
+        clean_exit: !exit.oom_killed && exit.code == Some(0),
+    };
     let port_text = |host_port: u16| match check.container_port {
         Some(p) => format!("container port {p} (published as 127.0.0.1:{host_port})"),
         None => format!("127.0.0.1:{host_port}"),
@@ -291,7 +436,7 @@ pub(crate) async fn wait_healthy(
     loop {
         // (reason, whether it is a connection problem the port hint explains)
         let (last, connection): (String, bool) = match inner.docker.inspect_container(&container.id).await {
-            Ok(None) => return Err(fail(format!("instance {instance} was removed"), false)),
+            Ok(None) => return Err(fail(format!("instance {instance} was removed"))),
             Ok(Some(info)) => match info.state {
                 ContainerState::Exited | ContainerState::Dead => {
                     let exit = LastExit {
@@ -300,17 +445,17 @@ pub(crate) async fn wait_healthy(
                         memory_limit_bytes: info.memory_limit_bytes,
                     };
                     let exit = with_late_oom(inner, &container.id, started_at, exit).await;
-                    return Err(fail(crash_message(&instance, exit, check.worker), true));
+                    return Err(exited(exit));
                 }
                 ContainerState::Restarting => {
                     let exit = last_exit(inner, &container.id, started_at, info.memory_limit_bytes).await;
                     let exit = with_late_oom(inner, &container.id, started_at, exit).await;
-                    return Err(fail(crash_message(&instance, exit, check.worker), true));
+                    return Err(exited(exit));
                 }
                 ContainerState::Running if info.restart_count.unwrap_or(0) > 0 => {
                     let exit = last_exit(inner, &container.id, started_at, info.memory_limit_bytes).await;
                     let exit = with_late_oom(inner, &container.id, started_at, exit).await;
-                    return Err(fail(crash_message(&instance, exit, check.worker), true));
+                    return Err(exited(exit));
                 }
                 ContainerState::Running => match &check.probe {
                     Probe::Uptime => {
@@ -322,7 +467,7 @@ pub(crate) async fn wait_healthy(
                     Probe::Tcp => match info.host_port.or(container.host_port) {
                         Some(port) if tcp_accepting(port, TCP_SETTLE).await => return Ok(Some(port)),
                         Some(port) => (format!("nothing accepts connections on {} yet", port_text(port)), true),
-                        None => return Err(fail(format!("instance {instance} has no published port"), false)),
+                        None => return Err(fail(format!("instance {instance} has no published port"))),
                     },
                     Probe::Http { path, host } => match (info.host_port.or(container.host_port), &inner.http) {
                         (Some(port), Ok(client)) => match http_probe(client, port, path, host).await {
@@ -330,8 +475,8 @@ pub(crate) async fn wait_healthy(
                             Err(ProbeError::Status(reason)) => (reason, false),
                             Err(ProbeError::Connection(reason)) => (format!("{reason} on {}", port_text(port)), true),
                         },
-                        (None, _) => return Err(fail(format!("instance {instance} has no published port"), false)),
-                        (_, Err(e)) => return Err(fail(e.clone(), false)),
+                        (None, _) => return Err(fail(format!("instance {instance} has no published port"))),
+                        (_, Err(e)) => return Err(fail(e.clone())),
                     },
                 },
                 other => (format!("instance {instance} is {}", other.as_str()), false),
@@ -344,7 +489,7 @@ pub(crate) async fn wait_healthy(
                 (Some(h), true) => format!(": {h}"),
                 _ => String::new(),
             };
-            return Err(fail(format!("health check timed out after {}s: {last}{hint}", check.timeout_secs), false));
+            return Err(fail(format!("health check timed out after {}s: {last}{hint}", check.timeout_secs)));
         }
         if now >= next_progress {
             next_progress = now + PROGRESS_EVERY;
@@ -397,6 +542,105 @@ mod tests {
             exit_message("abc123", Some(137), false),
             "instance abc123 crashed (exit code 137: killed by SIGKILL)"
         );
+    }
+
+    /// What a library deployed as a web service looks like: no start command,
+    /// so its "main" file is run, which ends at once without printing anything.
+    #[test]
+    fn clean_exits_say_what_ran_and_what_to_change() {
+        let web = Service::new("libui", ServiceType::WebService);
+        let source = CommandSource::of(&web, Some(Runtime::Node));
+        assert_eq!(source, CommandSource::Project);
+        let e = clean_exit("2e58a7", Some("node ./dist/index.js"), &web, Some(10000), source);
+        assert_eq!(
+            e.message,
+            "instance 2e58a7 exited with code 0: its command `node ./dist/index.js` ended without an error, but a \
+             web service must keep running and listen on port 10000"
+        );
+        assert_eq!(
+            e.hint,
+            "the service has no start command, so Ferry picked this one from the project (see \"==> Start \
+             command\" in the build log). If the project is an app, set the start command that runs its server. If \
+             it only builds files (a static site, a component library), create it as a static site instead."
+        );
+
+        // The service's own start command: it is the one to fix.
+        let mut own = Service::new("api", ServiceType::PrivateService);
+        own.start_command = Some(" npm run build ".into());
+        let source = CommandSource::of(&own, Some(Runtime::Node));
+        assert_eq!(source, CommandSource::Service);
+        let e = clean_exit("ab12cd", Some("npm run build"), &own, Some(3000), source);
+        assert!(e.message.ends_with("but a private service must keep running and listen on port 3000"), "{e:?}");
+        assert!(e.hint.starts_with("this is the service's start command: it must start a server"), "{e:?}");
+        assert!(e.hint.contains("build command"), "{e:?}");
+
+        // The image's command (a Dockerfile of the project, a prebuilt image).
+        for runtime in [Runtime::Docker, Runtime::Image] {
+            let source = CommandSource::of(&web, Some(runtime));
+            assert_eq!(source, CommandSource::Image);
+            let e = clean_exit("ab12cd", None, &web, Some(80), source);
+            assert_eq!(
+                e.message,
+                "instance ab12cd exited with code 0: its command ended without an error, but a web service must \
+                 keep running and listen on port 80"
+            );
+            assert!(e.hint.starts_with("this is the image's own command (its CMD or ENTRYPOINT)"), "{e:?}");
+            assert!(e.hint.ends_with("Set a start command on the service to run something else."), "{e:?}");
+        }
+        // The runtime is not known (the build's record is gone): the project's.
+        assert_eq!(CommandSource::of(&web, None), CommandSource::Project);
+        let mut blank = web.clone();
+        blank.start_command = Some("   ".into());
+        assert_eq!(CommandSource::of(&blank, Some(Runtime::Docker)), CommandSource::Image);
+
+        // Workers listen on nothing; what runs and ends is a job.
+        let worker = Service::new("mailer", ServiceType::BackgroundWorker);
+        for (source, start) in [
+            (CommandSource::Project, "the service has no start command, so Ferry picked this one"),
+            (CommandSource::Service, "this is the service's start command: it must keep running"),
+            (CommandSource::Image, "this is the image's own command (its CMD or ENTRYPOINT): it must keep running"),
+        ] {
+            let e = clean_exit("ab12cd", Some("python send.py"), &worker, None, source);
+            assert_eq!(
+                e.message,
+                "instance ab12cd exited with code 0: its command `python send.py` ended without an error, but a \
+                 background worker must keep running"
+            );
+            assert!(e.hint.starts_with(start), "{e:?}");
+            assert!(e.hint.ends_with("belongs in a cron job or a one-off job (`ferry run`)."), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn commands_are_shown_as_they_would_be_typed() {
+        let words = |w: &[&str]| -> Vec<String> { w.iter().map(|s| s.to_string()).collect() };
+        // What a generated Dockerfile's CMD is, behind the image's entrypoint.
+        assert_eq!(
+            display_command(&words(&["node", "./dist/index.js"]), Some("docker-entrypoint.sh"), &words(&["node"])),
+            Some("node ./dist/index.js".to_string())
+        );
+        // A start command is run by a shell: its script is what was typed.
+        for shell in ["/bin/sh", "sh", "/bin/bash", "bash"] {
+            assert_eq!(
+                display_command(&words(&[shell, "-c", " gunicorn app:app -b 0.0.0.0:$PORT "]), None, &[]),
+                Some("gunicorn app:app -b 0.0.0.0:$PORT".to_string())
+            );
+        }
+        // No command: the entrypoint and its arguments.
+        assert_eq!(
+            display_command(&[], Some("/usr/local/bin/app"), &words(&["--once"])),
+            Some("/usr/local/bin/app --once".to_string())
+        );
+        assert_eq!(display_command(&[], None, &[]), None);
+        assert_eq!(display_command(&words(&["/bin/sh", "-c", "  "]), None, &[]), None);
+        // One line, of a bounded length.
+        assert_eq!(
+            display_command(&words(&["/bin/sh", "-c", "set -e\nmigrate\n  serve"]), None, &[]),
+            Some("set -e migrate serve".to_string())
+        );
+        let long = display_command(&words(&["echo", &"é".repeat(500)]), None, &[]).unwrap();
+        assert_eq!(long.chars().count(), 201, "{long}");
+        assert!(long.ends_with('…'), "{long}");
     }
 
     #[test]

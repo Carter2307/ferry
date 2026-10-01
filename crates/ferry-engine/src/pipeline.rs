@@ -23,7 +23,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::health::{HealthCheck, Probe, wait_healthy};
+use crate::health::{self, CommandSource, HealthCheck, Probe, wait_healthy};
 use crate::images;
 use crate::instances::{self, BuildInfo, STOP_GRACE_SECS};
 use crate::limits::{self, Resources};
@@ -59,15 +59,27 @@ struct Failure {
     /// The failure line is already in the deploy log (the builder writes
     /// `==> Build failed: …` itself).
     logged: bool,
+    /// What to do about it, when the engine can tell: a `==> Hint: …` line
+    /// after the failure line, and part of the server log's line.
+    hint: Option<String>,
 }
 
 impl Failure {
+    fn new(stage: Stage, error: Error) -> Self {
+        Failure { stage, error, logged: false, hint: None }
+    }
+
     fn build(error: Error) -> Self {
-        Failure { stage: Stage::Build, error, logged: false }
+        Failure::new(Stage::Build, error)
     }
 
     fn deploy(error: Error) -> Self {
-        Failure { stage: Stage::Deploy, error, logged: false }
+        Failure::new(Stage::Deploy, error)
+    }
+
+    fn with_hint(mut self, hint: Option<String>) -> Self {
+        self.hint = hint.or(self.hint);
+        self
     }
 }
 
@@ -94,16 +106,12 @@ impl Ctx {
     }
 
     fn check_cancel(&self, stage: Stage) -> Result<(), Failure> {
-        if self.cancel().is_cancelled() {
-            Err(Failure { stage, error: Error::Canceled, logged: false })
-        } else {
-            Ok(())
-        }
+        if self.cancel().is_cancelled() { Err(Failure::new(stage, Error::Canceled)) } else { Ok(()) }
     }
 
     fn canceled(&self, stage: Stage, reason: &str) -> Failure {
         self.active.request_cancel(reason);
-        Failure { stage, error: Error::Canceled, logged: false }
+        Failure::new(stage, Error::Canceled)
     }
 }
 
@@ -195,7 +203,7 @@ async fn current_service(ctx: &Ctx, stage: Stage) -> Result<Service, Failure> {
         Ok(Some(s)) if s.suspended => Err(ctx.canceled(stage, "service suspended")),
         Ok(Some(s)) => Ok(s),
         Ok(None) => Err(ctx.canceled(stage, "service deleted")),
-        Err(e) => Err(Failure { stage, error: e, logged: false }),
+        Err(e) => Err(Failure::new(stage, e)),
     }
 }
 
@@ -222,13 +230,10 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
                 commit: commit.clone(),
                 credentials,
             };
-            let built = build_image(ctx, svc, deploy, source, opts).await;
-            if let Err(Failure { error, .. }) = &built
-                && let Some(hint) = git_access_hint(error, access.as_ref().map(|a| &a.connection), repo_url)
-            {
-                ctx.log.system(hint);
-            }
-            built
+            build_image(ctx, svc, deploy, source, opts).await.map_err(|failure| {
+                let hint = git_access_hint(&failure.error, access.as_ref().map(|a| &a.connection), repo_url);
+                failure.with_hint(hint)
+            })
         }
         DeploySource::Archive { path } => {
             build_image(ctx, svc, deploy, BuildSource::Archive { path: PathBuf::from(path) }, opts).await
@@ -304,11 +309,11 @@ async fn git_access(ctx: &Ctx, repo_url: &str) -> ferry_core::Result<Option<Repo
     Ok(access)
 }
 
-/// What to do about a clone the remote refused: a line for the deploy log,
-/// or `None` when the failure doesn't look like an access problem.
+/// What to do about a clone the remote refused (the failure's hint), or
+/// `None` when the failure doesn't look like an access problem.
 fn git_access_hint(error: &Error, connection: Option<&GitConnection>, repo_url: &str) -> Option<String> {
     let Error::Build(message) = error else { return None };
-    ferry_scm::access_hint(message, connection, repo_url).map(|hint| format!("==> Hint: {hint}"))
+    ferry_scm::access_hint(message, connection, repo_url)
 }
 
 /// Restarts reuse what is live when they run, not when they were queued
@@ -407,7 +412,7 @@ async fn build_image(
         }
         Err(Error::Canceled) => Err(Failure::build(Error::Canceled)),
         // The builder already wrote "==> Build failed: <reason>".
-        Err(e) => Err(Failure { stage: Stage::Build, error: e, logged: true }),
+        Err(e) => Err(Failure { logged: true, ..Failure::build(e) }),
     }
 }
 
@@ -721,6 +726,13 @@ async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerIn
         started.len(),
         check.probe.describe()
     ));
+    info!(
+        service = %svc.name,
+        deploy = %ctx.deploy_id,
+        instances = started.len(),
+        check = %check.probe.describe(),
+        "instances started, waiting for the health check"
+    );
     let containers: Vec<ContainerInfo> = started.iter().map(|(c, _)| c.clone()).collect();
     let mut capture = OutputCapture::start(&inner.docker, &containers, ctx.log.sink());
     let checks = try_join_all(started.iter().map(|(c, at)| wait_healthy(inner, &check, c, *at)));
@@ -734,6 +746,16 @@ async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerIn
         Some(Err(failure)) => {
             if failure.crashed {
                 capture.dump_tail(&inner.docker, &failure.container, ctx.log.sink(), CRASH_TAIL_LINES).await;
+            }
+            if failure.clean_exit {
+                // Nothing crashed and nothing may have been printed: say what
+                // ran (while the instance is still there to ask) and what to
+                // change.
+                let command = health::container_command(inner, &failure.container.id).await;
+                let source = CommandSource::of(&svc, built.info.runtime);
+                let instance = instance_id(&failure.container.name);
+                let explained = health::clean_exit(&instance, command.as_deref(), &svc, port, source);
+                return Err(Failure::deploy(Error::Invalid(explained.message)).with_hint(Some(explained.hint)));
             }
             return Err(Failure::deploy(Error::Invalid(failure.message)));
         }
@@ -875,7 +897,27 @@ async fn record_failure(ctx: &Ctx, failure: Failure) {
     if !failure.logged {
         ctx.log.system(line);
     }
-    info!(deploy = %ctx.deploy_id, status = %status, "deploy ended: {message}");
+    // A hint is about a failure: a canceled deploy has nothing to fix.
+    let hint = failure.hint.filter(|_| status != DeployStatus::Canceled);
+    if let Some(hint) = &hint {
+        ctx.log.system(format!("==> Hint: {hint}"));
+    }
+    // The server log names the service and says as much as the deploy log's
+    // last lines: whoever runs the server sees why without opening it. (The
+    // app's own output stays in the deploy log.)
+    let service = match inner.store.get_service(&ctx.service_id).await {
+        Ok(Some(s)) => s.name,
+        _ => ctx.service_id.clone(),
+    };
+    let hint = hint.as_deref().unwrap_or("-");
+    match status {
+        DeployStatus::Canceled => {
+            info!(service = %service, deploy = %ctx.deploy_id, status = %status, "deploy canceled: {message}");
+        }
+        _ => {
+            warn!(service = %service, deploy = %ctx.deploy_id, status = %status, hint = %hint, "deploy failed: {message}");
+        }
+    }
     if let Err(e) = inner.store.set_deploy_status(&ctx.deploy_id, status, Some(&message)).await {
         warn!(deploy = %ctx.deploy_id, "cannot record the deploy's failure: {e}");
     }
@@ -1130,10 +1172,10 @@ mod tests {
             "HTTP Basic: Access denied",
         ] {
             let with = git_access_hint(&build(refused), Some(&account), url).unwrap_or_default();
-            assert!(with.starts_with("==> Hint: the token of the GitHub account 'octocat' may have expired"), "{with}");
+            assert!(with.starts_with("the token of the GitHub account 'octocat' may have expired"), "{with}");
             assert!(!with.contains("ghp_"), "{with}");
             let without = git_access_hint(&build(refused), None, url).unwrap_or_default();
-            assert!(without.starts_with("==> Hint: if the repository is private, connect its"), "{without}");
+            assert!(without.starts_with("if the repository is private, connect its"), "{without}");
             // The hint says what to fix for the way the account is connected.
             let mut oauth = account.clone();
             oauth.auth = GitAuth::Oauth;

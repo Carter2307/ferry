@@ -933,6 +933,64 @@ async fn live_deploys_keep_their_launch_spec() {
 
 /// Image deploys are pinned to what was pulled: a moved tag changes neither
 /// the live deploy's crash replacements nor a rollback.
+/// An instance whose command ends without an error (a library started as a
+/// web service, a start command that only builds) says what ran, why ending
+/// is a failure, and what to change.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_that_ends_is_explained() {
+    require_e2e!();
+    let h = harness(|_| {}).await;
+    // The image's own command: busybox runs `sh`, which ends at once.
+    let svc = h.create_service("oneshot", ServiceType::WebService, |s| s.image = Some("busybox:stable".into())).await;
+    let d = h.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Create)).await.unwrap();
+    let d = h.expect(&d, DeployStatus::DeployFailed).await;
+    let port = d.port.expect("a web service has a port");
+    let error = d.error.clone().unwrap_or_default();
+    let explained = format!(
+        " exited with code 0: its command `sh` ended without an error, but a web service must keep running and \
+         listen on port {port}"
+    );
+    assert!(error.starts_with("instance ") && error.ends_with(&explained), "{error}");
+    let log = h.deploy_log(&d.id).await;
+    let failed = log.find("==> Deploy failed: instance ").unwrap_or_else(|| panic!("no failure line:\n{log}"));
+    let hint = log
+        .find("==> Hint: this is the image's own command (its CMD or ENTRYPOINT): it must start a server")
+        .unwrap_or_else(|| panic!("no hint:\n{log}"));
+    assert!(failed < hint, "the hint comes after the failure:\n{log}");
+    assert!(h.containers(&format!("ferry.deploy={}", d.id)).is_empty(), "the instance is removed");
+
+    // The service's own start command: it is named, with what it printed.
+    let mut own = h.store.require_service(&svc.id).await.unwrap();
+    own.start_command = Some("echo built-and-done".into());
+    h.store.update_service(&own).await.unwrap();
+    let d = h.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let d = h.expect(&d, DeployStatus::DeployFailed).await;
+    let error = d.error.clone().unwrap_or_default();
+    assert!(error.contains("exited with code 0: its command `echo built-and-done` ended without an error"), "{error}");
+    let log = h.deploy_log(&d.id).await;
+    assert!(log.lines().any(|l| l == "built-and-done"), "the instance's output is in the log:\n{log}");
+    assert!(log.contains("==> Hint: this is the service's start command: it must start a server"), "{log}");
+
+    // A worker that ends: what runs and ends is a job.
+    let worker = h
+        .create_service("once", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("true".into());
+        })
+        .await;
+    let d = h.engine.deploy(&worker.id, DeployRequest::new(DeployTrigger::Create)).await.unwrap();
+    let d = h.expect(&d, DeployStatus::DeployFailed).await;
+    let error = d.error.clone().unwrap_or_default();
+    assert!(
+        error.ends_with(
+            "exited with code 0: its command `true` ended without an error, but a background worker must keep running"
+        ),
+        "{error}"
+    );
+    let log = h.deploy_log(&d.id).await;
+    assert!(log.contains("belongs in a cron job or a one-off job (`ferry run`)."), "{log}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn image_deploys_are_pinned() {
     require_e2e!();
