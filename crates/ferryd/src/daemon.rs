@@ -27,6 +27,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(60);
 const STOP_TIMEOUT: Duration = Duration::from_secs(60);
 /// `ferryd start` moves a log bigger than this to `ferryd.log.1`.
 const LOG_ROTATE_BYTES: u64 = 10 << 20;
+/// Where the API listens by default: what `ferry login` uses when no server is named.
+const DEFAULT_API_URL: &str = "http://127.0.0.1:7878";
 /// `ferryd logs` reads at most this much of the end of the log.
 const LOG_TAIL_BYTES: u64 = 4 << 20;
 
@@ -176,14 +178,25 @@ fn ago(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
     format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
 }
 
-fn print_summary(ready: &Ready) {
-    for line in &ready.summary {
-        if line.is_empty() {
-            println!();
-        } else {
-            println!("  {line}");
-        }
+/// What to do next with a server that listens at `api_url`: create its
+/// account while it has none (its setup code is then on disk), else connect
+/// the CLI.
+pub fn next_step(data_dir: &Path, api_url: &str) -> String {
+    match ferry_api::setup::read_code(data_dir) {
+        Some(code) => format!("Create your account: {}", ferry_api::setup::setup_url(api_url, &code)),
+        None if api_url == DEFAULT_API_URL => "Connect the CLI : ferry login".to_string(),
+        None => format!("Connect the CLI : ferry login --server {api_url}"),
     }
+}
+
+/// The banner under its title: where the server listens, then what to do next.
+pub fn print_summary(data_dir: &Path, ready: &Ready) {
+    for line in &ready.summary {
+        println!("  {line}");
+    }
+    println!();
+    println!("  {}", next_step(data_dir, &ready.api_url));
+    println!();
 }
 
 /// How to follow and stop a server that runs in the background.
@@ -239,7 +252,7 @@ pub fn start(data_dir: &Path, server_args: &[OsString], hint: &str) -> anyhow::R
             Some(ServerState { pid, ready: Some(ready), .. }) => {
                 println!();
                 println!("  Ferry is already running (pid {pid})");
-                print_summary(&ready);
+                print_summary(data_dir, &ready);
             }
             Some(ServerState { pid, .. }) => println!("Ferry is already starting (pid {pid})."),
             None => println!("Ferry is already running with data directory {}.", data_dir.display()),
@@ -303,7 +316,7 @@ pub fn start(data_dir: &Path, server_args: &[OsString], hint: &str) -> anyhow::R
     }
     println!();
     println!("  Ferry {} is running in the background (pid {pid})", ferry_core::VERSION);
-    print_summary(&ready);
+    print_summary(data_dir, &ready);
     print_commands(hint);
     Ok(ExitCode::SUCCESS)
 }
@@ -329,7 +342,7 @@ pub fn status(data_dir: &Path, hint: &str) -> anyhow::Result<ExitCode> {
     match &state.ready {
         Some(ready) => {
             println!("  Ferry {} is running {how} (pid {}, for {since})", state.version, state.pid);
-            print_summary(ready);
+            print_summary(data_dir, ready);
         }
         None => {
             println!("  Ferry {} is starting {how} (pid {}, for {since})", state.version, state.pid);

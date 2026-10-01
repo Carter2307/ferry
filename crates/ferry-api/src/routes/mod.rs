@@ -1,5 +1,6 @@
 //! HTTP handlers, one module per resource.
 
+pub mod auth;
 pub mod blueprints;
 pub mod datastores;
 pub mod deploys;

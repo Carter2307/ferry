@@ -33,6 +33,21 @@ impl ApiError {
         Self::new(StatusCode::UNAUTHORIZED, "unauthorized", message)
     }
 
+    /// Authenticated, but not allowed to do this (`code` says why).
+    pub fn forbidden(code: &str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, code, message)
+    }
+
+    pub fn too_many_requests(code: &str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, code, message)
+    }
+
+    /// Too many failed sign-ins: wait `secs`.
+    pub fn too_many_attempts(secs: u64) -> Self {
+        let wait = if secs >= 120 { format!("{} minutes", secs.div_ceil(60)) } else { format!("{secs} seconds") };
+        Self::too_many_requests("too_many_attempts", format!("too many failed attempts: try again in {wait}"))
+    }
+
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", message)
     }

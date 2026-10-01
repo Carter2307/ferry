@@ -19,6 +19,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0002_resource_limits.sql"),
     include_str!("../migrations/0003_git_connections.sql"),
     include_str!("../migrations/0004_git_authorization.sql"),
+    include_str!("../migrations/0005_accounts.sql"),
 ];
 
 /// Handle to the Ferry database.
@@ -217,6 +218,40 @@ fn row_to_git_connection(r: &SqliteRow) -> Result<GitConnection> {
 }
 
 /// SQLite integers are signed: ids GitHub hands out fit (they are far below 2^63).
+fn row_to_user(r: &SqliteRow) -> Result<User> {
+    Ok(User {
+        id: r.try_get("id")?,
+        email: r.try_get("email")?,
+        password_hash: r.try_get("password_hash")?,
+        created_at: get_ts(r, "created_at")?,
+        updated_at: get_ts(r, "updated_at")?,
+    })
+}
+
+fn row_to_session(r: &SqliteRow) -> Result<Session> {
+    Ok(Session {
+        id: r.try_get("id")?,
+        user_id: r.try_get("user_id")?,
+        token_hash: r.try_get("token_hash")?,
+        user_agent: r.try_get("user_agent")?,
+        created_at: get_ts(r, "created_at")?,
+        last_used_at: get_ts(r, "last_used_at")?,
+        expires_at: get_ts(r, "expires_at")?,
+    })
+}
+
+fn row_to_api_token(r: &SqliteRow) -> Result<ApiToken> {
+    Ok(ApiToken {
+        id: r.try_get("id")?,
+        name: r.try_get("name")?,
+        token_hash: r.try_get("token_hash")?,
+        hint: r.try_get("hint")?,
+        created_at: get_ts(r, "created_at")?,
+        last_used_at: get_ts_opt(r, "last_used_at")?,
+        expires_at: get_ts_opt(r, "expires_at")?,
+    })
+}
+
 fn sql_u64(v: Option<u64>) -> Option<i64> {
     v.and_then(|v| i64::try_from(v).ok())
 }
@@ -1201,6 +1236,180 @@ impl Store {
     }
 
     // -----------------------------------------------------------------------
+    // accounts, sessions and API tokens (DESIGN.md §20)
+
+    /// The administrator's account, once the server is set up.
+    pub async fn first_user(&self) -> Result<Option<User>> {
+        let row = sqlx::query("SELECT * FROM users ORDER BY created_at, id LIMIT 1").fetch_optional(&self.pool).await?;
+        row.as_ref().map(row_to_user).transpose()
+    }
+
+    /// Create the account of a server that has none. `false` when one exists
+    /// already (nothing is written): of two setups at once, one wins.
+    pub async fn create_first_user(&self, u: &User) -> Result<bool> {
+        let res = sqlx::query(
+            "INSERT INTO users (id, email, password_hash, created_at, updated_at)
+             SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)",
+        )
+        .bind(&u.id)
+        .bind(&u.email)
+        .bind(&u.password_hash)
+        .bind(ts(&u.created_at))
+        .bind(ts(&u.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn get_user(&self, id: &str) -> Result<Option<User>> {
+        let row = sqlx::query("SELECT * FROM users WHERE id = ?").bind(id).fetch_optional(&self.pool).await?;
+        row.as_ref().map(row_to_user).transpose()
+    }
+
+    /// `email` as [`crate::auth::normalize_email`] returns it.
+    pub async fn find_user_by_email(&self, email: &str) -> Result<Option<User>> {
+        let row = sqlx::query("SELECT * FROM users WHERE email = ?").bind(email).fetch_optional(&self.pool).await?;
+        row.as_ref().map(row_to_user).transpose()
+    }
+
+    /// Replace the password of an account and bump `updated_at`.
+    pub async fn set_password(&self, user_id: &str, password_hash: &str) -> Result<()> {
+        let res = sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+            .bind(password_hash)
+            .bind(ts(&now()))
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("account", user_id));
+        }
+        Ok(())
+    }
+
+    pub async fn create_session(&self, s: &Session) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sessions (id, user_id, token_hash, user_agent, created_at, last_used_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&s.id)
+        .bind(&s.user_id)
+        .bind(&s.token_hash)
+        .bind(&s.user_agent)
+        .bind(ts(&s.created_at))
+        .bind(ts(&s.last_used_at))
+        .bind(ts(&s.expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The session of a cookie, by the digest of its value. Expired ones
+    /// are returned too: the caller decides.
+    pub async fn find_session(&self, token_hash: &str) -> Result<Option<Session>> {
+        let row = sqlx::query("SELECT * FROM sessions WHERE token_hash = ?")
+            .bind(token_hash)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(row_to_session).transpose()
+    }
+
+    /// Record that a session was used, and until when it now lasts.
+    pub async fn touch_session(&self, id: &str, used_at: DateTime<Utc>, expires_at: DateTime<Utc>) -> Result<()> {
+        sqlx::query("UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?")
+            .bind(ts(&used_at))
+            .bind(ts(&expires_at))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Sessions of an account that haven't expired, the last used first.
+    pub async fn list_sessions(&self, user_id: &str) -> Result<Vec<Session>> {
+        let rows =
+            sqlx::query("SELECT * FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_used_at DESC, id")
+                .bind(user_id)
+                .bind(ts(&now()))
+                .fetch_all(&self.pool)
+                .await?;
+        rows.iter().map(row_to_session).collect()
+    }
+
+    /// End a session; returns whether it existed.
+    pub async fn delete_session(&self, id: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM sessions WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// End every session of an account but `except`; returns how many.
+    pub async fn delete_sessions(&self, user_id: &str, except: Option<&str>) -> Result<u64> {
+        let res = sqlx::query("DELETE FROM sessions WHERE user_id = ? AND id != ?")
+            .bind(user_id)
+            .bind(except.unwrap_or_default())
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Forget the sessions that expired; returns how many.
+    pub async fn delete_expired_sessions(&self) -> Result<u64> {
+        let res =
+            sqlx::query("DELETE FROM sessions WHERE expires_at <= ?").bind(ts(&now())).execute(&self.pool).await?;
+        Ok(res.rows_affected())
+    }
+
+    pub async fn create_api_token(&self, t: &ApiToken) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO api_tokens (id, name, token_hash, hint, created_at, last_used_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&t.id)
+        .bind(&t.name)
+        .bind(&t.token_hash)
+        .bind(&t.hint)
+        .bind(ts(&t.created_at))
+        .bind(ts_opt(&t.last_used_at))
+        .bind(ts_opt(&t.expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The API token with this digest. An expired one is returned too: the
+    /// caller decides.
+    pub async fn find_api_token(&self, token_hash: &str) -> Result<Option<ApiToken>> {
+        let row = sqlx::query("SELECT * FROM api_tokens WHERE token_hash = ?")
+            .bind(token_hash)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(row_to_api_token).transpose()
+    }
+
+    pub async fn touch_api_token(&self, id: &str, used_at: DateTime<Utc>) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")
+            .bind(ts(&used_at))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Every API token, the newest first.
+    pub async fn list_api_tokens(&self) -> Result<Vec<ApiToken>> {
+        let rows = sqlx::query("SELECT * FROM api_tokens ORDER BY created_at DESC, id").fetch_all(&self.pool).await?;
+        rows.iter().map(row_to_api_token).collect()
+    }
+
+    /// Revoke an API token.
+    pub async fn delete_api_token(&self, id: &str) -> Result<()> {
+        let res = sqlx::query("DELETE FROM api_tokens WHERE id = ?").bind(id).execute(&self.pool).await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("API token", id));
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // settings (small key/value store for server-level state)
 
     pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -1334,6 +1543,81 @@ mod tests {
         store.delete_service(&svc.id).await.unwrap();
         assert!(store.get_deploy(&d1.id).await.unwrap().is_none());
         assert!(store.get_job_run(&j.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_first_account_is_the_only_one() {
+        let store = Store::open_in_memory().await.unwrap();
+        assert!(store.first_user().await.unwrap().is_none());
+        let ada = User::new("ada@example.com", "hash-1");
+        assert!(store.create_first_user(&ada).await.unwrap());
+        // A second setup changes nothing.
+        assert!(!store.create_first_user(&User::new("eve@example.com", "hash-2")).await.unwrap());
+        assert_eq!(store.first_user().await.unwrap().unwrap(), ada);
+        assert_eq!(store.get_user(&ada.id).await.unwrap().unwrap(), ada);
+        assert_eq!(store.find_user_by_email("ada@example.com").await.unwrap().unwrap().id, ada.id);
+        assert!(store.find_user_by_email("eve@example.com").await.unwrap().is_none());
+
+        store.set_password(&ada.id, "hash-3").await.unwrap();
+        let changed = store.get_user(&ada.id).await.unwrap().unwrap();
+        assert_eq!(changed.password_hash, "hash-3");
+        assert!(changed.updated_at >= ada.updated_at);
+        assert!(store.set_password("usr-missing", "x").await.is_err());
+        assert!(!format!("{changed:?}").contains("hash-3"), "no hash in debug output");
+    }
+
+    #[tokio::test]
+    async fn sessions_round_trip_and_end() {
+        let store = Store::open_in_memory().await.unwrap();
+        let user = User::new("ada@example.com", "hash");
+        store.create_first_user(&user).await.unwrap();
+        let (a, b) = (Session::new(&user.id, "secret-a", Some("Firefox")), Session::new(&user.id, "secret-b", None));
+        store.create_session(&a).await.unwrap();
+        store.create_session(&b).await.unwrap();
+        assert_eq!(store.find_session(&crate::auth::digest("secret-a")).await.unwrap().unwrap(), a);
+        assert!(store.find_session("secret-a").await.unwrap().is_none(), "found by digest only");
+        assert_eq!(store.list_sessions(&user.id).await.unwrap().len(), 2);
+
+        // An expired session is no longer listed, and is swept.
+        let past = now() - chrono::Duration::hours(1);
+        store.touch_session(&b.id, past, past).await.unwrap();
+        let found = store.find_session(&b.token_hash).await.unwrap().unwrap();
+        assert!(found.is_expired(now()) && !a.is_expired(now()));
+        assert_eq!(store.list_sessions(&user.id).await.unwrap(), vec![a.clone()]);
+        assert_eq!(store.delete_expired_sessions().await.unwrap(), 1);
+        assert!(store.find_session(&b.token_hash).await.unwrap().is_none());
+
+        let c = Session::new(&user.id, "secret-c", None);
+        store.create_session(&c).await.unwrap();
+        assert_eq!(store.delete_sessions(&user.id, Some(&a.id)).await.unwrap(), 1, "every one but `a`");
+        assert_eq!(store.list_sessions(&user.id).await.unwrap(), vec![a.clone()]);
+        assert!(store.delete_session(&a.id).await.unwrap());
+        assert!(!store.delete_session(&a.id).await.unwrap());
+        store.create_session(&c).await.unwrap();
+        assert_eq!(store.delete_sessions(&user.id, None).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn api_tokens_round_trip() {
+        let store = Store::open_in_memory().await.unwrap();
+        let token = crate::auth::new_api_token();
+        let t = ApiToken::new("CI", &token, None);
+        store.create_api_token(&t).await.unwrap();
+        assert_eq!(store.find_api_token(&crate::auth::digest(&token)).await.unwrap().unwrap(), t);
+        assert!(store.find_api_token(&token).await.unwrap().is_none(), "found by digest only");
+        assert_eq!(t.hint, token[39..]);
+
+        let used_at = now();
+        store.touch_api_token(&t.id, used_at).await.unwrap();
+        let listed = store.list_api_tokens().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].last_used_at, Some(used_at));
+
+        let old = ApiToken::new("old", &crate::auth::new_api_token(), Some(now() - chrono::Duration::days(1)));
+        assert!(old.is_expired(now()) && !t.is_expired(now()));
+        store.delete_api_token(&t.id).await.unwrap();
+        assert!(store.delete_api_token(&t.id).await.is_err());
+        assert!(store.list_api_tokens().await.unwrap().is_empty());
     }
 
     #[tokio::test]
