@@ -15,6 +15,14 @@ import { RequireAuth } from './RequireAuth'
 export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage />, errorElement: <RouteError /> },
   {
+    // Where GitHub / GitLab send the browser back: outside the shell (it is
+    // often a small window of its own); it checks the session itself.
+    path: '/git/callback',
+    errorElement: <RouteError />,
+    hydrateFallbackElement: <FullPageLoader />,
+    lazy: async () => ({ Component: (await import('@/pages/git/GitCallbackPage')).GitCallbackPage }),
+  },
+  {
     element: <RequireAuth />,
     errorElement: <RouteError />,
     hydrateFallbackElement: <FullPageLoader />,

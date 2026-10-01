@@ -1,8 +1,9 @@
 import * as React from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { AlertTriangle, ArrowLeft, Box, ChevronDown, GitBranch, Rocket, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { BranchSelect } from '@/components/git/BranchSelect'
 import { CodeBlock } from '@/components/patterns/Copy'
 import { Callout } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
@@ -21,24 +22,28 @@ import { useCreateService, useDatastores, useServerInfo, useServices } from '@/l
 import { RUNTIMES, type GitRepository, type Runtime, type ServiceType } from '@/lib/api/types'
 import { RUNTIME_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
 import { serviceNameFromRepository } from '@/lib/git'
+import { connectedFromState } from '@/lib/gitAuthorize'
 import { LIMIT_DEFAULT, limitValue, memoryHostWarning, type LimitField } from '@/lib/resources'
 import { cn } from '@/lib/utils'
 import { servicePath } from '@/pages/service/context'
 
 import { previewServiceUrl } from './lib'
-import { BranchSelect } from './new/BranchSelect'
 import { ChoiceCards, type Choice } from './new/ChoiceCards'
 import { CronField } from './new/CronField'
 import { DatastoreRefMenu } from './new/DatastoreRefMenu'
 import { DomainsInput } from './new/DomainsInput'
 import { EnvGroupsPicker } from './new/EnvGroupsPicker'
 import {
+  clearDraft,
   FIELD_ORDER,
   fieldForServerError,
   INITIAL_FORM,
   MAX_INSTANCES,
+  readDraft,
+  saveDraft,
   toCreateRequest,
   validateForm,
+  validateRepoUrl,
   visibleFields,
   type FieldKey,
   type NewServiceForm,
@@ -123,13 +128,17 @@ function focusField(k: FieldKey) {
 /** `/services/new` — Studio settings-style form cards, "Create and deploy". */
 export function NewServicePage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const create = useCreateService()
   const info = useServerInfo()
   const services = useServices()
   const datastores = useDatastores()
   const env = useKeyValueRows([])
 
-  const [form, setForm] = React.useState<NewServiceForm>(INITIAL_FORM)
+  // Back from GitHub / GitLab after connecting an account: the form is as it was left.
+  const justConnected = connectedFromState(location.state)
+  const [form, setForm] = React.useState<NewServiceForm>(() => (justConnected ? readDraft() : null) ?? INITIAL_FORM)
+  React.useEffect(() => saveDraft(form), [form])
   const [touched, setTouched] = React.useState<ReadonlySet<FieldKey>>(() => new Set())
   const [submitted, setSubmitted] = React.useState(false)
   const [serverError, setServerError] = React.useState<{ field: FieldKey | null; message: string } | null>(null)
@@ -268,6 +277,7 @@ export function NewServicePage() {
     setServerError(null)
     create.mutate(toCreateRequest(form, env.vars), {
       onSuccess: (view) => {
+        clearDraft()
         const deploy = view.latest_deploy
         toast.success(`${view.name} created`, {
           description: deploy ? 'The first deploy is on its way.' : `Upload your code with: ferry up ${view.name}`,
@@ -291,6 +301,9 @@ export function NewServicePage() {
 
   const typeLabel = SERVICE_TYPE_LABELS[form.type]
   const picked = form.repoMode === 'account' ? form.repository : null
+  // The repository the branch list is read from: the picked one, or a URL
+  // once it looks like one.
+  const branchesOf = picked ? picked.cloneUrl : validateRepoUrl(form.repoUrl) === null ? form.repoUrl.trim() : ''
   const summary = [
     typeLabel,
     form.source === 'git' ? (picked?.fullName ?? 'Git') : form.source === 'image' ? 'Docker image' : 'Upload via CLI',
@@ -392,6 +405,7 @@ export function NewServicePage() {
                       <RepositoryPicker
                         id={fieldId('repository')}
                         value={form.repository}
+                        account={justConnected}
                         onChange={pickRepository}
                         invalid={Boolean(errorFor('repository'))}
                         describedBy={errorFor('repository') ? errorId('repository') : undefined}
@@ -401,7 +415,8 @@ export function NewServicePage() {
                       <Input {...bind('repoUrl')} mono placeholder="https://github.com/you/app.git" />
                       <p className="text-[12.5px] text-foreground-lighter">
                         HTTPS or SSH URL, or the absolute path of a git repository on the server. A private repository
-                        needs an SSH key on the server — or pick it from a connected account.
+                        on GitHub or GitLab is cloned with the account connected to this server; elsewhere it needs an
+                        SSH key on the server.
                       </p>
                     </TabsContent>
                   </Tabs>
@@ -411,26 +426,20 @@ export function NewServicePage() {
                   htmlFor={fieldId('branch')}
                   description={
                     picked
-                      ? 'Deployed branch. Starts on the repository’s default branch.'
-                      : 'Deployed branch. Defaults to main.'
+                      ? 'Deployed branch, from the repository’s own branches. Starts on its default branch.'
+                      : 'Deployed branch, from the repository’s own branches. Defaults to main.'
                   }
                   error={errNode('branch')}
                 >
-                  {picked ? (
-                    <BranchSelect
-                      id={fieldId('branch')}
-                      connectionId={picked.connectionId}
-                      repository={picked.fullName}
-                      defaultBranch={picked.defaultBranch}
-                      value={form.branch}
-                      onChange={(b) => update('branch', b)}
-                      onBlur={() => touch('branch')}
-                      invalid={Boolean(errorFor('branch'))}
-                      describedBy={errorFor('branch') ? errorId('branch') : undefined}
-                    />
-                  ) : (
-                    <Input {...bind('branch')} mono placeholder="main" />
-                  )}
+                  <BranchSelect
+                    id={fieldId('branch')}
+                    repoUrl={branchesOf}
+                    value={form.branch}
+                    onChange={(b) => update('branch', b)}
+                    onBlur={() => touch('branch')}
+                    invalid={Boolean(errorFor('branch'))}
+                    describedBy={errorFor('branch') ? errorId('branch') : undefined}
+                  />
                 </FormRow>
                 <FormRow
                   label="Auto-deploy"

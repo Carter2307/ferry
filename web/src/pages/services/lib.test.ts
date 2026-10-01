@@ -10,7 +10,6 @@ function svc(patch: Partial<ServiceView>): ServiceView {
     name: 'web',
     type: 'web_service',
     repo_url: null,
-    git_connection_id: null,
     branch: 'main',
     image: null,
     runtime: 'auto',

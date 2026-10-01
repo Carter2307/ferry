@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import type { GitRepository } from '@/lib/api/types'
+import type { GitConnectionView, GitRepository } from '@/lib/api/types'
 
 import {
+  accountName,
+  applicationsPageUrl,
+  connectedAccounts,
   connectionHost,
   connectionLabel,
-  connectionServes,
   filterRepositories,
   instanceUrl,
   instanceUrlError,
+  isBranchName,
   parseHttpUrl,
+  savedApplication,
   scopeWarning,
   serviceNameFromRepository,
   tokenExpiry,
@@ -64,34 +68,65 @@ describe('parseHttpUrl (mirror of ferry_core::git::parse_http_url)', () => {
   })
 })
 
-describe('connectionServes (mirror of GitConnection::serves)', () => {
-  const github = { base_url: 'https://github.com' }
-  it('accepts http(s) repositories of the same origin', () => {
-    expect(connectionServes(github, 'https://github.com/octocat/app.git')).toBe(true)
-    expect(connectionServes(github, 'https://GitHub.com:443/octocat/app')).toBe(true)
-    expect(connectionServes({ base_url: 'http://127.0.0.1:8929' }, 'http://127.0.0.1:8929/a/b.git')).toBe(true)
+describe('accounts', () => {
+  const connection = (over: Partial<GitConnectionView>): GitConnectionView => ({
+    id: 'git-1',
+    provider: 'gitlab',
+    base_url: 'https://gitlab.com',
+    auth: 'oauth',
+    status: 'connected',
+    account: 'tanuki',
+    account_name: null,
+    token_hint: null,
+    scopes: [],
+    token_expires_at: null,
+    client_id: 'app-id',
+    app_slug: null,
+    app_url: null,
+    manage_url: null,
+    repository_selection: null,
+    services: [],
+    created_at: '2026-10-01T00:00:00Z',
+    updated_at: '2026-10-01T00:00:00Z',
+    ...over,
   })
 
-  it('refuses other hosts, schemes, ports and credentialed URLs', () => {
-    for (const no of [
-      'http://github.com/octocat/app.git',
-      'https://gitlab.com/octocat/app.git',
-      'https://github.com.evil.example/octocat/app.git',
-      'https://user:pw@github.com/octocat/app.git',
-      'https://github.com:8443/octocat/app.git',
-      'git@github.com:octocat/app.git',
-      '/srv/repos/app',
-      '',
-    ]) {
-      expect(connectionServes(github, no), no).toBe(false)
+  it('lists the accounts whose authorization is finished', () => {
+    const pending = connection({ id: 'git-2', status: 'pending', account: '' })
+    expect(connectedAccounts([connection({}), pending]).map((c) => c.id)).toEqual(['git-1'])
+    expect(connectedAccounts(undefined)).toEqual([])
+    // A connection without an account yet is named after what it is.
+    expect([accountName(connection({})), accountName(pending)]).toEqual(['tanuki', 'GitLab application'])
+    expect(connectionLabel(pending)).toBe('GitLab application')
+  })
+
+  it('finds the OAuth application saved for an instance', () => {
+    const connected = connection({})
+    const pending = connection({ id: 'git-2', status: 'pending', account: '' })
+    const selfHosted = connection({ id: 'git-3', base_url: 'https://gitlab.example.com' })
+    const token = connection({ id: 'git-4', auth: 'token', client_id: null })
+    const all = [token, connected, pending, selfHosted]
+    // The one waiting for its account first (the server looks it up first too).
+    expect(savedApplication(all, 'gitlab', '')?.id).toBe('git-2')
+    expect(savedApplication([token, connected], 'gitlab', 'https://gitlab.com')?.id).toBe('git-1')
+    expect(savedApplication(all, 'gitlab', 'https://gitlab.example.com')?.id).toBe('git-3')
+    expect(savedApplication(all, 'gitlab', 'https://other.example.com')).toBeUndefined()
+    expect(savedApplication([token], 'gitlab', '')).toBeUndefined()
+    expect(savedApplication(all, 'github', '')).toBeUndefined()
+  })
+
+  it('links to the page that creates the GitLab application', () => {
+    expect(applicationsPageUrl()).toBe('https://gitlab.com/-/user_settings/applications')
+    expect(applicationsPageUrl('gitlab.example.com/')).toBe('https://gitlab.example.com/-/user_settings/applications')
+  })
+})
+
+describe('isBranchName (mirror of validate::branch)', () => {
+  it('accepts what git accepts', () => {
+    for (const ok of ['main', 'feature/login', 'release/1.x', 'v2', 'été']) expect(isBranchName(ok), ok).toBe(true)
+    for (const bad of ['', '  ', '-x', '/a', 'a/', 'a.', 'a.lock', 'a..b', 'a//b', 'a@{b', 'a b', 'a~b', 'a:b', 'a\\b']) {
+      expect(isBranchName(bad), bad).toBe(false)
     }
-  })
-
-  it('keeps to the path of an instance hosted below one', () => {
-    const gitlab = { base_url: 'https://dev.example.com/gitlab' }
-    expect(connectionServes(gitlab, 'https://dev.example.com/gitlab/group/app.git')).toBe(true)
-    expect(connectionServes(gitlab, 'https://dev.example.com/gitlabx/group/app.git')).toBe(false)
-    expect(connectionServes(gitlab, 'https://dev.example.com/other/app.git')).toBe(false)
   })
 })
 

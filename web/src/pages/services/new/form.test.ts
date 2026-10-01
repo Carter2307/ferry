@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  draftOf,
   fieldForServerError,
+  formFromDraft,
   INITIAL_FORM,
   normalizeDomain,
   toCreateRequest,
@@ -176,10 +178,8 @@ describe('toCreateRequest', () => {
     })
     expect(body).not.toHaveProperty('image')
     expect(body).not.toHaveProperty('schedule')
-    // A repository given by URL is cloned without a connection.
-    expect(body).not.toHaveProperty('git_connection_id')
   })
-  it('a repository picked from a connected account is cloned through its connection', () => {
+  it('a repository picked from a connected account is sent as its clone URL', () => {
     const picked = {
       connectionId: 'git-0123456789abcdef0123',
       fullName: 'octocat/app',
@@ -190,19 +190,17 @@ describe('toCreateRequest', () => {
     // The URL typed in the other mode is not what gets deployed.
     const f = form({ name: 'app', repository: picked, repoUrl: 'https://example.com/other.git', branch: 'trunk' })
     expect(validateForm(f, none)).toEqual({})
-    expect(toCreateRequest(f, [])).toMatchObject({
+    const body = toCreateRequest(f, [])
+    expect(body).toMatchObject({
       repo_url: 'https://github.com/octocat/app.git',
-      git_connection_id: 'git-0123456789abcdef0123',
       branch: 'trunk',
       auto_deploy: true,
       deploy: true,
     })
-    // Back in URL mode the picked repository (and its connection) is left out.
-    const byUrl = toCreateRequest({ ...f, repoMode: 'url' }, [])
-    expect(byUrl.repo_url).toBe('https://example.com/other.git')
-    expect(byUrl).not.toHaveProperty('git_connection_id')
-    // Other sources never carry one.
-    expect(toCreateRequest({ ...f, source: 'image', image: 'nginx' }, [])).not.toHaveProperty('git_connection_id')
+    // A service names no connection: the server finds the one for the repository's host.
+    expect(JSON.stringify(body)).not.toContain('git-0123456789abcdef0123')
+    // Back in URL mode the picked repository is left out.
+    expect(toCreateRequest({ ...f, repoMode: 'url' }, []).repo_url).toBe('https://example.com/other.git')
   })
   it('a git source needs its repository, picked or typed', () => {
     expect(validateForm(form({ name: 'app' }), none)).toEqual({ repository: 'Select a repository.' })
@@ -234,6 +232,50 @@ describe('toCreateRequest', () => {
   })
 })
 
+describe('the draft kept while an account is being connected', () => {
+  const picked = {
+    connectionId: 'git-0123456789abcdef0123',
+    fullName: 'octocat/app',
+    cloneUrl: 'https://github.com/octocat/app.git',
+    private: true,
+    defaultBranch: 'main',
+  }
+
+  it('comes back as it was', () => {
+    const f = form({
+      name: 'app',
+      type: 'static_site',
+      repository: picked,
+      domains: ['app.example.com'],
+      autoDeploy: false,
+      memoryLimit: { choice: 'custom', custom: '768' },
+    })
+    expect(formFromDraft(JSON.stringify(draftOf(f)))).toEqual(f)
+    expect(formFromDraft(JSON.stringify(draftOf(form({}))))).toEqual(INITIAL_FORM)
+  })
+
+  it('never stores credentials of a repository URL', () => {
+    // Put together here: nothing in the repository looks like a URL with a password.
+    const userinfo = ['deploy', 'not-kept'].join(':')
+    const typed = form({ repoMode: 'url', repoUrl: `https://${userinfo}@gitlab.com/acme/app.git` })
+    expect(JSON.stringify(draftOf(typed))).not.toContain('not-kept')
+    expect(draftOf(typed).repoUrl).toBe('')
+    // URLs without credentials, and scp-like ones (the user is not a secret), are kept.
+    for (const url of ['https://github.com/a/b.git', 'git@github.com:a/b.git', '/srv/repos/app']) {
+      expect(draftOf(form({ repoUrl: url })).repoUrl).toBe(url)
+    }
+  })
+
+  it('ignores what is not a draft', () => {
+    for (const bad of [null, '', 'not json', '[]', '"text"', '42']) expect(formFromDraft(bad)).toBeNull()
+    // Unknown fields are dropped; fields of the wrong shape keep their initial value.
+    const odd = formFromDraft(
+      JSON.stringify({ name: 'api', branch: 7, domains: 'x', repository: 'x', autoDeploy: 'yes', extra: true }),
+    )
+    expect(odd).toEqual({ ...INITIAL_FORM, name: 'api' })
+  })
+})
+
 describe('fieldForServerError', () => {
   it('maps server messages to fields', () => {
     expect(fieldForServerError("name 'api' is already in use")).toBe('name')
@@ -241,10 +283,6 @@ describe('fieldForServerError', () => {
     expect(fieldForServerError("domain 'a.example.com' is already used by service 'web'")).toBe('domains')
     expect(fieldForServerError("env group 'nope' not found")).toBe('envGroups')
     expect(fieldForServerError("invalid repo_url 'x': must not be empty")).toBe('repoUrl')
-    expect(fieldForServerError("git connection 'git-0123456789abcdef0123' not found")).toBe('repository')
-    expect(
-      fieldForServerError("the GitHub account 'octocat' can't be used for https://gitlab.com/a/b: its token is only for …"),
-    ).toBe('repository')
     expect(fieldForServerError('memory limit must be between 16 MiB and 1024 GiB (got 8 MiB)')).toBe('memoryLimit')
     expect(fieldForServerError('CPU limit must be between 0.01 and 512 CPUs (got 0)')).toBe('cpuLimit')
     expect(fieldForServerError('something else entirely')).toBeNull()
