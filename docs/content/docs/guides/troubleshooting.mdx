@@ -196,6 +196,25 @@ A deploy that fails ends as `deploy_failed`, and the previous deploy keeps servi
 
 **Fix:** read the instance's last lines of output, which Ferry copies into the deploy log just above.
 
+### The app exits right away
+
+```text title="Deploy log" noCopy
+==> Start command: node ./dist/index.js (package.json has no "start" script: its "main" file is run)
+…
+==> Deploy failed: instance 2e58a7 exited with code 0: its command `node ./dist/index.js` ended without an error, but a web service must keep running and listen on port 10000
+==> Hint: the service has no start command, so Ferry picked this one from the project (see "==> Start command" in the build log). If the project is an app, set the start command that runs its server. If it only builds files (a static site, a component library), create it as a static site instead.
+```
+
+**Cause:** the command the instance ran finished without an error, and often without printing anything, instead of starting a server that keeps running. The message names that command, and the hint says where it comes from:
+
+| The command is | Typical case | Fix |
+|---|---|---|
+| picked from the project, because the service has no start command | A library, or a site that only builds files: its `main` file loads and returns | Create the service as a **static site** with its build command and publish directory, or set the start command of the app's server |
+| the service's start command | It only builds (`npm run build`), or starts a daemon and returns | Put build steps in the build command; start the server in the foreground |
+| the image's own command | An image made for one-shot tasks | Set a start command on the service |
+
+A background worker that ends is told the same way: a task that runs and ends belongs in a [cron job or a one-off job](/docs/concepts/jobs) (`ferry run`).
+
 ### The app runs out of memory
 
 ```text title="Deploy log" noCopy

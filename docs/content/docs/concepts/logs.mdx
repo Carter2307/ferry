@@ -168,6 +168,14 @@ Docker clears the out-of-memory flag as soon as the container runs again, so `oo
 
 `ferryd` writes its own log (lifecycle events, proxy warnings, certificate requests) to standard output at the `info` level. Set the `RUST_LOG` environment variable to change it, for example `RUST_LOG=debug ferryd` to also log every proxied request. Under systemd, read it with `journalctl -u ferryd`.
 
+Every deploy that fails is logged as a warning that names the service and says as much as the end of its deploy log: the error, and the hint when Ferry has one.
+
+```text title="journalctl -u ferryd" noCopy
+WARN deploy failed: instance 2e58a7 exited with code 0: its command `node ./dist/index.js` ended without an error, but a web service must keep running and listen on port 10000 service=libui deploy=dep-1edd534d254f47bbbde5 status=deploy_failed hint=the service has no start command, so Ferry picked this one from the project (…)
+```
+
+What the app itself printed is not copied there: it stays in the deploy log (`ferry logs --deploy ID`).
+
 The server log is also where out-of-memory kills end up: `ferryd` logs a warning for every container of the server the kernel kills, for example `instance a1b2c3 of service 'api' ran out of memory (limit 512 MiB) — raise the service's memory limit`. At startup, it warns about [limits](/docs/concepts/resource-limits#cpu-limits-and-the-host) the Docker host can't enforce.
 
 <Cards cols={3}>

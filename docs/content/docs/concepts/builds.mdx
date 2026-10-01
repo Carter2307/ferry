@@ -178,6 +178,14 @@ The start command of a generated image is, in order:
 
 A cron job needs none of them: its command can come at run time.
 
+The build log says which one was used, and why:
+
+```text title="Deploy log" noCopy
+==> Start command: npm start (the "start" script of package.json)
+```
+
+Check that line when an instance doesn't stay up: a default nobody chose, such as the `main` file of a library, may not start a server at all. See [The app exits right away](/docs/guides/troubleshooting#the-app-exits-right-away).
+
 ## Static sites
 
 Static sites (the `static` service type, or the `static` runtime) are served by `nginx:alpine` on port 80, with this behavior:
