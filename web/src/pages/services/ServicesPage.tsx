@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { useServices } from '@/lib/api/queries'
 import type { ServiceState } from '@/lib/api/types'
 
+import { ConnectGitPrompt } from './ConnectGitPrompt'
 import { countByState, matchesQuery, parseStatusParam, sortServices } from './lib'
 import { ServerPanel } from './ServerPanel'
 import { ServiceCard } from './ServiceCard'
@@ -146,6 +147,7 @@ export function ServicesPage() {
       />
       <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="flex min-w-0 flex-col gap-4">
+          <ConnectGitPrompt />
           {(loading || total > 0) && (
             <ServicesToolbar
               query={query}

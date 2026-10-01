@@ -827,9 +827,12 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "chrono",
+ "ferry-build",
  "ferry-core",
+ "ferry-scm",
  "flate2",
  "form_urlencoded",
  "futures",
@@ -837,7 +840,6 @@ dependencies = [
  "hmac",
  "http",
  "http-body-util",
- "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -947,6 +949,7 @@ dependencies = [
  "ferry-core",
  "ferry-docker",
  "ferry-proxy",
+ "ferry-scm",
  "futures",
  "libc",
  "reqwest",
@@ -980,6 +983,23 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "ferry-scm"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ferry-core",
+ "futures",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

@@ -18,6 +18,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_resource_limits.sql"),
     include_str!("../migrations/0003_git_connections.sql"),
+    include_str!("../migrations/0004_git_authorization.sql"),
 ];
 
 /// Handle to the Ferry database.
@@ -74,7 +75,6 @@ fn row_to_service(r: &SqliteRow) -> Result<Service> {
         name: r.try_get("name")?,
         service_type: get_enum(r, "service_type")?,
         repo_url: r.try_get("repo_url")?,
-        git_connection_id: r.try_get("git_connection_id")?,
         branch: r.try_get("branch")?,
         image: r.try_get("image")?,
         runtime: get_enum(r, "runtime")?,
@@ -168,31 +168,57 @@ fn row_to_env(r: &SqliteRow) -> Result<EnvVar> {
     Ok(EnvVar { key: r.try_get("key")?, value: r.try_get("value")? })
 }
 
+fn get_u64_opt(r: &SqliteRow, col: &str) -> Result<Option<u64>> {
+    Ok(r.try_get::<Option<i64>, _>(col)?.and_then(|v| u64::try_from(v).ok()))
+}
+
 fn row_to_git_connection(r: &SqliteRow) -> Result<GitConnection> {
     let scopes: String = r.try_get("scopes")?;
+    // An app is its id, slug, page and key together.
+    let app = match (
+        get_u64_opt(r, "app_id")?,
+        r.try_get::<Option<String>, _>("app_slug")?,
+        r.try_get::<Option<String>, _>("app_url")?,
+        r.try_get::<Option<String>, _>("private_key")?,
+    ) {
+        (Some(id), Some(slug), Some(url), Some(private_key)) => {
+            Some(GithubApp { id, slug, url, private_key, webhook_secret: r.try_get("webhook_secret")? })
+        }
+        _ => None,
+    };
+    let installation = get_u64_opt(r, "installation_id")?
+        .map(|id| -> Result<GithubInstallation> {
+            Ok(GithubInstallation {
+                id,
+                url: r.try_get("installation_url")?,
+                repository_selection: r.try_get("repository_selection")?,
+            })
+        })
+        .transpose()?;
     Ok(GitConnection {
         id: r.try_get("id")?,
         provider: get_enum(r, "provider")?,
         base_url: r.try_get("base_url")?,
+        auth: get_enum(r, "auth")?,
         account: r.try_get("account")?,
         account_name: r.try_get("account_name")?,
         token: r.try_get("token")?,
+        refresh_token: r.try_get("refresh_token")?,
         scopes: serde_json::from_str(&scopes)
             .map_err(|e| Error::internal(format!("bad git connection scopes json: {e}")))?,
         token_expires_at: get_ts_opt(r, "token_expires_at")?,
+        client_id: r.try_get("client_id")?,
+        client_secret: r.try_get("client_secret")?,
+        app,
+        installation,
         created_at: get_ts(r, "created_at")?,
         updated_at: get_ts(r, "updated_at")?,
     })
 }
 
-/// A foreign-key violation (e.g. a service row naming a git connection that
-/// doesn't exist).
-fn is_foreign_key_violation(e: &sqlx::Error) -> bool {
-    matches!(e, sqlx::Error::Database(db) if db.is_foreign_key_violation())
-}
-
-fn unknown_git_connection(s: &Service) -> Error {
-    Error::invalid(format!("git connection '{}' not found", s.git_connection_id.as_deref().unwrap_or_default()))
+/// SQLite integers are signed: ids GitHub hands out fit (they are far below 2^63).
+fn sql_u64(v: Option<u64>) -> Option<i64> {
+    v.and_then(|v| i64::try_from(v).ok())
 }
 
 impl Store {
@@ -283,17 +309,16 @@ impl Store {
             return Err(Error::conflict(format!("name '{}' is already in use", s.name)));
         }
         let res = sqlx::query(
-            "INSERT INTO services (id, name, service_type, repo_url, git_connection_id, branch, image, runtime, root_dir,
-                dockerfile_path, build_command, start_command, publish_dir, port, health_check_path, schedule, instances,
-                auto_deploy, suspended, disk_mount_path, memory_limit_mb, cpu_limit, custom_domains, deploy_hook_key,
-                live_deploy_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO services (id, name, service_type, repo_url, branch, image, runtime, root_dir, dockerfile_path,
+                build_command, start_command, publish_dir, port, health_check_path, schedule, instances, auto_deploy,
+                suspended, disk_mount_path, memory_limit_mb, cpu_limit, custom_domains, deploy_hook_key, live_deploy_id,
+                created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&s.id)
         .bind(&s.name)
         .bind(s.service_type.as_str())
         .bind(&s.repo_url)
-        .bind(&s.git_connection_id)
         .bind(&s.branch)
         .bind(&s.image)
         .bind(s.runtime.as_str())
@@ -321,7 +346,6 @@ impl Store {
         match res {
             Ok(_) => Ok(()),
             Err(e) if is_unique_violation(&e) => Err(Error::conflict(format!("name '{}' is already in use", s.name))),
-            Err(e) if is_foreign_key_violation(&e) => Err(unknown_git_connection(s)),
             Err(e) => Err(e.into()),
         }
     }
@@ -335,16 +359,15 @@ impl Store {
     /// revert a scale, suspend or deploy. `name` and `id` are immutable.
     pub async fn update_service(&self, s: &Service) -> Result<Service> {
         let res = sqlx::query(
-            "UPDATE services SET service_type = ?, repo_url = ?, git_connection_id = ?, branch = ?, image = ?,
-                runtime = ?, root_dir = ?, dockerfile_path = ?, build_command = ?, start_command = ?, publish_dir = ?,
-                port = ?, health_check_path = ?, schedule = ?, auto_deploy = ?,
+            "UPDATE services SET service_type = ?, repo_url = ?, branch = ?, image = ?, runtime = ?, root_dir = ?,
+                dockerfile_path = ?, build_command = ?, start_command = ?, publish_dir = ?, port = ?,
+                health_check_path = ?, schedule = ?, auto_deploy = ?,
                 disk_mount_path = ?, memory_limit_mb = ?, cpu_limit = ?, custom_domains = ?, deploy_hook_key = ?,
                 updated_at = ?
              WHERE id = ?",
         )
         .bind(s.service_type.as_str())
         .bind(&s.repo_url)
-        .bind(&s.git_connection_id)
         .bind(&s.branch)
         .bind(&s.image)
         .bind(s.runtime.as_str())
@@ -365,12 +388,7 @@ impl Store {
         .bind(ts(&Utc::now()))
         .bind(&s.id)
         .execute(&self.pool)
-        .await;
-        let res = match res {
-            Ok(res) => res,
-            Err(e) if is_foreign_key_violation(&e) => return Err(unknown_git_connection(s)),
-            Err(e) => return Err(e.into()),
-        };
+        .await?;
         if res.rows_affected() == 0 {
             return Err(Error::not_found("service", &s.id));
         }
@@ -1021,18 +1039,31 @@ impl Store {
     /// provider instance is already connected.
     pub async fn create_git_connection(&self, c: &GitConnection) -> Result<()> {
         let res = sqlx::query(
-            "INSERT INTO git_connections (id, provider, base_url, account, account_name, token, scopes,
-                token_expires_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO git_connections (id, provider, base_url, auth, account, account_name, token, refresh_token,
+                token_expires_at, scopes, client_id, client_secret, app_id, app_slug, app_url, private_key,
+                webhook_secret, installation_id, installation_url, repository_selection, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&c.id)
         .bind(c.provider.as_str())
         .bind(&c.base_url)
+        .bind(c.auth.as_str())
         .bind(&c.account)
         .bind(&c.account_name)
         .bind(&c.token)
-        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(&c.refresh_token)
         .bind(ts_opt(&c.token_expires_at))
+        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(&c.client_id)
+        .bind(&c.client_secret)
+        .bind(sql_u64(c.app.as_ref().map(|a| a.id)))
+        .bind(c.app.as_ref().map(|a| a.slug.as_str()))
+        .bind(c.app.as_ref().map(|a| a.url.as_str()))
+        .bind(c.app.as_ref().map(|a| a.private_key.as_str()))
+        .bind(c.app.as_ref().and_then(|a| a.webhook_secret.as_deref()))
+        .bind(sql_u64(c.installation.as_ref().map(|i| i.id)))
+        .bind(c.installation.as_ref().and_then(|i| i.url.as_deref()))
+        .bind(c.installation.as_ref().and_then(|i| i.repository_selection.as_deref()))
         .bind(ts(&c.created_at))
         .bind(ts(&c.updated_at))
         .execute(&self.pool)
@@ -1046,28 +1077,75 @@ impl Store {
         }
     }
 
-    /// Persist what a new token changes — the token itself, the account's
-    /// names, the token's scopes and expiry — and bump `updated_at`. Returns
-    /// the stored row. Provider and instance are immutable.
+    /// Persist everything a (re)authorization changes — the account, how it
+    /// is authorized and its secrets — and bump `updated_at`. Returns the
+    /// stored row. Provider and instance are immutable. Conflict if the
+    /// account became one that has another connection.
     pub async fn update_git_connection(&self, c: &GitConnection) -> Result<GitConnection> {
         let res = sqlx::query(
-            "UPDATE git_connections SET account = ?, account_name = ?, token = ?, scopes = ?, token_expires_at = ?,
-                updated_at = ?
+            "UPDATE git_connections SET auth = ?, account = ?, account_name = ?, token = ?, refresh_token = ?,
+                token_expires_at = ?, scopes = ?, client_id = ?, client_secret = ?, app_id = ?, app_slug = ?,
+                app_url = ?, private_key = ?, webhook_secret = ?, installation_id = ?, installation_url = ?,
+                repository_selection = ?, updated_at = ?
              WHERE id = ?",
         )
+        .bind(c.auth.as_str())
         .bind(&c.account)
         .bind(&c.account_name)
         .bind(&c.token)
-        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(&c.refresh_token)
         .bind(ts_opt(&c.token_expires_at))
+        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(&c.client_id)
+        .bind(&c.client_secret)
+        .bind(sql_u64(c.app.as_ref().map(|a| a.id)))
+        .bind(c.app.as_ref().map(|a| a.slug.as_str()))
+        .bind(c.app.as_ref().map(|a| a.url.as_str()))
+        .bind(c.app.as_ref().map(|a| a.private_key.as_str()))
+        .bind(c.app.as_ref().and_then(|a| a.webhook_secret.as_deref()))
+        .bind(sql_u64(c.installation.as_ref().map(|i| i.id)))
+        .bind(c.installation.as_ref().and_then(|i| i.url.as_deref()))
+        .bind(c.installation.as_ref().and_then(|i| i.repository_selection.as_deref()))
         .bind(ts(&Utc::now()))
         .bind(&c.id)
         .execute(&self.pool)
-        .await?;
+        .await;
+        let res = match res {
+            Ok(res) => res,
+            Err(e) if is_unique_violation(&e) => {
+                return Err(Error::conflict(format!("the {} is already connected", c.describe())));
+            }
+            Err(e) => return Err(e.into()),
+        };
         if res.rows_affected() == 0 {
             return Err(Error::not_found("git connection", &c.id));
         }
         self.require_git_connection(&c.id).await
+    }
+
+    /// Store a renewed OAuth access token, with the refresh token that
+    /// replaces the one just used. Unlike [`Store::update_git_connection`]
+    /// this leaves `updated_at` alone: nothing about the connection changed
+    /// for its users.
+    pub async fn set_git_tokens(
+        &self,
+        id: &str,
+        token: &str,
+        refresh_token: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        let res =
+            sqlx::query("UPDATE git_connections SET token = ?, refresh_token = ?, token_expires_at = ? WHERE id = ?")
+                .bind(token)
+                .bind(refresh_token)
+                .bind(ts_opt(&expires_at))
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("git connection", id));
+        }
+        Ok(())
     }
 
     pub async fn get_git_connection(&self, id: &str) -> Result<Option<GitConnection>> {
@@ -1084,7 +1162,8 @@ impl Store {
     }
 
     /// The connection of an account (its login compared case-insensitively)
-    /// on a provider instance, if any.
+    /// on a provider instance, if any. The empty account is the instance's
+    /// OAuth application that waits for its first authorization.
     pub async fn find_git_connection(
         &self,
         provider: GitProvider,
@@ -1111,30 +1190,10 @@ impl Store {
             .collect()
     }
 
-    /// Services cloned with a git connection (ordered by name).
-    pub async fn git_connection_services(&self, id: &str) -> Result<Vec<Service>> {
-        sqlx::query("SELECT * FROM services WHERE git_connection_id = ? ORDER BY name")
-            .bind(id)
-            .fetch_all(&self.pool)
-            .await?
-            .iter()
-            .map(row_to_service)
-            .collect()
-    }
-
-    /// Delete a git connection. The services that used it keep their
-    /// repository and clone without credentials from then on.
+    /// Delete a git connection. The repositories it served are cloned
+    /// without credentials from then on.
     pub async fn delete_git_connection(&self, id: &str) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        // Explicit (the foreign key would do it too): `updated_at` tells the
-        // change feed that these services changed.
-        sqlx::query("UPDATE services SET git_connection_id = NULL, updated_at = ? WHERE git_connection_id = ?")
-            .bind(ts(&Utc::now()))
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        let res = sqlx::query("DELETE FROM git_connections WHERE id = ?").bind(id).execute(&mut *tx).await?;
-        tx.commit().await?;
+        let res = sqlx::query("DELETE FROM git_connections WHERE id = ?").bind(id).execute(&self.pool).await?;
         if res.rows_affected() == 0 {
             return Err(Error::not_found("git connection", id));
         }
@@ -1314,7 +1373,7 @@ mod tests {
     }
 
     /// A database written before git connections existed (schema v2) gets
-    /// the new table and column; its services have no connection.
+    /// their table; its services are served by the connections made later.
     #[tokio::test]
     async fn upgrades_a_database_without_git_connections() {
         use sqlx::Connection;
@@ -1339,13 +1398,74 @@ mod tests {
         }
         let store = Store::open(&path).await.unwrap();
         let old = store.require_service("old").await.unwrap();
-        assert_eq!((old.repo_url.as_deref(), old.git_connection_id.as_deref()), (Some("https://github.com/a/b"), None));
+        assert_eq!(old.repo_url.as_deref(), Some("https://github.com/a/b"));
         assert!(store.list_git_connections().await.unwrap().is_empty());
         let conn = GitConnection::new(GitProvider::Github, "https://github.com", "a", "tok");
         store.create_git_connection(&conn).await.unwrap();
-        let mut linked = old.clone();
-        linked.git_connection_id = Some(conn.id.clone());
-        assert_eq!(store.update_service(&linked).await.unwrap().git_connection_id, Some(conn.id));
+        // The old service's repository is served by the new connection.
+        let all = store.list_git_connections().await.unwrap();
+        assert_eq!(git_connection_for(&all, old.repo_url.as_deref().unwrap()).map(|c| &c.id), Some(&conn.id));
+    }
+
+    /// A database written when git connections were pasted tokens that
+    /// services named (schema v3): its connections are token connections,
+    /// and its services no longer name one — their repository's URL decides.
+    #[tokio::test]
+    async fn upgrades_a_database_with_token_connections() {
+        use sqlx::Connection;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferry.db");
+        {
+            let opts = SqliteConnectOptions::new().filename(&path).create_if_missing(true).foreign_keys(true);
+            let mut conn = sqlx::SqliteConnection::connect_with(&opts).await.unwrap();
+            for sql in &MIGRATIONS[..3] {
+                sqlx::raw_sql(sql).execute(&mut conn).await.unwrap();
+            }
+            sqlx::raw_sql(
+                "PRAGMA user_version = 3;
+                 INSERT INTO git_connections (id, provider, base_url, account, account_name, token, scopes,
+                                              created_at, updated_at)
+                 VALUES ('git-00000000000000000001', 'github', 'https://github.com', 'Octocat', 'The Octocat',
+                         'tok', '[\"repo\"]', '2026-01-01T00:00:00.000000Z', '2026-01-01T00:00:00.000000Z');
+                 INSERT INTO services (id, name, service_type, repo_url, git_connection_id, deploy_hook_key,
+                                       created_at, updated_at)
+                 VALUES ('srv-00000000000000000001', 'old', 'web_service', 'https://github.com/octocat/app',
+                         'git-00000000000000000001', 'k', '2026-01-01T00:00:00.000000Z',
+                         '2026-01-01T00:00:00.000000Z');",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            conn.close().await.unwrap();
+        }
+        let store = Store::open(&path).await.unwrap();
+        let all = store.list_git_connections().await.unwrap();
+        let [c] = all.as_slice() else { panic!("{all:?}") };
+        assert_eq!((c.auth, c.account.as_str(), c.token.as_str()), (GitAuth::Token, "Octocat", "tok"));
+        assert_eq!((c.account_name.as_deref(), c.scopes.as_slice()), (Some("The Octocat"), &["repo".to_string()][..]));
+        assert!(c.is_connected());
+        assert!(c.refresh_token.is_none() && c.client_id.is_none() && c.app.is_none() && c.installation.is_none());
+        // The service kept its repository, which the connection still serves.
+        let old = store.require_service("old").await.unwrap();
+        assert_eq!(old.repo_url.as_deref(), Some("https://github.com/octocat/app"));
+        assert_eq!(git_connection_for(&all, "https://github.com/octocat/app").map(|c| &c.id), Some(&c.id));
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('services')").fetch_all(store.pool()).await.unwrap();
+        assert!(!columns.iter().any(|name| name == "git_connection_id"), "{columns:?}");
+        // The connection can be authorized another way, and removed.
+        let mut again = c.clone();
+        again.auth = GitAuth::Oauth;
+        again.refresh_token = Some("renew".into());
+        again.client_id = Some("app".into());
+        let saved = store.update_git_connection(&again).await.unwrap();
+        assert_eq!((saved.auth, saved.refresh_token.as_deref()), (GitAuth::Oauth, Some("renew")));
+        store.delete_git_connection(&saved.id).await.unwrap();
+        assert_eq!(store.require_service("old").await.unwrap().repo_url, old.repo_url);
+        // Reopening applies nothing twice.
+        store.pool().close().await;
+        let store = Store::open(&path).await.unwrap();
+        assert!(store.list_git_connections().await.unwrap().is_empty());
+        assert_eq!(store.list_services().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1391,36 +1511,76 @@ mod tests {
             Err(Error::NotFound(_))
         ));
 
-        // Services name their connection; an unknown one is refused.
+        // Deleting a connection leaves services alone: they name no connection.
         let mut svc = Service::new("app", ServiceType::WebService);
-        svc.repo_url = Some("https://github.com/octocat/app.git".into());
-        svc.git_connection_id = Some("git-00000000000000000000".into());
-        let err = store.create_service(&svc).await.unwrap_err();
-        assert!(
-            matches!(&err, Error::Invalid(m) if m == "git connection 'git-00000000000000000000' not found"),
-            "{err}"
-        );
-        svc.git_connection_id = Some(gh.id.clone());
+        svc.repo_url = Some("https://gitlab.com/octocat/app.git".into());
         store.create_service(&svc).await.unwrap();
-        assert_eq!(store.require_service("app").await.unwrap().git_connection_id.as_deref(), Some(gh.id.as_str()));
-        let mut other = svc.clone();
-        other.git_connection_id = Some("git-00000000000000000000".into());
-        assert!(matches!(store.update_service(&other).await, Err(Error::Invalid(_))));
-        other.git_connection_id = Some(gl.id.clone());
-        assert_eq!(store.update_service(&other).await.unwrap().git_connection_id.as_deref(), Some(gl.id.as_str()));
-        let users: Vec<String> =
-            store.git_connection_services(&gl.id).await.unwrap().into_iter().map(|s| s.name).collect();
-        assert_eq!(users, vec!["app"]);
-        assert!(store.git_connection_services(&gh.id).await.unwrap().is_empty());
-
-        // Deleting a connection keeps its services, without the connection.
-        let before = store.require_service("app").await.unwrap();
         store.delete_git_connection(&gl.id).await.unwrap();
-        let after = store.require_service("app").await.unwrap();
-        assert_eq!((after.git_connection_id, after.repo_url), (None, svc.repo_url.clone()));
-        assert!(after.updated_at >= before.updated_at);
+        assert_eq!(store.require_service("app").await.unwrap(), svc);
         assert!(matches!(store.delete_git_connection(&gl.id).await, Err(Error::NotFound(_))));
         assert_eq!(store.list_git_connections().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn git_connections_authorized_in_the_browser() {
+        let store = Store::open_in_memory().await.unwrap();
+        // An OAuth application waits for its authorization under the empty account.
+        let pending = GitConnection::oauth_application(GitProvider::Gitlab, "https://gitlab.com", "app-id", "app-s");
+        store.create_git_connection(&pending).await.unwrap();
+        let found = store.find_git_connection(GitProvider::Gitlab, "https://gitlab.com", "").await.unwrap().unwrap();
+        assert_eq!(found, pending);
+        assert!(!found.is_connected());
+        // Authorized: the account, its tokens and when the access token expires.
+        let mut authorized = found;
+        authorized.account = "tanuki".into();
+        authorized.token = "access-1".into();
+        authorized.refresh_token = Some("refresh-1".into());
+        authorized.token_expires_at = Some(now() + chrono::Duration::hours(2));
+        authorized.scopes = vec!["read_api".into(), "read_repository".into()];
+        let saved = store.update_git_connection(&authorized).await.unwrap();
+        assert!(saved.is_connected());
+        assert_eq!((saved.auth, saved.client_id.as_deref()), (GitAuth::Oauth, Some("app-id")));
+        assert_eq!(saved.refresh_token.as_deref(), Some("refresh-1"));
+        // Renewing the tokens doesn't count as a change of the connection.
+        let expires = now() + chrono::Duration::hours(4);
+        store.set_git_tokens(&saved.id, "access-2", Some("refresh-2"), Some(expires)).await.unwrap();
+        let renewed = store.require_git_connection(&saved.id).await.unwrap();
+        assert_eq!((renewed.token.as_str(), renewed.refresh_token.as_deref()), ("access-2", Some("refresh-2")));
+        assert_eq!((renewed.token_expires_at, renewed.updated_at), (Some(expires), saved.updated_at));
+        assert!(matches!(store.set_git_tokens("git-none", "t", None, None).await, Err(Error::NotFound(_))));
+
+        // A GitHub App: its registration, then where it is installed.
+        let app = GithubApp {
+            id: 4242,
+            slug: "ferry-test".into(),
+            url: "https://github.com/apps/ferry-test".into(),
+            private_key: "pem".into(),
+            webhook_secret: Some("hook".into()),
+        };
+        let mut gh = GitConnection::github_app("https://github.com", "octocat", app.clone(), "Iv1.abc", "s");
+        store.create_git_connection(&gh).await.unwrap();
+        let stored = store.require_git_connection(&gh.id).await.unwrap();
+        assert_eq!(stored, gh);
+        assert_eq!(
+            (stored.app.as_ref(), stored.installation.as_ref(), stored.is_connected()),
+            (Some(&app), None, false)
+        );
+        gh.installation = Some(GithubInstallation {
+            id: 99,
+            url: Some("https://github.com/settings/installations/99".into()),
+            repository_selection: Some("selected".into()),
+        });
+        let installed = store.update_git_connection(&gh).await.unwrap();
+        assert!(installed.is_connected());
+        assert_eq!(installed.installation, gh.installation);
+        assert_eq!(installed.token, "");
+
+        // An account can't end up with two connections.
+        let mut clash = GitConnection::new(GitProvider::Github, "https://github.com", "hubot", "t");
+        store.create_git_connection(&clash).await.unwrap();
+        clash.account = "OctoCat".into();
+        let err = store.update_git_connection(&clash).await.unwrap_err();
+        assert!(matches!(&err, Error::Conflict(m) if m.contains("already connected")), "{err}");
     }
 
     #[tokio::test]

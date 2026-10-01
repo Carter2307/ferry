@@ -35,10 +35,10 @@ export const keys = {
   envGroupList: () => ['env-groups', 'list'] as const,
   envGroup: (ref: string) => ['env-groups', 'detail', ref] as const,
 
+  /** Everything about git connections: what they can read changes with them. */
   git: () => ['git'] as const,
   gitConnections: () => ['git', 'connections'] as const,
-  /** Everything asked from the provider through one connection (repositories, branches). */
-  gitProvider: (id: string) => ['git', 'provider', id] as const,
-  gitRepositories: (id: string) => ['git', 'provider', id, 'repositories'] as const,
-  gitBranches: (id: string, repository: string) => ['git', 'provider', id, 'branches', repository] as const,
+  gitRepositories: (id: string) => ['git', 'repositories', id] as const,
+  /** The branches of a repository, by its URL (whatever reads it). */
+  gitBranches: (repoUrl: string) => ['git', 'branches', repoUrl] as const,
 } as const

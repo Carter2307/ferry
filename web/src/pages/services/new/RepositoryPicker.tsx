@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Link } from 'react-router'
-import { AlertTriangle, Archive, BookMarked, Check, Lock, Plus, RefreshCw, Search } from 'lucide-react'
+import { AlertTriangle, Archive, BookMarked, Check, ExternalLink, Lock, Plus, RefreshCw, Search } from 'lucide-react'
 
 import { ConnectGitDialog } from '@/components/git/ConnectGitDialog'
 import { Callout, EmptyState, ErrorState } from '@/components/patterns/EmptyState'
@@ -15,7 +15,7 @@ import { ApiError, errorMessage } from '@/lib/api/client'
 import { useGitConnections, useGitRepositories } from '@/lib/api/queries'
 import type { GitConnectionView, GitProvider, GitRepository } from '@/lib/api/types'
 import { relativeTime } from '@/lib/format'
-import { connectionLabel, filterRepositories, GIT_PROVIDER_LABELS, scopeWarning } from '@/lib/git'
+import { connectedAccounts, connectionLabel, filterRepositories, GIT_PROVIDER_LABELS, scopeWarning } from '@/lib/git'
 import { cn } from '@/lib/utils'
 
 import type { PickedRepository } from './form'
@@ -27,6 +27,8 @@ interface RepositoryPickerProps {
   /** Id of the focusable element (for the label and for error focus). */
   id: string
   value: PickedRepository | null
+  /** The account to show first (the one that was just connected), by connection id. */
+  account?: string | null
   /** `repository` is the provider's record of a newly picked one (for its default branch and name). */
   onChange: (value: PickedRepository | null, repository?: GitRepository) => void
   invalid?: boolean
@@ -96,13 +98,20 @@ function RepositoryRow({ repository, selected, onPick }: { repository: GitReposi
   )
 }
 
+/** What to do when the provider no longer accepts how an account was authorized. */
+function reconnectLabel(connection: GitConnectionView): string {
+  if (connection.auth === 'token') return 'Replace the token'
+  if (connection.auth === 'oauth') return 'Authorize again'
+  return 'Connect again'
+}
+
 /** The repositories of one connection: search + list. */
 function RepositoryList({
   id,
   connection,
   value,
   onPick,
-  onReplaceToken,
+  onReconnect,
   invalid,
   describedBy,
 }: {
@@ -110,7 +119,7 @@ function RepositoryList({
   connection: GitConnectionView
   value: PickedRepository | null
   onPick: (repository: GitRepository) => void
-  onReplaceToken: () => void
+  onReconnect: () => void
   invalid?: boolean
   describedBy?: string
 }) {
@@ -120,6 +129,8 @@ function RepositoryList({
   const all = repositories.data?.repositories
   const matches = React.useMemo(() => filterRepositories(all ?? [], query), [all, query])
   const warning = scopeWarning(connection)
+  // A GitHub App reads what the account selected for it, on GitHub.
+  const selection = connection.auth === 'github_app' && connection.manage_url ? connection.manage_url : null
 
   if (repositories.isPending) {
     return (
@@ -134,15 +145,15 @@ function RepositoryList({
     )
   }
   if (repositories.isError && !all) {
-    const rejected = repositories.error instanceof ApiError && repositories.error.code === 'git_token_rejected'
+    const rejected = repositories.error instanceof ApiError && repositories.error.code === 'git_authorization_rejected'
     return rejected ? (
       <Callout
         tone="destructive"
         icon={<AlertTriangle />}
-        title={`${label} no longer accepts this token`}
+        title={`${label} no longer accepts this authorization`}
         actions={
-          <Button size="tiny" onClick={onReplaceToken}>
-            Replace the token
+          <Button size="tiny" onClick={onReconnect}>
+            {reconnectLabel(connection)}
           </Button>
         }
       >
@@ -210,7 +221,9 @@ function RepositoryList({
       ) : (
         <p className="rounded-md border border-dashed border-border-stronger px-3 py-6 text-center text-[13px] text-foreground-light">
           {all?.length === 0
-            ? `${connection.account} has no repository this token can access.`
+            ? selection
+              ? `The app can’t read any repository of ${connection.account} yet.`
+              : `${connection.account} has no repository Ferry can read.`
             : `No repository matches “${query.trim()}”.`}
         </p>
       )}
@@ -226,6 +239,23 @@ function RepositoryList({
           For another one, give its URL instead.
         </p>
       )}
+      {selection && (
+        <p className="text-[12.5px] text-foreground-lighter">
+          {connection.repository_selection === 'all'
+            ? 'The GitHub App reads every repository of this account.'
+            : 'The GitHub App reads the repositories you selected for it.'}{' '}
+          <a
+            href={selection}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Change them on GitHub
+            <ExternalLink className="size-3" aria-hidden="true" />
+          </a>
+          <span className="sr-only"> (opens in a new tab)</span>, then refresh the list.
+        </p>
+      )}
       {warning && <p className="text-[12.5px] text-warning">{warning}</p>}
       {repositories.isError && (
         <p role="alert" className="text-[12.5px] text-destructive">
@@ -237,17 +267,19 @@ function RepositoryList({
 }
 
 /**
- * Pick the repository to deploy from a connected GitHub / GitLab account:
- * connect an account (access token), choose the account, search its
+ * Pick the repository to deploy from a GitHub / GitLab account: connect an
+ * account (on the provider's own pages), choose the account, search its
  * repositories, click one.
  */
-export function RepositoryPicker({ id, value, onChange, invalid, describedBy }: RepositoryPickerProps) {
+export function RepositoryPicker({ id, value, account: preferred, onChange, invalid, describedBy }: RepositoryPickerProps) {
   const connections = useGitConnections()
   const [dialog, setDialog] = React.useState<DialogState>(null)
-  const [accountId, setAccountId] = React.useState<string | null>(value?.connectionId ?? null)
+  const [accountId, setAccountId] = React.useState<string | null>(value?.connectionId ?? preferred ?? null)
   const [choosing, setChoosing] = React.useState(value === null)
 
-  const list = connections.data ?? []
+  // Only accounts whose authorization is finished have repositories to list.
+  const list = connectedAccounts(connections.data)
+  const unfinished = (connections.data ?? []).filter((c) => c.status === 'pending')
   const account = list.find((c) => c.id === accountId) ?? list[0]
   const pickedFrom = value ? list.find((c) => c.id === value.connectionId) : undefined
 
@@ -282,13 +314,32 @@ export function RepositoryPicker({ id, value, onChange, invalid, describedBy }: 
   }
 
   if (!account) {
+    const resume = unfinished[0]
     return (
       <>
         <EmptyState
           size="sm"
           title="Connect GitHub or GitLab"
-          description="Pick the repository from a list instead of pasting its URL. Private repositories work too: Ferry clones them with the account’s token."
-          actions={<ConnectButtons onConnect={(provider) => setDialog({ provider })} />}
+          description="Authorize this server on GitHub or GitLab, then pick the repository from a list. Private repositories work too."
+          actions={
+            resume ? (
+              <>
+                <Button
+                  size="md"
+                  variant="primary"
+                  icon={<GitProviderIcon provider={resume.provider} />}
+                  onClick={() => setDialog({ connection: resume })}
+                >
+                  Finish connecting {GIT_PROVIDER_LABELS[resume.provider]}
+                </Button>
+                <Button size="md" icon={<Plus />} onClick={() => setDialog({})}>
+                  Another account
+                </Button>
+              </>
+            ) : (
+              <ConnectButtons onConnect={(provider) => setDialog({ provider })} />
+            )
+          }
         >
           {/* The focus target of the field while there is nothing to pick from. */}
           <span id={id} tabIndex={-1} className="sr-only" aria-describedby={describedBy}>
@@ -320,7 +371,7 @@ export function RepositoryPicker({ id, value, onChange, invalid, describedBy }: 
               )}
             </span>
             <span className="truncate text-[12.5px] text-foreground-lighter">
-              Cloned with the {GIT_PROVIDER_LABELS[pickedFrom.provider]} account {connectionLabel(pickedFrom)}
+              From the {GIT_PROVIDER_LABELS[pickedFrom.provider]} account {connectionLabel(pickedFrom)}
             </span>
           </div>
           <Button id={id} size="tiny" aria-describedby={describedBy} onClick={() => setChoosing(true)}>
@@ -360,7 +411,7 @@ export function RepositoryPicker({ id, value, onChange, invalid, describedBy }: 
           value={value}
           invalid={invalid}
           describedBy={describedBy}
-          onReplaceToken={() => setDialog({ connection: account })}
+          onReconnect={() => setDialog({ connection: account })}
           onPick={(r) => {
             onChange(
               {
@@ -376,7 +427,7 @@ export function RepositoryPicker({ id, value, onChange, invalid, describedBy }: 
           }}
         />
         <p className="text-[12.5px] text-foreground-lighter">
-          Accounts and their tokens are managed in{' '}
+          Accounts are connected to this server, for every service: manage them in{' '}
           <Link
             to="/server?section=connections"
             target="_blank"

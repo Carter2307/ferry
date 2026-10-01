@@ -23,7 +23,11 @@ export type RepoMode = 'account' | 'url'
 
 /** A repository picked from a connected GitHub / GitLab account. */
 export interface PickedRepository {
-  /** The git connection it was listed through (its token clones it). */
+  /**
+   * The git connection it was listed through. Only for the form: a service
+   * names no connection, the server clones a repository with the connection
+   * that serves its URL.
+   */
   connectionId: string
   fullName: string
   cloneUrl: string
@@ -94,6 +98,77 @@ export const INITIAL_FORM: NewServiceForm = {
   autoDeploy: true,
   memoryLimit: DEFAULT_LIMIT,
   cpuLimit: DEFAULT_LIMIT,
+}
+
+const DRAFT_KEY = 'ferry.new-service.draft'
+
+/**
+ * The form as it is kept while the browser is away at GitHub / GitLab
+ * (connecting an account takes it to the provider and back). A repository
+ * URL that carries credentials is left out: nothing secret is stored.
+ */
+export function draftOf(form: NewServiceForm): NewServiceForm {
+  const withCredentials = /^[a-z][a-z0-9+.-]*:\/\/[^/@]*@/i.test(form.repoUrl.trim())
+  return withCredentials ? { ...form, repoUrl: '' } : form
+}
+
+/** A stored draft read back: only fields of the expected shape are taken. */
+export function formFromDraft(raw: string | null): NewServiceForm | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+  const draft = parsed as Record<string, unknown>
+  const out: Record<string, unknown> = { ...INITIAL_FORM }
+  for (const [key, initial] of Object.entries(INITIAL_FORM)) {
+    const value = draft[key]
+    if (value === undefined) continue
+    const sameShape =
+      key === 'repository'
+        ? value === null || (typeof value === 'object' && !Array.isArray(value))
+        : Array.isArray(initial)
+          ? Array.isArray(value) && value.every((v) => typeof v === 'string')
+          : typeof value === typeof initial && value !== null && !Array.isArray(value)
+    if (sameShape) out[key] = value
+  }
+  return out as unknown as NewServiceForm
+}
+
+/** `sessionStorage` (this tab only), never throwing. */
+function session(): Storage | null {
+  try {
+    return window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+export function saveDraft(form: NewServiceForm): void {
+  try {
+    session()?.setItem(DRAFT_KEY, JSON.stringify(draftOf(form)))
+  } catch {
+    /* storage unavailable or full: the form just isn't kept */
+  }
+}
+
+export function readDraft(): NewServiceForm | null {
+  try {
+    return formFromDraft(session()?.getItem(DRAFT_KEY) ?? null)
+  } catch {
+    return null
+  }
+}
+
+export function clearDraft(): void {
+  try {
+    session()?.removeItem(DRAFT_KEY)
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 export const MAX_INSTANCES = 50
@@ -374,13 +449,9 @@ export function toCreateRequest(f: NewServiceForm, env: EnvVar[]): CreateService
   const v = visibleFields(f)
   const body: CreateService = { name: f.name.trim(), type: f.type }
   if (v.repo) {
-    if (f.repoMode === 'account' && f.repository) {
-      // Cloned with the token of the account it was picked from.
-      body.repo_url = f.repository.cloneUrl
-      body.git_connection_id = f.repository.connectionId
-    } else {
-      body.repo_url = f.repoUrl.trim()
-    }
+    // A picked repository is just its clone URL: the server clones it with
+    // the account connected for that host.
+    body.repo_url = f.repoMode === 'account' && f.repository ? f.repository.cloneUrl : f.repoUrl.trim()
     body.branch = opt(f.branch) ?? 'main'
     body.auto_deploy = f.autoDeploy
   }
@@ -425,7 +496,6 @@ export function fieldForServerError(message: string): FieldKey | null {
     [/environment variable|variables total|value of /, 'env'],
     [/domain '/, 'domains'],
     [/custom domain|host '/, 'name'],
-    [/git connection|can't be used for/, 'repository'],
     [/repo_url|either repo_url or image/, 'repoUrl'],
     [/branch/, 'branch'],
     [/image/, 'image'],

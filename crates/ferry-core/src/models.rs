@@ -271,11 +271,58 @@ impl GitProvider {
     }
 }
 
-/// An account of a git provider connected with an access token. The
-/// dashboard lists the account's repositories through it, and the services
-/// that use it ([`Service::git_connection_id`]) clone with its token.
+str_enum! {
+    /// Where the tokens of a git connection come from.
+    pub enum GitAuth {
+        /// A GitHub App registered for this server and installed on the
+        /// account: tokens are minted on demand.
+        GithubApp = "github_app",
+        /// An OAuth application the account authorized in the browser: the
+        /// access token is renewed with a refresh token.
+        Oauth = "oauth",
+        /// A personal access token.
+        Token = "token",
+    }
+}
+
+/// The GitHub App of a [`GitAuth::GithubApp`] connection.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GithubApp {
+    /// The app's numeric id.
+    pub id: u64,
+    /// Its URL name (`https://github.com/apps/<slug>`).
+    pub slug: String,
+    /// Its public page, where it is installed from.
+    pub url: String,
+    /// PEM private key that signs the app's JWTs.
+    pub private_key: String,
+    /// Secret of the app's webhook deliveries.
+    pub webhook_secret: Option<String>,
+}
+
+impl std::fmt::Debug for GithubApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GithubApp").field("id", &self.id).field("slug", &self.slug).finish_non_exhaustive()
+    }
+}
+
+/// Where a GitHub App is installed: what lets it read an account's
+/// repositories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubInstallation {
+    pub id: u64,
+    /// The installation's settings page (which repositories it may read).
+    pub url: Option<String>,
+    /// `all` or `selected`.
+    pub repository_selection: Option<String>,
+}
+
+/// An account of a git provider this server is authorized to read the
+/// repositories of. The dashboard lists the account's repositories through
+/// it, and repositories it serves ([`git_connection_for`]) are cloned with
+/// its tokens: connections belong to the server, not to a service.
 ///
-/// The token never leaves the server: this type is deliberately not
+/// Secrets never leave the server: this type is deliberately not
 /// serializable (the API returns `dto::GitConnectionView`).
 #[derive(Clone, PartialEq)]
 pub struct GitConnection {
@@ -284,16 +331,28 @@ pub struct GitConnection {
     /// Web URL of the provider instance without a trailing slash:
     /// `https://github.com`, `https://gitlab.com` or a self-hosted one.
     pub base_url: String,
-    /// Login of the account the token belongs to.
+    pub auth: GitAuth,
+    /// Login of the account. Empty while an OAuth application waits for its
+    /// first authorization.
     pub account: String,
     /// Display name of the account, if it has one.
     pub account_name: Option<String>,
-    /// The access token (a personal access token).
+    /// The personal access token, or the current OAuth access token. Empty
+    /// for a GitHub App and until an OAuth application is authorized.
     pub token: String,
+    /// What renews an OAuth access token.
+    pub refresh_token: Option<String>,
     /// Scopes of the token, when the provider reports them.
     pub scopes: Vec<String>,
-    /// When the token expires, when the provider reports it.
+    /// When `token` expires, when known.
     pub token_expires_at: Option<DateTime<Utc>>,
+    /// Client id of the OAuth application or GitHub App.
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    /// The GitHub App ([`GitAuth::GithubApp`] only).
+    pub app: Option<GithubApp>,
+    /// Where the GitHub App is installed, once it is.
+    pub installation: Option<GithubInstallation>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -304,6 +363,7 @@ impl std::fmt::Debug for GitConnection {
             .field("id", &self.id)
             .field("provider", &self.provider)
             .field("base_url", &self.base_url)
+            .field("auth", &self.auth)
             .field("account", &self.account)
             .field("token", &"***")
             .finish_non_exhaustive()
@@ -311,57 +371,142 @@ impl std::fmt::Debug for GitConnection {
 }
 
 impl GitConnection {
+    fn with_auth(provider: GitProvider, base_url: String, auth: GitAuth, account: String) -> Self {
+        let now = now();
+        GitConnection {
+            id: ids::new_id(ids::GIT_CONNECTION),
+            provider,
+            base_url,
+            auth,
+            account,
+            account_name: None,
+            token: String::new(),
+            refresh_token: None,
+            scopes: Vec::new(),
+            token_expires_at: None,
+            client_id: None,
+            client_secret: None,
+            app: None,
+            installation: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// An account connected with a personal access token.
     pub fn new(
         provider: GitProvider,
         base_url: impl Into<String>,
         account: impl Into<String>,
         token: impl Into<String>,
     ) -> Self {
-        let now = now();
-        GitConnection {
-            id: ids::new_id(ids::GIT_CONNECTION),
-            provider,
-            base_url: base_url.into(),
-            account: account.into(),
-            account_name: None,
-            token: token.into(),
-            scopes: Vec::new(),
-            token_expires_at: None,
-            created_at: now,
-            updated_at: now,
+        let mut c = Self::with_auth(provider, base_url.into(), GitAuth::Token, account.into());
+        c.token = token.into();
+        c
+    }
+
+    /// An OAuth application no account authorized yet (pending).
+    pub fn oauth_application(
+        provider: GitProvider,
+        base_url: impl Into<String>,
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+    ) -> Self {
+        let mut c = Self::with_auth(provider, base_url.into(), GitAuth::Oauth, String::new());
+        c.client_id = Some(client_id.into());
+        c.client_secret = Some(client_secret.into());
+        c
+    }
+
+    /// A GitHub App registered on `owner`'s account and not installed yet
+    /// (pending).
+    pub fn github_app(
+        base_url: impl Into<String>,
+        owner: impl Into<String>,
+        app: GithubApp,
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+    ) -> Self {
+        let mut c = Self::with_auth(GitProvider::Github, base_url.into(), GitAuth::GithubApp, owner.into());
+        c.app = Some(app);
+        c.client_id = Some(client_id.into());
+        c.client_secret = Some(client_secret.into());
+        c
+    }
+
+    /// Whether the authorization was finished: repositories can be listed
+    /// and cloned through this connection.
+    pub fn is_connected(&self) -> bool {
+        match self.auth {
+            GitAuth::Token | GitAuth::Oauth => !self.token.is_empty(),
+            GitAuth::GithubApp => self.app.is_some() && self.installation.is_some(),
         }
     }
 
     /// `GitHub account 'octocat'`, for messages.
     pub fn describe(&self) -> String {
+        if self.account.is_empty() {
+            return format!("{} application", self.provider.label());
+        }
         format!("{} account '{}'", self.provider.label(), self.account)
     }
 
-    /// The end of the token (`…a1b2`), enough to tell two tokens apart.
-    pub fn token_hint(&self) -> String {
+    /// The end of a personal access token (`…a1b2`), enough to tell two
+    /// tokens apart. `None` for the other kinds (their tokens are renewed).
+    pub fn token_hint(&self) -> Option<String> {
+        if self.auth != GitAuth::Token {
+            return None;
+        }
         let chars: Vec<char> = self.token.chars().collect();
         // Never more than a third of a (suspiciously short) token.
         let shown = (chars.len() / 3).min(4);
-        format!("…{}", chars[chars.len() - shown..].iter().collect::<String>())
+        Some(format!("…{}", chars[chars.len() - shown..].iter().collect::<String>()))
     }
 
-    /// Whether the token is meant for `repo_url`: an http(s) repository on
-    /// this connection's provider instance (same scheme, host and port, and
-    /// below the instance's path when it has one). Everything else (other
-    /// hosts, ssh, local paths, URLs that carry credentials of their own)
-    /// is cloned without it.
-    pub fn serves(&self, repo_url: &str) -> bool {
-        let (Some(base), Some(repo)) =
-            (crate::git::parse_http_url(&self.base_url), crate::git::parse_http_url(repo_url))
-        else {
-            return false;
-        };
+    /// The path of `repo_url` below this connection's provider instance
+    /// (`/owner/name.git`), when it is an http(s) repository there: same
+    /// scheme, host and port, and below the instance's path when it has
+    /// one. `None` for everything else (other hosts, ssh, local paths, URLs
+    /// that carry credentials of their own).
+    fn repository_path(&self, repo_url: &str) -> Option<String> {
+        let base = crate::git::parse_http_url(&self.base_url)?;
+        let repo = crate::git::parse_http_url(repo_url)?;
         if (base.scheme, &base.host, base.port) != (repo.scheme, &repo.host, repo.port) {
-            return false;
+            return None;
         }
-        let prefix = base.path.trim_end_matches('/');
-        prefix.is_empty() || repo.path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+        let rest = repo.path.strip_prefix(base.path.trim_end_matches('/'))?;
+        rest.starts_with('/').then(|| rest.to_string())
     }
+
+    /// Whether `repo_url` is on this connection's provider instance: its
+    /// tokens are never sent anywhere else.
+    pub fn serves(&self, repo_url: &str) -> bool {
+        self.repository_path(repo_url).is_some()
+    }
+
+    /// Whether `repo_url` is a repository of this connection's own account
+    /// (`https://github.com/<account>/…`).
+    pub fn owns(&self, repo_url: &str) -> bool {
+        let Some(path) = self.repository_path(repo_url) else { return false };
+        let owner = path.trim_start_matches('/').split('/').next().unwrap_or_default();
+        !owner.is_empty() && owner.eq_ignore_ascii_case(&self.account)
+    }
+}
+
+/// The connection whose tokens clone `repo_url`: a connected one on the
+/// repository's provider instance ([`GitConnection::serves`]). A GitHub App
+/// only reads the repositories of the account it is installed on; other
+/// connections (a user's token) may reach any repository of their instance.
+/// The repository owner's own connection wins, then the most recently
+/// updated one. `None`: the repository is cloned without credentials.
+pub fn git_connection_for<'a>(connections: &'a [GitConnection], repo_url: &str) -> Option<&'a GitConnection> {
+    connections
+        .iter()
+        .filter(|c| c.is_connected() && c.serves(repo_url))
+        .map(|c| (c.owns(repo_url), c))
+        .filter(|(owns, c)| *owns || c.auth != GitAuth::GithubApp)
+        .max_by(|(a_owns, a), (b_owns, b)| (a_owns, a.updated_at, &b.id).cmp(&(b_owns, b.updated_at, &a.id)))
+        .map(|(_, c)| c)
 }
 
 /// Where a service's code comes from (derived from its fields).
@@ -386,11 +531,6 @@ pub struct Service {
     pub service_type: ServiceType,
     /// Git URL (https, ssh, or local path / file://). Mutually exclusive with `image`.
     pub repo_url: Option<String>,
-    /// The git connection (a connected GitHub / GitLab account) whose token
-    /// authenticates the clones of `repo_url`. `None` = clone without it
-    /// (public repositories, credentials in the URL, ssh).
-    #[serde(default)]
-    pub git_connection_id: Option<String>,
     /// Branch to build and to watch for auto-deploys.
     pub branch: String,
     /// Prebuilt image reference (`runtime` = image).
@@ -450,7 +590,6 @@ impl Service {
             name: name.into(),
             service_type,
             repo_url: None,
-            git_connection_id: None,
             branch: "main".to_string(),
             image: None,
             runtime: Runtime::Auto,
@@ -822,17 +961,87 @@ mod tests {
         assert!(gl.serves("https://dev.example.com/gitlab/group/sub/app.git"));
         assert!(!gl.serves("https://dev.example.com/gitlabx/group/app.git"));
         assert!(!gl.serves("https://dev.example.com/other/app.git"));
+        // Whose repository it is: the first segment below the instance.
+        assert!(gh.owns("https://github.com/OctoCat/app.git") && !gh.owns("https://github.com/acme/app.git"));
+        assert!(!gh.owns("https://gitlab.com/octocat/app.git") && !gh.owns("https://github.com/"));
+        assert!(
+            gl.owns("https://dev.example.com/gitlab/me/app") && !gl.owns("https://dev.example.com/gitlab/group/me")
+        );
+    }
+
+    fn test_app() -> GithubApp {
+        GithubApp {
+            id: 7,
+            slug: "ferry-test".into(),
+            url: "https://github.com/apps/ferry-test".into(),
+            private_key: "pem".into(),
+            webhook_secret: None,
+        }
+    }
+
+    #[test]
+    fn git_connections_are_pending_until_authorized() {
+        assert_eq!(GitAuth::GithubApp.as_str(), "github_app");
+        assert!(GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "t").is_connected());
+        // An OAuth application: connected once an account authorized it.
+        let mut oauth = GitConnection::oauth_application(GitProvider::Gitlab, "https://gitlab.com", "id", "s");
+        assert_eq!((oauth.auth, oauth.account.as_str(), oauth.is_connected()), (GitAuth::Oauth, "", false));
+        assert_eq!(oauth.describe(), "GitLab application");
+        oauth.account = "tanuki".into();
+        oauth.token = "t".into();
+        assert!(oauth.is_connected());
+        // A GitHub App: connected once it is installed.
+        let mut app = GitConnection::github_app("https://github.com", "octocat", test_app(), "Iv1", "s");
+        assert_eq!((app.auth, app.provider, app.is_connected()), (GitAuth::GithubApp, GitProvider::Github, false));
+        app.installation = Some(GithubInstallation { id: 1, url: None, repository_selection: None });
+        assert!(app.is_connected());
+    }
+
+    #[test]
+    fn repositories_are_cloned_with_the_connection_that_serves_them() {
+        let at = |c: &mut GitConnection, secs: i64| c.updated_at = c.created_at + chrono::Duration::seconds(secs);
+        let mut app = GitConnection::github_app("https://github.com", "acme", test_app(), "Iv1", "s");
+        app.installation = Some(GithubInstallation { id: 1, url: None, repository_selection: None });
+        let mut user = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "t");
+        let mut older = GitConnection::new(GitProvider::Github, "https://github.com", "hubot", "t");
+        let gitlab = GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "octocat", "t");
+        let pending = GitConnection::oauth_application(GitProvider::Gitlab, "https://gitlab.example.com", "id", "s");
+        at(&mut app, 30);
+        at(&mut user, 20);
+        at(&mut older, 10);
+        let all = [older.clone(), gitlab.clone(), pending, app.clone(), user.clone()];
+        let pick = |url: &str| git_connection_for(&all, url).map(|c| c.account.as_str());
+        // The owner's own connection first.
+        assert_eq!(pick("https://github.com/acme/api.git"), Some("acme"));
+        assert_eq!(pick("https://github.com/octocat/app"), Some("octocat"));
+        assert_eq!(pick("https://github.com/hubot/bot"), Some("hubot"));
+        // Somebody else's repository: a user's token may reach it (the most
+        // recently updated one), an app installed on another account can't.
+        assert_eq!(pick("https://github.com/rust-lang/rust"), Some("octocat"));
+        assert_eq!(git_connection_for(std::slice::from_ref(&app), "https://github.com/rust-lang/rust"), None);
+        assert_eq!(pick("https://gitlab.com/group/sub/app.git"), Some("octocat"));
+        // Never across instances, never while pending, never for ssh or credentials in the URL.
+        assert_eq!(pick("https://gitlab.example.com/group/app.git"), None);
+        assert_eq!(pick("https://bitbucket.org/acme/api.git"), None);
+        assert_eq!(pick("git@github.com:acme/api.git"), None);
+        assert_eq!(pick("https://u:p@github.com/acme/api.git"), None);
+        assert_eq!(git_connection_for(&[], "https://github.com/acme/api.git"), None);
     }
 
     #[test]
     fn git_connection_tokens_stay_out_of_debug_output() {
         let c = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "ghp_0123456789abcdefWXYZ");
-        assert_eq!(c.token_hint(), "…WXYZ");
+        assert_eq!(c.token_hint().as_deref(), Some("…WXYZ"));
         let debug = format!("{c:?}");
         assert!(debug.contains("octocat") && !debug.contains("ghp_") && !debug.contains("WXYZ"), "{debug}");
         // Short tokens reveal at most a third of themselves.
-        let short = |t: &str| GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "me", t).token_hint();
+        let short =
+            |t: &str| GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "me", t).token_hint().unwrap();
         assert_eq!((short("abcdef").as_str(), short("ab").as_str(), short("").as_str()), ("…ef", "…", "…"));
+        // Only personal access tokens have a hint; an app's key is never shown.
+        let app = GitConnection::github_app("https://github.com", "octocat", test_app(), "Iv1", "s");
+        assert_eq!(app.token_hint(), None);
+        assert!(!format!("{app:?} {:?}", app.app).contains("pem"));
     }
 
     #[test]

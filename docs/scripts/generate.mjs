@@ -80,10 +80,12 @@ const PATH_ORDER = [
   '/api/v1/env-groups/{id}/env',
   '/api/v1/services/{id}/env-groups',
   '/api/v1/services/{id}/env-groups/{group}',
+  '/api/v1/git/authorize',
+  '/api/v1/git/callback',
   '/api/v1/git/connections',
   '/api/v1/git/connections/{id}',
   '/api/v1/git/connections/{id}/repositories',
-  '/api/v1/git/connections/{id}/branches',
+  '/api/v1/git/branches',
 ];
 
 /** The document with its paths in PATH_ORDER (only used to lay out the pages). */

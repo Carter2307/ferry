@@ -62,6 +62,9 @@ export type ServiceState = (typeof SERVICE_STATES)[number]
 export const GIT_PROVIDERS = ['github', 'gitlab'] as const
 export type GitProvider = (typeof GIT_PROVIDERS)[number]
 
+/** Where the tokens of a git connection come from. */
+export type GitAuth = 'github_app' | 'oauth' | 'token'
+
 /** Where a service's code comes from (derived client-side, see `sourceKind`). */
 export type SourceKind = 'git' | 'image' | 'upload'
 
@@ -76,11 +79,6 @@ export interface Service {
   name: string
   type: ServiceType
   repo_url: string | null
-  /**
-   * The git connection (a connected GitHub / GitLab account) whose token clones
-   * `repo_url`. `null` = cloned without one.
-   */
-  git_connection_id: string | null
   branch: string
   image: string | null
   runtime: Runtime
@@ -229,8 +227,6 @@ export interface CreateService {
   name: string
   type?: ServiceType | null
   repo_url?: string | null
-  /** Git connection that clones `repo_url` (an http(s) repository on its provider instance). */
-  git_connection_id?: string | null
   branch?: string | null
   image?: string | null
   runtime?: Runtime | null
@@ -261,8 +257,6 @@ export interface CreateService {
  */
 export interface UpdateService {
   repo_url?: string | null
-  /** '' removes the connection; omitted = kept while `repo_url` stays on its host. */
-  git_connection_id?: string | null
   branch?: string | null
   image?: string | null
   runtime?: Runtime | null
@@ -395,6 +389,46 @@ export interface EnvGroupView extends EnvGroup {
   services: string[]
 }
 
+/**
+ * `POST /api/v1/git/authorize` — start (or resume, with `connection_id`) the
+ * authorization of an account on the provider's own pages.
+ */
+export interface AuthorizeGit {
+  provider?: GitProvider | null
+  /** Web URL of a self-hosted instance; default github.com / gitlab.com. */
+  base_url?: string | null
+  /** Resume a pending connection, or authorize a connection again. */
+  connection_id?: string | null
+  /** Where the provider sends the browser back: the dashboard's `/git/callback` page. */
+  redirect_uri: string
+  /** GitHub: register the app in this organization instead of the user's account. */
+  organization?: string | null
+  /** GitLab: the OAuth application created for this server (needed the first time). */
+  client_id?: string | null
+  client_secret?: string | null
+}
+
+/** `POST /api/v1/git/callback` — the query parameters the provider sent the browser back with. */
+export interface GitCallback {
+  state: string
+  code?: string | null
+  installation_id?: number | null
+  setup_action?: string | null
+  error?: string | null
+  error_description?: string | null
+}
+
+/** The next step of a browser authorization. */
+export interface GitAuthorization {
+  /** `redirect`: send the browser to `url`; `connected`: done. */
+  status: 'redirect' | 'connected'
+  url: string | null
+  /** `get`: navigate; `post`: submit a form with `fields`. */
+  method: 'get' | 'post' | null
+  fields: Record<string, string>
+  connection: GitConnectionView | null
+}
+
 /** `POST /api/v1/git/connections` — connect the account an access token belongs to. */
 export interface ConnectGit {
   provider: GitProvider
@@ -403,21 +437,37 @@ export interface ConnectGit {
   base_url?: string | null
 }
 
-/** A connected GitHub / GitLab account. The token itself is never returned. */
+/**
+ * A GitHub / GitLab account this server is authorized to read the
+ * repositories of. Its secrets are never returned.
+ */
 export interface GitConnectionView {
   id: string
   provider: GitProvider
   /** Web URL of the provider instance, e.g. `https://github.com`. */
   base_url: string
-  /** Login of the account the token belongs to. */
+  auth: GitAuth
+  /** `pending`: its authorization was started in the browser and not finished. */
+  status: 'connected' | 'pending'
+  /** Login of the account ('' while an OAuth application waits for its first authorization). */
   account: string
   account_name: string | null
-  /** The end of the stored token (`…a1b2`). */
-  token_hint: string
+  /** The end of a personal access token (`…a1b2`); `null` for the other kinds. */
+  token_hint: string | null
   /** Scopes of the token, when the provider reports them. */
   scopes: string[]
+  /** When a personal access token expires; `null` for the other kinds (renewed). */
   token_expires_at: Timestamp | null
-  /** Names of the services cloned with this connection. */
+  /** Id of the OAuth application or GitHub App (not a secret). */
+  client_id: string | null
+  /** GitHub App: its URL name and page. */
+  app_slug: string | null
+  app_url: string | null
+  /** GitHub App: where the account chooses the repositories it may read. */
+  manage_url: string | null
+  /** GitHub App: `all` or `selected` repositories. */
+  repository_selection: string | null
+  /** Names of the services whose repository is cloned with this connection. */
   services: string[]
   created_at: Timestamp
   updated_at: Timestamp
@@ -449,9 +499,14 @@ export interface GitRepositoryList {
   truncated: boolean
 }
 
-export interface GitBranch {
-  name: string
-  protected: boolean
+/** `GET /api/v1/git/branches?repo_url=` — asked from the repository's remote itself. */
+export interface GitBranches {
+  /** The branch the repository's HEAD points to, when it says. */
+  default_branch: string | null
+  /** The default branch first, then by name. */
+  branches: string[]
+  /** The git connection the repository was read with; `null` when read without one. */
+  connection_id: string | null
 }
 
 /** `POST /api/v1/blueprints/apply` */

@@ -270,12 +270,9 @@ async fn git_connections_authenticate_clones_on_their_own_host() {
     let (port, authorized) = private_git_server(served.path().join("repo.git"), "x-access-token", TOKEN).await;
     let repo_url = format!("http://127.0.0.1:{port}/repo.git");
 
-    let deploy = async |name: &str, connection: Option<&GitConnection>| {
-        let svc = service(&f.store, name, ServiceType::WebService, |s| {
-            s.repo_url = Some(repo_url.clone());
-            s.git_connection_id = connection.map(|c| c.id.clone());
-        })
-        .await;
+    // Services don't name a connection: the server's connections decide.
+    let deploy = async |name: &str| {
+        let svc = service(&f.store, name, ServiceType::WebService, |s| s.repo_url = Some(repo_url.clone())).await;
         let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
         let lines = log_lines(&f.engine, &d.id).await;
         let d = wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
@@ -286,9 +283,10 @@ async fn git_connections_authenticate_clones_on_their_own_host() {
         (d, lines)
     };
     let has = |lines: &[String], prefix: &str| lines.iter().any(|l| l.starts_with(prefix));
+    let instance = format!("http://127.0.0.1:{port}");
 
     // Without a connection the private repository can't be cloned.
-    let (d, lines) = deploy("anonymous", None).await;
+    let (d, lines) = deploy("anonymous").await;
     assert_eq!(d.commit_sha, None, "{lines:?}");
     assert!(has(&lines, "==> Hint: if the repository is private, connect its GitHub or GitLab account"), "{lines:?}");
     assert!(!authorized.load(Ordering::SeqCst));
@@ -296,25 +294,44 @@ async fn git_connections_authenticate_clones_on_their_own_host() {
     // A connection for another host is never used for this one.
     let elsewhere = GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "me", "glpat-0therS3cret");
     f.store.create_git_connection(&elsewhere).await.unwrap();
-    let (d, lines) = deploy("elsewhere", Some(&elsewhere)).await;
+    let (d, lines) = deploy("elsewhere").await;
     assert_eq!(d.commit_sha, None, "{lines:?}");
-    let warning = "==> Warning: the GitLab account 'me' is connected to https://gitlab.com, which this repository is \
-                   not on: cloning without it";
-    assert!(lines.iter().any(|l| l == warning), "{lines:?}");
-    assert!(!authorized.load(Ordering::SeqCst));
+    assert!(!has(&lines, "==> Cloning with") && !authorized.load(Ordering::SeqCst), "{lines:?}");
 
     // A connection whose token the remote refuses says what to do about it.
-    let stale = GitConnection::new(GitProvider::Github, format!("http://127.0.0.1:{port}"), "ghost", "ghp_expired0");
+    let stale = GitConnection::new(GitProvider::Github, instance.clone(), "ghost", "ghp_expired0");
     f.store.create_git_connection(&stale).await.unwrap();
-    let (d, lines) = deploy("stale", Some(&stale)).await;
+    let (d, lines) = deploy("stale").await;
     assert_eq!(d.commit_sha, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "==> Cloning with the GitHub account 'ghost'"), "{lines:?}");
     assert!(has(&lines, "==> Hint: the token of the GitHub account 'ghost' may have expired"), "{lines:?}");
     assert!(!authorized.load(Ordering::SeqCst));
+    f.store.delete_git_connection(&stale.id).await.unwrap();
+
+    // A connection that can't produce a token (here: an app whose key is
+    // unreadable) is said, and the clone goes on without it.
+    let app = ferry_core::GithubApp {
+        id: 1,
+        slug: "ferry-test".into(),
+        url: format!("{instance}/apps/ferry-test"),
+        private_key: "not a key".into(),
+        webhook_secret: None,
+    };
+    let mut broken = GitConnection::github_app(instance.clone(), "repo.git", app, "Iv1", "s");
+    broken.installation = Some(ferry_core::GithubInstallation { id: 1, url: None, repository_selection: None });
+    f.store.create_git_connection(&broken).await.unwrap();
+    let (d, lines) = deploy("broken").await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    let warning = "==> Warning: the GitHub account 'repo.git' can't be used (the GitHub App's private key can't be \
+                   read): cloning without it";
+    assert!(lines.iter().any(|l| l == warning), "{lines:?}");
+    assert!(has(&lines, "==> Hint: the GitHub App of the GitHub account 'repo.git' may not be allowed"), "{lines:?}");
+    f.store.delete_git_connection(&broken.id).await.unwrap();
 
     // The connection of the repository's own host: its token clones it.
-    let connection = GitConnection::new(GitProvider::Github, format!("http://127.0.0.1:{port}"), "octocat", TOKEN);
+    let connection = GitConnection::new(GitProvider::Github, instance.clone(), "octocat", TOKEN);
     f.store.create_git_connection(&connection).await.unwrap();
-    let (d, lines) = deploy("private", Some(&connection)).await;
+    let (d, lines) = deploy("private").await;
     assert!(authorized.load(Ordering::SeqCst), "{lines:?}");
     assert_eq!(d.commit_sha.as_deref(), Some(sha.as_str()), "{lines:?}");
     assert_eq!(d.commit_message.as_deref(), Some("private app"));
@@ -323,10 +340,9 @@ async fn git_connections_authenticate_clones_on_their_own_host() {
     assert!(!has(&lines, "==> Hint"), "{lines:?}");
     assert_eq!(d.source, DeploySource::Git { repo_url: repo_url.clone(), branch: "main".into(), commit: None });
 
-    // Once the connection is deleted, the service clones without it again.
+    // Once the connection is deleted, the same service clones without it again.
     f.store.delete_git_connection(&connection.id).await.unwrap();
     let svc = f.store.require_service("private").await.unwrap();
-    assert_eq!(svc.git_connection_id, None);
     let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
     let lines = log_lines(&f.engine, &d.id).await;
     assert!(!has(&lines, "==> Cloning with"), "{lines:?}");

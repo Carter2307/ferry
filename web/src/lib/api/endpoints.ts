@@ -6,6 +6,7 @@
 import { api, seg } from './client'
 import type {
   ApplyBlueprint,
+  AuthorizeGit,
   BlueprintResult,
   ConnectGit,
   CreateDatastore,
@@ -15,7 +16,9 @@ import type {
   Deploy,
   EnvGroupView,
   EnvVar,
-  GitBranch,
+  GitAuthorization,
+  GitBranches,
+  GitCallback,
   GitConnectionView,
   GitRepositoryList,
   JobRun,
@@ -116,13 +119,15 @@ export const endpoints = {
   // git connections
   listGitConnections: (signal?: AbortSignal) =>
     api.get<GitConnectionView[]>(`${V1}/git/connections`, undefined, signal),
+  authorizeGit: (body: AuthorizeGit) => api.post<GitAuthorization>(`${V1}/git/authorize`, body),
+  gitCallback: (body: GitCallback) => api.post<GitAuthorization>(`${V1}/git/callback`, body),
   connectGit: (body: ConnectGit) => api.post<GitConnectionView>(`${V1}/git/connections`, body),
   deleteGitConnection: (id: string, force = false) =>
     api.delete(`${V1}/git/connections/${seg(id)}`, force ? { force: true } : undefined),
   listGitRepositories: (id: string, signal?: AbortSignal) =>
     api.get<GitRepositoryList>(`${V1}/git/connections/${seg(id)}/repositories`, undefined, signal),
-  listGitBranches: (id: string, repository: string, signal?: AbortSignal) =>
-    api.get<GitBranch[]>(`${V1}/git/connections/${seg(id)}/branches`, { repository }, signal),
+  listGitBranches: (repoUrl: string, signal?: AbortSignal) =>
+    api.get<GitBranches>(`${V1}/git/branches`, { repo_url: repoUrl }, signal),
 
   // blueprints
   applyBlueprint: (body: ApplyBlueprint) => api.post<BlueprintResult>(`${V1}/blueprints/apply`, body),

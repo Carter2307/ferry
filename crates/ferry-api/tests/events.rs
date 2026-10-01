@@ -171,21 +171,24 @@ async fn git_connections_are_reported() {
         seen.last().unwrap(),
         &json!({"kind": "git_connection", "id": conn.id, "service_id": null, "action": "created"})
     );
-    // disconnecting: the services that used it change, then it goes
-    let web = app
-        .create_service(json!({
-            "name": "web", "repo_url": "https://github.com/octocat/web", "git_connection_id": conn.id,
-        }))
-        .await;
+    // a renewed token isn't a change of the connection (no event)...
+    app.store.set_git_tokens(&conn.id, "another-token", None, None).await.unwrap();
+    let datastore = app.post("/api/v1/datastores", json!({"name": "cache", "kind": "redis"})).await.json();
+    let seen = feed.until("datastore", &id(&datastore), "created").await;
+    assert!(!seen.iter().any(|c| c["kind"] == "git_connection"), "{seen:?}");
+    // ...an authorization is
+    let mut again = app.store.require_git_connection(&conn.id).await.unwrap();
+    again.account_name = Some("The Octocat".into());
+    app.store.update_git_connection(&again).await.unwrap();
+    feed.until("git_connection", &conn.id, "updated").await;
+    // disconnecting: the services it cloned for name no connection, so only it changes
+    let web = app.create_service(json!({"name": "web", "repo_url": "https://github.com/octocat/web"})).await;
     feed.until("service", &id(&web), "created").await;
     let disconnect = app.delete(&format!("/api/v1/git/connections/{}?force=true", conn.id)).await;
     assert_eq!(disconnect.status, StatusCode::NO_CONTENT);
     let seen = feed.until("git_connection", &conn.id, "deleted").await;
     let web_id = id(&web);
-    assert!(
-        seen.iter().any(|c| c["kind"] == "service" && c["id"] == web_id.as_str() && c["action"] == "updated"),
-        "{seen:?}"
-    );
+    assert!(!seen.iter().any(|c| c["kind"] == "service" && c["id"] == web_id.as_str()), "{seen:?}");
 }
 
 #[tokio::test]

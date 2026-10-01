@@ -30,12 +30,15 @@ describe('invalidationsForChange', () => {
       keys.datastores(),
     ])
   })
-  it('maps git connection changes to the accounts, and to what their token sees once it changed', () => {
-    expect(
-      invalidationsForChange({ kind: 'git_connection', id: 'git-1', service_id: null, action: 'created' }),
-    ).toEqual([keys.gitConnections()])
-    expect(
-      invalidationsForChange({ kind: 'git_connection', id: 'git-1', service_id: null, action: 'updated' }),
-    ).toEqual([keys.gitConnections(), keys.gitProvider('git-1')])
+  it('maps git connection changes to the accounts and everything read through them', () => {
+    for (const action of ['created', 'updated', 'deleted'] as const) {
+      expect(invalidationsForChange({ kind: 'git_connection', id: 'git-1', service_id: null, action })).toEqual([
+        keys.git(),
+      ])
+    }
+    // the prefix covers the accounts, their repositories and the branches of any repository
+    for (const key of [keys.gitConnections(), keys.gitRepositories('git-1'), keys.gitBranches('https://x/a/b')]) {
+      expect(key[0]).toBe(keys.git()[0])
+    }
   })
 })

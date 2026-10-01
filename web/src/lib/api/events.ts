@@ -69,10 +69,8 @@ export function invalidationsForChange(change: ChangeEvent): Invalidation[] {
     case 'env_group':
       return change.action === 'deleted' ? [keys.envGroups(), keys.services()] : [keys.envGroups()]
     case 'git_connection':
-      // a replaced token may see other repositories; a removed account has none
-      return change.action === 'created'
-        ? [keys.gitConnections()]
-        : [keys.gitConnections(), keys.gitProvider(change.id)]
+      // the accounts, and what they let the server read (repositories, branches)
+      return [keys.git()]
   }
 }
 

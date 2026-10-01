@@ -17,7 +17,6 @@ import {
 
 const gitService = {
   repo_url: 'https://github.com/acme/api.git',
-  git_connection_id: null as string | null,
   branch: 'main',
   image: null,
   runtime: 'node' as const,
@@ -81,24 +80,6 @@ describe('buildPatch', () => {
     const docker = buildFormFrom({ ...gitService, runtime: 'docker' })
     expect(buildPatch(docker, { ...docker, build_command: 'make' }, 'web_service')).toEqual({})
   })
-
-  it('selects, replaces and removes the git connection explicitly', () => {
-    const initial = buildFormFrom(gitService)
-    expect(initial.git_connection_id).toBe('')
-    expect(buildPatch(initial, { ...initial, git_connection_id: 'git-a' }, 'web_service')).toEqual({ git_connection_id: 'git-a' })
-    const connected = buildFormFrom({ ...gitService, git_connection_id: 'git-a' })
-    expect(buildPatch(connected, { ...connected, git_connection_id: 'git-b' }, 'web_service')).toEqual({ git_connection_id: 'git-b' })
-    // '' removes it.
-    expect(buildPatch(connected, { ...connected, git_connection_id: '' }, 'web_service')).toEqual({ git_connection_id: '' })
-    // Untouched, it is left to the server (which keeps it while the repository stays on its host).
-    const moved = { ...connected, repo_url: 'https://github.com/acme/web.git' }
-    expect(buildPatch(connected, moved, 'web_service')).toEqual({ repo_url: 'https://github.com/acme/web.git' })
-    // Leaving git doesn't mention it either: the server drops it with the repository.
-    expect(buildPatch(connected, { ...connected, source: 'image', image: 'nginx' }, 'web_service')).toEqual({
-      image: 'nginx',
-      repo_url: '',
-    })
-  })
 })
 
 describe('validateBuildForm', () => {
@@ -113,34 +94,6 @@ describe('validateBuildForm', () => {
     const f = buildFormFrom(gitService)
     const e = validateBuildForm({ ...f, root_dir: '../x', port: '70000', health_check_path: 'healthz' }, 'web_service')
     expect(Object.keys(e).sort()).toEqual(['health_check_path', 'port', 'root_dir'])
-  })
-
-  it('a git account only clones repositories of its own host', () => {
-    const account = {
-      id: 'git-a',
-      provider: 'github' as const,
-      base_url: 'https://github.com',
-      account: 'octocat',
-      account_name: null,
-      token_hint: '…0001',
-      scopes: [],
-      token_expires_at: null,
-      services: [],
-      created_at: '2026-10-01T00:00:00Z',
-      updated_at: '2026-10-01T00:00:00Z',
-    }
-    const f = { ...buildFormFrom(gitService), git_connection_id: 'git-a' }
-    expect(validateBuildForm(f, 'web_service', [account])).toEqual({})
-    for (const repo_url of ['https://gitlab.com/acme/api.git', 'git@github.com:acme/api.git', '/srv/git/api']) {
-      const e = validateBuildForm({ ...f, repo_url }, 'web_service', [account])
-      expect(e.git_connection_id, repo_url).toMatch(/octocat only clones http\(s\) repositories on github\.com/)
-    }
-    // Without the list (still loading), or with an account that is gone, the server decides.
-    expect(validateBuildForm({ ...f, repo_url: '/srv/git/api' }, 'web_service')).toEqual({})
-    expect(validateBuildForm({ ...f, repo_url: '/srv/git/api', git_connection_id: 'git-x' }, 'web_service', [account])).toEqual({})
-    // No account, nothing to check; other sources ignore it.
-    expect(validateBuildForm({ ...f, repo_url: '/srv/git/api', git_connection_id: '' }, 'web_service', [account])).toEqual({})
-    expect(validateBuildForm({ ...f, source: 'image', image: 'nginx' }, 'web_service', [account])).toEqual({})
   })
 })
 

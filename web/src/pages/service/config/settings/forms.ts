@@ -8,14 +8,12 @@
 import {
   listensOnPort,
   sourceKind,
-  type GitConnectionView,
   type Runtime,
   type ServiceType,
   type ServiceView,
   type SourceKind,
   type UpdateService,
 } from '@/lib/api/types'
-import { connectionServes, GIT_PROVIDER_LABELS } from '@/lib/git'
 
 export type FormErrors<F> = Partial<Record<keyof F, string>>
 
@@ -26,8 +24,6 @@ export type FormErrors<F> = Partial<Record<keyof F, string>>
 export interface BuildForm {
   source: SourceKind
   repo_url: string
-  /** Id of the git connection that clones the repository ('' = none). */
-  git_connection_id: string
   branch: string
   image: string
   /** Build runtime (git / upload sources; `image` is implied by an image source). */
@@ -57,7 +53,6 @@ export const BUILD_RUNTIMES: readonly Exclude<Runtime, 'image'>[] = [
 type BuildSource = Pick<
   ServiceView,
   | 'repo_url'
-  | 'git_connection_id'
   | 'branch'
   | 'image'
   | 'runtime'
@@ -75,7 +70,6 @@ export function buildFormFrom(s: BuildSource): BuildForm {
   return {
     source: sourceKind(s),
     repo_url: s.repo_url ?? '',
-    git_connection_id: s.git_connection_id ?? '',
     branch: s.branch,
     image: s.image ?? '',
     runtime: s.runtime === 'image' ? 'auto' : s.runtime,
@@ -174,15 +168,7 @@ export function healthPathError(p: string): string | null {
   return null
 }
 
-/**
- * `connections` (the connected git accounts, once loaded) lets the form say
- * up front when the selected account can't clone the repository.
- */
-export function validateBuildForm(
-  f: BuildForm,
-  type: ServiceType,
-  connections?: readonly GitConnectionView[],
-): FormErrors<BuildForm> {
+export function validateBuildForm(f: BuildForm, type: ServiceType): FormErrors<BuildForm> {
   const show = buildFields(type, f)
   const e: FormErrors<BuildForm> = {}
   const set = (k: keyof BuildForm, msg: string | null) => {
@@ -191,11 +177,6 @@ export function validateBuildForm(
   if (show.repo) {
     set('repo_url', repoUrlError(f.repo_url))
     set('branch', branchError(f.branch))
-    // An account that is no longer listed is left to the server.
-    const account = connections?.find((c) => c.id === f.git_connection_id)
-    if (account && !e.repo_url && !connectionServes(account, f.repo_url)) {
-      e.git_connection_id = `The ${GIT_PROVIDER_LABELS[account.provider]} account ${account.account} only clones http(s) repositories on ${account.base_url.replace(/^https?:\/\//, '')}. Select another account, or none.`
-    }
   }
   if (show.image) {
     const img = f.image.trim()
@@ -233,9 +214,6 @@ export function buildPatch(initial: BuildForm, next: BuildForm, type: ServiceTyp
     const repo = next.repo_url.trim()
     if (was !== 'git' || repo !== initial.repo_url.trim()) patch.repo_url = repo
     if (was === 'image') patch.image = ''
-    // '' removes the connection. Left out, the server keeps it for as long
-    // as the repository stays on the connection's host.
-    if (next.git_connection_id !== initial.git_connection_id) patch.git_connection_id = next.git_connection_id
     const branch = next.branch.trim()
     if (branch !== initial.branch.trim()) patch.branch = branch
   } else if (next.source === 'image') {

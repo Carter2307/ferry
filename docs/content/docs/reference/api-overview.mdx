@@ -90,7 +90,8 @@ Every error has the same body:
 | Status | `code` | When |
 |---|---|---|
 | 400 | `invalid_request` | Malformed JSON, unknown field, invalid query string, failed validation (`invalid name 'Bad_Name': use 1-40 lowercase letters, digits or '-', starting with a letter`). |
-| 400, 409 | `git_token_rejected` | GitHub or GitLab rejected an access token: `400` for the token you are connecting, `409` for the stored token of a [git connection](/docs/guides/git-accounts) (expired, revoked or lacking access). Never `401`, which is about Ferry's own token. |
+| 400 | `git_application_required` | GitLab needs an OAuth application created for this server before an account can authorize it: send its `client_id` and `client_secret` with `POST /api/v1/git/authorize`. See [Connect GitHub or GitLab](/docs/guides/git-accounts). |
+| 400, 409 | `git_authorization_rejected` | GitHub or GitLab refused an authorization: `400` for the one being made (a rejected token or code, a user who said no), `409` for what a [git connection](/docs/guides/git-accounts) has stored (expired, revoked, uninstalled, or not finished). Never `401`, which is about Ferry's own token. |
 | 401 | `unauthorized` | Missing or wrong token, wrong deploy hook key, bad webhook signature. |
 | 404 | `not_found` | No such resource, or no such route (`no API route for /api/v1/nope`). |
 | 405 | `method_not_allowed` | The path exists but not with this method. |
@@ -98,7 +99,8 @@ Every error has the same body:
 | 413 | `payload_too_large` | The body exceeds the endpoint's limit. |
 | 500 | `database_error`, `io_error`, `build_failed`, `internal_error` | A server-side failure; details are in the `ferryd` log. |
 | 502 | `docker_error` | The Docker daemon failed or is unreachable. |
-| 502 | `git_provider_unavailable` | GitHub or GitLab could not be reached, or answered an error, while listing a git connection's repositories or branches. |
+| 502 | `git_provider_unavailable` | GitHub or GitLab could not be reached, or answered an error, while an account was being authorized or a git connection's repositories listed. |
+| 502 | `git_remote_unreachable` | The remote of a repository refused, wasn't found or didn't answer in time while its branches were listed (`GET /api/v1/git/branches`). The message says why, and what to do when the repository looks private. |
 
 A 409 caused by references lists what would break:
 

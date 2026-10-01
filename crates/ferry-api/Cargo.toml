@@ -30,9 +30,10 @@ sha2.workspace = true
 hex.workspace = true
 subtle = "2.6"
 form_urlencoded = "1.2"
-# Calls to the GitHub / GitLab REST APIs for git connections (accounts,
-# repositories, branches).
-reqwest.workspace = true
+# Git connections: authorizing GitHub / GitLab accounts, their repositories...
+ferry-scm.workspace = true
+# ...and the branches of a repository (`git ls-remote`).
+ferry-build.workspace = true
 # OpenAPI document (`/api/openapi.json`) and Swagger UI (`/api/docs`, assets vendored).
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
@@ -40,6 +41,8 @@ utoipa-swagger-ui.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
+# The fake git provider reads Basic credentials and the claims of app JWTs.
+base64.workspace = true
 http-body-util.workspace = true
 flate2.workspace = true
 tar.workspace = true

@@ -38,18 +38,18 @@ See [Production setup](/docs/guides/production) for a complete hardened setup.
 
 ## The data directory
 
-`--data-dir` (default `./ferry-data`) holds everything Ferry knows, including secrets: variable values, datastore passwords, repository URLs with credentials, the access tokens of connected GitHub and GitLab accounts, logs, uploaded source code and TLS keys. `ferryd` therefore creates it with mode `0700` (owner only) and tightens it at every start.
+`--data-dir` (default `./ferry-data`) holds everything Ferry knows, including secrets: variable values, datastore passwords, repository URLs with credentials, the secrets of connected GitHub and GitLab accounts, logs, uploaded source code and TLS keys. `ferryd` therefore creates it with mode `0700` (owner only) and tightens it at every start.
 
 | File | Mode | Contains |
 |---|---|---|
 | `api_token` | `0600` | The API token |
 | `instance_id` | `0600` | This data directory's claim on its Docker name prefix |
-| `ferry.db` | inside the `0700` directory | Services, deploys, variables, datastores (with passwords), env groups, git connections (with access tokens), settings |
+| `ferry.db` | inside the `0700` directory | Services, deploys, variables, datastores (with passwords), env groups, git connections (with their secrets: a GitHub App's private key, tokens, an OAuth application's secret), settings |
 | `certs/<host>/key.pem`, `certs/accounts/*.json` | `0600` | TLS private keys and the ACME account |
 | `logs/`, `repos/`, `uploads/`, `builds/` | inside the `0700` directory | Deploy and job logs, git mirrors, uploaded archives, build scratch space |
 
 <Callout type="warning" title="Secrets are not encrypted at rest">
-Variable values, datastore passwords and the access tokens of connected git accounts are stored in plain text in `ferry.db`, protected by the directory's permissions. Anyone who can read the data directory, or its backups, can read every secret. Encrypt backups and restrict access to the machine accordingly.
+Variable values, datastore passwords and the secrets of connected git accounts are stored in plain text in `ferry.db`, protected by the directory's permissions. Anyone who can read the data directory, or its backups, can read every secret. Encrypt backups and restrict access to the machine accordingly.
 </Callout>
 
 ## Secrets
@@ -59,7 +59,7 @@ How Ferry keeps secret values out of places where they tend to leak:
 - **Builds.** Variables reach `docker build` as BuildKit secrets (`--secret id=KEY,env=…`), with the values passed through the Docker CLI's environment, never its command line. Generated Dockerfiles mount them only into their install and build steps and never declare them as `ARG`s, so they don't end up in the image or its history. Your own Dockerfile can mount them the same way with `RUN --mount=type=secret,id=KEY,env=KEY …`. For compatibility, your Dockerfile also receives `--build-arg KEY` for the `ARG`s it declares, and BuildKit records those in the image history: declaring a secret as `ARG` is the Dockerfile's choice.
 - **References instead of copies.** [Env var references](/docs/reference/env-references) such as `${{datastore.app-db.password}}` keep the password in one place; the service stores the reference and gets the value only in its containers.
 - **Repository credentials.** A token embedded in a repository URL (`https://user:token@github.com/…`) is redacted as `***` in deploy logs, error messages, blueprint change lists and webhook responses. Git receives credentials through its environment, never its command line, and only hands them to the repository's own host: a redirect to another host gets none.
-- **Git connections.** The access token of a [connected GitHub or GitLab account](/docs/guides/git-accounts) is the one secret the API never returns: a connection shows `token_hint`, the last characters of its token. Ferry sends the token to the provider's API and, when cloning, to repositories on the provider's own host (same scheme, host and port): a service whose repository is elsewhere is cloned without it. Prefer tokens that can only read (a fine-grained GitHub token, or GitLab's `read_api` and `read_repository` scopes), with an expiry.
+- **Git connections.** A [connected GitHub or GitLab account](/docs/guides/git-accounts) is authorized on the provider's own page, for read access only: a GitHub App that reads the repositories you chose (`contents: read`, `metadata: read`), or a GitLab application with the `read_api` and `read_repository` scopes. What the server keeps for it (the app's private key, the OAuth tokens and client secret, or a personal access token) is never returned by the API: of a personal token, a connection shows `token_hint`, its last characters. A GitHub App's tokens last an hour and are only kept in memory. Ferry sends a token to its provider's API and, when cloning or listing branches, to repositories on the provider's own host (same scheme, host and port): a repository elsewhere is read without it. The answers the provider sends back through the browser are only accepted with a single-use random `state` the server issued less than an hour before.
 - **Datastore passwords** are generated (32 random characters) and never appear in logs or error messages. Readiness probes never put them on a command line: `redis-cli` gets the password through the exec environment (`REDISCLI_AUTH`).
 - **Webhook responses** return deploys with credentials redacted and without server paths.
 

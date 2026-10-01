@@ -12,7 +12,7 @@ Ferry reads Render's blueprint format. `ferry blueprint apply render.yaml` creat
 
 - A Ferry server with Docker, reachable at the domains you'll use. See [Production setup](/docs/guides/production).
 - The `ferry` CLI logged in to it.
-- The repositories your services build from must be reachable from the server: public, or with credentials in the URL, or over SSH. See [Auto-deploy from GitHub](/docs/guides/github-auto-deploy). A blueprint can't select a [connected GitHub or GitLab account](/docs/guides/git-accounts): to clone a private repository through one, choose the account in the service's settings after the first apply and deploy again. Later applies keep it.
+- The repositories your services build from must be reachable from the server: public, or with credentials in the URL, or over SSH. See [Auto-deploy from GitHub](/docs/guides/github-auto-deploy). For private repositories on GitHub or GitLab, [connect the account](/docs/guides/git-accounts) to the server before you apply the blueprint: every repository of that account is then cloned with it, with nothing to add to the blueprint.
 
 ## Migrate step by step
 

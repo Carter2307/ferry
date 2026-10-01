@@ -21,7 +21,7 @@ code).
 |---|---|
 | Web services, private services, background workers, cron jobs, static sites | ✅ `ServiceType` |
 | Deploy from Git (auto-deploy on push) | ✅ GitHub webhook `/hooks/github`, any git URL incl. local paths |
-| Connect GitHub / GitLab, pick a repository, deploy private repositories | ✅ git connections: an account connected with an access token (§18) |
+| Connect GitHub / GitLab, pick a repository and a branch, deploy private repositories | ✅ git connections: the account authorizes the server on the provider's own pages — a GitHub App, a GitLab OAuth application — or with an access token (§18) |
 | Deploy prebuilt Docker image | ✅ `image` / runtime `image` |
 | Native runtimes (Node, Python, Go, Rust, Ruby, static) + Dockerfile | ✅ builder detection + generated Dockerfiles |
 | Zero-downtime deploys + health checks | ✅ blue/green per deploy, `health_check_path` |
@@ -67,11 +67,12 @@ auth, secret files, IP allow lists, teams/RBAC.
 |---|---|---|---|
 | `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers, git connections (§18). **Frozen.** |
 | `ferry-docker` | lib | core | typed Docker wrapper (containers, images, volumes, networks, logs, stats, exec) |
-| `ferry-build` | lib | core | git fetch / archive extract, runtime detection, Dockerfile generation, `docker build` |
+| `ferry-build` | lib | core | git fetch / archive extract, the branches of a remote (`git ls-remote`), runtime detection, Dockerfile generation, `docker build` |
+| `ferry-scm` | lib | core | git providers (§18): GitHub / GitLab REST clients, authorizing an account in the browser (GitHub App manifest + installation, GitLab OAuth), the tokens of a connection (minted or renewed on demand), which connection reads a repository |
 | `ferry-proxy` | lib | core | `RouteTable`, HTTP/HTTPS reverse proxy, websockets, error pages |
 | `ferry-tls` | lib | core | ACME certificates, SNI resolver, `TlsHooks` impl |
-| `ferry-engine` | lib | core, docker, build, proxy | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs |
-| `ferry-api` | lib | core | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, GitHub / GitLab REST clients for git connections (`providers`, §18), serves the embedded web client (`web/dist`) |
+| `ferry-engine` | lib | core, docker, build, proxy, scm | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs |
+| `ferry-api` | lib | core, build, scm | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, git connections (§18; `build` only for the branches of a remote), serves the embedded web client (`web/dist`) |
 | `ferry-cli` | bin `ferry` | core | CLI client |
 | `ferryd` | bin | all | wiring (already written) |
 
@@ -127,10 +128,10 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    nor pull, and must keep working on a host that is short on disk.
    Git/Archive → `Builder::build` with image tag
    `naming.image_tag(name, deploy_id)`, build args = the service's resolved env,
-   labels `naming.service_labels`. A Git deploy of a service with a git
-   connection (§18) clones with the connection's token
-   (`BuildSource::Git.credentials`), after `==> Cloning with the GitHub
-   account 'octocat'`. Image → `docker.ensure_image` (pull; always
+   labels `naming.service_labels`. A Git deploy whose repository is served
+   by one of the server's git connections (§18) clones with a token of that
+   connection (`BuildSource::Git.credentials`), after `==> Cloning with the
+   GitHub account 'octocat'`. Image → `docker.ensure_image` (pull; always
    pull when the tag is `latest`/untagged). Reuse → verify the image exists.
    Record `image`, `commit_sha`, `commit_message` on the deploy (the commit is
    recorded as soon as it is checked out — `BuildEvent::CheckedOut` — so failed
@@ -404,11 +405,13 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /api/v1/env-groups` · `POST` | `[EnvGroupView]` · `CreateEnvGroup` → 201 `EnvGroupView` |
 | `GET /api/v1/env-groups/{id}` · `DELETE ?force=&restart=` | `EnvGroupView` · 204 (409 while linked, unless `force=true`; `restart=true` restarts the linked live services) |
 | `PUT` / `PATCH /api/v1/env-groups/{id}/env?restart=` | `ReplaceEnv` / `PatchEnv` → `EnvGroupView` (restart linked live services) |
-| `GET /api/v1/git/connections` | `[GitConnectionView]` (§18; the token is never returned, only `token_hint`) |
-| `POST /api/v1/git/connections` | `ConnectGit` `{provider, token, base_url?}` → 201 `GitConnectionView`: asks the provider whose token it is, then stores it. 200 when that account was already connected (its token is replaced). 400 `git_token_rejected` when the provider rejects the token, 502 `git_provider_unavailable` when it can't be reached |
-| `GET /api/v1/git/connections/{id}` · `DELETE ?force=` | `GitConnectionView` · 204 (409 while services use it, unless `force=true`: they keep their repository and lose the connection). `{id}` is the id only |
-| `GET /api/v1/git/connections/{id}/repositories` | `GitRepositoryList` `{repositories, truncated}`: what the token can access, most recently updated first, asked from the provider on every call (at most 1000). 409 `git_token_rejected` when the stored token is no longer accepted, 502 `git_provider_unavailable` |
-| `GET /api/v1/git/connections/{id}/branches?repository=` | `[GitBranch]` of `repository` (`owner/name`; at most 500). Same errors, 404 for an unknown repository |
+| `GET /api/v1/git/connections` | `[GitConnectionView]` (§18; no secret is ever returned, of a personal token only `token_hint`). `status` is `pending` for an authorization that was started and not finished |
+| `POST /api/v1/git/authorize` | `AuthorizeGit` `{provider?, base_url?, connection_id?, redirect_uri, organization?, client_id?, client_secret?}` → `GitAuthorization` `{status, url, method, fields, connection}`: where to send the browser (`status: redirect`; `method: post` = submit a form with `fields`), or the connection when nothing is left to do (`status: connected`). GitHub: the page that registers the server's GitHub App from a manifest. GitLab: the page where the account authorizes the server's OAuth application — 400 `git_application_required` until its `client_id` / `client_secret` were given once. `connection_id` resumes a pending connection or authorizes one again. 400 `git_authorization_rejected`, 502 `git_provider_unavailable` |
+| `POST /api/v1/git/callback` | `GitCallback` `{state, code?, installation_id?, setup_action?, error?, error_description?}` — the query parameters the provider sent the browser back with → `GitAuthorization`: the next page (GitHub: install the app that was just registered) or the connection. A `state` works once, for an hour; without one, an `installation_id` re-reads that installation. 400 for an unknown `state`, 400 `git_authorization_rejected` when the provider or the user refused, 502 `git_provider_unavailable` |
+| `POST /api/v1/git/connections` | `ConnectGit` `{provider, token, base_url?}` → 201 `GitConnectionView`: the way without a browser — asks the provider whose token it is, then stores it. 200 when that account was already connected (the token replaces what it had). 400 `git_authorization_rejected` when the provider rejects the token, 502 `git_provider_unavailable` when it can't be reached |
+| `GET /api/v1/git/connections/{id}` · `DELETE ?force=` | `GitConnectionView` · 204 (409 while it clones the repository of services, unless `force=true`: they are cloned without credentials from then on). `{id}` is the id only |
+| `GET /api/v1/git/connections/{id}/repositories` | `GitRepositoryList` `{repositories, truncated}`: what the connection can read, most recently updated first, asked from the provider on every call (at most 1000). 409 `git_authorization_rejected` when the connection is pending or the provider no longer accepts its authorization, 502 `git_provider_unavailable` |
+| `GET /api/v1/git/branches?repo_url=` | `GitBranches` `{default_branch, branches, connection_id}`: the branches of any repository a service can deploy from, read from its remote (`git ls-remote`, 20 s) the way a deploy would clone it; the default branch first, then by name. 400 for a malformed URL, 502 `git_remote_unreachable` |
 | `POST /api/v1/blueprints/apply` | `ApplyBlueprint` JSON, or raw YAML (`Content-Type: application/yaml` / `text/yaml`, `?dry_run=`) → `BlueprintResult` |
 | `GET\|POST /hooks/deploy/{service_id}?key=` | 202 minimal deploy summary (trigger `deploy_hook`, credentials redacted); service **id** only; unknown id or wrong key → the same 401 (no enumeration) |
 | `POST /hooks/github` | GitHub webhook. 404 unless `github_webhook_secret` set; verify `X-Hub-Signature-256` (HMAC-SHA256, constant-time) → 401; `ping` → 200; `push` → deploy (trigger `webhook`, commit = `after`) every service with `auto_deploy`, matching `git::normalize_repo_url` of `repository.clone_url`/`ssh_url`/`html_url`, and `refs/heads/<branch>`; deleted-branch pushes ignored → 200 `{"deploys": [...]}` |
@@ -424,11 +427,9 @@ limit or `0` means the server default, as on PATCH. Request bodies reject
 unknown fields.
 Git inputs are validated up front (`validate::repo_url` — absolute local
 paths only —, `branch`, `commit`). Switching a service between git and image
-requires clearing the other source in the same PATCH. A service's
-`git_connection_id` (`CreateService`, `UpdateService`; §18) must name a
-connection that serves its `repo_url`; in a PATCH an empty string removes
-it, and when it is omitted the service keeps its connection for as long as
-`repo_url` stays on the connection's host. Cron jobs always have
+requires clearing the other source in the same PATCH. A service names no
+git connection: its repository is cloned with the connection of the server
+that serves `repo_url` (§18). Cron jobs always have
 exactly 1 instance. Writes to one service are serialized, and custom-domain
 claims are globally serialized. GitHub webhooks also accept form-encoded
 deliveries and ignore replayed payloads.
@@ -529,9 +530,9 @@ services:
   datastore's status (§8; a failure becomes a warning). Blueprint applies
   also take the row locks of the existing datastores they name.
   Services with neither repo nor image produce a warning ("deploy with `ferry up <name>`").
-* Blueprints don't select git connections (§18): an existing service keeps
-  its connection while its `repo` stays on the connection's host, and loses
-  it otherwise (`git_connection_id: git-… → (none)` in the `changes`).
+* Blueprints don't mention git connections (§18): a service's `repo` is
+  cloned with the connection of the server that serves it, like any other
+  service's.
 * `dry_run: true` computes the same result without writing anything.
 
 ## 12. CLI (`ferry`)
@@ -608,19 +609,43 @@ Rust build never runs Node.
   connection strings, resources) · env groups (+ detail) · blueprints (paste
   YAML → dry run → apply) · server (incl. default container limits, the
   Docker host's size, and the connected git accounts).
-* **Git connections in the UI** (§18): a new service's Git source is either
-  a repository picked from a "Connected account" (the default) or a
-  "Repository URL". The picker connects an account in a dialog (provider,
-  a link to the provider's token page with the scopes filled in, the token,
-  the address of a self-hosted instance), lists the account's repositories
-  with a search (private / archived badges; one without commits can't be
-  picked), then offers its branches (a searchable list that also takes a
-  typed name); picking a repository fills in its default branch and, unless
-  one was typed, the service name. Server → Connections → "Git accounts"
-  lists the accounts (token hint, expiry, the services using each) with
-  "Replace token" and "Disconnect"; a service's Settings → Build & deploy
-  has a "Git account" select. `src/lib/git.ts` mirrors
-  `GitConnection::serves`.
+* **Git connections in the UI** (§18):
+  * *Asking for one.* As long as the server has no connected account, the
+    services page (the home page) asks to connect GitHub or GitLab — or to
+    finish an authorization that was left half-way. It can be dismissed
+    (per browser).
+  * *Connecting.* The dialog's button sends the browser, in the same tab,
+    to the provider's own pages: GitHub registers the server's app, then
+    asks which repositories it may read; GitLab asks to authorize the
+    server's application, whose Application ID and Secret the dialog takes
+    the first time, next to the redirect URI and scopes to create it with.
+    No token is typed; "Use an access token instead" is the dialog's other
+    way. Options: a GitHub organization, the address of a self-hosted
+    instance.
+  * *Coming back.* The provider sends the browser to `/git/callback`, a
+    page outside the app shell that hands the query parameters to `POST
+    /api/v1/git/callback`, goes on to the provider's next page when there
+    is one, and otherwise returns to where the user was (kept in
+    `localStorage` for an hour; only ever a path of the app) with a toast —
+    or says why the account was not connected.
+  * *Picking a repository.* A new service's Git source is either a
+    repository picked from a "Connected account" (the default) or a
+    "Repository URL". The picker lists the repositories of the connected
+    accounts with a search (private / archived badges; one without commits
+    can't be picked); picking one fills in its default branch and, unless
+    one was typed, the service name. Connecting an account from the form
+    keeps the form: its draft waits in `sessionStorage` (never the
+    credentials of a URL) and the new account is selected on return.
+  * *Branches* are a searchable list read from the repository itself when
+    the list opens (`GET /api/v1/git/branches`, the default branch first),
+    for a picked repository as for a typed URL, in the new-service form and
+    in Settings → Build & deploy; a name can still be typed (a branch that
+    isn't pushed yet). The settings also say which account clones the
+    repository.
+  * *Managing.* Server → Connections → "Git accounts" lists the connections
+    (how each was authorized, the services it clones for) with "Finish
+    connecting", "Authorize again", "Repositories" (GitHub's page of the
+    installation), "Replace token" and "Disconnect".
 * **Resource limits in the UI** (§14): "Memory limit" / "CPU limit" selects
   (`Server default (512 MiB)` from `/api/v1/info`, presets, Custom…) in the
   service's Settings → Resources ("Changes apply on the next deploy or
@@ -642,7 +667,10 @@ Rust build never runs Node.
   on an older server), falls back to polling.
 * **Storage:** the token in `localStorage` under `ferry.token`, UI
   preferences under `ferry.ui` (theme applied before first paint by
-  `public/theme-init.js`, so a strict `script-src 'self'` CSP works).
+  `public/theme-init.js`, so a strict `script-src 'self'` CSP works). While
+  a git account is being authorized: `ferry.git.authorizing` (where to go
+  back) in `localStorage`, `ferry.new-service.draft` in `sessionStorage`;
+  `ferry.git.prompt-dismissed` once the home page's prompt was dismissed.
 * **Embedding:** `npm run build` writes `web/dist`; `ferry-api`'s `build.rs`
   embeds every file of it at compile time (`FERRY_WEB_DIST` overrides the
   directory; without a built client it embeds a placeholder page explaining
@@ -807,12 +835,17 @@ are never checked; on non-Unix systems the check does nothing.
 ## 15. Operational safety
 
 * The data directory is created `0700` (it holds env values, datastore
-  passwords, credentialed repo URLs, the access tokens of git connections);
+  passwords, credentialed repo URLs, the secrets of git connections: access
+  and refresh tokens, GitHub App private keys, OAuth client secrets);
   `api_token` and `instance_id` are `0600`.
 * Git credentials (in a repository URL, or a git connection's token, §18)
   reach `git` through its environment only, never a command line, the git
   cache or a log, and only for the host of the remote: a host the remote
   redirects to gets none.
+* The secrets of git connections never leave the server through the API
+  (`GitConnection` is not serializable), a log or a `Debug` output. An
+  answer of a provider is only accepted with the single-use `state` the
+  server made up for it (§18).
 * `ferryd` holds an exclusive lock on `<data-dir>/ferryd.lock`, and records
   ownership of its Docker name prefix on a marker volume `<prefix>-owner`.
   A server refuses to start on a prefix owned by another data dir (or when an
@@ -916,50 +949,147 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   (`resource_limits_apply_to_instances_jobs_and_datastores`,
   `out_of_memory_kills_are_reported`).
 * Git connections (§18) never call the real providers in tests:
-  `ferry-api/tests/git.rs` runs a fake GitHub Enterprise / GitLab API on a
-  local socket (accounts, paginated repositories, branches, rejected and
-  rate-limited tokens), and `ferry-build` / `ferry-engine` clone from a
-  local HTTP server that demands the token (also through a redirect, which
-  must not get it).
+  `ferry-api/tests/git_connections.rs` runs a fake GitHub Enterprise /
+  GitLab on a local socket — accounts, paginated repositories, rejected
+  and rate-limited tokens; the manifest conversion, installations and
+  installation tokens of a GitHub App, checking the signature of every JWT;
+  an OAuth token endpoint whose refresh tokens work once; and the
+  repositories themselves over git's dumb HTTP protocol, behind those
+  tokens. The GitHub App's RSA key is generated with the `openssl` CLI when
+  the tests start (no key is kept in the repository; the app tests are
+  skipped without `openssl`). `ferry-build` / `ferry-engine` clone and list
+  branches from a local HTTP server that demands the token (also through a
+  redirect, which must not get it).
 
 ## 18. Git connections
 
 A **git connection** is an account of a git provider — GitHub or GitLab,
-their public instances or a self-hosted one — connected with a **personal
-access token**. It does two things: the dashboard lists the account's
-repositories (and their branches) so a repository is picked instead of
-typed, and the services that name the connection are cloned with its token,
-so private repositories deploy without credentials in their URL.
+their public instances or a self-hosted one — that this server is
+authorized to read the repositories of. It does two things: the dashboard
+lists the account's repositories, so a repository is picked instead of
+typed, and every repository the connection serves is cloned with its
+tokens, so private repositories deploy without credentials in their URL.
 
-Tokens rather than OAuth: a self-hosted server has no provider application
-of its own (each operator would have to register one, with a callback URL
-that changes with the server's address), while a token works on any server,
-`localhost` included, and for self-hosted providers.
+**Connections belong to the server, not to a service.** A service names no
+connection: its `repo_url` decides which one clones it
+(`git_connection_for`, below). An account is authorized once, for every
+service — also those created later, by the CLI, a blueprint or the API.
 
-**Data model.** `GitConnection { id (git-…), provider, base_url, account,
-account_name, token, scopes, token_expires_at }` (migration
-`0003_git_connections.sql`; one row per `(provider, base_url, account)`,
-the account compared case-insensitively). `base_url` is the instance's web
-URL without a trailing slash (`https://github.com`, `https://gitlab.com`,
-`https://gitlab.example.com`), validated by `validate::git_base_url`. The
-type is not serializable: the API returns `GitConnectionView`, with
-`token_hint` (the end of the token) and the names of the `services` using
-it. `Service.git_connection_id` (nullable, `ON DELETE SET NULL`) names the
-connection that clones `repo_url`; `validate::normalize_service` drops it
-when the service has no repository.
+**How an account authorizes the server** (`GitAuth`):
 
-**Which repositories a token is for.** `GitConnection::serves(repo_url)`: an
-http(s) URL of the same scheme, host and port as `base_url` (below its path
-when it has one), read by `git::parse_http_url`, which refuses anything
-that isn't a plain URL: credentials, unusual characters, other schemes. A
-URL with credentials of its own, an ssh URL and a local path are never
-served. The API refuses a `git_connection_id` that doesn't serve the
-service's `repo_url` (400), and the engine checks again before every clone
-(a connection that doesn't serve the deploy's URL is skipped with a
-`==> Warning:` line), so a token is never sent anywhere but to its own
-provider.
+| `auth` | provider | what the user does | tokens |
+|---|---|---|---|
+| `github_app` | GitHub | confirms the registration of a GitHub App for this server, then installs it and chooses the repositories it may read | installation tokens (1 h), minted on demand with a JWT signed by the app's private key; kept in memory only |
+| `oauth` | GitLab | authorizes an OAuth application created for this server | an access token (2 h), renewed with its refresh token |
+| `token` | both | pastes a personal access token (the way without a browser) | the token as it is |
 
-**Connecting** (`POST /api/v1/git/connections`): the token is checked by
+The first two happen on the provider's own pages: no token is typed, and
+the server only gets read access (GitHub: `contents: read` and `metadata:
+read` on the chosen repositories; GitLab: `read_api`, `read_repository`).
+A GitHub App can be registered from a **manifest**, so no application has
+to exist beforehand: it works for any server, whatever its address,
+`localhost` included. GitLab has no such registration: its OAuth
+application is created once by the user (redirect URI = the dashboard's
+`/git/callback`, the two scopes, confidential) and its `client_id` /
+`client_secret` are given to the server the first time; the instance's
+next authorizations reuse them.
+
+**Data model.** `GitConnection { id (git-…), provider, base_url, auth,
+account, account_name, token, refresh_token, scopes, token_expires_at,
+client_id, client_secret, app: GithubApp { id, slug, url, private_key,
+webhook_secret }, installation: GithubInstallation { id, url,
+repository_selection } }`; one row per `(provider, base_url, account)`,
+the account compared case-insensitively. Migration
+`0003_git_connections.sql` made the table for pasted tokens, with a
+`git_connection_id` on services; `0004_git_authorization.sql` adds the
+columns of the other kinds and drops that one, so the connections of a
+database that ran the first become `token` connections and its services
+are cloned with the connection of their repository's host. `base_url` is
+the instance's web URL without a trailing slash (`https://github.com`,
+`https://gitlab.com`, `https://gitlab.example.com`), validated by
+`validate::git_base_url`. A
+connection is **pending** until its authorization is finished
+(`is_connected`): a GitHub App that is registered and not installed, an
+OAuth application no account authorized yet (its `account` is empty).
+Pending connections are listed, so the dashboard can finish them, and
+never used. The type is not serializable: the API returns
+`GitConnectionView` — `status` (`connected` / `pending`), `auth`, the
+account, `client_id`, `app_slug` / `app_url`, `manage_url` (GitHub's page
+of the installation, where its repositories are chosen),
+`repository_selection` (`all` / `selected`), the names of the `services`
+it clones for, and for a personal token `token_hint` (its end), `scopes`
+and `token_expires_at` — and no secret.
+
+**Authorizing in the browser** takes two calls, made by the dashboard:
+
+1. `POST /api/v1/git/authorize` (`ferry_scm::start`) answers with the page
+   to send the browser to. Its `redirect_uri` is the dashboard's
+   `/git/callback` page (`validate::git_redirect_uri`: an http(s) URL
+   without credentials, query string or fragment).
+2. The provider sends the browser back to `redirect_uri` with query
+   parameters, which that page hands to `POST /api/v1/git/callback`
+   (`ferry_scm::callback`). It answers with the next page, or with the
+   connection.
+
+Every page the browser is sent to carries a `state` (48 hex characters)
+the server made up and remembers in memory with what it expects back — for
+an hour, at most 256 at a time — and an answer is only accepted with it,
+once. A restart of the server forgets them: the authorization is started
+again.
+
+* **GitHub.** `authorize` answers `method: post`: the browser submits the
+  form field `manifest` to `<base_url>/settings/apps/new?state=…` (or
+  `/organizations/<organization>/settings/apps/new`, since a private app
+  only reads the repositories of the account or organization that owns
+  it). The manifest describes a private app named `ferry-<host>-<random>`
+  with read access to contents and metadata, no webhook, and
+  `redirect_url`, `setup_url` and `callback_urls` all set to
+  `redirect_uri` (`setup_on_update`: GitHub also comes back after an
+  installation's repositories were changed). GitHub redirects with
+  `?code=`; the callback converts it (`POST
+  /app-manifests/{code}/conversions`) into the app's id, slug, client id
+  and secret and private key, saves them as the pending connection of the
+  app's owner, and answers with `<app url>/installations/new?state=…`.
+  GitHub redirects with `?installation_id=`; the callback reads that
+  installation as the app (`GET /app/installations/{id}` — an id that
+  isn't one of this app's is refused) and the connection is connected,
+  under the account the app is installed on. An installation that waits
+  for an organization owner's approval (`setup_action=request`) is told
+  so; a suspended one is refused. A callback without `state` but with an
+  `installation_id` (GitHub's own pages lead there) re-reads that
+  installation, on the connection whose app has it.
+* **GitLab.** `authorize` answers with `<base_url>/oauth/authorize?
+  client_id&redirect_uri&response_type=code&state&scope=read_api+
+  read_repository` — 400 `git_application_required` when the server has no
+  application for that instance and the request brings none. An
+  application given before any account authorized it is kept as a pending
+  connection. GitLab redirects with `?code=`, or with
+  `?error=access_denied` when the user refuses (400
+  `git_authorization_rejected`); the callback exchanges the code (`POST
+  <base_url>/oauth/token`, with the same `redirect_uri`), asks whose token
+  it is (`GET /api/v4/user`) and saves the tokens on that account's
+  connection.
+* **`connection_id`** resumes or repeats an authorization: a GitHub App
+  connection goes to its installation page, or is connected at once when
+  the app turns out to be installed (`status: connected`); an OAuth
+  connection is authorized again, with another application when the
+  request brings one; a connection made with a token takes a new token
+  instead. Connecting an account that is already connected, by any of the
+  three ways, replaces what connected it.
+
+**Tokens** (`ferry_scm::access`). A personal token is used as it is. An
+OAuth access token is renewed with its refresh token 5 minutes before it
+expires — one renewal at a time per connection, because GitLab's refresh
+tokens work once — and both are saved (`Store::set_git_tokens`, which
+leaves `updated_at` alone: a renewal is not a change). An installation
+token is minted when needed (`POST /app/installations/{id}/access_tokens`,
+authenticated by a JWT: RS256, `iss` = the app's id, expiring after 9
+minutes, signed with `ring`), kept in memory until 5 minutes before its
+hour ends, and never stored. When the authorization is gone — the refresh
+token revoked, the app uninstalled or deleted — the error says to connect
+the account again.
+
+**With a token** (`POST /api/v1/git/connections`): the token is checked by
 asking the provider whose it is — GitHub `GET /user` (`api.github.com`, or
 `<base_url>/api/v3` on GitHub Enterprise Server), GitLab `GET
 <base_url>/api/v4/user` — always as `Authorization: Bearer`. The answer
@@ -969,40 +1099,77 @@ gives the account, and what is known about the token: its scopes (GitHub's
 (`github-authentication-token-expiration`; `expires_at`). Needed: on GitHub
 a classic token with `repo` (or a fine-grained one with read access to
 Contents and Metadata), on GitLab `read_api` + `read_repository`.
-Connecting an account that is already connected replaces its token.
 
-**Listing.** Repositories: GitHub `GET /user/repos?sort=pushed` (owned,
-collaborator and organization repositories), GitLab `GET
-/projects?membership=true&order_by=last_activity_at`; 100 per page, at most
-10 pages (`truncated` says when there are more), the pages after the first
-fetched 4 at a time when the provider says how many there are. Branches:
-`GET /repos/{owner}/{repo}/branches`, `GET
-/projects/{path}/repository/branches` (at most 5 pages). Nothing is cached
-on the server; the dashboard keeps a listing for a minute and has a
-Refresh button.
+**Which connection clones a repository** (`git_connection_for`).
+`GitConnection::serves(repo_url)`: an http(s) URL of the same scheme, host
+and port as `base_url` (below its path when it has one), read by
+`git::parse_http_url`, which refuses anything that isn't a plain URL:
+credentials, unusual characters, other schemes. A URL with credentials of
+its own, an ssh URL and a local path are never served, so a token is never
+sent anywhere but to its own provider. Among the connected connections
+that serve the URL, the one of the repository's owner
+(`https://github.com/<account>/…`) comes first, then the most recently
+updated. A GitHub App is only used for the account it is installed on (its
+tokens read nothing else); a user's OAuth or personal token is tried for
+any repository of its instance.
+
+**Listing repositories** (`GET …/connections/{id}/repositories`). A GitHub
+App: `GET /installation/repositories`, exactly what the account allowed.
+Otherwise GitHub `GET /user/repos?sort=pushed` (owned, collaborator and
+organization repositories), GitLab `GET
+/projects?membership=true&order_by=last_activity_at`. 100 per page, at
+most 10 pages (`truncated` says when there are more), the pages after the
+first fetched 4 at a time when the provider says how many there are.
+Nothing is cached on the server; the dashboard keeps a listing for a
+minute and has a Refresh button.
+
+**Branches** (`GET /api/v1/git/branches?repo_url=`) are asked from the
+repository itself, not from the provider's API: `git ls-remote --symref
+<url> HEAD 'refs/heads/*'` (`ferry_build::remote_branches`, 20 s), with
+what a deploy would clone with — the connection that serves the URL, the
+credentials the URL carries, or nothing. It therefore works for any URL a
+service can deploy from (other hosts, ssh, a path on the server) and shows
+what a deploy will see. The answer has the default branch (the remote's
+`HEAD`) first, then the others by name, and `connection_id` when a
+connection was used. A remote that refuses, isn't found or doesn't answer
+is 502 `git_remote_unreachable`, with the hint of the next paragraph.
+
+**Cloning** (§5.3). The pipeline asks `ferry_scm::repo_access` what reads
+the deploy's `repo_url`, logs `==> Cloning with the GitHub account
+'octocat'` and hands `BuildSource::Git` the credentials: the token as the
+password, with the username `x-access-token` (GitHub) or `oauth2`
+(GitLab). `ferry-build` gives them to git like credentials embedded in a
+URL (§15). A connection that can't produce a token is said (`==> Warning:
+the … can't be used (…): cloning without it`) and the clone goes on
+without it: a public repository still deploys. When the remote refuses the
+clone, the deploy log gets a `==> Hint:` — add the repository to the app's
+installation; check the account's access or connect it again; the token
+may have expired; or, without a connection, that a private repository
+needs its account connected to the server. A deploy's `source` and the git
+cache only ever hold the plain URL.
 
 **Provider failures** never answer 401 (which means "wrong Ferry token" to
-API clients: the dashboard signs out). A token the provider rejects is 400
-when it was just given, 409 when it is a connection's stored one — both
-with code `git_token_rejected` — and an unreachable, failing or
-rate-limiting provider is 502 `git_provider_unavailable`. Messages name the
-provider and never contain the token.
-
-**Cloning** (§5.3). The pipeline looks up the service's connection, logs
-`==> Cloning with the GitHub account 'octocat'` and hands
-`BuildSource::Git` the credentials: the token as the password, with the
-username `x-access-token` (GitHub) or `oauth2` (GitLab). `ferry-build`
-gives them to git like credentials embedded in a URL (§15). When the remote
-refuses the clone, the deploy log gets a hint: the connection's token may
-have expired or lack access to the repository; or, without a connection,
-that a private repository needs one. A deploy's `source` and the git cache
-only ever hold the plain URL.
+API clients: the dashboard signs out). An authorization the provider
+refuses is 400 while it is being made (a rejected token or code, a user
+who said no) and 409 when it is what a connection has stored (also a
+pending connection asked for its repositories) — both with code
+`git_authorization_rejected` — and an unreachable, failing or
+rate-limiting provider is 502 `git_provider_unavailable`. Messages name
+the provider and never contain a secret.
 
 **Removing.** `DELETE /api/v1/git/connections/{id}` is refused (409) while
-services use the connection, unless `force=true`; those services keep
-their repository and clone without credentials from then on. The token
-stays valid on the provider until it is revoked there.
+the connection clones the repository of services, unless `force=true`;
+those services keep their repository and are cloned without credentials
+from then on (or with another connection that serves it). What was
+authorized stays on the provider until it is removed there: the GitHub App
+(in GitHub's settings), the OAuth grant, the token.
 
-Not covered: OAuth / GitHub App sign-in, registering webhooks on the
-provider (auto-deploy still needs the GitHub webhook of §10 or a deploy
-hook), and connections in the CLI and in blueprints.
+**Change feed.** Connections are the `git_connection` kind of §10's feed,
+fingerprinted by `id` and `updated_at` only: a renewed token is not a
+change.
+
+Not covered: registering webhooks on the provider (the GitHub App has
+none; auto-deploy still needs the GitHub webhook of §10 or a deploy hook),
+encrypting the stored secrets beyond the data directory's permissions
+(§15), and connecting accounts from the CLI or a blueprint (both deploy
+repositories through the server's connections, like the API).

@@ -1,11 +1,10 @@
 /**
- * Git connections (connected GitHub / GitLab accounts): labels, the links to
- * the providers' token pages, repository search and the rule that decides
- * which repositories a connection's token is for (mirror of
- * `ferry_core::GitConnection::serves`).
+ * Git connections (the GitHub / GitLab accounts this server is authorized to
+ * read): labels, the links to the providers' pages, how an account is
+ * described, and repository search.
  */
 
-import type { GitConnectionView, GitProvider, GitRepository } from '@/lib/api/types'
+import type { GitAuth, GitConnectionView, GitProvider, GitRepository } from '@/lib/api/types'
 
 export const GIT_PROVIDER_LABELS: Record<GitProvider, string> = {
   github: 'GitHub',
@@ -18,10 +17,20 @@ export const GIT_DEFAULT_BASE_URLS: Record<GitProvider, string> = {
   gitlab: 'https://gitlab.com',
 }
 
-/** What the token must be allowed to do, per provider. */
+/** What a personal access token must be allowed to do, per provider. */
 export const GIT_TOKEN_SCOPES: Record<GitProvider, string[]> = {
   github: ['repo'],
   gitlab: ['read_api', 'read_repository'],
+}
+
+/** What the OAuth application created on GitLab asks for (`ferry_scm::oauth::GITLAB_SCOPES`). */
+export const GITLAB_APPLICATION_SCOPES = ['read_api', 'read_repository'] as const
+
+/** How an account got connected, in a few words. */
+export const GIT_AUTH_LABELS: Record<GitAuth, string> = {
+  github_app: 'GitHub App',
+  oauth: 'OAuth application',
+  token: 'Access token',
 }
 
 /** The address typed for a self-hosted instance, as a URL (a bare host means https). */
@@ -75,16 +84,39 @@ export function parseHttpUrl(url: string): HttpUrl | null {
 }
 
 /**
- * `GitConnection::serves`: the connection's token is for http(s) repositories
- * on its own provider instance (same scheme, host and port, below its path).
+ * GitLab's page where the user creates the OAuth application this server
+ * needs (GitLab has no way to register one on the fly).
  */
-export function connectionServes(connection: Pick<GitConnectionView, 'base_url'>, repoUrl: string): boolean {
-  const base = parseHttpUrl(connection.base_url)
-  const repo = parseHttpUrl(repoUrl)
-  if (!base || !repo) return false
-  if (base.scheme !== repo.scheme || base.host !== repo.host || base.port !== repo.port) return false
-  const prefix = base.path.replace(/\/+$/, '')
-  return prefix === '' || repo.path.startsWith(`${prefix}/`)
+export function applicationsPageUrl(baseUrl?: string | null): string {
+  const base = (baseUrl ? instanceUrl(baseUrl) : '') || GIT_DEFAULT_BASE_URLS.gitlab
+  return `${base}/-/user_settings/applications`
+}
+
+/** The accounts repositories can be listed and cloned through (their authorization is finished). */
+export function connectedAccounts(connections: readonly GitConnectionView[] | undefined): GitConnectionView[] {
+  return (connections ?? []).filter((c) => c.status === 'connected')
+}
+
+/**
+ * The OAuth application saved for a provider instance, if any: a later
+ * authorization there needs no application typed again.
+ */
+export function savedApplication(
+  connections: readonly GitConnectionView[] | undefined,
+  provider: GitProvider,
+  baseUrl: string,
+): GitConnectionView | undefined {
+  const base = baseUrl || GIT_DEFAULT_BASE_URLS[provider]
+  const candidates = (connections ?? []).filter(
+    (c) => c.provider === provider && c.base_url === base && c.auth === 'oauth' && c.client_id,
+  )
+  // The one that waits for its account first (the server looks it up first too).
+  return candidates.find((c) => c.status === 'pending') ?? candidates[0]
+}
+
+/** `octocat`, or what a connection is while it has no account yet. */
+export function accountName(connection: Pick<GitConnectionView, 'provider' | 'account'>): string {
+  return connection.account || `${GIT_PROVIDER_LABELS[connection.provider]} application`
 }
 
 /** Host of a self-hosted instance (`gitlab.example.com`), `null` on the provider's public one. */
@@ -96,7 +128,7 @@ export function connectionHost(connection: Pick<GitConnectionView, 'provider' | 
 /** `octocat`, or `octocat · gitlab.example.com` on a self-hosted instance. */
 export function connectionLabel(connection: Pick<GitConnectionView, 'provider' | 'base_url' | 'account'>): string {
   const host = connectionHost(connection)
-  return host ? `${connection.account} · ${host}` : connection.account
+  return host ? `${accountName(connection)} · ${host}` : accountName(connection)
 }
 
 /**
@@ -156,4 +188,22 @@ export function serviceNameFromRepository(name: string): string {
     .slice(0, 40)
     .replace(/-+$/, '')
   return slug
+}
+
+/** Whether `name` can be a git branch (`validate::branch`). */
+export function isBranchName(name: string): boolean {
+  const v = name.trim()
+  return !(
+    v === '' ||
+    v.length > 255 ||
+    v.startsWith('-') ||
+    v.startsWith('/') ||
+    v.endsWith('/') ||
+    v.endsWith('.') ||
+    v.endsWith('.lock') ||
+    v.includes('..') ||
+    v.includes('//') ||
+    v.includes('@{') ||
+    /[\s\p{Cc}~^:?*[\\]/u.test(v)
+  )
 }

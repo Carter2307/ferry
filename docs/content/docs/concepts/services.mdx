@@ -109,7 +109,7 @@ ferry create api --repo https://github.com/you/api --branch main
 ```
 
 - **Repository URLs:** `https://`, `ssh://`, `git://`, scp-style `git@github.com:you/api.git`, `file:///path`, or the absolute path of a repository on the server. With `ferry create`, a relative path that exists on your machine is sent as an absolute path.
-- **Private repositories:** [connect your GitHub or GitLab account](/docs/guides/git-accounts) in the dashboard and pick the repository from its list: the service is cloned with the account's token. Or put a token in an HTTPS URL (`https://user:token@github.com/you/api`); Ferry never prints it in logs or errors. SSH URLs use the SSH keys of the user running `ferryd`, in batch mode (new host keys are accepted, changed ones are refused).
+- **Private repositories:** [connect your GitHub or GitLab account](/docs/guides/git-accounts) to the server, by authorizing it on the provider's own page: its repositories are then cloned with the account, for every service. Or put a token in an HTTPS URL (`https://user:token@github.com/you/api`); Ferry never prints it in logs or errors. SSH URLs use the SSH keys of the user running `ferryd`, in batch mode (new host keys are accepted, changed ones are refused).
 - **Commits:** a deploy builds the tip of the branch. `ferry deploy api --commit <sha>` builds an exact commit.
 - **Auto-deploy** is on by default: a push to the branch deploys the service when the [GitHub webhook](/docs/guides/github-auto-deploy) is set up. Turn it off with `--no-auto-deploy`.
 - Git submodules are not fetched.

@@ -455,12 +455,35 @@ pub(crate) async fn ls_remote_branch(repo_url: &str, branch: &str) -> Result<Str
 }
 
 /// What a remote says about its branches (`git ls-remote --symref`).
-#[derive(Debug, Default, PartialEq, Eq)]
-struct RemoteBranches {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemoteBranches {
     /// The branch `HEAD` points to (the repository's default branch).
-    default: Option<String>,
-    /// Every branch, in the remote's order.
-    branches: Vec<String>,
+    pub default: Option<String>,
+    /// Every branch, in the remote's order (by name).
+    pub branches: Vec<String>,
+}
+
+/// The branches of `repo_url`, asked from the remote itself, with
+/// `credentials` when it is an http(s) remote that needs them (see
+/// [`RepoUrl::authenticated`]).
+pub(crate) async fn list_remote_branches(
+    repo_url: &str,
+    credentials: Option<&Credentials>,
+    timeout: Duration,
+) -> Result<RemoteBranches, GitError> {
+    let url = prepare_repo_url(repo_url)?.authenticated(credentials);
+    check_local_exists(&url).await?;
+    let mut cmd = git_remote_cmd(&url);
+    cmd.args(["ls-remote", "--symref"]).arg(&url.git_url).args(["HEAD", "refs/heads/*"]);
+    let out = run_git(cmd, "git ls-remote", &url, None, timeout).await?;
+    if !out.status.success() {
+        return Err(GitError::Failed(format!(
+            "cannot list the branches of {}: {}",
+            url.display,
+            git_failure_reason(&out, &url)
+        )));
+    }
+    Ok(parse_remote_branches(&String::from_utf8_lossy(&out.stdout)))
 }
 
 fn parse_remote_branches(stdout: &str) -> RemoteBranches {
@@ -1065,6 +1088,52 @@ mod tests {
         let wrong = Credentials { username: "x-access-token".into(), password: "ghp_wr0ngT0ken".into() };
         let err = super::checkout(&other, source(Some(&wrong)), &dest, &logs, &cancel).await.unwrap_err().message();
         assert!(err.contains(&url) && !err.contains("ghp_"), "{err}");
+    }
+
+    /// What a connected account is cloned with: `value` as the password.
+    fn account(value: &str) -> Credentials {
+        Credentials { username: "x-access-token".into(), password: value.into() }
+    }
+
+    /// What the private remote of `lists_the_branches_of_a_remote` lets in,
+    /// and what it doesn't.
+    const ADMITTED: &str = "admitted-by-the-remote";
+    const REFUSED: &str = "refused-by-the-remote";
+
+    #[tokio::test]
+    async fn lists_the_branches_of_a_remote() {
+        let (repo, _, _) = sample_repo();
+        git_in(repo.path(), &["branch", "dev"]);
+        git_in(repo.path(), &["branch", "feature/login"]);
+        let local = repo.path().to_string_lossy().into_owned();
+        let remote = list_remote_branches(&local, None, LS_REMOTE_TIMEOUT).await.unwrap();
+        assert_eq!(remote.default.as_deref(), Some("main"));
+        assert_eq!(remote.branches, vec!["dev", "feature/login", "main"]);
+
+        // A private http remote lists them to its credentials only, and
+        // never echoes them.
+        let served = tempfile::tempdir().unwrap();
+        git_in(served.path(), &["clone", "-q", "--bare", &local, "repo.git"]);
+        git_in(&served.path().join("repo.git"), &["update-server-info"]);
+        let expected = format!("Basic {}", base64(format!("x-access-token:{ADMITTED}").as_bytes()));
+        let (port, authorized) = auth_git_server(served.path().join("repo.git"), expected).await;
+        let url = format!("http://127.0.0.1:{port}/repo.git");
+        let err = list_remote_branches(&url, None, LS_REMOTE_TIMEOUT).await.unwrap_err().message();
+        assert!(err.starts_with(&format!("cannot list the branches of {url}: ")), "{err}");
+        let wrong = account(REFUSED);
+        let err = list_remote_branches(&url, Some(&wrong), LS_REMOTE_TIMEOUT).await.unwrap_err().message();
+        assert!(err.contains(&url) && !err.contains(REFUSED), "{err}");
+        assert!(!authorized.load(std::sync::atomic::Ordering::SeqCst));
+        let right = account(ADMITTED);
+        let remote = list_remote_branches(&url, Some(&right), LS_REMOTE_TIMEOUT).await.unwrap();
+        assert!(authorized.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(remote.branches, vec!["dev", "feature/login", "main"]);
+
+        // What isn't a repository says so.
+        let missing = list_remote_branches("/nonexistent/ferry-repo", None, LS_REMOTE_TIMEOUT).await.unwrap_err();
+        assert!(matches!(&missing, GitError::NotFound(m) if m.contains("does not exist")), "{missing:?}");
+        let invalid = list_remote_branches("ext::sh -c id", None, LS_REMOTE_TIMEOUT).await.unwrap_err();
+        assert!(matches!(invalid, GitError::Invalid(_)), "{invalid:?}");
     }
 
     /// A server answering every request with a redirect to the same path on
