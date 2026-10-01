@@ -21,7 +21,7 @@ use ferry_core::{Error, Result, Runtime, ServiceType};
 use serde_json::Value;
 
 use crate::detect::{self, CargoInfo, node_major_for, read_text};
-use crate::{DockerfileOptions, GeneratedDockerfile};
+use crate::{DockerfileOptions, GeneratedDockerfile, StartCommand};
 
 pub(crate) const DEFAULT_PYTHON: &str = "3.12";
 pub(crate) const DEFAULT_GO: &str = "1.23";
@@ -54,7 +54,7 @@ pub(crate) fn generate(runtime: Runtime, dir: &Path, opts: &DockerfileOptions) -
         return static_site(dir, runtime, opts);
     }
     check_sources(runtime, dir, opts)?;
-    let contents = match runtime {
+    let (contents, start) = match runtime {
         Runtime::Node => node(dir, opts)?,
         Runtime::Python => python(dir, opts)?,
         Runtime::Go => go(dir, opts)?,
@@ -64,8 +64,12 @@ pub(crate) fn generate(runtime: Runtime, dir: &Path, opts: &DockerfileOptions) -
             return Err(Error::invalid(format!("no Dockerfile generator for runtime '{runtime}'")));
         }
     };
-    Ok(GeneratedDockerfile { contents, port_hint: None })
+    Ok(GeneratedDockerfile { contents, port_hint: None, start })
 }
+
+/// A generated Dockerfile, and the command it starts (`None` for a cron job
+/// whose command comes at run time).
+type Generated = (String, Option<StartCommand>);
 
 /// A runtime chosen explicitly must match the source: fail with a clear
 /// message instead of deep inside `npm` / `bundle` / `go build`, or with a
@@ -303,28 +307,66 @@ fn apt_install(pkgs: &[&str]) -> String {
     )
 }
 
-/// Where the start command comes from.
-enum Start {
+/// How the image starts.
+enum StartCmd {
+    /// Run by a shell (so `$PORT` and friends expand).
     Shell(String),
     Exec(Vec<String>),
     /// No command (cron jobs get their command at run time).
     None,
 }
 
-fn emit_start(df: &mut Df, start: Start) {
-    match start {
-        Start::Shell(c) => df.cmd_shell(&c),
-        Start::Exec(argv) => {
+/// The start command of a generated image, and where it comes from (the
+/// build log says both: a default nobody chose is the first thing to look at
+/// when an instance doesn't stay up).
+struct Start {
+    cmd: StartCmd,
+    source: String,
+}
+
+impl Start {
+    fn shell(cmd: impl Into<String>, source: impl Into<String>) -> Self {
+        Start { cmd: StartCmd::Shell(cmd.into()), source: source.into() }
+    }
+
+    fn exec(argv: Vec<String>, source: impl Into<String>) -> Self {
+        Start { cmd: StartCmd::Exec(argv), source: source.into() }
+    }
+
+    fn none() -> Self {
+        Start { cmd: StartCmd::None, source: String::new() }
+    }
+}
+
+/// The start command the user chose: the service's own, else the entry of
+/// its Procfile.
+fn chosen_start(dir: &Path, opts: &DockerfileOptions) -> Option<Start> {
+    if let Some(s) = nonempty(&opts.start_command) {
+        return Some(Start::shell(s, "the service's start command"));
+    }
+    detect::procfile_command(dir, opts.service_type).map(|p| Start::shell(p, "the Procfile"))
+}
+
+/// Write the `CMD`; returns what the build log says about it.
+fn emit_start(df: &mut Df, start: Start) -> Option<StartCommand> {
+    let command = match start.cmd {
+        StartCmd::Shell(c) => {
+            df.cmd_shell(&c);
+            c.trim().to_string()
+        }
+        StartCmd::Exec(argv) => {
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             df.cmd_exec(&refs);
+            argv.join(" ")
         }
-        Start::None => {}
-    }
+        StartCmd::None => return None,
+    };
+    Some(StartCommand { command, source: start.source })
 }
 
 fn missing_start(what: &str, hint: &str, opts: &DockerfileOptions) -> Result<Start> {
     if opts.service_type == Some(ServiceType::CronJob) {
-        return Ok(Start::None);
+        return Ok(Start::none());
     }
     let entry = match opts.service_type {
         Some(ServiceType::BackgroundWorker) => "worker",
@@ -538,31 +580,35 @@ fn node_build_stage(df: &mut Df, plan: &NodePlan, stage: Option<&str>, build: Op
     }
 }
 
-fn node(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
+fn node(dir: &Path, opts: &DockerfileOptions) -> Result<Generated> {
     let plan = node_plan(dir)?;
     let build = nonempty(&opts.build_command)
         .map(str::to_string)
         .or_else(|| plan.has_build_script.then(|| plan.pm.run_script("build")));
-    let start = if let Some(s) = nonempty(&opts.start_command) {
-        Start::Shell(s.to_string())
-    } else if let Some(p) = detect::procfile_command(dir, opts.service_type) {
-        Start::Shell(p)
+    // The file a package.json without a "start" script is run from: its
+    // "main" (which a build may produce), else a conventional file.
+    let main = plan.main.clone().filter(|m| build.is_some() || dir.join(m).is_file());
+    let start = if let Some(chosen) = chosen_start(dir, opts) {
+        chosen
     } else if plan.has_start_script {
-        Start::Exec(match plan.pm {
+        let argv = match plan.pm {
             Pm::YarnBerry => vec!["yarn".into(), "start".into()],
             Pm::Bun => vec!["bun".into(), "run".into(), "start".into()],
             _ => vec!["npm".into(), "start".into()],
-        })
-    } else if let Some(entry) =
-        plan.main.clone().filter(|m| build.is_some() || dir.join(m).is_file()).or_else(|| {
-            ["server.js", "index.js", "app.js"].iter().find(|f| dir.join(f).is_file()).map(|f| f.to_string())
+        };
+        Start::exec(argv, "the \"start\" script of package.json")
+    } else if let Some((entry, source)) =
+        main.map(|m| (m, "package.json has no \"start\" script: its \"main\" file is run".to_string())).or_else(|| {
+            let file = ["server.js", "index.js", "app.js"].iter().find(|f| dir.join(f).is_file())?;
+            Some((file.to_string(), format!("package.json has no \"start\" script: {file} is run")))
         })
     {
-        Start::Exec(match plan.pm {
+        let argv = match plan.pm {
             Pm::YarnBerry => vec!["yarn".into(), "node".into(), entry],
             Pm::Bun => vec!["bun".into(), entry],
             _ => vec!["node".into(), entry],
-        })
+        };
+        Start::exec(argv, source)
     } else {
         missing_start("Node.js", ", a \"start\" script to package.json, or a server.js / index.js file", opts)?
     };
@@ -570,8 +616,8 @@ fn node(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
     let mut df = Df::new(&format!("Node.js app ({})", plan.pm.name()), opts);
     node_build_stage(&mut df, &plan, None, build.as_deref(), None);
     df.blank();
-    emit_start(&mut df, start);
-    Ok(df.finish())
+    let start = emit_start(&mut df, start);
+    Ok((df.finish(), start))
 }
 
 // ---------------------------------------------------------------------------
@@ -801,7 +847,7 @@ fn python_stage(df: &mut Df, dir: &Path, stage: Option<&str>) {
     }
 }
 
-fn python(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
+fn python(dir: &Path, opts: &DockerfileOptions) -> Result<Generated> {
     let mut df = Df::new("Python app", opts);
     python_stage(&mut df, dir, None);
     if let Some(b) = nonempty(&opts.build_command) {
@@ -809,17 +855,15 @@ fn python(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
     }
     df.blank();
 
-    let start = if let Some(s) = nonempty(&opts.start_command) {
-        Start::Shell(s.to_string())
-    } else if let Some(p) = detect::procfile_command(dir, opts.service_type) {
-        Start::Shell(p)
+    let start = if let Some(chosen) = chosen_start(dir, opts) {
+        chosen
     } else if let Some(f) = ["main.py", "app.py"].iter().find(|f| dir.join(f).is_file()) {
-        Start::Exec(vec!["python".into(), f.to_string()])
+        Start::exec(vec!["python".into(), f.to_string()], format!("the Python default: {f} is run"))
     } else {
         missing_start("Python", ", or a main.py / app.py file", opts)?
     };
-    emit_start(&mut df, start);
-    Ok(df.finish())
+    let start = emit_start(&mut df, start);
+    Ok((df.finish(), start))
 }
 
 // ---------------------------------------------------------------------------
@@ -882,7 +926,7 @@ fn go_source_stage(df: &mut Df, dir: &Path) {
     df.line("COPY . .");
 }
 
-fn go(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
+fn go(dir: &Path, opts: &DockerfileOptions) -> Result<Generated> {
     let steps: Vec<(bool, String)> = match nonempty(&opts.build_command) {
         Some(b) => vec![(false, "mkdir -p /out".into()), (true, b.to_string())],
         None => vec![
@@ -905,21 +949,16 @@ fn go(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
     df.line("COPY --from=build /src/ /app/");
     df.line("COPY --from=build /out/ /usr/local/bin/");
     df.blank();
-    let start = if let Some(s) = nonempty(&opts.start_command) {
-        Start::Shell(s.to_string())
-    } else if let Some(p) = detect::procfile_command(dir, opts.service_type) {
-        Start::Shell(p)
-    } else {
-        Start::Exec(vec!["/usr/local/bin/app".into()])
-    };
-    emit_start(&mut df, start);
-    Ok(df.finish())
+    let start = chosen_start(dir, opts)
+        .unwrap_or_else(|| Start::exec(vec!["/usr/local/bin/app".into()], "the Go default: the built binary is run"));
+    let start = emit_start(&mut df, start);
+    Ok((df.finish(), start))
 }
 
 // ---------------------------------------------------------------------------
 // Rust
 
-fn rust(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
+fn rust(dir: &Path, opts: &DockerfileOptions) -> Result<Generated> {
     let info: CargoInfo = detect::parse_cargo_toml(&read_text(dir, "Cargo.toml").unwrap_or_default());
     let bin = detect::rust_binary(dir, &info);
     if let Some(b) = &bin
@@ -927,10 +966,8 @@ fn rust(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
     {
         return Err(Error::invalid(format!("unsupported Rust binary name '{b}'")));
     }
-    let start_command = nonempty(&opts.start_command).map(str::to_string);
-    let procfile = detect::procfile_command(dir, opts.service_type);
-    if bin.is_none() && start_command.is_none() && procfile.is_none() && opts.service_type != Some(ServiceType::CronJob)
-    {
+    let chosen = chosen_start(dir, opts);
+    if bin.is_none() && chosen.is_none() && opts.service_type != Some(ServiceType::CronJob) {
         return Err(Error::invalid(
             "cannot determine which binary to run (Cargo workspace without a root package): set a start command \
              naming the binary; release binaries are installed in /usr/local/bin",
@@ -984,14 +1021,15 @@ fn rust(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
     df.line("COPY --from=build /src/ /app/");
     df.line("COPY --from=build /out/ /usr/local/bin/");
     df.blank();
-    let start = match (start_command, procfile, bin) {
-        (Some(s), _, _) => Start::Shell(s),
-        (None, Some(p), _) => Start::Shell(p),
-        (None, None, Some(b)) => Start::Exec(vec![format!("/usr/local/bin/{b}")]),
-        (None, None, None) => Start::None,
+    let start = match (chosen, bin) {
+        (Some(chosen), _) => chosen,
+        (None, Some(b)) => {
+            Start::exec(vec![format!("/usr/local/bin/{b}")], "the Rust default: the package's binary is run")
+        }
+        (None, None) => Start::none(),
     };
-    emit_start(&mut df, start);
-    Ok(df.finish())
+    let start = emit_start(&mut df, start);
+    Ok((df.finish(), start))
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,24 +1070,25 @@ fn ruby_stage(df: &mut Df, dir: &Path, stage: Option<&str>) {
     }
 }
 
-fn ruby(dir: &Path, opts: &DockerfileOptions) -> Result<String> {
+fn ruby(dir: &Path, opts: &DockerfileOptions) -> Result<Generated> {
     let mut df = Df::new("Ruby app", opts);
     ruby_stage(&mut df, dir, None);
     if let Some(b) = nonempty(&opts.build_command) {
         df.run_env(&[], b);
     }
     df.blank();
-    let start = if let Some(s) = nonempty(&opts.start_command) {
-        Start::Shell(s.to_string())
-    } else if let Some(p) = detect::procfile_command(dir, opts.service_type) {
-        Start::Shell(p)
+    let start = if let Some(chosen) = chosen_start(dir, opts) {
+        chosen
     } else if exists(dir, "config.ru") {
-        Start::Shell("bundle exec rackup -o 0.0.0.0 -p ${PORT:-10000}".to_string())
+        Start::shell(
+            "bundle exec rackup -o 0.0.0.0 -p ${PORT:-10000}",
+            "the Ruby default for a Rack app: config.ru is served",
+        )
     } else {
         missing_start("Ruby", ", or a config.ru for Rack apps", opts)?
     };
-    emit_start(&mut df, start);
-    Ok(df.finish())
+    let start = emit_start(&mut df, start);
+    Ok((df.finish(), start))
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,7 +1322,8 @@ fn static_site(dir: &Path, runtime: Runtime, opts: &DockerfileOptions) -> Result
         }
     }
     df.line("EXPOSE 80");
-    Ok(GeneratedDockerfile { contents: df.finish(), port_hint: Some(80) })
+    // nginx: nothing of the project's is started.
+    Ok(GeneratedDockerfile { contents: df.finish(), port_hint: Some(80), start: None })
 }
 
 #[cfg(test)]
@@ -1479,6 +1519,67 @@ mod tests {
             DockerfileOptions { service_type: Some(ServiceType::CronJob), ..opts() },
         );
         assert!(!df.contains("CMD"), "{df}");
+    }
+
+    /// The build log says which command the image starts and where it comes
+    /// from: a default nobody chose is what to look at when an instance
+    /// doesn't stay up.
+    #[test]
+    fn the_start_command_and_its_origin_are_reported() {
+        let start = |runtime: Runtime, files: &[(&str, &str)], opts: DockerfileOptions| -> Option<String> {
+            gen_with(runtime, files, opts).unwrap().start.map(|s| s.log_line())
+        };
+        let line = |runtime: Runtime, files: &[(&str, &str)]| start(runtime, files, opts()).unwrap();
+
+        // What the user chose: the service's start command, then the Procfile.
+        let chosen = start(
+            Runtime::Node,
+            &[("package.json", r#"{"scripts":{"start":"node a.js"}}"#), ("Procfile", "web: node web.js")],
+            DockerfileOptions { start_command: Some("  node x.js --port $PORT ".into()), ..opts() },
+        );
+        assert_eq!(chosen.as_deref(), Some("==> Start command: node x.js --port $PORT (the service's start command)"));
+        assert_eq!(
+            line(Runtime::Node, &[("package.json", "{}"), ("Procfile", "web: node web.js")]),
+            "==> Start command: node web.js (the Procfile)"
+        );
+
+        // What Ferry falls back to, and why.
+        assert_eq!(
+            line(Runtime::Node, &[("package.json", r#"{"scripts":{"start":"node a.js"}}"#)]),
+            "==> Start command: npm start (the \"start\" script of package.json)"
+        );
+        // A library: a build, a "main" the build produces, nothing to start.
+        assert_eq!(
+            line(Runtime::Node, &[("package.json", r#"{"main":"./dist/index.js","scripts":{"build":"vite build"}}"#)]),
+            "==> Start command: node ./dist/index.js (package.json has no \"start\" script: its \"main\" file is run)"
+        );
+        assert_eq!(
+            line(Runtime::Node, &[("package.json", "{}"), ("server.js", "")]),
+            "==> Start command: node server.js (package.json has no \"start\" script: server.js is run)"
+        );
+        assert_eq!(
+            line(Runtime::Python, &[("requirements.txt", ""), ("app.py", "")]),
+            "==> Start command: python app.py (the Python default: app.py is run)"
+        );
+        assert_eq!(
+            line(Runtime::Go, &[("go.mod", "module example.com/app\n\ngo 1.23\n"), ("main.go", "package main\n")]),
+            "==> Start command: /usr/local/bin/app (the Go default: the built binary is run)"
+        );
+        assert_eq!(
+            line(Runtime::Rust, &[("Cargo.toml", "[package]\nname = \"api\"\n"), ("src/main.rs", "fn main() {}")]),
+            "==> Start command: /usr/local/bin/api (the Rust default: the package's binary is run)"
+        );
+        assert_eq!(
+            line(Runtime::Ruby, &[("Gemfile", ""), ("config.ru", "")]),
+            "==> Start command: bundle exec rackup -o 0.0.0.0 -p ${PORT:-10000} (the Ruby default for a Rack app: \
+             config.ru is served)"
+        );
+
+        // Nothing of the project's is started: nginx, or a cron job whose
+        // command comes at run time.
+        assert_eq!(start(Runtime::Static, &[("index.html", "")], opts()), None);
+        let cron = DockerfileOptions { service_type: Some(ServiceType::CronJob), ..opts() };
+        assert_eq!(start(Runtime::Node, &[("package.json", "{}")], cron), None);
     }
 
     #[test]
