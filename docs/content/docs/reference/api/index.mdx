@@ -40,7 +40,7 @@ The request examples target `http://127.0.0.1:7878`, the default `--api-addr` (d
     Managed Postgres and Redis instances with their connection strings and resource limits.
   </Card>
   <Card title="Git connections" href="/docs/reference/api/git">
-    Git connections: GitHub / GitLab accounts connected with an access token, to pick a repository from a list and to clone private repositories. A service uses one through its `git_connection_id`.
+    Git connections: the GitHub / GitLab accounts this server is authorized to read the repositories of, to pick a repository and a branch from a list and to clone private repositories. An account is authorized in the browser (a GitHub App on GitHub, an OAuth application on GitLab) or with an access token. Connections belong to the server, not to a service: a repository is cloned with the connection that serves its URL.
   </Card>
   <Card title="Blueprints" href="/docs/reference/api/blueprints">
     Infrastructure as code: apply a `ferry.yaml` / `render.yaml` (idempotent, with a dry run).

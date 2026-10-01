@@ -34,6 +34,7 @@ Every screen shares the same frame:
 
 The home screen lists every service as a card: name, source (repository and branch, image, or "Upload via ferry up"), badges for the type, runtime and instance count, the public URL, private address or cron schedule, and a status line such as **Service is live** with the time of the last deploy.
 
+- As long as no GitHub or GitLab account is connected to the server, the page starts with **Connect GitHub** and **Connect GitLab**: authorize the server on the provider's own page, and new services pick their repository and branch from a list. See [Connect GitHub or GitLab](/docs/guides/git-accounts). **Not now** hides the prompt.
 - **Search** by name, filter by **Status** (live, deploying, degraded, failed, suspended, not deployed), sort by name or last deploy, and switch between grid and list views.
 - The **⋮** menu on a card: open the service, deploy it, restart it, suspend or resume it, copy its URL, or delete it.
 - The **Ferry server** panel on the right shows the Ferry and Docker versions, the proxy address, how many services, datastores and env groups exist, and how many instances are running. Its footer says **Live updates** while the change feed is connected.
@@ -44,7 +45,7 @@ The home screen lists every service as a card: name, source (repository and bran
 
 1. **Service type:** web service, private service, background worker, cron job or static site (see [Services](/docs/concepts/services)).
 2. **General:** the name, with a preview of the public URL it will get.
-3. **Source:** a **Git repository**, a **Docker image**, or **Upload later** to create the service now and push code with `ferry up`. For a git repository, **Connected account** lists the repositories of a [connected GitHub or GitLab account](/docs/guides/git-accounts) (search, pick one, then choose its branch), and **Repository URL** takes any git URL. Both have the auto-deploy switch.
+3. **Source:** a **Git repository**, a **Docker image**, or **Upload later** to create the service now and push code with `ferry up`. For a git repository, **Connected account** lists the repositories of a [connected GitHub or GitLab account](/docs/guides/git-accounts) (search and pick one; **Add account** authorizes another one on the provider's page and brings you back to the form as you left it), and **Repository URL** takes any git URL. Either way, **Branch** is a list read from the repository itself, and both have the auto-deploy switch.
 4. **Build & deploy:** runtime (auto-detect or a specific one), build command, start command (or the command and schedule of a cron job, or the publish directory of a static site), port and instances. **Advanced** adds the root directory and Dockerfile path for monorepos, the health check path, a persistent disk, and the memory and CPU limits of each instance (see [Resource limits](/docs/concepts/resource-limits)).
 5. **Custom domains**, **Environment** variables (add them one by one, import a `.env` file, or insert a datastore reference) and **Env groups** to link.
 
@@ -89,7 +90,7 @@ See [Environment & env groups](/docs/concepts/environment).
 | Section | What you can change |
 |---|---|
 | General | Nothing: name, id, type, private address and creation date, with copy buttons |
-| Build & deploy | Source (git, image or upload), the [git account](/docs/guides/git-accounts) that clones the repository, runtime, root directory, Dockerfile path, build command, start command, publish directory, port, health check path, auto-deploy. Applies on the next deploy. |
+| Build & deploy | Source (git, image or upload), the branch (a list read from the repository; the section also says which [connected account](/docs/guides/git-accounts) clones it), runtime, root directory, Dockerfile path, build command, start command, publish directory, port, health check path, auto-deploy. Applies on the next deploy. |
 | Cron schedule | The schedule of a cron job, with common presets |
 | Scaling | Instances (applied immediately, no deploy) and the disk mount path |
 | Resources | Memory limit and CPU limit of each instance (of each run, for a cron job) and of the service's jobs: **Server default**, a preset or **Custom…**. Applies on the next deploy or restart; on a live service, **Restart now** in the confirmation applies it right away. |
@@ -124,7 +125,7 @@ Paste or open a `ferry.yaml` or `render.yaml` (or start from **Example**), click
 ## Server
 
 - **General:** Ferry and Docker versions, the default container limits with the Docker host's CPUs and memory, base domain, proxy URL, whether TLS is enabled, the dashboard URL, whether the GitHub webhook is enabled, the state of live updates, and the theme.
-- **Connections:** the `ferry login` command and the `FERRY_SERVER` / `FERRY_TOKEN` variables for CI, the [connected GitHub and GitLab accounts](/docs/guides/git-accounts) (connect one, replace its token, disconnect it), the GitHub webhook settings to paste into GitHub (payload URL, content type, events), and a pointer to per-service deploy hooks.
+- **Connections:** the `ferry login` command and the `FERRY_SERVER` / `FERRY_TOKEN` variables for CI, the [connected GitHub and GitLab accounts](/docs/guides/git-accounts) (connect one, finish or repeat its authorization, change the repositories a GitHub App may read, disconnect it), the GitHub webhook settings to paste into GitHub (payload URL, content type, events), and a pointer to per-service deploy hooks.
 - **API:** the base URL, how to authenticate, an example request, links to the Swagger UI at `/api/docs` and the OpenAPI document, and the server-sent event streams.
 
 ## Live updates

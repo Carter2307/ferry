@@ -1,17 +1,23 @@
 ---
 title: "Git connections"
-description: "Git connections: GitHub / GitLab accounts connected with an access token, to pick a repository from a list and to clone private repositories. A service uses one through its git_connection_id."
+description: "Git connections: the GitHub / GitLab accounts this server is authorized to read the repositories of, to pick a repository and a branch from a list and to clone private repositories. An account is authorized in the browser (a GitHub App on GitHub, an OAuth application on GitLab) or with an access token. Connections belong to the server, not to a service: a repository is cloned with the connection that serves its URL."
 full: true
 _openapi:
   preload:
     - ferry
   toc:
     - depth: 2
+      title: Authorize a git account in the browser
+      url: '#authorize-a-git-account-in-the-browser'
+    - depth: 2
+      title: Finish a step of a browser authorization
+      url: '#finish-a-step-of-a-browser-authorization'
+    - depth: 2
       title: List git connections
       url: '#list-git-connections'
     - depth: 2
-      title: Connect a git account
-      url: '#connect-a-git-account'
+      title: Connect a git account with an access token
+      url: '#connect-a-git-account-with-an-access-token'
     - depth: 2
       title: Get a git connection
       url: '#get-a-git-connection'
@@ -26,10 +32,14 @@ _openapi:
       url: '#list-the-branches-of-a-repository'
   structuredData:
     headings:
+      - content: Authorize a git account in the browser
+        id: authorize-a-git-account-in-the-browser
+      - content: Finish a step of a browser authorization
+        id: finish-a-step-of-a-browser-authorization
       - content: List git connections
         id: list-git-connections
-      - content: Connect a git account
-        id: connect-a-git-account
+      - content: Connect a git account with an access token
+        id: connect-a-git-account-with-an-access-token
       - content: Get a git connection
         id: get-a-git-connection
       - content: Disconnect a git account
@@ -39,36 +49,81 @@ _openapi:
       - content: List the branches of a repository
         id: list-the-branches-of-a-repository
     contents:
-      - content: 'The connected GitHub / GitLab accounts, with the names of the services
-          cloned through each. Tokens are never returned: `token_hint` is the
-          end of the stored one.'
+      - content: >-
+          Starts connecting an account on the provider's own pages and answers
+          with where to send the browser (`status: redirect`): a URL to navigate
+          to (`method: get`) or to submit a form with `fields` to (`method:
+          post`). When the provider is done it sends the browser back to
+          `redirect_uri` (the dashboard's `/git/callback` page) with query
+          parameters to hand to `POST /api/v1/git/callback`.
+
+
+          **GitHub**: the browser posts a manifest to GitHub, which registers a
+          private GitHub App for this server (on the user's account, or in
+          `organization`) and then asks the account which repositories the app
+          may read. No token is ever typed: the app's key mints short-lived
+          tokens.
+
+
+          **GitLab**: the account authorizes an OAuth application created for
+          this server (scopes `read_api` and `read_repository`, redirect URI =
+          `redirect_uri`). Give its `client_id` and `client_secret` the first
+          time (400 `git_application_required` otherwise); they are kept for
+          later authorizations.
+
+
+          With `connection_id`, resumes a `pending` connection or authorizes a
+          connection again; the answer is `status: connected` when nothing is
+          left to do (a GitHub App that is already installed).
+        heading: authorize-a-git-account-in-the-browser
+      - content: 'Takes the query parameters the provider sent the browser back with (to
+          the `redirect_uri` given to `POST /api/v1/git/authorize`): `state`,
+          and `code` and / or `installation_id`. Answers with the next page to
+          send the browser to (`status: redirect`: after GitHub registered the
+          app, its installation page) or with the connection (`status:
+          connected`). A `state` works once, for an hour. Without `state` but
+          with an `installation_id` (GitHub sends the browser back after an
+          installation was changed on its own pages), the connection of that
+          installation is read again.'
+        heading: finish-a-step-of-a-browser-authorization
+      - content: The GitHub / GitLab accounts this server is authorized to read the
+          repositories of, with the names of the services whose repository each
+          one clones. A `pending` connection was started in the browser and not
+          finished. Secrets are never returned.
         heading: list-git-connections
-      - content: "Connects the account an access token belongs to: Ferry asks the
-          provider who the token is, then stores it to list the account's
-          repositories and to clone them (also the private ones) for the
-          services that use the connection. On GitHub use a classic personal
-          access token with the `repo` scope, or a fine-grained one with read
-          access to Contents and Metadata; on GitLab one with the `read_api` and
-          `read_repository` scopes. `base_url` selects a self-hosted instance
-          (GitHub Enterprise Server, GitLab self-managed). Connecting an account
-          that is already connected replaces its token (200 instead of 201). The
-          token is never returned by the API."
-        heading: connect-a-git-account
-      - content: 'Deletes the connection and its stored token (the token itself stays
-          valid on the provider: revoke it there). Refused while services use
-          it, unless `force=true`: those services keep their repository and
-          clone without credentials from then on, which fails for private
-          repositories.'
+      - content: 'The alternative to authorizing in the browser (`POST
+          /api/v1/git/authorize`), for scripts and for instances where no
+          application can be registered: connects the account a personal access
+          token belongs to. Ferry asks the provider who the token is, then
+          stores it. On GitHub use a classic personal access token with the
+          `repo` scope, or a fine-grained one with read access to Contents and
+          Metadata; on GitLab one with the `read_api` and `read_repository`
+          scopes. `base_url` selects a self-hosted instance (GitHub Enterprise
+          Server, GitLab self-managed). An account that is already connected
+          gets the token instead of what it had (200 instead of 201). The token
+          is never returned by the API.'
+        heading: connect-a-git-account-with-an-access-token
+      - content: "Deletes the connection and its secrets. What it authorized stays on
+          the provider until it is removed there: the GitHub App (delete it in
+          GitHub's settings), the OAuth grant or the token. Refused while
+          services' repositories are cloned with it, unless `force=true`: those
+          services keep their repository and are cloned without credentials from
+          then on, which fails for private repositories."
         heading: disconnect-a-git-account
-      - content: "The repositories the connection's token can access, asked from the
-          provider on every call: the account's own, its organizations' /
-          groups' and those it collaborates on, most recently updated first. At
-          most 1000 are listed (`truncated` says when there are more). Use a
-          repository's `clone_url` as the `repo_url` of a service, with this
-          connection as its `git_connection_id`."
+      - content: "The repositories the connection can read, asked from the provider on
+          every call, most recently updated first: for a GitHub App the
+          repositories the account allowed it to read (see `manage_url`);
+          otherwise the account's own, its organizations' / groups' and those it
+          collaborates on. At most 1000 are listed (`truncated` says when there
+          are more). Use a repository's `clone_url` as the `repo_url` of a
+          service: it is cloned with this connection."
         heading: list-the-repositories-of-a-git-connection
-      - content: The branches of a repository the connection can access, asked from the
-          provider on every call (at most 500).
+      - content: "The branches of a repository and its default one, asked from the
+          repository's remote itself (`git ls-remote`) on every call. Works for
+          any repository URL a service can deploy from; it is read the way a
+          deploy would clone it: with the git connection that serves the URL
+          when there is one (`connection_id` in the answer), with the
+          credentials the URL carries, or without any."
         heading: list-the-branches-of-a-repository
 ---
 
@@ -79,7 +134,7 @@ export default function Layout(props) {
   return (
     <>
       {props.children}
-      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/git/connections","method":"get"},{"path":"/api/v1/git/connections","method":"post"},{"path":"/api/v1/git/connections/{id}","method":"get"},{"path":"/api/v1/git/connections/{id}","method":"delete"},{"path":"/api/v1/git/connections/{id}/repositories","method":"get"},{"path":"/api/v1/git/connections/{id}/branches","method":"get"}]} showTitle showDescription />
+      <OpenAPIPage document="ferry" webhooks={[]} operations={[{"path":"/api/v1/git/authorize","method":"post"},{"path":"/api/v1/git/callback","method":"post"},{"path":"/api/v1/git/connections","method":"get"},{"path":"/api/v1/git/connections","method":"post"},{"path":"/api/v1/git/connections/{id}","method":"get"},{"path":"/api/v1/git/connections/{id}","method":"delete"},{"path":"/api/v1/git/connections/{id}/repositories","method":"get"},{"path":"/api/v1/git/branches","method":"get"}]} showTitle showDescription />
     </>
   );
 }

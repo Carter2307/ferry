@@ -62,7 +62,7 @@ Auto-deploy is on by default. Turn it off with `--no-auto-deploy` (on `create` o
 
 For a **private repository**, Ferry needs read access when it clones:
 
-- **A connected account:** [connect your GitHub account](/docs/guides/git-accounts) in the dashboard and pick the repository from its list. The service is cloned with the account's token, and its URL stays free of credentials.
+- **A connected account:** [connect your GitHub account](/docs/guides/git-accounts) to the server, by authorizing it on GitHub's own page. Its repositories are then cloned with the account, whichever way the service was created, and their URL stays free of credentials.
 - **HTTPS with a token:** put a GitHub personal access token with read access to the repository's contents in the URL, `https://USERNAME:TOKEN@github.com/you/api`. Ferry keeps the credentials out of build logs and error messages, and hands them to git through its environment, not its command line.
 - **SSH:** use `git@github.com:you/api.git` and give the user that runs `ferryd` an SSH key that GitHub accepts (a deploy key, for example). Git runs in batch mode and accepts the host key on first connection.
 
