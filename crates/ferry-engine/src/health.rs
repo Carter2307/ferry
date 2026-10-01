@@ -342,12 +342,7 @@ async fn last_exit(inner: &Inner, id: &str, started: Duration, memory_limit_byte
 
 /// How the container last exited according to its Docker events (`die`,
 /// with its exit code, and `oom`) since `since` (a time since the epoch).
-pub(crate) async fn exit_from_events(
-    inner: &Inner,
-    id: &str,
-    since: Duration,
-    memory_limit_bytes: Option<i64>,
-) -> LastExit {
+async fn exit_from_events(inner: &Inner, id: &str, since: Duration, memory_limit_bytes: Option<i64>) -> LastExit {
     let filters: HashMap<String, Vec<String>> = HashMap::from([
         ("type".to_string(), vec!["container".to_string()]),
         ("container".to_string(), vec![id.to_string()]),
@@ -376,10 +371,10 @@ pub(crate) async fn exit_from_events(
 
 /// `exit`, or an OOM kill Docker recorded late. Only a SIGKILL can be the
 /// kernel's OOM killer, and Docker may record the OOM kill a moment after it
-/// reports the exit (seen on Linux hosts): an instance SIGKILLed with no OOM
-/// kill on record is looked up in its Docker events since `since` (a time
-/// since the epoch) a while longer.
-async fn with_late_oom(inner: &Inner, id: &str, since: Duration, exit: LastExit) -> LastExit {
+/// reports the exit (seen on Linux hosts): an instance (or a job) SIGKILLed
+/// with no OOM kill on record is looked up in its Docker events since `since`
+/// (a time since the epoch) a while longer.
+pub(crate) async fn with_late_oom(inner: &Inner, id: &str, since: Duration, exit: LastExit) -> LastExit {
     if exit.oom_killed || exit.code != Some(SIGKILL_EXIT_CODE) {
         return exit;
     }

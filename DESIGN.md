@@ -887,7 +887,11 @@ never refreshed: after resizing Docker Desktop's VM, restart ferryd.
 
 **OOM visibility.** Docker's `OOMKilled` flag (inspect only — the list API
 never reports it) is the proof of an out-of-memory kill; exit code 137 alone
-is a SIGKILL, which may have other causes.
+is a SIGKILL, which may have other causes. Docker can record the kill a
+moment after it reports the exit (seen on Linux hosts): an instance or a job
+that ended with a SIGKILL and no kill on record is looked at a while longer —
+its flag, then its `oom` events for 2 s — before it is reported as a plain
+exit.
 * Deploys: a new instance OOM-killed during its health check fails the
   deploy with `instance ab12cd ran out of memory (limit 512 MiB) — raise the
   service's memory limit` (§5.5), also when Docker already restarted it
