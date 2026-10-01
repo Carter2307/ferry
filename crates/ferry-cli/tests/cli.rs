@@ -1724,3 +1724,163 @@ async fn info_and_login_show_default_limits_and_host_capacity() {
     assert_eq!(out.code, 0, "{out:?}");
     assert!(!out.stdout.contains("Default limits") && !out.stdout.contains("Docker host"), "{}", out.stdout);
 }
+
+// ---------------------------------------------------------------------------
+// the server's domains and certificates (DESIGN.md §21)
+
+fn domain_view(name: &str, status: &str, extra: Value) -> Value {
+    let mut v = json!({
+        "id": format!("dom-{}", name.replace('.', "-")), "name": name, "source": "connected", "status": status,
+        "is_default": false, "checks": [], "created_at": "2026-10-01T10:00:00Z", "verified_at": null,
+        "checked_at": null, "local": false, "served": status != "pending",
+        "records": [
+            {"type": "A", "name": "*", "value": "203.0.113.10", "required": true},
+            {"type": "A", "name": "@", "value": "203.0.113.10", "required": false},
+        ],
+        "url_pattern": format!("https://<service>.{name}"),
+    });
+    for (k, val) in extra.as_object().unwrap() {
+        v[k] = val.clone();
+    }
+    v
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn server_domains_are_connected_verified_and_listed() {
+    let (fake, url) = Fake::start().await;
+    let h = home();
+
+    // Connecting prints the record to create.
+    fake.on("POST", "/api/v1/domains", Reply::json(201, domain_view("example.com", "pending", json!({}))));
+    let out = ferry(&url, h.path(), &["domains", "connect", "example.com"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout.starts_with(
+            "Connected example.com. Services will be served at https://<service>.example.com once its DNS points at this server."
+        ),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("  A      *      203.0.113.10\n"), "{}", out.stdout);
+    assert!(out.stdout.contains("optional: only to serve example.com itself"), "{}", out.stdout);
+    assert!(out.stdout.contains("ferry domains verify example.com"), "{}", out.stdout);
+    assert_eq!(fake.find("POST", "/api/v1/domains")[0].json(), json!({"name": "example.com"}));
+
+    // Verifying: exit 1 while its names don't reach the server...
+    let checks = json!({"checks": [
+        {"kind": "dns", "outcome": "failed", "message": "No DNS record answers for *.example.com yet."},
+        {"kind": "http", "outcome": "skipped", "message": "Not checked: the name does not resolve."},
+    ]});
+    let passed = json!({"is_default": true, "checks": [
+        {"kind": "dns", "outcome": "passed", "message": "*.example.com resolves to 203.0.113.10, this server."},
+        {"kind": "http", "outcome": "passed", "message": "This server answers on port 80 for names under example.com."},
+    ]});
+    let active = domain_view("example.com", "active", passed);
+    // Replies of one route queue: the first verification, then the second.
+    fake.on("POST", "/api/v1/domains/example.com/verify", Reply::ok(domain_view("example.com", "pending", checks)));
+    fake.on("POST", "/api/v1/domains/example.com/verify", Reply::ok(active.clone()));
+    let out = ferry(&url, h.path(), &["domains", "verify", "example.com"]).await;
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.starts_with("example.com doesn't reach this server (pending):"), "{}", out.stdout);
+    assert!(out.stdout.contains("  dns   failed   No DNS record answers for *.example.com yet."), "{}", out.stdout);
+    assert!(out.stdout.contains("  http  skipped  Not checked"), "{}", out.stdout);
+    assert!(out.stdout.contains("Create this DNS record"), "{}", out.stdout);
+    // ...and 0 once they do.
+    let out = ferry(&url, h.path(), &["domains", "verify", "example.com"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout.starts_with("example.com reaches this server: services are served at https://<service>.example.com"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("Create this DNS record"), "{}", out.stdout);
+
+    // The list: the default domain, the base domain, and what to do about one that waits.
+    let base = domain_view(
+        "localhost",
+        "active",
+        json!({"source": "config", "local": true, "records": [], "url_pattern": "http://<service>.localhost:8080"}),
+    );
+    let waiting = domain_view("example.org", "pending", json!({}));
+    fake.on("GET", "/api/v1/domains", Reply::ok(json!([active, base, waiting])));
+    let out = ferry(&url, h.path(), &["domains"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let rows: Vec<Vec<&str>> = out.stdout.lines().take(4).map(|l| l.split_whitespace().collect()).collect();
+    assert_eq!(rows[0], vec!["DOMAIN", "STATUS", "DEFAULT", "SERVICES", "AT", "SET", "BY"]);
+    assert_eq!(rows[1], vec!["example.com", "active", "yes", "https://<service>.example.com", "connected"]);
+    assert_eq!(rows[2], vec!["localhost", "local", "-", "http://<service>.localhost:8080", "--base-domain"]);
+    assert_eq!(rows[3], vec!["example.org", "pending", "-", "(waits", "for", "its", "DNS)", "connected"]);
+    assert!(out.stdout.contains("example.org doesn't reach this server yet:"), "{}", out.stdout);
+    assert!(out.stdout.contains("ferry domains verify example.org"), "{}", out.stdout);
+    let out = ferry(&url, h.path(), &["domains", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap().as_array().unwrap().len(), 3);
+
+    // The default domain.
+    fake.on("PATCH", "/api/v1/domains/example.com", Reply::ok(active.clone()));
+    let out = ferry(&url, h.path(), &["domains", "default", "example.com"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(
+        out.stdout.trim(),
+        "example.com is the default domain: services are shown at https://<service>.example.com"
+    );
+    assert!(out.stderr.contains("FERRY_EXTERNAL_URL"), "{}", out.stderr);
+    assert_eq!(fake.find("PATCH", "/api/v1/domains/example.com")[0].json(), json!({"is_default": true}));
+
+    // Disconnecting asks first; without a terminal it needs --yes.
+    fake.on("GET", "/api/v1/domains/example.com", Reply::ok(active));
+    fake.on("DELETE", "/api/v1/domains/dom-example-com", Reply::no_content());
+    let out = ferry(&url, h.path(), &["domains", "disconnect", "example.com"]).await;
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("re-run with --yes"), "{}", out.stderr);
+    assert!(fake.find("DELETE", "/api/v1/domains/dom-example-com").is_empty());
+    let out = ferry(&url, h.path(), &["domains", "disconnect", "example.com", "--yes"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.starts_with("Disconnected example.com."), "{}", out.stdout);
+    assert_eq!(fake.find("DELETE", "/api/v1/domains/dom-example-com").len(), 1);
+
+    // A service's custom domains are still `ferry domains NAME`.
+    fake.on("GET", "/api/v1/services/web/domains", Reply::ok(json!(["app.example.com"])));
+    let out = ferry(&url, h.path(), &["domains", "web"]).await;
+    assert_eq!(out.stdout.trim(), "app.example.com");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn certificates_are_listed_with_their_state() {
+    let (fake, url) = Fake::start().await;
+    let h = home();
+    let cert = |host: &str, service: Value, state: &str, extra: Value| {
+        let mut v = json!({"host": host, "service": service, "state": state, "expires_at": null, "error": null,
+            "retry_at": null});
+        for (k, val) in extra.as_object().unwrap() {
+            v[k] = val.clone();
+        }
+        v
+    };
+    let expires = Utc::now() + chrono::Duration::days(75);
+    let list = json!([
+        cert("ferry.localhost", Value::Null, "local", json!({})),
+        cert("web.example.com", json!("web"), "issued", json!({"expires_at": expires})),
+        cert("api.example.com", json!("api"), "failed", json!({"error": "no valid A record for api.example.com"})),
+        cert("new.example.com", json!("new"), "pending", json!({})),
+    ]);
+    // Replies of one route queue: this list twice, then a server without HTTPS.
+    let without_https = json!([cert("web.example.com", json!("web"), "disabled", json!({}))]);
+    for reply in [list.clone(), list.clone(), without_https] {
+        fake.on("GET", "/api/v1/certificates", Reply::ok(reply));
+    }
+    let out = ferry(&url, h.path(), &["certificates"]).await;
+    assert_eq!(out.code, 0, "{out:?}");
+    let lines: Vec<&str> = out.stdout.lines().collect();
+    assert!(lines[0].starts_with("HOST              SERVICE       CERTIFICATE"), "{}", lines[0]);
+    assert!(lines[1].starts_with("ferry.localhost   (dashboard)   local"), "{}", lines[1]);
+    assert!(lines[2].starts_with("web.example.com   web           issued        expires in 2mo"), "{}", lines[2]);
+    assert!(lines[3].contains("failed        no valid A record for api.example.com"), "{}", lines[3]);
+    assert!(lines[4].contains("pending       requested shortly"), "{}", lines[4]);
+    assert!(!out.stdout.contains("HTTPS is off"), "{}", out.stdout);
+    let out = ferry(&url, h.path(), &["certs", "--json"]).await;
+    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap(), list);
+
+    // A server without HTTPS says how to turn it on.
+    let out = ferry(&url, h.path(), &["certs"]).await;
+    assert!(out.stdout.contains("HTTPS is off on this server: start ferryd with --https-addr"), "{}", out.stdout);
+}

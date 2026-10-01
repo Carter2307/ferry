@@ -5,6 +5,7 @@ mod auth;
 mod blueprint;
 mod db;
 mod deploys;
+mod domains;
 mod env;
 mod jobs;
 mod logs;
@@ -88,12 +89,18 @@ async fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
             Some(EnvCommand::Unset(u)) => env::unset(ctx, &u.name, u.keys, !u.no_restart, u.follow).await,
             None => env::list(ctx, a.name.as_deref().unwrap_or_default(), a.effective).await,
         },
-        Command::Domains(a) => match a.command {
-            Some(DomainsCommand::Ls(n)) => services::domains_list(ctx, &n.name).await,
-            Some(DomainsCommand::Add(d)) => services::domains_add(ctx, &d.name, &d.domain).await,
-            Some(DomainsCommand::Rm(d)) => services::domains_rm(ctx, &d.name, &d.domain).await,
-            None => services::domains_list(ctx, a.name.as_deref().unwrap_or_default()).await,
+        Command::Domains(a) => match (a.command, a.name) {
+            (Some(DomainsCommand::Connect(d)), _) => domains::connect(ctx, &d.domain).await,
+            (Some(DomainsCommand::Verify(d)), _) => domains::verify(ctx, &d.domain).await,
+            (Some(DomainsCommand::Default(d)), _) => domains::set_default(ctx, &d.domain).await,
+            (Some(DomainsCommand::Disconnect(d)), _) => domains::disconnect(ctx, &d.domain, d.yes).await,
+            (Some(DomainsCommand::Ls(n)), _) => services::domains_list(ctx, &n.name).await,
+            (Some(DomainsCommand::Add(d)), _) => services::domains_add(ctx, &d.name, &d.domain).await,
+            (Some(DomainsCommand::Rm(d)), _) => services::domains_rm(ctx, &d.name, &d.domain).await,
+            (None, Some(name)) => services::domains_list(ctx, &name).await,
+            (None, None) => domains::list(ctx).await,
         },
+        Command::Certificates => domains::certificates(ctx).await,
         Command::Run(a) => jobs::run(ctx, &a.name, &a.command, a.follow).await,
         Command::Jobs(a) => match a.command {
             Some(JobsCommand::Ls(l)) => jobs::list(ctx, &l.name, l.limit).await,
