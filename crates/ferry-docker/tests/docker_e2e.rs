@@ -742,8 +742,13 @@ async fn oom_kills_are_reported() {
     let docker = connect().await;
     docker.ensure_image(BUSYBOX, &LogSink::noop()).await.unwrap();
 
-    // `tail` buffers a newline-free /dev/zero until the limit is hit.
-    let hog = ContainerSpec { memory_limit_bytes: Some(32 << 20), ..cleanup.spec("hog", "exec tail /dev/zero") };
+    // `tail` buffers a newline-free /dev/zero until the limit is hit. The
+    // shell outlives its kill for a second, then ends with its exit code:
+    // Docker learns of an OOM kill from the container's cgroup, and on Linux
+    // CI it did not always record the kill of a container whose only process
+    // was killed and which was gone at once (DESIGN.md §14).
+    let hungry = "tail /dev/zero; code=$?; sleep 1; exit $code";
+    let hog = ContainerSpec { memory_limit_bytes: Some(32 << 20), ..cleanup.spec("hog", hungry) };
     let info = docker.run_container(&hog).await.unwrap();
     let code = tokio::time::timeout(Duration::from_secs(60), docker.wait_container(&info.id))
         .await
