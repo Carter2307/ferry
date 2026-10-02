@@ -1,0 +1,28 @@
+---
+title: Paths of the server
+description: ferryd serves the API, its documents, the webhooks and the dashboard on different paths.
+---
+
+```text title="http://127.0.0.1:7878" noCopy
+/api/v1/…                     the REST API
+/api/openapi.json             the OpenAPI 3.1 document
+/api/docs                     Swagger UI
+/hooks/deploy/{service_id}    deploy hooks
+/hooks/github                 the GitHub webhook
+/healthz                      liveness probe
+anything else                 the web dashboard
+```
+
+Each path has its own <Term id="authentication" />.
+
+## The paths
+
+| Path | What it is | Authentication |
+|---|---|---|
+| `/api/v1/…` | The REST API | An <Term id="api-token" /> or the session of the dashboard. A few [account endpoints](/docs/reference/api-overview/account-endpoints) need none. |
+| `/api/openapi.json` | The <Term id="openapi" />, version 3.1 | None |
+| `/api/docs` | <Term id="swagger-ui" /> for your server | None. Its **Authorize** button takes an API token. |
+| `/hooks/deploy/{service_id}` | [Deploy hooks](/docs/reference/api-overview/deploy-hooks) | The key of the hook |
+| `/hooks/github` | [GitHub webhook](/docs/reference/api-overview/github-webhook) | The signature of the webhook |
+| `/healthz` | A <Term id="liveness-probe" />. It answers `ok`. | None |
+| All other paths | The web dashboard | None. The dashboard asks you to sign in. |

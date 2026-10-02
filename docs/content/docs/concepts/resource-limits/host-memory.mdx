@@ -1,0 +1,61 @@
+---
+title: When the server has no free memory
+description: The containers together can use more memory than the server has. ferryd protects itself.
+---
+
+<Diagram
+  nodes={[
+    { id: 'kernel', at: [0, 0.5], icon: 'shield', label: 'Kernel', note: 'memory is full' },
+    { id: 'ferryd', at: [1.75, 0], icon: 'server', label: 'ferryd', note: 'OOM score: -500' },
+    { id: 'app', at: [1.75, 1], icon: 'box', label: 'Container' },
+  ]}
+  edges={[
+    { from: 'kernel', to: 'ferryd' },
+    { from: 'kernel', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'The containers together use all the memory of the server.',
+      cut: ['kernel>ferryd', 'kernel>app'],
+      tones: { kernel: 'warning' },
+    },
+    {
+      caption: 'The kernel must stop one process. It reads the OOM score of each process.',
+      flow: ['kernel>ferryd', 'kernel>app'],
+      tones: { kernel: 'warning' },
+    },
+    {
+      caption: 'ferryd has a low score. The kernel stops a container before it stops ferryd.',
+      cut: ['kernel>ferryd'],
+      flow: ['kernel>app'],
+      tones: { ferryd: 'success', app: 'danger' },
+      notes: { app: 'stopped first' },
+    },
+  ]}
+/>
+
+A limit is a cap, not a reservation. This is <Term id="overcommit" />: all the limits together can be larger than the memory of the server.
+
+On Linux, `ferryd` lowers its own <Term id="oom-score" /> when it starts. The default is `-500`.
+
+## Set the score
+
+| Flag of `ferryd` | Default |
+|---|---|
+| `--oom-score-adj` | `-500` |
+
+`ferryd` does not raise a lower value that exists, such as `OOMScoreAdjust=-900` from systemd.
+
+<Accordions>
+  <Accordion title="If ferryd cannot lower its score">
+    `ferryd` needs root or `CAP_SYS_RESOURCE` to lower the score. Without them, it writes a warning in its log.
+
+    Then set `OOMScoreAdjust=` in the systemd unit of `ferryd`. See [Production setup](/docs/guides/production). Add `--oom-score-adj 0` to stop the warning.
+  </Accordion>
+  <Accordion title="Processes that ferryd starts">
+    `ferryd` starts git and the docker CLI with a score of 0. Thus the kernel can stop a `git` that uses too much memory. Containers do not get the score of `ferryd`.
+  </Accordion>
+  <Accordion title="Other systems">
+    On a system that is not Linux, the flag does nothing.
+  </Accordion>
+</Accordions>

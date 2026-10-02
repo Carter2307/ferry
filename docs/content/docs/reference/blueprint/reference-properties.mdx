@@ -1,0 +1,47 @@
+---
+title: Reference properties
+description: The property of fromDatabase or fromService tells which value of the target the variable gets.
+---
+
+```yaml title="ferry.yaml"
+envVars:
+  - key: DATABASE_URL
+    fromDatabase: { name: app-db, property: connectionString }   # ${{datastore.app-db.connectionString}}
+  - key: API_HOST
+    fromService: { type: pserv, name: api, property: hostport }  # ${{service.api.hostport}}
+```
+
+Ferry changes each `fromDatabase` and `fromService` entry into a <Term id="reference" />. The <Term id="reference-property" /> tells which value you get.
+
+## Properties of a datastore
+
+For `fromDatabase`, and for `fromService` with `type: redis` or `keyvalue`:
+
+| Property | Value |
+|---|---|
+| `connectionString` | The URL on the <Term id="private-network" />, such as `postgresql://app:…@app-db:5432/app` or `redis://default:…@cache:6379` |
+| `externalConnectionString` | The same URL through the port that the server publishes, for tools that run outside Docker |
+| `host`, `port`, `hostport` | `app-db`, `5432` and `app-db:5432` |
+| `user`, `password` | The credentials |
+| `database` | The name of the Postgres database. Redis has none. |
+
+## Properties of a service
+
+For `fromService` with a service type:
+
+| Property | Exists for |
+|---|---|
+| `host` | Each service type |
+| `port`, `hostport`, `internalUrl` | Services that listen on a port: web services, private services and static sites |
+| `url` (the public URL) | Web services and static sites |
+
+The [env references pages](/docs/reference/env-references) list each property with its other names.
+
+<Accordions>
+  <Accordion title="fromService with no type">
+    Without a `type`, Ferry looks for `name` in the services and in the datastores.
+  </Accordion>
+  <Accordion title="hostport of a datastore">
+    For a datastore, `hostport` becomes `${{datastore.NAME.host}}:${{datastore.NAME.port}}`.
+  </Accordion>
+</Accordions>

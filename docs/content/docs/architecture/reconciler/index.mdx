@@ -1,0 +1,69 @@
+---
+title: Reconciler
+description: The reconciler compares what must run with what Docker runs, then repairs the difference.
+icon: RefreshCw
+---
+
+<Diagram
+  nodes={[
+    { id: 'store', at: [0, 0.5], icon: 'database', label: 'Store', note: 'api: 2 instances' },
+    { id: 'reconciler', at: [1.5, 0.5], icon: 'restart', label: 'Reconciler' },
+    { id: 'a', at: [3, 0], icon: 'box', label: 'Instance 1', note: 'runs' },
+    { id: 'b', at: [3, 1], icon: 'box', label: 'Instance 2', note: 'runs' },
+  ]}
+  edges={[
+    { from: 'store', to: 'reconciler' },
+    { from: 'reconciler', to: 'a' },
+    { from: 'reconciler', to: 'b' },
+  ]}
+  groups={[{ label: 'Docker', around: ['a', 'b'] }]}
+  steps={[
+    {
+      caption: 'The store says what must run: 2 instances of the live deploy of api.',
+      flow: ['store>reconciler'],
+      tones: { store: 'primary' },
+    },
+    {
+      caption: 'Docker says what runs: 2 instances. The two agree, and the reconciler changes nothing.',
+      tones: { a: 'success', b: 'success' },
+    },
+    {
+      caption: 'Instance 2 exits.',
+      cut: ['reconciler>b'],
+      tones: { a: 'success', b: 'danger' },
+      notes: { b: 'exited' },
+    },
+    {
+      caption: 'The reconciler compares the store with Docker and finds the difference.',
+      flow: ['store>reconciler'],
+      cut: ['reconciler>b'],
+      tones: { reconciler: 'warning', a: 'success', b: 'danger' },
+      notes: { b: 'exited', reconciler: '2 wanted, 1 runs' },
+    },
+    {
+      caption: 'It removes the container that exited and starts a new instance from the snapshot of the live deploy.',
+      flow: ['reconciler>b'],
+      tones: { reconciler: 'primary', a: 'success', b: 'success' },
+      notes: { b: 'new' },
+    },
+  ]}
+/>
+
+The <Term id="store" /> has the <Term id="desired-state" />. Docker has the <Term id="actual-state" />. The <Term id="reconciler" />, in `ferry-engine`, makes Docker agree with the store.
+
+The reconciler does three things:
+
+- It restarts a service that crashed.
+- It applies a new instance count.
+- It cleans up after a server that stopped in the middle of an operation.
+
+For the effect on your apps, see [Self-healing](/docs/concepts/self-healing).
+
+## In this section
+
+<Cards>
+  <Card title="When it runs" href="/docs/architecture/reconciler/when" description="At boot, each 10 seconds, and on demand." />
+  <Card title="One pass" href="/docs/architecture/reconciler/pass" description="The steps of one run." />
+  <Card title="A pass for one service" href="/docs/architecture/reconciler/services" description="Which containers stay and which go." />
+  <Card title="What it never does" href="/docs/architecture/reconciler/never" description="The limits of the reconciler." />
+</Cards>

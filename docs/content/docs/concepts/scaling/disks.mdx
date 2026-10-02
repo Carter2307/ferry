@@ -1,0 +1,59 @@
+---
+title: Persistent disks
+description: A disk keeps the files of a service when a deploy replaces its container.
+---
+
+<Diagram
+  nodes={[
+    { id: 'old', at: [0, 0], icon: 'box', label: 'Container', note: 'deploy 1' },
+    { id: 'new', at: [0, 1], icon: 'box', label: 'New container', note: 'deploy 2' },
+    { id: 'disk', at: [1.75, 0.5], icon: 'disk', label: 'Disk', note: '/data' },
+  ]}
+  edges={[
+    { from: 'old', to: 'disk', both: true },
+    { from: 'new', to: 'disk', both: true },
+  ]}
+  steps={[
+    { caption: 'The app writes files in /data. This folder is on the disk.', hide: ['new'], flow: ['old>disk'] },
+    { caption: 'A deploy removes the container. All its other files go away with it.', hide: ['new'], cut: ['old>disk'], tones: { old: 'danger' }, notes: { old: 'removed' } },
+    { caption: 'The new container gets the same disk. The files in /data are there.', hide: ['old'], flow: ['new>disk'], tones: { new: 'success', disk: 'success' } },
+  ]}
+/>
+
+Each <Term id="deploy" /> removes the container of a service, and the files in it. To keep files, give the service a <Term id="disk" />. A disk is a Docker <Term id="volume" /> at a path that you choose, the <Term id="mount-path" />.
+
+## Add a disk
+
+```bash title="Terminal"
+ferry create files --repo https://github.com/you/files --disk /data
+ferry update api --disk /var/lib/api     # add or move the disk (next deploy)
+ferry update api --disk ""               # stop mounting it (next deploy)
+```
+
+## The rules
+
+| Subject | Rule |
+|---|---|
+| Volume | `<prefix>-svc-<service id>-disk`. Ferry creates it at the first use. |
+| What stays | The data stays through deploys, restarts and server restarts. |
+| Service types | Web services, private services and background workers. Not static sites, not cron jobs. |
+| Mount path | An absolute path, and not `/`. |
+| Instances | Exactly 1. See [Deploys with a disk](/docs/concepts/scaling/disk-deploys). |
+| Size | No limit. The disk uses the Docker storage of the server. |
+| Deletion | Ferry deletes the volume with the service. If you remove the disk setting, Ferry only stops the mount. |
+
+<Callout type="warning" title="Back up disks yourself">
+Ferry makes no copy and no backup of a disk. See [Production setup](/docs/guides/production).
+</Callout>
+
+<Accordions>
+  <Accordion title="In a blueprint">
+    `disk: { mountPath: /data }` does the same. Ferry accepts `name` and `sizeGB`, and ignores them.
+  </Accordion>
+  <Accordion title="If the storage is almost full">
+    Ferry does not limit the size of a disk. The free-disk check only stops new deploys when the Docker storage of the server is almost full. See [Resource limits](/docs/concepts/resource-limits).
+  </Accordion>
+  <Accordion title="One-off jobs">
+    A one-off job of the service gets the same disk. See [Jobs and the disk](/docs/concepts/jobs/disk).
+  </Accordion>
+</Accordions>

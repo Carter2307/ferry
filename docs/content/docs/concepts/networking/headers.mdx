@@ -1,0 +1,87 @@
+---
+title: The headers that your app gets
+description: The proxy removes the address headers that a client sends and sets its own, thus your app can trust them.
+---
+
+<Diagram
+  nodes={[
+    { id: 'client', at: [0, 0], icon: 'browser', label: 'Client' },
+    { id: 'proxy', at: [1.5, 0], icon: 'route', label: 'Proxy', note: 'edge of the server' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'Your app' },
+  ]}
+  edges={[
+    { from: 'client', to: 'proxy' },
+    { from: 'proxy', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'A client sends a request with a false header: X-Forwarded-For: 1.2.3.4.',
+      flow: ['client>proxy'],
+      tones: { client: 'warning' },
+      notes: { client: 'false header' },
+    },
+    {
+      caption: 'The proxy removes the address headers that the client sent.',
+      tones: { proxy: 'primary' },
+      notes: { proxy: 'removes' },
+    },
+    {
+      caption: 'The proxy sets its own headers, with the real address of the client.',
+      flow: ['proxy>app'],
+      tones: { proxy: 'primary' },
+      notes: { proxy: 'sets its own' },
+    },
+    {
+      caption: 'Your app can trust these headers.',
+      flow: ['proxy>app'],
+      tones: { app: 'success' },
+      notes: { app: 'real address' },
+    },
+  ]}
+/>
+
+The <Term id="proxy" /> is the edge of your server. It removes these <Term id="header">headers</Term> of the client: `Forwarded`, each `X-Forwarded-*`, `X-Real-IP`, `X-Client-IP` and similar headers. Then it sets its own.
+
+## The headers that the proxy sets
+
+| Header | Value |
+|---|---|
+| `Host` | The host that the client asked for, with the port. |
+| `X-Forwarded-For` | The <Term id="ip-address" /> of the client only (no chain). |
+| `X-Real-IP` | The IP address of the client. |
+| `X-Forwarded-Proto` | `http` or `https`. |
+| `X-Forwarded-Host` | Same as `Host`. |
+| `X-Forwarded-Port` | The port in the URL that the client used, else `80` or `443`. |
+| `Forwarded` | The same facts in RFC 7239 form: `for=…;host=…;proto=…`. |
+| `X-Request-Id` | A random id, unless the request has one. |
+
+## Try it
+
+```bash title="Terminal"
+curl -H 'X-Forwarded-For: 1.2.3.4' http://echo.localhost:8080/
+```
+
+The app does not get the false header:
+
+```json title="Headers seen by the app"
+{
+  "host": "echo.localhost:8080",
+  "x-forwarded-for": "127.0.0.1",
+  "x-forwarded-proto": "http",
+  "x-forwarded-host": "echo.localhost:8080",
+  "x-forwarded-port": "8080",
+  "x-real-ip": "127.0.0.1",
+  "forwarded": "for=127.0.0.1;host=\"echo.localhost:8080\";proto=http",
+  "x-request-id": "59f1d9afbc7b4c7f9dda561433c3ab9b"
+}
+```
+
+<Accordions>
+  <Accordion title="Behind a CDN or a second proxy">
+    - The proxy does not change the headers that a <Term id="cdn" /> sets, such as `CF-Connecting-IP` or `True-Client-IP`.
+    - If a CDN or a second reverse proxy is in front of Ferry, `X-Forwarded-For` has the address of that proxy.
+    - `X-Forwarded-Proto` is `http` when that proxy connects to Ferry with plain HTTP.
+
+    See [Production setup](/docs/guides/production).
+  </Accordion>
+</Accordions>

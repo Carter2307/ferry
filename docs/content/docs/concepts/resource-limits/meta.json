@@ -1,0 +1,28 @@
+{
+  "title": "Resource limits",
+  "icon": "Gauge",
+  "pages": [
+    "---Memory and CPU---",
+    "guards",
+    "memory",
+    "oom-kills",
+    "oom-messages",
+    "cpu",
+    "---Set the limits---",
+    "service",
+    "apply",
+    "datastore",
+    "redis",
+    "defaults",
+    "blueprint",
+    "plans",
+    "---Other guards---",
+    "processes",
+    "log-rotation",
+    "free-disk",
+    "host",
+    "host-memory",
+    "not-limited",
+    "upgrade"
+  ]
+}

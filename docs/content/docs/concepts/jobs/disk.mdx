@@ -1,0 +1,39 @@
+---
+title: Jobs and the disk
+description: A one-off job gets the disk of its service at the same path. It can read and write the same files.
+---
+
+<Diagram
+  nodes={[
+    { id: 'inst', at: [0, 0], icon: 'box', label: 'Instance', note: 'the app' },
+    { id: 'job', at: [0, 1], icon: 'terminal', label: 'One-off job', note: 'ls -la /data' },
+    { id: 'disk', at: [1.75, 0.5], icon: 'disk', label: 'Disk', note: '/data' },
+  ]}
+  edges={[
+    { from: 'inst', to: 'disk', both: true },
+    { from: 'job', to: 'disk', both: true },
+  ]}
+  steps={[
+    { caption: 'The service has a disk at /data.', hide: ['job'], flow: ['inst>disk'] },
+    { caption: 'A one-off job of this service gets the same disk at the same path.', flow: ['inst>disk', 'job>disk'], tones: { job: 'primary' } },
+    { caption: 'The job and the instance use the disk at the same time.', flow: ['inst>disk', 'job>disk'], tones: { disk: 'warning' } },
+  ]}
+/>
+
+When a service has a <Term id="disk" />, each <Term id="one-off-job" /> of that service can read and write the files of the service.
+
+## Try it
+
+<Terminal
+  lines={[
+    "$ ferry run files --follow -- 'ls -la /data'",
+    "==> Mounting the service's disk at /data",
+    '==> Running `ls -la /data`',
+  ]}
+/>
+
+<Callout type="warning" title="Two programs write to one disk">
+The job and the <Term id="instance" /> use the disk at the same time. Make sure that your command is safe next to the app.
+</Callout>
+
+[Persistent disks](/docs/concepts/scaling/disks) explains the disk of a service.

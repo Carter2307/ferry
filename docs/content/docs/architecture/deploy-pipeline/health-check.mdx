@@ -1,0 +1,66 @@
+---
+title: The health check
+description: The engine tests each new instance each second until it passes or the timeout ends.
+---
+
+<Diagram
+  nodes={[
+    { id: 'engine', at: [0, 0], icon: 'workflow', label: 'Engine' },
+    { id: 'box', at: [1.75, 0], icon: 'box', label: 'New instance' },
+    { id: 'log', at: [3.25, 0], icon: 'logs', label: 'Deploy log' },
+  ]}
+  edges={[
+    { from: 'engine', to: 'box', label: 'each second' },
+    { from: 'box', to: 'log', label: 'output' },
+  ]}
+  steps={[
+    {
+      caption: 'The engine tests each new instance one time each second. The output of the instance goes into the deploy log.',
+      flow: ['engine>box', 'box>log'],
+      tones: { box: 'warning' },
+      notes: { box: 'not ready' },
+    },
+    {
+      caption: 'The instance passes the test. The deploy continues to the switch.',
+      flow: ['engine>box'],
+      tones: { box: 'success' },
+      notes: { box: 'healthy' },
+    },
+    {
+      caption: 'Or the instance exits. The deploy fails immediately, and its last 50 log lines go into the deploy log.',
+      flow: ['box>log'],
+      tones: { box: 'danger' },
+      notes: { box: 'exited' },
+    },
+    {
+      caption: 'Or no instance passes before the timeout of 120 seconds. The deploy fails.',
+      tones: { box: 'danger' },
+      notes: { box: 'timeout' },
+    },
+  ]}
+/>
+
+## The three tests
+
+A <Term id="health-check" /> depends on the type of the service.
+
+| Service | The test passes when |
+|---|---|
+| With a health check path | `GET http://127.0.0.1:<host port><path>` answers with a status below 400. The `Host` header is the default host of the service. |
+| With a port and no path | The port accepts a TCP connection and does not close it immediately. |
+| Background worker | The process still runs 5 seconds after its start. |
+
+The option `--health-check-timeout` sets the timeout (default 120 seconds). For the user view, see [Health checks](/docs/concepts/deploys/health-checks).
+
+<Accordions>
+  <Accordion title="An instance that ran out of memory">
+    If the <Term id="kernel" /> killed an instance because of its memory limit, the deploy fails. This is an <Term id="oom" />. It fails even when Docker restarted the container: the Docker events of the container tell the engine.
+
+    ```text title="Error" noCopy
+    instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit
+    ```
+  </Accordion>
+  <Accordion title="Nothing answers on the port">
+    The failure message gives the usual cause. The app must listen on `$PORT` on `0.0.0.0`, not on `127.0.0.1` in its container.
+  </Accordion>
+</Accordions>

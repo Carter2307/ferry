@@ -1,0 +1,57 @@
+---
+title: The development loop
+description: Run ferryd for the API and Vite for the dashboard. Then each change of the code shows in the browser.
+---
+
+<Flow
+  steps={[
+    { icon: 'server', title: 'Start ferryd', text: 'The dev server needs only the API of ferryd.' },
+    { icon: 'zap', title: 'Start Vite', text: 'Vite serves the app on port 5173.' },
+    { icon: 'login', title: 'Sign in', text: 'Use the account of the server.' },
+    { icon: 'pencil', title: 'Change the code', text: 'Vite puts the change into the open page. Then you change the code again.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Start a server
+
+Run `ferryd` as in [Start the server](/docs/contributing/development/run).
+
+The <Term id="dev-server" /> needs only the API of `ferryd`. The dashboard that `ferryd` embeds does not matter.
+
+</Step>
+<Step>
+
+### Start Vite
+
+```bash title="Terminal"
+cd web
+npm install
+FERRY_API_URL=http://127.0.0.1:7878 npm run dev    # → http://localhost:5173
+```
+
+<Term id="vite" /> serves the app with <Term id="hmr" />. [The dev proxy](/docs/contributing/web-client/dev-proxy) sends the API calls to `FERRY_API_URL`.
+
+</Step>
+<Step>
+
+### Sign in
+
+Open `http://localhost:5173`. Sign in with the email and the password of the <Term id="admin-account" /> of the server.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="A server with no account">
+    The app shows **Create your account**. You need the <Term id="setup-code" />.
+
+    - Take the code from the link that `ferryd` printed. `ferryd status` prints the link again.
+    - The code is also in the file `<data-dir>/setup_code`.
+  </Accordion>
+  <Accordion title="A page with all the UI patterns">
+    In development, `/dev/patterns` shows the shared UI patterns of the dashboard on one page.
+  </Accordion>
+</Accordions>

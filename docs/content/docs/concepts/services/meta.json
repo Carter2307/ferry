@@ -1,0 +1,25 @@
+{
+  "title": "Services",
+  "icon": "Boxes",
+  "pages": [
+    "---Types---",
+    "types",
+    "web-services",
+    "private-services",
+    "background-workers",
+    "cron-jobs",
+    "static-sites",
+    "---Sources---",
+    "sources",
+    "git-repository",
+    "docker-image",
+    "upload",
+    "---Settings and states---",
+    "settings",
+    "names",
+    "urls",
+    "internal-hostnames",
+    "states",
+    "delete"
+  ]
+}

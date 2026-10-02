@@ -1,0 +1,14 @@
+{
+  "title": "Deploy an app with Postgres",
+  "icon": "Database",
+  "pages": [
+    "database",
+    "app",
+    "deploy",
+    "migrate",
+    "auto-migrate",
+    "connect",
+    "backup",
+    "redis"
+  ]
+}

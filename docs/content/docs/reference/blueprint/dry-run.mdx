@@ -1,0 +1,56 @@
+---
+title: Dry run
+description: A dry run shows the plan of an apply and writes nothing.
+---
+
+```diff title="ferry.yaml (edited)"
+ envVarGroups:
+   - name: shared-settings
+     envVars:
+       - key: APP_ENV
+-        value: production
++        value: staging
+ …
+   - type: redis
+     name: cache
+-    plan: starter            # 256 MiB of memory
++    plan: standard
+ …
+-    numInstances: 2
+-    plan: starter            # 512 MiB / 0.5 CPU per instance
++    numInstances: 1
++    plan: standard
+```
+
+A <Term id="dry-run" /> makes the same plan as an <Term id="apply" />, with the same <Term id="validation" /> and the same warnings. It writes nothing.
+
+Use it before each apply to a server that runs real work.
+
+## The output
+
+```text title="ferry blueprint apply ferry.yaml --dry-run" noCopy
+Blueprint ferry.yaml — dry run, nothing was changed
+
+Would update:
+  ~ env group shared-settings
+      - env APP_ENV: updated
+  ~ datastore cache
+      - memory_limit: 256 MiB → 1 GiB
+  ~ service hello
+      - memory_limit: 512 MiB → 2 GiB
+      - cpu_limit: 0.5 CPU → 1 CPU
+      - instances: 2 → 1
+
+Unchanged:
+  = datastore app-db
+  = service nightly
+
+Run without --dry-run to apply.
+```
+
+## The real apply of this file
+
+- The container of `cache` gets 1 GiB in place.
+- Ferry scales `hello` to one instance.
+- Ferry restarts `hello` (trigger `restart`) with its new limits and the new variable of the group.
+- Ferry builds nothing.

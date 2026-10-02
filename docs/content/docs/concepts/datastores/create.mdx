@@ -1,0 +1,65 @@
+---
+title: Create a datastore
+description: One command creates a datastore. It is ready when its status is available.
+---
+
+<Tabs items={['CLI', 'API', 'Blueprint']} groupId="interface" persist>
+<Tab value="CLI">
+
+<Terminal
+  lines={[
+    '$ ferry db create app-db --wait',
+    "Waiting for postgres 'app-db' to become available…",
+    "Created postgres datastore 'app-db' (dbs-be901a454ec7413aa1a2) — available",
+    'Internal URL: postgresql://app_db:6dd99f93338045919b9e682913c3c6a4@app-db:5432/app_db',
+  ]}
+/>
+
+The command creates a <Term id="postgres" /> 16 <Term id="datastore" />. The line `Internal URL` is the <Term id="internal-url" /> for your services.
+
+Without `--wait`, the command returns while the status is `creating`.
+
+</Tab>
+<Tab value="API">
+
+```bash title="Terminal"
+curl -X POST http://127.0.0.1:7878/api/v1/datastores \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "app-db", "kind": "postgres", "version": "16"}'
+```
+
+To set the [limits](/docs/concepts/datastores/limits), add `memory_limit_mb` (MiB) and `cpu_limit` (CPUs).
+
+The answer is `201` with the datastore, even when the creation fails. Then `status` is `failed` and `error` gives the cause. See [Datastores](/docs/reference/api/datastores) in the API reference.
+
+</Tab>
+<Tab value="Blueprint">
+
+```yaml title="ferry.yaml"
+databases:
+  - name: app-db
+    postgresMajorVersion: "16"
+    databaseName: app
+    user: app
+    plan: basic-1gb    # memory limit 1 GiB
+services:
+  - type: redis        # or keyvalue
+    name: cache
+    memoryLimit: 256M
+```
+
+A Render `plan` sets the memory limit. `memoryLimit` and `cpuLimit` replace the value of the plan. See [Resource limits](/docs/concepts/resource-limits).
+
+</Tab>
+</Tabs>
+
+## More examples
+
+```bash title="Terminal"
+ferry db create cache --kind redis --wait      # Redis 7
+ferry db create reports --version 17 --database reports --user analyst
+ferry db create big-db --memory 2G --cpu 2     # own resource limits
+```
+
+[Options of a datastore](/docs/concepts/datastores/options) lists each option and its default.

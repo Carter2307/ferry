@@ -17,6 +17,7 @@ icon: CloudUpload
     { from: 'proxy', to: 'old' },
     { from: 'proxy', to: 'new' },
   ]}
+  groups={[{ label: 'Your server', around: ['proxy', 'old', 'new'] }]}
   steps={[
     {
       caption: 'The old instance answers the requests.',

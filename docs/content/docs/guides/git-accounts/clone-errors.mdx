@@ -1,0 +1,64 @@
+---
+title: Problems with repositories
+description: A repository is not in the list, or a deploy cannot clone it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry' },
+    { id: 'conn', at: [1.5, 0], icon: 'plug', label: 'Connection' },
+    { id: 'repo', at: [3, 0], icon: 'repo', label: 'Repository' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'conn' },
+    { from: 'conn', to: 'repo' },
+  ]}
+  steps={[
+    {
+      caption: 'The connection cannot see the repository. The repository is not in the list.',
+      flow: ['ferry>conn'],
+      cut: ['conn>repo'],
+      tones: { repo: 'warning' },
+      notes: { repo: 'not in the list' },
+    },
+    {
+      caption: 'The provider refuses the authorization. Connect the account again.',
+      cut: ['ferry>conn', 'conn>repo'],
+      tones: { conn: 'danger' },
+      notes: { conn: 'refused' },
+    },
+    {
+      caption: 'The remote refuses the clone. The deploy log gives a hint.',
+      flow: ['ferry>conn'],
+      tones: { repo: 'danger' },
+      notes: { repo: 'clone refused' },
+    },
+  ]}
+/>
+
+## A repository is not in the list
+
+| Connection | Why, and what to do |
+|---|---|
+| GitHub | The app reads only the repositories that you chose. Click **Change them on GitHub** and add the repository. A repository of an organization needs a connection to the organization. |
+| GitLab, or a token | The account cannot see it. You must be a member of the project. A classic GitHub token needs `repo` and, in some organizations, an SSO authorization. Ferry lists only the 1000 repositories with the newest updates. For an older repository, use the **Repository URL** tab. |
+
+## The provider refuses the authorization
+
+The repository list shows **… no longer accepts this authorization**. There are three possible causes:
+
+- A person removed or deleted the app.
+- A person revoked the authorization of the application.
+- The token expired.
+
+Use the button next to the message to connect again.
+
+## A deploy cannot clone
+
+The <Term id="deploy" /> fails with **Authentication failed** or **repository not found**. A `==> Hint` line comes after it. The remote refused the <Term id="clone" />.
+
+The hint tells you what to do:
+
+- Add the repository to the installation of the app.
+- Connect the account again.
+- If no account is there, connect the account of the repository.

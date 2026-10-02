@@ -1,0 +1,51 @@
+---
+title: Restarts and rollbacks
+description: A restart and a rollback are deploys that use an image again and build nothing.
+---
+
+<Diagram
+  nodes={[
+    { id: 'earlier', at: [0, 0], icon: 'package', label: 'Earlier deploy', note: 'its image' },
+    { id: 'live', at: [0, 1], icon: 'package', label: 'Live deploy', note: 'its image', tone: 'success' },
+    { id: 'settings', at: [0, 2], icon: 'sliders', label: 'Settings', note: 'the current ones' },
+    { id: 'new', at: [2, 1], icon: 'deploy', label: 'New deploy' },
+  ]}
+  edges={[
+    { from: 'earlier', to: 'new' },
+    { from: 'live', to: 'new' },
+    { from: 'settings', to: 'new' },
+  ]}
+  steps={[
+    {
+      caption: 'A restart runs the image of the live deploy.',
+      cut: ['earlier>new'],
+      flow: ['live>new'],
+      notes: { new: 'trigger: restart' },
+    },
+    {
+      caption: 'A rollback runs the image of an earlier deploy.',
+      cut: ['live>new'],
+      flow: ['earlier>new'],
+      notes: { new: 'trigger: rollback' },
+    },
+    {
+      caption: 'The two use the current settings, resource limits and environment.',
+      flow: ['settings>new'],
+      tones: { settings: 'primary' },
+    },
+  ]}
+/>
+
+| | <Term id="restart">Restart</Term> | <Term id="rollback">Rollback</Term> |
+|---|---|---|
+| Image | Of the live deploy | Of an earlier deploy |
+| Settings, limits, environment | The current ones | The current ones |
+| Rule | The engine finds the live deploy when the restart runs, not when it enters the queue. | The target was live: its status is `live` or `deactivated`. Its image must still exist (see `--keep-images`). |
+
+## Why the restart rule matters
+
+A restart that waits in the queue behind another deploy does not undo that deploy. It restarts the new live deploy.
+
+A restart is how a change of variables reaches the containers that run.
+
+For the user view, see [Restart a service](/docs/concepts/deploys/restarts) and [Roll back](/docs/concepts/deploys/rollbacks).

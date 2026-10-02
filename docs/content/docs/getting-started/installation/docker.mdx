@@ -1,0 +1,35 @@
+---
+title: How ferryd finds Docker
+description: ferryd connects to the Docker daemon through DOCKER_HOST, or through the default socket.
+---
+
+<Flow
+  caption="Where ferryd looks for the Docker daemon"
+  steps={[
+    { icon: 'variable', title: 'DOCKER_HOST', text: 'If you set this environment variable, ferryd uses its value.' },
+    { icon: 'plug', title: 'Default socket', text: 'If not, ferryd uses the file /var/run/docker.sock.' },
+    { icon: 'laptop', title: 'Docker Desktop', text: 'On macOS, ferryd also tries the file ~/.docker/run/docker.sock.', tone: 'muted' },
+  ]}
+/>
+
+The <Term id="docker-daemon" /> is the part of <Term id="docker" /> that runs the containers. Builds run the `docker` CLI on the same daemon.
+
+## The forms of DOCKER_HOST
+
+| `DOCKER_HOST` form | Supported |
+|---|---|
+| `unix:///path/to/docker.sock` | Yes |
+| `tcp://host:port`, `http://host:port` | Yes, plain TCP only |
+| TLS (`DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`), `ssh://` | No |
+
+## Use another Docker context
+
+Before you start `ferryd`, give it the <Term id="docker-socket">socket</Term> of that <Term id="docker-context">context</Term>.
+
+```bash title="Terminal"
+export DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
+```
+
+<Callout type="warning" title="The daemon must be on the same machine">
+Ferry reaches your containers through the ports that they publish on `127.0.0.1`. The daemon must run on the machine of `ferryd`, or forward these ports to it. Docker Desktop, Colima and OrbStack forward them.
+</Callout>

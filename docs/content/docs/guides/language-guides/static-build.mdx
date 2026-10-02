@@ -1,0 +1,56 @@
+---
+title: Static sites with a build step
+description: Ferry runs your build command, then nginx serves the publish directory.
+---
+
+<Flow
+  steps={[
+    { icon: 'search', title: 'Toolchain', text: 'Ferry chooses the build image from the files of the project.' },
+    { icon: 'hammer', title: 'Build', text: 'The build command runs, for example npm run build.' },
+    { icon: 'folder', title: 'Publish', text: 'Ferry takes the publish directory, for example dist.' },
+    { icon: 'server', title: 'Serve', text: 'nginx:alpine serves the files on port 80.', tone: 'success' },
+  ]}
+/>
+
+## An example
+
+<Files>
+  <Folder name="web" defaultOpen>
+    <File name="package.json" />
+    <File name="package-lock.json" />
+    <File name="index.html" />
+    <File name="vite.config.js" />
+  </Folder>
+</Files>
+
+```bash title="Terminal"
+ferry up web --type static --follow      # runs "npm run build", serves dist/
+```
+
+The build step runs when you set a <Term id="build-command" />, or when `package.json` has a `build` script.
+
+## The build image
+
+The <Term id="toolchain" /> comes from the files of the project.
+
+| Project | Build image |
+|---|---|
+| `package.json` | Node with the package manager of the project, as for [Node.js](/docs/guides/language-guides/node) |
+| `requirements.txt`, `pyproject.toml`, `Pipfile` (MkDocs, Pelican…) | Python, as for [Python](/docs/guides/language-guides/python) |
+| `Gemfile` (Jekyll…) | Ruby, as for [Ruby](/docs/guides/language-guides/ruby) |
+| `hugo.toml` / `hugo.yaml` / `hugo.json`, or `hugo` in the build command | Alpine with Hugo (and Go when there is a `go.mod`) |
+| `go.mod` | Go |
+| none of these | `node:22-alpine` |
+
+## The publish directory
+
+After the build, Ferry publishes the <Term id="publish-directory" />: `--publish-dir`. If you did not set it, Ferry publishes the first of `dist`, `build`, `out`, `public`, `_site` and `site` that exists. If none exists, the build fails.
+
+```bash title="Terminal"
+ferry create docs --type static --repo https://github.com/you/docs --build-cmd "mkdocs build"   # publishes site/
+ferry create blog --type static --repo https://github.com/you/blog --build-cmd "hugo --minify"  # publishes public/
+```
+
+<Callout type="warning" title="A build with no package.json at the root">
+The root can have no `package.json`, for example for a build in a subdirectory: `cd docs && npm ci && npm run build`. Then Ferry sets `NODE_ENV=production` before your build command, and `npm ci` skips the devDependencies. The build tools are usually there. Use `npm ci --include=dev`. The guide [Host these docs on Ferry](/docs/guides/host-docs-on-ferry) does this.
+</Callout>

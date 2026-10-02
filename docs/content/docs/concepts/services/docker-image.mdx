@@ -1,0 +1,64 @@
+---
+title: A Docker image
+description: Ferry pulls an image that exists and runs it. It builds nothing.
+---
+
+<Diagram
+  nodes={[
+    { id: 'registry', at: [0, 0], icon: 'cloud', label: 'Registry', note: 'nginx:alpine' },
+    { id: 'pinned', at: [1.5, 0], icon: 'tag', label: 'Pinned image', note: 'tag of the deploy' },
+    { id: 'c', at: [3, 0], icon: 'box', label: 'Container' },
+  ]}
+  edges={[
+    { from: 'registry', to: 'pinned', label: 'pull' },
+    { from: 'pinned', to: 'c' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry pulls the image from the registry.',
+      hide: ['c'],
+      flow: ['registry>pinned'],
+      tones: { registry: 'primary' },
+    },
+    {
+      caption: 'The deploy pins the image: Ferry gives it a tag of its own.',
+      hide: ['c'],
+      tones: { pinned: 'primary' },
+    },
+    {
+      caption: 'Each container of this deploy runs the pinned image, even after the tag in the registry moves.',
+      flow: ['pinned>c'],
+      tones: { pinned: 'success', c: 'success' },
+      notes: { registry: 'the tag moved' },
+    },
+  ]}
+/>
+
+## Create a service from an image
+
+```bash title="Terminal"
+ferry create hello --image nginx:alpine --port 80
+```
+
+The <Term id="image" /> comes from a <Term id="registry" />. The <Term id="runtime" /> of the service becomes `image`.
+
+## When Ferry pulls the image
+
+| <Term id="image-tag">Tag</Term> of the image | Ferry pulls it |
+|---|---|
+| No tag, or `:latest` | At each deploy |
+| Each other tag | Only when the image is not on the server |
+
+## The pinned image
+
+A <Term id="pinned-image" /> is the exact image that one deploy pulled. Restarts, crash replacements and rollbacks run that image.
+
+<Callout type="warning" title="Public images only">
+Ferry has no registry authentication.
+</Callout>
+
+<Accordions>
+  <Accordion title="The start command">
+    If you set a start command, it replaces the command of the image. Ferry runs it with `sh -c`.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,31 @@
+---
+title: The npm scripts
+description: Eight npm scripts in docs/ run, measure, generate, check and build the site.
+---
+
+<Flow
+  caption="From a new page to the export"
+  steps={[
+    { icon: 'zap', title: 'dev', text: 'Write the page and look at it in the browser.' },
+    { icon: 'gauge', title: 'check-content', text: 'Measure the page against the rules for text.' },
+    { icon: 'file-code', title: 'generate', text: 'Write the reference pages again, if the Rust code changed.' },
+    { icon: 'braces', title: 'typecheck', text: 'Check the types.' },
+    { icon: 'hammer', title: 'build', text: 'Export the site and check each link.', tone: 'success' },
+    { icon: 'eye', title: 'start', text: 'Look at the export on your machine.' },
+  ]}
+/>
+
+## What each script does
+
+Run each script in `docs/`.
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | Next.js dev server with hot reload |
+| `npm run build` | Static export to `out/`, then the link check |
+| `npm start` | Serves `out/` locally |
+| `npm run typecheck` | `next typegen && tsc --noEmit` |
+| `npm run generate` | Regenerates the reference pages from the Rust code (needs `cargo`) |
+| `npm run generate:check` | Fails when a generated file is stale |
+| `npm run check-links` | Checks `out/` for broken internal links and anchors |
+| `npm run check-content` | Measures the pages against the rules of `AUTHORING.md`: simple English, words per page, figures |

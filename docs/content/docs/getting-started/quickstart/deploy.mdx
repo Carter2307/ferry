@@ -1,0 +1,61 @@
+---
+title: 3. Deploy the app
+description: The command ferry up sends the current folder to the server and deploys it.
+---
+
+<Steps>
+<Step>
+
+### Go to the example
+
+```bash title="Terminal"
+cd examples/node-hello
+```
+
+</Step>
+<Step>
+
+### Run ferry up
+
+<Terminal
+  lines={[
+    '$ ferry up --follow',
+    'Packing /home/you/ferry/examples/node-hello …',
+    'Packed 2 file(s), 576 B',
+    "Created web service 'node-hello' (srv-8593a88388f349feade2)",
+    'Uploading 576 B …',
+    'Deploy dep-3493c505ea9b4415b359 queued (upload), streaming logs…',
+    '09:36:21 ==> Detected Node.js runtime',
+    '09:36:21 ==> Build successful 🎉',
+    '09:36:21 ==> Starting 1 instance(s)',
+    '09:36:23 ==> Health check passed',
+    '09:36:23 ==> Routing traffic to the new instance(s)',
+    '09:36:23 ==> Your service is live 🎉',
+    '09:36:23 ==> Available at http://node-hello.localhost:8080',
+    'Deploy dep-3493c505ea9b4415b359 is live at http://node-hello.localhost:8080',
+  ]}
+/>
+
+`--follow` shows the build and deploy <Term id="log" /> until the app is live. This terminal shows only the main lines.
+
+</Step>
+<Step>
+
+### Open the app
+
+```bash title="Terminal"
+curl http://node-hello.localhost:8080
+```
+
+```text title="Output" noCopy
+Hello from Ferry (node)! service=node-hello deploy=dep-3493c505ea9b4415b359
+```
+
+The same URL works in your browser.
+
+</Step>
+</Steps>
+
+The first deploy is slower: Docker downloads the `node:22-alpine` <Term id="base-image" /> one time.
+
+The next page shows [what the deploy did](/docs/getting-started/quickstart/deploy-log).

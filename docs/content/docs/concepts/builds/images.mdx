@@ -1,0 +1,71 @@
+---
+title: Images and retention
+description: Each deploy has its own image. Ferry keeps the newest images and deletes the older ones.
+---
+
+<Diagram
+  nodes={[
+    { id: 'build', at: [0, 0], icon: 'hammer', label: 'Each build', note: 'makes one image' },
+    { id: 'kept', at: [1.5, 0], icon: 'package', label: 'Images kept', note: '5 newest + live' },
+    { id: 'old', at: [3, 0], icon: 'trash', label: 'Older images' },
+    { id: 'rollback', at: [1.5, 1], icon: 'rollback', label: 'Rollback', note: 'or restart' },
+  ]}
+  edges={[
+    { from: 'build', to: 'kept' },
+    { from: 'kept', to: 'old' },
+    { from: 'kept', to: 'rollback' },
+  ]}
+  steps={[
+    {
+      caption: 'Each build makes one image for its deploy.',
+      cut: ['kept>old', 'kept>rollback'],
+      flow: ['build>kept'],
+      tones: { build: 'primary', old: 'muted', rollback: 'muted' },
+    },
+    {
+      caption: 'Ferry keeps the 5 newest images. It also keeps the image of the live deploy at any age.',
+      cut: ['kept>old', 'kept>rollback'],
+      tones: { kept: 'success', old: 'muted', rollback: 'muted' },
+    },
+    {
+      caption: 'After each deploy, Ferry deletes the older images of the service.',
+      cut: ['kept>rollback'],
+      flow: ['kept>old'],
+      tones: { old: 'danger', rollback: 'muted' },
+      notes: { old: 'deleted' },
+    },
+    {
+      caption: 'A rollback or a restart uses one of the kept images again.',
+      cut: ['kept>old'],
+      flow: ['kept>rollback'],
+      tones: { kept: 'success', rollback: 'primary', old: 'muted' },
+    },
+  ]}
+/>
+## The tag of an image
+
+Each build makes an image with the <Term id="image-tag" /> `<prefix>/<service>:<deploy-id>`. Ferry also puts a label on it, to know its service.
+
+## What Ferry keeps
+
+- The 5 newest images of the service. `--keep-images` on <Term id="ferryd" /> sets this number.
+- The image of the live deploy, at any age.
+- The images of the deploys in progress, at any age.
+
+## If the image of a deploy is gone
+
+You cannot [roll back](/docs/concepts/deploys/rollbacks) to that deploy. Deploy again from the source.
+
+A <Term id="rollback" /> and a <Term id="restart" /> use the images that Ferry keeps.
+
+<Accordions>
+  <Accordion title="What Ferry never deletes">
+    Ferry deletes only the images that it gave a tag to for the service. It never deletes an image that you pulled, or a public base image.
+  </Accordion>
+  <Accordion title="Services that deploy an image">
+    Ferry pulls the image, then gives it the same form of tag. This is the <Term id="pinned-image" />. Thus each deploy refers to the exact image that it ran.
+  </Accordion>
+  <Accordion title="When you delete a service">
+    Ferry deletes all its images.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,39 @@
+---
+title: Guarantees
+description: An apply deletes nothing, changes nothing the second time, and writes nothing if the file is not valid.
+---
+
+<Terminal
+  title="A second apply of the example"
+  lines={[
+    '$ ferry blueprint apply examples/blueprint/ferry.yaml',
+    'Applied blueprint examples/blueprint/ferry.yaml',
+    '',
+    'Unchanged:',
+    '  = env group shared-settings',
+    '  = datastore app-db',
+    '  = datastore cache',
+    '  = service hello',
+    '  = service nightly',
+  ]}
+/>
+
+An <Term id="apply" /> gives three guarantees.
+
+## Ferry deletes nothing
+
+- A <Term id="resource" /> that you remove from the file stays on the server.
+- A variable that is not in the file stays.
+- An env group that has a link to a service stays linked, also when the file does not declare it.
+
+To delete a resource, use the CLI, the API or the dashboard.
+
+## The same file changes nothing
+
+An apply is <Term id="idempotent" />. If the file did not change, each resource is `unchanged` and Ferry puts nothing in the queue. Ferry keeps each <Term id="generated-secret" />.
+
+## All or nothing before the writes
+
+- An error of <Term id="validation" /> leaves the server as it was.
+- Ferry runs one apply at a time.
+- An apply runs to its end, also if the client disconnects.

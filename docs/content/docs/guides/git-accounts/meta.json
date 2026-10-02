@@ -1,0 +1,17 @@
+{
+  "title": "Connect GitHub or GitLab",
+  "icon": "Plug",
+  "pages": [
+    "github",
+    "gitlab",
+    "deploy",
+    "which-account",
+    "manage",
+    "token",
+    "authorization",
+    "storage",
+    "api",
+    "connect-errors",
+    "clone-errors"
+  ]
+}

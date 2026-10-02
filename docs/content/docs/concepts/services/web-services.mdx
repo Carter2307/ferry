@@ -1,0 +1,57 @@
+---
+title: Web services
+description: A web service is a public HTTP app. The proxy sends its requests to the instances in turn.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 0.5], icon: 'route', label: 'Proxy', note: 'api.localhost' },
+    { id: 'a', at: [2.5, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [2.5, 1], icon: 'box', label: 'Instance 2' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'a' },
+    { from: 'proxy', to: 'b' },
+  ]}
+  steps={[
+    {
+      caption: 'The proxy receives each request for the hostname of the service.',
+      flow: ['browser>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'The proxy sends the first request to instance 1.',
+      flow: ['browser>proxy', 'proxy>a'],
+      tones: { a: 'success' },
+    },
+    {
+      caption: 'The proxy sends the next request to instance 2. Each instance gets requests in turn.',
+      flow: ['browser>proxy', 'proxy>b'],
+      tones: { b: 'success' },
+    },
+  ]}
+/>
+
+A <Term id="web-service" /> is a public HTTP app. The <Term id="proxy" /> gives the requests to its <Term id="instance">instances</Term> in turn. This is <Term id="load-balancing" />.
+
+The proxy sends `<name>.<domain>` to the service, for each domain of the server. It also sends each [custom domain](/docs/concepts/networking) of the service to it.
+
+HTTP/1.1, <Term id="http2" /> and <Term id="websocket">WebSockets</Term> pass through the proxy.
+
+## Create a web service
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --health /healthz --instances 2
+```
+
+`--health` sets the path of the [health check](/docs/concepts/deploys/health-checks). `--instances` sets the number of instances.
+
+## What your app must do
+
+Your app must listen on the <Term id="port" /> in the `PORT` environment variable, on the address `0.0.0.0`.
+
+<Callout type="warning">
+An app that listens on `127.0.0.1` in its container gets no traffic.
+</Callout>

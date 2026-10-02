@@ -1,0 +1,67 @@
+---
+title: Language guides
+description: Ferry finds the language of your app from its files and writes the Dockerfile for you.
+icon: Code
+---
+
+<Diagram
+  caption="From your files to an image, with no Dockerfile"
+  nodes={[
+    { id: 'files', at: [0, 0], icon: 'folder', label: 'Your files', note: 'package.json' },
+    { id: 'detect', at: [1.1, 0], icon: 'search', label: 'Detection' },
+    { id: 'dockerfile', at: [2.2, 0], icon: 'file-code', label: 'Dockerfile', note: 'Dockerfile.ferry' },
+    { id: 'image', at: [3.3, 0], icon: 'package', label: 'Image' },
+  ]}
+  edges={[
+    { from: 'files', to: 'detect' },
+    { from: 'detect', to: 'dockerfile' },
+    { from: 'dockerfile', to: 'image' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry looks at the root of your source.',
+      hide: ['dockerfile', 'image'],
+      flow: ['files>detect'],
+    },
+    {
+      caption: 'Ferry finds package.json. The runtime is Node.js.',
+      hide: ['dockerfile', 'image'],
+      tones: { detect: 'primary' },
+      notes: { detect: 'Node.js runtime' },
+    },
+    {
+      caption: 'Ferry writes a Dockerfile for this runtime.',
+      hide: ['image'],
+      flow: ['detect>dockerfile'],
+      notes: { detect: 'Node.js runtime' },
+    },
+    {
+      caption: 'Docker builds the image. You wrote no Dockerfile.',
+      flow: ['dockerfile>image'],
+      tones: { image: 'success' },
+      notes: { detect: 'Node.js runtime' },
+    },
+  ]}
+/>
+
+You do not need a <Term id="dockerfile" />. When the <Term id="runtime" /> of a <Term id="service" /> is `auto` (the default), Ferry looks at the root of the source. Then Ferry writes a Dockerfile for the first file that it knows.
+
+## Deploy an example
+
+```bash title="Terminal"
+ferry up hello-node --follow
+```
+
+Each example of this section deploys from its directory with [`ferry up`](/docs/reference/cli#ferry-up). The command creates the service, uploads the files and shows the build. The same settings work with `ferry create NAME --repo URL`.
+
+## Your language
+
+[Node.js](/docs/guides/language-guides/node) · [Python](/docs/guides/language-guides/python) · [Go](/docs/guides/language-guides/go) · [Rust](/docs/guides/language-guides/rust) · [Ruby](/docs/guides/language-guides/ruby) · [Static sites](/docs/guides/language-guides/static)
+
+## In this section
+
+<Cards>
+  <Card title="The files Ferry looks for" href="/docs/guides/language-guides/detection" description="Which file gives which runtime." />
+  <Card title="Three rules for every language" href="/docs/guides/language-guides/rules" description="The port, the start command, the build command." />
+  <Card title="Your own Dockerfile" href="/docs/guides/language-guides/dockerfile" description="A Dockerfile always wins over the detection." />
+</Cards>

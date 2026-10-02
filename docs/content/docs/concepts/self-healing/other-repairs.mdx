@@ -1,0 +1,59 @@
+---
+title: Datastores, orphans and routes
+description: Each pass also repairs datastores, removes orphans and updates the routes of the proxy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'rec', at: [0, 1], icon: 'repeat', label: 'Reconciler', tone: 'primary' },
+    { id: 'db', at: [1.75, 0], icon: 'database', label: 'Datastore', note: 'container stopped' },
+    { id: 'orphan', at: [1.75, 1], icon: 'box', label: 'Orphan', note: 'no service' },
+    { id: 'route', at: [1.75, 2], icon: 'route', label: 'Route', note: 'service deleted' },
+  ]}
+  edges={[
+    { from: 'rec', to: 'db' },
+    { from: 'rec', to: 'orphan' },
+    { from: 'rec', to: 'route' },
+  ]}
+  steps={[
+    {
+      caption: 'The container of a datastore stopped. The reconciler starts it again.',
+      flow: ['rec>db'],
+      tones: { db: 'success' },
+      notes: { db: 'runs again' },
+    },
+    {
+      caption: 'A container has no service and no datastore. The reconciler removes this orphan.',
+      flow: ['rec>orphan'],
+      tones: { orphan: 'danger' },
+      notes: { orphan: 'removed' },
+    },
+    {
+      caption: 'A route points to a deleted service. The reconciler removes the route.',
+      flow: ['rec>route'],
+      tones: { route: 'danger' },
+      notes: { route: 'removed' },
+    },
+  ]}
+/>
+
+## What each pass repairs
+
+| Thing | Repair |
+|---|---|
+| <Term id="datastore" /> | If its container stopped, Ferry restarts it. If the container disappeared, Ferry creates it again. The volume keeps the data. |
+| Failed datastore | Ferry tries again, with a longer wait after each failure. |
+| <Term id="orphan" /> | Ferry removes a container of this server whose service or datastore does not exist. It also removes old job containers. |
+| <Term id="proxy-route" /> | Ferry removes the routes of deleted services. |
+
+See [Datastores](/docs/concepts/datastores).
+
+## Between two passes
+
+The <Term id="route-watcher" /> lists the instances that run, each second. If Docker restarts a container on a new port, the route follows in about one second.
+
+```bash title="Terminal"
+ferry status api
+```
+
+The command shows the port of each instance.

@@ -1,0 +1,60 @@
+---
+title: Names and labels in Docker
+description: Ferry finds its own Docker resources by a name prefix and by labels.
+---
+
+<Diagram
+  nodes={[
+    { id: 'one', at: [0, 0], icon: 'server', label: 'ferryd', note: 'prefix: ferry' },
+    { id: 'two', at: [0, 1], icon: 'server', label: 'Other ferryd', note: 'another prefix' },
+    { id: 'a', at: [2, 0], icon: 'box', label: 'ferry-api-…', note: 'instance: ferry' },
+    { id: 'b', at: [2, 1], icon: 'box', label: 'Container', note: 'another prefix' },
+  ]}
+  edges={[
+    { from: 'one', to: 'a' },
+    { from: 'two', to: 'b' },
+  ]}
+  groups={[{ label: 'One Docker daemon', around: ['a', 'b'] }]}
+  steps={[
+    {
+      caption: 'Each container has the label ferry.instance. Its value is the prefix of its server.',
+      tones: { a: 'primary' },
+    },
+    {
+      caption: 'The engine lists and changes only the containers whose ferry.instance is its own prefix.',
+      flow: ['one>a'],
+      tones: { one: 'primary', a: 'primary' },
+    },
+    {
+      caption: 'Thus many servers can share one Docker daemon.',
+      flow: ['one>a', 'two>b'],
+    },
+  ]}
+/>
+
+## The names
+
+`<prefix>` is the <Term id="name-prefix" /> of the server. The default is `ferry`.
+
+| Resource | Name |
+|---|---|
+| Network | `<prefix>` |
+| Image | `<prefix>/<service>:<deploy id>` |
+| Service container | `<prefix>-<service>-<deploy short id>-<random>` |
+| Job container | `<prefix>-job-<service>-<job short id>` |
+| Datastore container and volume | `<prefix>-ds-<name>` and `<prefix>-ds-<name>-data` |
+| Service disk | `<prefix>-svc-<service id>-disk` |
+| Ownership marker volume | `<prefix>-owner` |
+
+## The labels
+
+Each <Term id="container" /> has these <Term id="container-label">labels</Term>:
+
+| Label | Value |
+|---|---|
+| `ferry.managed` | `true` |
+| `ferry.instance` | `<prefix>` |
+| `ferry.role` | `service`, `job` or `datastore` |
+| `ferry.service`, `ferry.deploy`, `ferry.job`, `ferry.datastore` | The ids that apply to this container |
+
+See [the security model](/docs/architecture/security) for the rule "one server per data directory and prefix".

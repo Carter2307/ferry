@@ -1,0 +1,54 @@
+---
+title: Build cache
+description: Docker keeps the result of each build step. A step that did not change does not run again.
+---
+
+<Diagram
+  nodes={[
+    { id: 'base', at: [0, 0], icon: 'layers', label: 'Base image' },
+    { id: 'deps', at: [1.25, 0], icon: 'package', label: 'Dependencies' },
+    { id: 'code', at: [2.5, 0], icon: 'code', label: 'Your code' },
+  ]}
+  edges={[
+    { from: 'base', to: 'deps' },
+    { from: 'deps', to: 'code' },
+  ]}
+  steps={[
+    {
+      caption: 'The first build runs each step.',
+      flow: ['base>deps', 'deps>code'],
+      tones: { base: 'primary', deps: 'primary', code: 'primary' },
+      notes: { base: 'runs', deps: 'runs', code: 'runs' },
+    },
+    {
+      caption: 'You change your code. Docker takes the dependencies from the cache.',
+      flow: ['deps>code'],
+      tones: { base: 'success', deps: 'success', code: 'primary' },
+      notes: { base: 'from the cache', deps: 'from the cache', code: 'runs' },
+    },
+    {
+      caption: 'You change a manifest, for example package.json. Docker installs the dependencies again.',
+      flow: ['base>deps', 'deps>code'],
+      tones: { base: 'success', deps: 'primary', code: 'primary' },
+      notes: { base: 'from the cache', deps: 'runs', code: 'runs' },
+    },
+  ]}
+/>
+
+The <Term id="build-cache" /> of Docker makes the next builds fast. Docker installs the <Term id="dependency">dependencies</Term> again only when a manifest changes: `package.json`, `requirements.txt`, `go.mod`…
+
+## Build with no cache
+
+```bash title="Terminal"
+ferry deploy api --clear-cache
+```
+
+In the dashboard, open the **Manual deploy** menu. Choose **Clear build cache & deploy**.
+
+The two ways run `docker build --no-cache`. Use them, for example, to get new versions of dependencies that have no pinned version.
+
+<Accordions>
+  <Accordion title="Go and Rust">
+    Go and Rust builds also keep their module, registry and target caches between builds.
+  </Accordion>
+</Accordions>

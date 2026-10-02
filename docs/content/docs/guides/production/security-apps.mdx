@@ -1,0 +1,42 @@
+---
+title: Apps and servers
+description: Keep the limits on, give each server its own prefix, and know what Ferry does not protect.
+---
+
+<Diagram
+  caption="Each container can reach each service and datastore on the private network"
+  nodes={[
+    { id: 'a', at: [0, 0], icon: 'box', label: 'App A' },
+    { id: 'b', at: [1.25, 0], icon: 'box', label: 'App B' },
+    { id: 'db', at: [2.5, 0], icon: 'database', label: 'Postgres' },
+  ]}
+  edges={[
+    { from: 'a', to: 'b', both: true, flow: true },
+    { from: 'b', to: 'db', both: true, flow: true },
+  ]}
+  groups={[{ label: 'Private network', from: [0, 0], to: [2.5, 0] }]}
+/>
+
+## The checklist
+
+- [ ] **Keep the limits on.** A limit of `0` turns its guard off. [Size the limits](/docs/guides/production/limits) for the host. Keep `OOMScoreAdjust=` in the unit. Then the kernel stops a container before `ferryd` when the server runs out of memory.
+- [ ] **Give each server its own data directory and <Term id="name-prefix" />.** Ferry refuses to start on a prefix that another data directory owns. Do not override that with `--take-over`. See [Multiple servers](/docs/guides/multiple-servers).
+- [ ] **Trust the forwarded headers.** The proxy drops the `X-Forwarded-*`, `Forwarded` and `X-Real-IP` headers that a client sends. It sets `X-Forwarded-For` to the address that connects, and no more. Thus your apps can use them. See [Networking](/docs/concepts/networking).
+
+## What Ferry does not do
+
+| Subject | Limit |
+|---|---|
+| Accounts | One administrator account. No other users and no roles. |
+| API tokens | Each token has full access. No IP allow lists. |
+| Deploys | Each person who can deploy can run any code on the server. |
+| Resources | Containers have memory, CPU and process limits. Builds have none, and disks have no quotas. |
+| Network | Each container can reach each service and datastore on the <Term id="private-network" />. |
+
+See the [security model](/docs/architecture/security).
+
+<Accordions>
+  <Accordion title="When --take-over is correct">
+    A data directory that you moved keeps its `instance_id`. It needs no flag. `--take-over` is only for a data directory that lost its `instance_id`.
+  </Accordion>
+</Accordions>

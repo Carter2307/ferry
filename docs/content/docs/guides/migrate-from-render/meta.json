@@ -1,0 +1,23 @@
+{
+  "title": "Migrate from Render",
+  "icon": "ArrowRightLeft",
+  "pages": [
+    "---Steps---",
+    "before-you-start",
+    "preview",
+    "apply",
+    "secrets",
+    "postgres-data",
+    "domains",
+    "auto-deploy",
+    "---What maps to what---",
+    "top-level",
+    "service-types",
+    "service-keys",
+    "env-vars",
+    "databases",
+    "plans",
+    "reapply",
+    "differences"
+  ]
+}

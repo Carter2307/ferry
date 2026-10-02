@@ -1,0 +1,39 @@
+---
+title: When changes apply
+description: A saved change applies at the next deploy or restart, because each deploy keeps a snapshot of its environment.
+---
+
+<Flow
+  caption="What ferry env set does"
+  steps={[
+    { icon: 'save', title: 'Save', text: 'Ferry saves the new value. The instances that run keep the old value.' },
+    { icon: 'search', title: 'Compare', text: 'Ferry restarts the service only if its merged environment changed.' },
+    { icon: 'restart', title: 'Restart', text: 'The restart is a new deploy with the trigger env_change. It uses the live image again.' },
+    { icon: 'health', title: 'Health check', text: 'The new instances must pass their health check before the old instances stop.', tone: 'warning' },
+    { icon: 'ok', title: 'Applied', text: 'The new instances have the new value.', tone: 'success' },
+  ]}
+/>
+
+Ferry freezes the environment of a <Term id="deploy" /> when the deploy starts its instances. This is the <Term id="snapshot" />.
+
+All that starts containers for that deploy later uses the snapshot: crash replacements, [scaling](/docs/concepts/scaling), a resume, and [jobs](/docs/concepts/jobs). Thus a saved change applies only at the next deploy or <Term id="restart" />.
+
+## What Ferry does after a change
+
+`ferry env set`, `ferry env unset` and the API with `restart=true` restart the service only if it has something to restart.
+
+| State of the service | Result |
+|---|---|
+| Live | Ferry puts a restart in the queue (<Term id="trigger" /> `env_change`). |
+| A deploy in progress | The restart waits in the queue behind it. Thus you do not lose the new values. |
+| Never deployed | Nothing restarts. The first deploy uses the new values. |
+| Suspended | Nothing restarts. After `ferry resume`, run `ferry restart NAME` to apply the change. |
+
+<Accordions>
+  <Accordion title="If the restart fails">
+    A restart can fail, for example because a reference does not resolve. Then the previous deploy continues to answer. See [If a reference does not resolve](/docs/concepts/environment/broken-references).
+  </Accordion>
+  <Accordion title="More about restarts and snapshots">
+    A restart is a new deploy that uses the live image again with the current settings and environment. See [Restart a service](/docs/concepts/deploys/restarts) and [Settings and the live deploy](/docs/concepts/deploys/snapshot).
+  </Accordion>
+</Accordions>

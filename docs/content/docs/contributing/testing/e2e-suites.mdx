@@ -1,0 +1,35 @@
+---
+title: The end-to-end suites
+description: Six suites test Ferry against a real Docker daemon, from the Docker wrapper to the full server.
+---
+
+<Flow
+  caption="From one part to the full server"
+  steps={[
+    { icon: 'container', title: 'ferry-docker', text: 'The Docker wrapper against the daemon.' },
+    { icon: 'hammer', title: 'ferry-build', text: 'Real builds of the example apps.' },
+    { icon: 'route', title: 'ferry-proxy', text: 'Containers behind the proxy.' },
+    { icon: 'certificate', title: 'ferry-tls', text: 'Certificates from Pebble, a test ACME server.' },
+    { icon: 'layers', title: 'ferry-engine', text: 'The whole stack in one process.' },
+    { icon: 'terminal', title: 'ferry-cli', text: 'A real ferryd that the ferry CLI drives.' },
+  ]}
+/>
+
+## What each suite covers
+
+| Suite | Covers |
+|---|---|
+| `ferry-docker` · `docker_e2e` | The Docker wrapper against the daemon: container lifecycle and logs, exit codes, images, tags, volumes and exec. Resource limits set at creation (with the <Term id="pids-limit" /> and <Term id="log-rotation" />) and changed in place. <Term id="oom">OOM kills</Term> told apart from a plain `SIGKILL`. |
+| `ferry-build` · `build_e2e` and the regression suites | Real builds of the example apps |
+| `ferry-proxy` · `e2e_docker` | Containers published on `127.0.0.1:<random port>` behind the proxy |
+| `ferry-tls` · `pebble_e2e` | Certificates from <Term id="pebble" />, the test <Term id="acme" /> server of Let's Encrypt (image `ghcr.io/letsencrypt/pebble:latest`) |
+| `ferry-engine` · `e2e` | The whole stack in one process: store, Docker, builder, engine and proxy. It deploys the examples. It also tests the resource limits of instances, jobs and datastores. It tests the out-of-memory kills in deploys, jobs and status, and the <Term id="free-disk-check" />. |
+| `ferry-cli` · `e2e` | A real `ferryd` that the `ferry` CLI drives |
+
+## Run one suite
+
+```bash title="Terminal"
+FERRY_E2E=1 cargo test -p ferry-engine --test e2e
+```
+
+The first name is the crate. The second name is the test.

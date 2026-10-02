@@ -1,0 +1,57 @@
+---
+title: What ferryd answers
+description: ferryd serves the files of the dashboard with cache rules. Each path of the app gets index.html.
+---
+
+<Diagram
+  nodes={[
+    { id: 'asset', at: [0, 0], label: 'GET /assets/…', note: 'a hashed file' },
+    { id: 'index', at: [0, 1], label: 'GET /', note: 'or another file' },
+    { id: 'page', at: [0, 2], label: 'A history URL', note: '/services/api/logs' },
+    { id: 'gone', at: [0, 3], label: 'A missing asset', note: '/assets/…' },
+    { id: 'r1', at: [1.9, 0], icon: 'file', label: 'The file', note: 'cache: one year' },
+    { id: 'r2', at: [1.9, 1.5], icon: 'file-code', label: 'index.html', note: 'no-cache, ETag' },
+    { id: 'r4', at: [1.9, 3], icon: 'error', label: '404' },
+  ]}
+  edges={[
+    { from: 'asset', to: 'r1' },
+    { from: 'index', to: 'r2' },
+    { from: 'page', to: 'r2' },
+    { from: 'gone', to: 'r4' },
+  ]}
+  steps={[
+    {
+      caption: 'A file under /assets/ never changes. The browser can keep it for one year.',
+      flow: ['asset>r1'],
+      tones: { r1: 'success' },
+    },
+    {
+      caption: 'The browser must ask each time if index.html changed. The ETag gives the answer.',
+      flow: ['index>r2'],
+      tones: { r2: 'primary' },
+    },
+    {
+      caption: 'A history URL is not a file. The server answers with index.html, thus a reload works.',
+      flow: ['page>r2'],
+      tones: { r2: 'primary' },
+    },
+    {
+      caption: 'A file under /assets/ that does not exist stays a 404.',
+      flow: ['gone>r4'],
+      tones: { r4: 'danger' },
+    },
+  ]}
+/>
+
+## The rules
+
+`ferryd` serves the app at `/`.
+
+| Request | Answer |
+|---|---|
+| A file under `/assets/` | The file, with `Cache-Control: public, max-age=31536000, immutable` |
+| Each other file, `index.html` first | The file, with `no-cache` and an <Term id="etag" /> |
+| Another `GET` outside `/api`, `/hooks` and `/healthz` that is not a file | `index.html`. Thus a <Term id="history-url" /> such as `/services/api/logs` works after a reload. |
+| A file under `/assets/` that does not exist | `404` |
+
+<Term id="cache-control" /> tells the browser how long it can keep a file. `max-age=31536000` is one year, in seconds.

@@ -1,0 +1,48 @@
+---
+title: Restore on a new server
+description: Put the data directory back, start ferryd with the same name prefix, deploy each service and load your dumps.
+---
+
+<Flow
+  steps={[
+    { icon: 'folder', title: 'Data directory', text: 'Put your copy of the data directory on the new server.' },
+    { icon: 'play', title: 'Start ferryd', text: 'Use the same name prefix as the old server.' },
+    { icon: 'deploy', title: 'Deploy', text: 'A backup has no built images. Ferry must build each service again.', tone: 'warning' },
+    { icon: 'database', title: 'Load the dumps', text: 'The datastores come back empty. Your dumps fill them.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Restore the data directory
+
+Copy your <Term id="backup" /> of the <Term id="data-directory" /> to the new server.
+
+</Step>
+<Step>
+
+### Start ferryd
+
+Start `ferryd` with the same `--name-prefix` as the old server. This is the <Term id="name-prefix" />.
+
+</Step>
+<Step>
+
+### Deploy each service again
+
+```bash title="Terminal"
+ferry deploy NAME
+```
+
+The built images are not part of a backup. For a service that you deployed from a local directory, use `ferry up`.
+
+</Step>
+<Step>
+
+### Load your dumps
+
+The <Term id="datastore">datastores</Term> come back empty, with their old credentials. Load your dumps into them.
+
+</Step>
+</Steps>

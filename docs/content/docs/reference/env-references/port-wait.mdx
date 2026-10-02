@@ -1,0 +1,47 @@
+---
+title: Port references wait for the first deploy
+description: A deploy that references the port of a service waits for the first deploy of that service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'box', label: 'web', note: 'deploy' },
+    { id: 'api', at: [1.75, 0], icon: 'box', label: 'api', note: 'first deploy' },
+  ]}
+  edges={[{ from: 'api', to: 'web', label: 'port' }]}
+  steps={[
+    {
+      caption: 'The environment of web references the port of api. The first deploy of api is in progress.',
+      cut: ['api>web'],
+      tones: { api: 'warning' },
+    },
+    {
+      caption: 'The deploy of web waits.',
+      cut: ['api>web'],
+      tones: { web: 'warning', api: 'warning' },
+      notes: { web: 'waits' },
+    },
+    {
+      caption: 'api is live. Now Ferry knows its port. The deploy of web continues.',
+      flow: ['api>web'],
+      tones: { web: 'success', api: 'success' },
+      notes: { web: 'continues', api: 'live' },
+    },
+  ]}
+/>
+
+The properties `port`, `hostport` and `internalUrl` need the port of the referenced service. A service in its first deploy has no known port yet. This is typical when a <Term id="blueprint" /> deploys many services at the same time.
+
+## What you see in the log
+
+```text title="Deploy log" noCopy
+==> Waiting for service 'api' to finish deploying: its port is referenced in the environment
+```
+
+## How long the deploy waits
+
+The deploy waits 15 minutes at most. If two times the timeout of the health check is longer, it waits that long.
+
+<Callout type="warning" title="Two services that wait for each other">
+Two services can reference the port of each other before the first deploy of each. They cannot wait for each other: the deploy fails. Deploy one of them without the reference first.
+</Callout>

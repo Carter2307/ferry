@@ -1,0 +1,46 @@
+---
+title: References to a datastore
+description: A reference to a datastore gives its connection string, or one part of it.
+---
+
+<Diagram
+  caption="postgresql://app_db:…@app-db:5432/app_db"
+  nodes={[
+    { id: 'user', at: [0, 0], label: 'app_db', note: 'user' },
+    { id: 'password', at: [0.875, 0], label: '…', note: 'password' },
+    { id: 'host', at: [1.75, 0], label: 'app-db', note: 'host' },
+    { id: 'port', at: [2.625, 0], label: '5432', note: 'port' },
+    { id: 'database', at: [3.5, 0], label: 'app_db', note: 'database' },
+  ]}
+  steps={[
+    {
+      caption: 'connectionString gives the full URL: postgresql://app_db:…@app-db:5432/app_db.',
+      tones: { user: 'primary', password: 'primary', host: 'primary', port: 'primary', database: 'primary' },
+    },
+    { caption: 'user gives the Postgres user.', tones: { user: 'success' } },
+    { caption: 'password gives the password that Ferry made.', tones: { password: 'success' } },
+    { caption: 'host gives the name of the datastore.', tones: { host: 'success' } },
+    { caption: 'port gives 5432 for Postgres, or 6379 for Redis.', tones: { port: 'success' } },
+    { caption: 'database gives the name of the Postgres database.', tones: { database: 'success' } },
+  ]}
+/>
+
+The kind is `datastore`. You can also write `db` or `database`.
+
+```bash title="Terminal"
+ferry env set api 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+```
+
+## The properties
+
+| Property | Aliases | Value |
+|---|---|---|
+| `connectionString` | `url`, `internalUrl` | URL on the <Term id="private-network" />, for example `postgresql://app_db:…@app-db:5432/app_db` |
+| `externalConnectionString` | `externalUrl` | URL through the port published on the server, with the `--advertise-host` host |
+| `host` | `hostname` | The datastore name, for example `app-db` |
+| `port` | | `5432` (Postgres) or `6379` (Redis) |
+| `user` | `username` | The Postgres user, or `default` for Redis |
+| `password` | | The generated password |
+| `database` | `databaseName` | The Postgres database name (Redis has none) |
+
+A <Term id="connection-string" /> is the URL that your app uses to connect to the <Term id="datastore" />. See [Datastores](/docs/concepts/datastores) and [Datastore ports](/docs/concepts/networking/datastore-ports).

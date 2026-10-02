@@ -1,0 +1,58 @@
+---
+title: A render.yaml on Ferry
+description: Most render.yaml files apply with no change. Ferry gives a warning for what it does not use.
+---
+
+```yaml title="render.yaml"
+services:
+  - type: web
+    name: api
+    runtime: node
+    repo: https://github.com/render-examples/express-hello-world
+    branch: main
+    plan: starter # [!code highlight]
+    region: oregon # [!code --]
+    buildCommand: npm ci
+    startCommand: node app.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: STRIPE_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: app-db
+          property: connectionString
+databases:
+  - name: app-db
+    plan: basic-256mb # [!code highlight]
+    ipAllowList: [] # [!code --]
+```
+
+This file is for <Term id="render" />. It applies on Ferry with no change.
+
+## The dry run
+
+```text title="ferry blueprint apply render.yaml --dry-run" noCopy
+Blueprint render.yaml — dry run, nothing was changed
+
+Would create:
+  + datastore app-db
+  + service api
+
+Warnings:
+  ! database 'app-db': ignoring unsupported key 'ipAllowList'
+  ! service 'api': ignoring unsupported key 'region'
+  ! service 'api': env var 'STRIPE_KEY' is marked sync: false; set it with `ferry env set api STRIPE_KEY=...`
+
+Run without --dry-run to apply.
+```
+
+## What you get
+
+- The two lines in red give warnings: Ferry does not use `region` and `ipAllowList`.
+- The two plans become limits. `api` runs with 512 MiB and 0.5 CPU. `app-db` runs with 256 MiB and the default CPU limit of the server.
+- You must set `STRIPE_KEY` yourself.
+
+See [Differences from Render](/docs/reference/blueprint/render-differences). The [Render migration guide](/docs/guides/migrate-from-render) shows a full migration.

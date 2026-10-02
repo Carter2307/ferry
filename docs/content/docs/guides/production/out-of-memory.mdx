@@ -1,0 +1,66 @@
+---
+title: When an app runs out of memory
+description: The kernel stops a container that goes above its memory limit, and Docker starts it again.
+---
+
+<Diagram
+  nodes={[
+    { id: 'kernel', at: [0, 0], icon: 'cpu', label: 'Kernel' },
+    { id: 'app', at: [1.25, 0], icon: 'box', label: 'api', note: 'limit 512 MiB' },
+    { id: 'docker', at: [2.5, 0], icon: 'container', label: 'Docker' },
+    { id: 'log', at: [1.25, 1], icon: 'logs', label: 'Server log', note: 'of ferryd' },
+  ]}
+  edges={[
+    { from: 'kernel', to: 'app', label: 'stops' },
+    { from: 'docker', to: 'app', label: 'starts again' },
+    { from: 'app', to: 'log' },
+  ]}
+  steps={[
+    {
+      caption: 'The container goes above its memory limit.',
+      cut: ['kernel>app', 'docker>app', 'app>log'],
+      tones: { app: 'warning' },
+      notes: { app: 'above 512 MiB' },
+    },
+    {
+      caption: 'The kernel stops the container.',
+      cut: ['docker>app', 'app>log'],
+      flow: ['kernel>app'],
+      tones: { app: 'danger' },
+      notes: { app: 'stopped' },
+    },
+    {
+      caption: 'Docker starts the container again.',
+      cut: ['kernel>app', 'app>log'],
+      flow: ['docker>app'],
+      tones: { app: 'success' },
+      notes: { app: 'runs again' },
+    },
+    {
+      caption: 'ferryd writes each kill in the server log, with the name of the service or datastore and its limit.',
+      cut: ['kernel>app', 'docker>app'],
+      flow: ['app>log'],
+      tones: { log: 'primary' },
+    },
+  ]}
+/>
+
+A <Term id="job" /> run does not start again. It fails.
+
+## Find the kills
+
+```bash title="Terminal"
+journalctl -u ferryd | grep 'ran out of memory'
+```
+
+`ferry status NAME` and the dashboard mark a killed instance while it restarts. But Docker forgets the kill when the container runs again. Thus the <Term id="server-log" /> is the record.
+
+## During a deploy
+
+If a new instance runs out of memory, the deploy fails. The old instances continue to answer.
+
+```text title="Error of the deploy" noCopy
+instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit
+```
+
+[Resource limits](/docs/concepts/resource-limits) lists each message and how to fix it.

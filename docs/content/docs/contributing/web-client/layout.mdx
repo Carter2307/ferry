@@ -1,0 +1,42 @@
+---
+title: Code layout
+description: The code of the dashboard is in web/src. It has pages, components, stores and the API client.
+---
+
+<Diagram
+  caption="A page uses the components, the stores and the API client"
+  nodes={[
+    { id: 'routes', at: [0, 1], icon: 'route', label: 'routes.tsx' },
+    { id: 'pages', at: [1.25, 1], icon: 'file-code', label: 'pages/' },
+    { id: 'comp', at: [2.5, 0], icon: 'layers', label: 'components/', note: 'the shared UI' },
+    { id: 'stores', at: [2.5, 1], icon: 'save', label: 'stores/', note: 'Zustand' },
+    { id: 'api', at: [2.5, 2], icon: 'plug', label: 'lib/api/', note: 'calls the server' },
+  ]}
+  edges={[
+    { from: 'routes', to: 'pages', flow: true },
+    { from: 'pages', to: 'comp' },
+    { from: 'pages', to: 'stores' },
+    { from: 'pages', to: 'api' },
+  ]}
+/>
+
+## The folders
+
+<Files>
+  <Folder name="web/src" defaultOpen>
+    <File name="main.tsx, App.tsx (providers), routes.tsx, RequireAuth.tsx" />
+    <File name="styles/tokens.css — design tokens shared with the docs" />
+    <File name="styles/globals.css — tokens mapped to shadcn variables" />
+    <Folder name="lib" defaultOpen>
+      <File name="api/ — client, types, endpoints, keys, sse, events, queries, useLogStream" />
+      <File name="format.ts, dotenv.ts, logs.ts — pure helpers with tests" />
+    </Folder>
+    <File name="stores/ — auth.ts, ui.ts (Zustand)" />
+    <File name="components/ui/ — shadcn primitives (customized)" />
+    <File name="components/shell/ — AppShell, TopBar, IconRail, InnerMenu, CommandMenu, ConnectPopover" />
+    <File name="components/patterns/ — PageHeader, FormCard, InfoTile, MetricCard, EmptyState, LogViewer…" />
+    <File name="pages/ — routed pages, one named XxxPage export per file" />
+  </Folder>
+</Files>
+
+Each file in `pages/` has one named export, for example `LoginPage`. `routes.tsx` gives a URL to each page.

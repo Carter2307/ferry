@@ -1,0 +1,44 @@
+---
+title: Follow a deploy or a job
+description: With --follow, a command shows the log until the deploy or the job stops, then gives the result.
+---
+
+<Flow
+  steps={[
+    { icon: 'send', title: 'Command', text: 'You start a deploy or a job.' },
+    { icon: 'queue', title: 'Queue', text: 'The server puts it in the queue. Without --follow, the command stops here.' },
+    { icon: 'logs', title: 'Log', text: 'With --follow, ferry shows the log until the deploy or the job stops.', tone: 'primary' },
+    { icon: 'flag', title: 'Exit code', text: '0: the deploy is live, or the job is a success. 1: a failure or a cancel.', tone: 'success' },
+  ]}
+/>
+
+## Do it
+
+```bash title="Terminal"
+ferry deploy api --follow
+```
+
+`-f` is the short form of `--follow`. These commands start a deploy or a job, and accept `--follow`:
+
+`ferry up`, `create`, `deploy`, `restart`, `rollback`, `env set`, `run`.
+
+## The exit code
+
+| <Term id="exit-code">Exit code</Term> | Meaning |
+|---|---|
+| `0` | The deploy went live, or the job is a success. |
+| `1` | The deploy or the job failed, or a person canceled it. |
+
+## Stop the follow
+
+Press <kbd>Ctrl</kbd>+<kbd>C</kbd>. The deploy or the job continues on the server. `ferry` tells you how to see the log again:
+
+```text title="Output" noCopy
+Stopped following; the deploy continues on the server. Resume with: ferry logs --deploy dep-3493c505ea9b4415b359 -f
+```
+
+<Accordions>
+  <Accordion title="If the connection stops">
+    `ferry` connects again. The log continues from the line where it stopped.
+  </Accordion>
+</Accordions>

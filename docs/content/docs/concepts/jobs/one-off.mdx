@@ -1,0 +1,72 @@
+---
+title: Run a one-off job
+description: ferry run starts one new container of a service, runs your command in it, then removes it.
+---
+
+<Terminal
+  lines={[
+    '$ ferry run api --follow -- npm run migrate',
+    'Job job-48dd0201159b41c3bb58 pending, streaming output…',
+    '09:46:59 ==> Running `npm run migrate`',
+    '09:46:59 > node migrate.js',
+    '09:46:59 migrations applied',
+    '09:46:59 ==> Job succeeded',
+    'Job job-48dd0201159b41c3bb58 succeeded (exit code 0)',
+  ]}
+/>
+
+Write the command after `--`. With `--follow`, the <Term id="cli" /> shows the output. If the job fails, the CLI exits with 1.
+
+## Where the job runs
+
+<Diagram
+  nodes={[
+    { id: 'image', at: [0, 0.5], icon: 'package', label: 'Live image', note: 'of the service api' },
+    { id: 'inst', at: [1.75, 0], icon: 'box', label: 'Instance', note: 'gets the traffic' },
+    { id: 'job', at: [1.75, 1], icon: 'terminal', label: 'Job container', note: 'npm run migrate' },
+  ]}
+  edges={[
+    { from: 'image', to: 'inst' },
+    { from: 'image', to: 'job' },
+  ]}
+  steps={[
+    { caption: 'The instances of the service run.', hide: ['job'], tones: { inst: 'success' } },
+    { caption: 'The job starts in one more container, from the same image.', flow: ['image>job'], tones: { inst: 'success', job: 'primary' } },
+    { caption: 'The command ends. Ferry removes the job container. The instances did not change.', hide: ['job'], tones: { inst: 'success' } },
+  ]}
+/>
+
+A <Term id="one-off-job" /> runs next to the <Term id="instance">instances</Term> of the service, not in them.
+
+## The rules
+
+- The service needs a <Term id="live-deploy" />.
+- A suspended service cannot run a job.
+- The job uses the same image, variables and limits as the live deploy. See [What a run uses](/docs/concepts/jobs/container).
+
+<Accordions>
+  <Accordion title="How Ferry runs the command">
+    The command runs with `sh -c` in the container.
+
+    - One argument after `--` is a line for the <Term id="shell" /> of the container. Thus the shell reads `'npm run a && npm run b'` and `'echo $HOME'`.
+    - Ferry quotes each argument when there is more than one.
+
+    ```bash title="Terminal"
+    ferry run api -- 'python manage.py shell -c "print(1)"'
+    ```
+  </Accordion>
+  <Accordion title="If the job uses too much memory">
+    The system stops a run that goes over its memory limit. The run fails, and there is no restart.
+
+    ```text title="Job log" noCopy
+    ==> Job failed: the job ran out of memory (limit 512 MiB) — raise the service's memory limit
+    ```
+
+    Raise the limit of the service with `ferry update NAME --memory …`. Then run `ferry restart NAME`.
+  </Accordion>
+  <Accordion title="CLI and API">
+    [`ferry run`](/docs/reference/cli#ferry-run) has all the options of `ferry run` and `ferry jobs`.
+
+    `POST /api/v1/services/{id}/jobs` with `{"command": "…"}` starts a run. For a cron job, the command is optional. See [Jobs](/docs/reference/api/jobs) in the API reference.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,55 @@
+---
+title: Public URLs
+description: A web service or a static site gets a public URL from its name, the default domain and the public port.
+---
+
+<Diagram
+  caption="The parts of the default URL of a service named api"
+  nodes={[
+    { id: 'name', at: [0, 0], icon: 'tag', label: 'Service name', note: 'api' },
+    { id: 'domain', at: [0, 1], icon: 'globe', label: 'Default domain', note: 'localhost' },
+    { id: 'port', at: [0, 2], icon: 'plug', label: 'Public port', note: '8080' },
+    { id: 'url', at: [1.75, 1], icon: 'link', label: 'Public URL', note: 'api.localhost:8080', tone: 'success' },
+  ]}
+  edges={[
+    { from: 'name', to: 'url', flow: true },
+    { from: 'domain', to: 'url', flow: true },
+    { from: 'port', to: 'url', flow: true },
+  ]}
+/>
+
+A web service or a static site gets a <Term id="public-url" />. The <Term id="default-domain" /> is the <Term id="base-domain" /> until you [connect a domain](/docs/guides/domains) of your own.
+
+## Examples
+
+| Server settings | URL of a service named `api` |
+|---|---|
+| Defaults (`--base-domain localhost`, proxy on `:8080`) | `http://api.localhost:8080` |
+| `--base-domain apps.example.com --proxy-addr 0.0.0.0:80` | `http://api.apps.example.com` |
+| Same, with HTTPS (`--https-addr` and `--acme-email`) | `https://api.apps.example.com` |
+
+The URL has no port when the port is 80 or when HTTPS is on.
+
+## More hostnames
+
+Each domain of the server serves the service. If you connect `example.com` to the server, the service also answers at `api.example.com`.
+
+A <Term id="custom-domain" /> is for one service:
+
+```bash title="Terminal"
+ferry domains add api api.example.org
+```
+
+The proxy sends all these hostnames to the service. See [Networking, domains & TLS](/docs/concepts/networking).
+
+<Accordions>
+  <Accordion title="Other ways to add a custom domain">
+    Use the `--domain` flag, or the dashboard.
+  </Accordion>
+  <Accordion title="The port in the URL">
+    `--public-port` changes the port that Ferry shows in URLs. An example: a router forwards a different port to the proxy.
+  </Accordion>
+  <Accordion title="Why the default URLs work with no DNS setup">
+    Browsers resolve `*.localhost` to your own machine.
+  </Accordion>
+</Accordions>

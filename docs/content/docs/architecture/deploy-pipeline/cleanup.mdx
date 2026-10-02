@@ -1,0 +1,39 @@
+---
+title: Clean up
+description: After each deploy, the engine deletes the old images, uploads and build folders of the service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'old', at: [0, 0], icon: 'package', label: 'Older images' },
+    { id: 'keep', at: [1.5, 0], icon: 'package', label: '5 newest images', note: '--keep-images' },
+    { id: 'live', at: [3, 0], icon: 'package', label: 'Live image', tone: 'success' },
+    { id: 'uploads', at: [0, 1], icon: 'archive', label: 'Old uploads' },
+    { id: 'builds', at: [1.5, 1], icon: 'folder', label: 'Build folders', note: 'scratch' },
+  ]}
+  steps={[
+    {
+      caption: 'After each deploy, the engine keeps the newest images of the service: 5 by default (--keep-images).',
+      tones: { keep: 'primary' },
+    },
+    {
+      caption: 'It deletes the older images. It never deletes the image of the live deploy or of an active deploy.',
+      hide: ['old'],
+      tones: { keep: 'primary' },
+    },
+    {
+      caption: 'It also deletes the old uploaded archives and the scratch directories of the builds.',
+      hide: ['old', 'uploads', 'builds'],
+    },
+  ]}
+/>
+
+## What the engine never deletes
+
+- The <Term id="image" /> of the live deploy.
+- The images of the active deploys.
+- A public image that it pulled. It deletes only the tags that this server built or pinned.
+
+## The effect on rollbacks
+
+A [rollback](/docs/architecture/deploy-pipeline/restarts-rollbacks) can use only a deploy whose image still exists. To keep more images, start `ferryd` with a higher `--keep-images`.

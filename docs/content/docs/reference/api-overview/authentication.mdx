@@ -1,0 +1,53 @@
+---
+title: Authentication
+description: Each request to /api/v1 needs an API token or the session cookie of the dashboard.
+---
+
+<Diagram
+  nodes={[
+    { id: 'script', at: [0, 0], icon: 'terminal', label: 'CLI, script, CI' },
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Dashboard' },
+    { id: 'api', at: [1.75, 0.5], icon: 'shield-check', label: 'ferryd', note: '/api/v1' },
+  ]}
+  edges={[
+    { from: 'script', to: 'api', label: 'Bearer token' },
+    { from: 'browser', to: 'api', label: 'session cookie' },
+  ]}
+  steps={[
+    {
+      caption: 'The CLI, scripts and CI send an API token as a bearer token.',
+      flow: ['script>api'],
+      tones: { script: 'primary', api: 'success' },
+    },
+    {
+      caption: 'The dashboard sends the session cookie that it got when you signed in.',
+      flow: ['browser>api'],
+      tones: { browser: 'primary', api: 'success' },
+    },
+    {
+      caption: 'A request with no proof gets the answer 401.',
+      cut: ['script>api', 'browser>api'],
+      tones: { api: 'danger' },
+      notes: { api: '401 unauthorized' },
+    },
+  ]}
+/>
+
+<Term id="authentication" /> is the proof of who sends a request. A `/api/v1` request has one of two proofs.
+
+## Send a token
+
+```bash title="Terminal"
+curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/services
+```
+
+## The two proofs
+
+| Proof | Who uses it | How |
+|---|---|---|
+| An <Term id="api-token" /> | The CLI, scripts and <Term id="ci" /> | As a <Term id="bearer-token" />, in the `Authorization` header |
+| The <Term id="session-cookie" /> | The dashboard | The browser gets it when you sign in with the email and the password of the account. |
+
+The name of the cookie is `ferry_session_<port>`. The port is the port of the address that the browser uses.
+
+See [API tokens](/docs/reference/api-overview/tokens) and [Authentication errors](/docs/reference/api-overview/auth-errors).

@@ -1,0 +1,59 @@
+---
+title: Errors of the proxy
+description: When the proxy answers by itself, the response has an x-ferry-error header.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.5, 0], icon: 'route', label: 'Proxy' },
+    { id: 'box', at: [3, 0], icon: 'box', label: 'Instance' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy', both: true },
+    { from: 'proxy', to: 'box' },
+  ]}
+  steps={[
+    {
+      caption: 'No service has this hostname. The proxy answers 404, with x-ferry-error: not_found.',
+      hide: ['box'],
+      flow: ['browser>proxy'],
+      tones: { proxy: 'warning' },
+      notes: { proxy: '404 not_found' },
+    },
+    {
+      caption: 'You suspended the service. The proxy answers 503, with x-ferry-error: suspended.',
+      hide: ['box'],
+      flow: ['browser>proxy'],
+      tones: { proxy: 'warning' },
+      notes: { proxy: '503 suspended' },
+    },
+    {
+      caption: 'No instance accepts connections yet. The proxy answers 503, with x-ferry-error: no_upstreams.',
+      cut: ['proxy>box'],
+      flow: ['browser>proxy'],
+      tones: { proxy: 'warning', box: 'warning' },
+      notes: { proxy: '503 no_upstreams', box: 'not ready' },
+    },
+    {
+      caption: 'The instance refuses the connection. The proxy answers 502, with x-ferry-error: bad_gateway.',
+      flow: ['browser>proxy', 'proxy>box'],
+      tones: { proxy: 'danger', box: 'danger' },
+      notes: { proxy: '502 bad_gateway', box: 'refuses' },
+    },
+  ]}
+/>
+
+| Status | `x-ferry-error` | When |
+|---|---|---|
+| 400 | `bad_request` | The `Host` header is not there, or it has a bad format. |
+| 404 | `not_found` | No service has this hostname. |
+| 405 | `method_not_allowed` | `CONNECT`: a reverse proxy does not forward it. |
+| 408 | `request_timeout` | The client stopped in the middle of its request body. |
+| 503 | `suspended` | You suspended the service. |
+| 503 | `no_upstreams` | No instance accepts connections yet: no deploy before, a deploy in progress, or a crash. The answer has `Retry-After: 5`. |
+| 502 | `bad_gateway` | The instance refused the connection, or failed during the request. |
+
+## Use the header
+
+The header is <Term id="ferry-error-header" />. If a response has it, the answer comes from the proxy and not from your app.

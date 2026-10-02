@@ -1,0 +1,85 @@
+---
+title: The three steps
+description: Give the domain to Ferry, create one DNS record, then wait for the status Active.
+---
+
+<Flow
+  steps={[
+    { icon: 'plug', title: 'Connect', text: 'You give the domain to Ferry. Its status is pending.' },
+    { icon: 'globe', title: 'DNS record', text: 'You create the record at your DNS provider.' },
+    { icon: 'search', title: 'Verify', text: 'Ferry tests the domain each 15 seconds.', tone: 'warning' },
+    { icon: 'ok', title: 'Active', text: 'Each service answers under the domain.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Connect the domain
+
+<Tabs items={['Dashboard', 'CLI', 'API']} groupId="interface" persist>
+<Tab value="Dashboard">
+
+Open **Server → Domains**. Click **Connect a domain**. Enter the domain: `example.com`.
+
+The window shows the <Term id="dns-record" /> to create, with a button to copy each value.
+
+</Tab>
+<Tab value="CLI">
+
+```bash title="Terminal"
+ferry domains connect example.com
+# Connected example.com. Services will be served at https://<service>.example.com once its DNS points at this server.
+# Create this DNS record where the DNS of example.com is managed:
+#
+#   TYPE   NAME   VALUE
+#   A      *      203.0.113.10
+#   A      @      203.0.113.10   optional: only to serve example.com itself
+```
+
+</Tab>
+<Tab value="API">
+
+```bash title="Terminal"
+curl -X POST http://127.0.0.1:7878/api/v1/domains \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "example.com"}'
+# {"id": "dom-…", "name": "example.com", "status": "pending", "served": false,
+#  "records": [{"type": "A", "name": "*", "value": "203.0.113.10", "required": true}, …],
+#  "url_pattern": "https://<service>.example.com", …}
+```
+
+See [Domains](/docs/reference/api/domains) in the API reference.
+
+</Tab>
+</Tabs>
+
+The domain starts as **Waiting for DNS** (`pending`). Ferry serves nothing under it.
+
+</Step>
+<Step>
+
+### Create the DNS record
+
+Add the record that Ferry shows at your <Term id="dns-provider" />. See [The DNS record](/docs/guides/domains/dns-record).
+
+| Type | Name | Value |
+|---|---|---|
+| `A` | `*` | The public <Term id="ip-address" /> of the server |
+
+</Step>
+<Step>
+
+### Wait for the status Active
+
+Do nothing: Ferry [verifies the domain](/docs/guides/domains/verify) each 15 seconds. When the names under the domain reach the server, the status becomes **Active**.
+
+</Step>
+</Steps>
+
+## When the domain is active
+
+- Ferry serves each web service and static site under the domain. No deploy is necessary.
+- With HTTPS on, each hostname gets its [certificate](/docs/guides/domains/certificates) in seconds.
+- If the default domain was a local name such as `localhost`, the new domain becomes the [default domain](/docs/guides/domains/default-domain).

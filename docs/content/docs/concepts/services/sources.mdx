@@ -1,0 +1,58 @@
+---
+title: Sources
+description: The source of a service is where its code comes from. A service has exactly one source.
+---
+
+<Diagram
+  nodes={[
+    { id: 'repo', at: [0, 0], icon: 'repo', label: 'Git repository', note: 'Ferry builds it' },
+    { id: 'image', at: [0, 1], icon: 'pull', label: 'Docker image', note: 'Ferry pulls it' },
+    { id: 'upload', at: [0, 2], icon: 'upload', label: 'Upload', note: 'ferry up' },
+    { id: 'service', at: [1.5, 1], icon: 'box', label: 'Service' },
+  ]}
+  edges={[
+    { from: 'repo', to: 'service' },
+    { from: 'image', to: 'service' },
+    { from: 'upload', to: 'service' },
+  ]}
+  steps={[
+    {
+      caption: 'A git repository: Ferry clones the code and builds an image.',
+      cut: ['image>service', 'upload>service'],
+      flow: ['repo>service'],
+      tones: { repo: 'primary', image: 'muted', upload: 'muted' },
+    },
+    {
+      caption: 'A Docker image: Ferry pulls an image that exists. It builds nothing.',
+      cut: ['repo>service', 'upload>service'],
+      flow: ['image>service'],
+      tones: { image: 'primary', repo: 'muted', upload: 'muted' },
+    },
+    {
+      caption: 'An upload: ferry up sends a folder from your machine. Ferry builds an image.',
+      cut: ['repo>service', 'image>service'],
+      flow: ['upload>service'],
+      tones: { upload: 'primary', repo: 'muted', image: 'muted' },
+    },
+  ]}
+/>
+
+## How Ferry finds the source
+
+A <Term id="source" /> is a git <Term id="repository" />, a Docker <Term id="image" /> or an <Term id="upload" />. Ferry reads it from the settings of the service.
+
+| The service has | Source |
+|---|---|
+| An image | [A Docker image](/docs/concepts/services/docker-image) |
+| A repository and no image | [A git repository](/docs/concepts/services/git-repository) |
+| No image and no repository | [An upload](/docs/concepts/services/upload) |
+
+## Change the source
+
+Set the new source. Clear the old source in the same command.
+
+```bash title="Terminal"
+ferry update api --image ghcr.io/you/api:1.4 --repo ""
+```
+
+Thus Ferry never forgets a repository or an image by accident.

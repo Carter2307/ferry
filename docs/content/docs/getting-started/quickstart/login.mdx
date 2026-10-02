@@ -1,0 +1,49 @@
+---
+title: 2. Log in with the CLI
+description: The command ferry login gives your terminal its own API token.
+---
+
+<Steps>
+<Step>
+
+### Run ferry login
+
+<Terminal
+  lines={[
+    '$ ferry login --server http://127.0.0.1:7878',
+    'To connect this terminal, open this page and sign in:',
+    '',
+    '  http://127.0.0.1:7878/cli-login?id=d54ce0ee…',
+    '',
+    'Approve the request there if it shows this code:  MRDB-M7EE',
+    'Waiting for the approval... (Ctrl-C to cancel)',
+  ]}
+/>
+
+The command prints a page and a code. It opens the page in your browser and waits.
+
+</Step>
+<Step>
+
+### Compare the code
+
+The page shows who asks (for example `you@laptop`) and a code. Make sure that it is the code in your terminal.
+
+</Step>
+<Step>
+
+### Click **Approve**
+
+The command in the terminal completes without more input.
+
+```text title="Output" noCopy
+Logged in to http://127.0.0.1:7878 (Ferry 0.1.0)
+Saved to /home/you/.config/ferry/config.json
+```
+
+</Step>
+</Steps>
+
+The terminal now has its own <Term id="api-token" />. The <Term id="cli" /> saves it with the server URL. Thus the next commands do not need them.
+
+More in [Set up the CLI](/docs/getting-started/cli).

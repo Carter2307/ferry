@@ -1,0 +1,63 @@
+---
+title: Datastores
+description: Each datastore with the status available must have a container that runs.
+---
+
+<Diagram
+  nodes={[
+    { id: 'reconciler', at: [0, 0], icon: 'restart', label: 'Reconciler' },
+    { id: 'box', at: [1.75, 0], icon: 'database', label: 'Datastore', note: 'container: runs' },
+    { id: 'volume', at: [1.75, 1], icon: 'disk', label: 'Volume', note: 'the data' },
+  ]}
+  edges={[
+    { from: 'reconciler', to: 'box' },
+    { from: 'box', to: 'volume', both: true },
+  ]}
+  steps={[
+    {
+      caption: 'The datastore has the status available. Its container runs, and its data is on the volume.',
+      flow: ['box>volume'],
+      tones: { box: 'success' },
+    },
+    {
+      caption: 'The container stops, or it is not there.',
+      cut: ['box>volume'],
+      tones: { box: 'danger' },
+      notes: { box: 'container: stopped' },
+    },
+    {
+      caption: 'The reconciler provisions the datastore again, with the same volume. The data stays.',
+      flow: ['reconciler>box', 'box>volume'],
+      tones: { box: 'success', reconciler: 'primary' },
+      notes: { box: 'container: new' },
+    },
+  ]}
+/>
+
+The reconciler provisions a <Term id="datastore" /> again when its container is not there, stopped, paused or dead. It starts or creates the container with the same <Term id="volume" />, thus the data stays.
+
+## A datastore that failed
+
+If a datastore has the status `failed`, the reconciler tries again with a <Term id="backoff" />.
+
+| Try | Wait before it |
+|---|---|
+| First | 60 seconds |
+| Next ones | Two times the previous wait |
+| Maximum | 30 minutes |
+
+<Accordions>
+  <Accordion title="Limits">
+    When the reconciler provisions a datastore again, it can keep a container that exists. If the current limits of the datastore are different, it applies them to this container. Example: you raised the limits while the datastore was `failed` because it ran out of memory.
+  </Accordion>
+  <Accordion title="Out of memory">
+    A container that the kernel killed because of its memory limit makes the provision fail immediately.
+
+    ```text title="Error" noCopy
+    the redis container ran out of memory (limit 256 MiB) — raise the datastore's memory limit
+    ```
+  </Accordion>
+  <Accordion title="A disk that is almost full">
+    The free-disk check (`--min-free-disk`) never blocks the reconciler here. The condition: the datastore exists and its image is still on the server. Thus a datastore heals on a disk that is almost full too.
+  </Accordion>
+</Accordions>

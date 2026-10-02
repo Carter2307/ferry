@@ -1,0 +1,37 @@
+---
+title: "Service: Jobs"
+description: The Jobs page lists the one-off jobs and the cron runs of one service, and starts new jobs.
+---
+
+<Flow
+  steps={[
+    { icon: 'play', title: 'Run job', text: 'You click Run job and give a command.' },
+    { icon: 'box', title: 'New container', text: 'Ferry starts a new container from the image of the live deploy.' },
+    { icon: 'logs', title: 'Output', text: 'The page of the job shows its output, live.' },
+    { icon: 'flag', title: 'Exit code', text: 'The command stops. The list shows the status and the exit code.', tone: 'success' },
+  ]}
+/>
+
+A <Term id="job" /> is one command that runs one time in a new container, then stops.
+
+## The list
+
+| Column | Content |
+|---|---|
+| Status | The state of the job |
+| Command | The command that ran |
+| Trigger | Manual or schedule |
+| Exit code | The <Term id="exit-code" /> of the command |
+| Duration, start time | |
+
+## Run a job
+
+Click **Run job**. On a <Term id="cron-job" />, the button has the name **Run now**.
+
+Open a job to read its output. You can cancel a job while it runs.
+
+## On a cron job
+
+A card shows the schedule in plain words, for example "Every day at 03:00 UTC". The **Edit schedule** shortcut opens the setting.
+
+See [Jobs & cron](/docs/concepts/jobs).

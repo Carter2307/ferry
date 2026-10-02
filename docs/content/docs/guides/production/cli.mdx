@@ -1,0 +1,55 @@
+---
+title: Connect the CLI
+description: Log in with the CLI through the SSH tunnel and approve the code in the dashboard.
+---
+
+<Flow
+  steps={[
+    { icon: 'terminal', title: 'ferry login', text: 'The CLI prints a code and opens a page of the dashboard.' },
+    { icon: 'eye', title: 'Compare', text: 'The page must show the same code.', tone: 'warning' },
+    { icon: 'check', title: 'Approve', text: 'You click Approve in the dashboard.' },
+    { icon: 'key', title: 'Token', text: 'Your terminal gets an API token of its own.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Log in through the tunnel
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878
+```
+
+The <Term id="cli" /> prints a code and opens a page of the dashboard.
+
+</Step>
+<Step>
+
+### Approve the code
+
+Make sure that the page shows the same code. Click **Approve**.
+
+</Step>
+<Step>
+
+### Test the connection
+
+```bash title="Terminal"
+ferry info
+```
+
+The command shows your server: its default limits and its Docker host.
+
+</Step>
+</Steps>
+
+Your terminal now has its own <Term id="api-token" />. You can revoke it under **Server → Account**. See [Set up the CLI](/docs/getting-started/cli).
+
+## On the server, with no browser
+
+Log in with the <Term id="server-token" />.
+
+```bash title="Terminal (on the server)"
+ferry login --token "$(sudo cat /var/lib/ferry/api_token)"
+```

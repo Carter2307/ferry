@@ -1,0 +1,48 @@
+---
+title: Changes with the session cookie
+description: A change that uses the session cookie must come from the origin of the dashboard.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dash', at: [0, 0], icon: 'monitor', label: 'Dashboard', note: 'same origin' },
+    { id: 'other', at: [0, 1], icon: 'globe', label: 'Other site', note: 'different origin' },
+    { id: 'api', at: [1.75, 0.5], icon: 'shield', label: 'ferryd' },
+  ]}
+  edges={[
+    { from: 'dash', to: 'api', label: 'POST + cookie' },
+    { from: 'other', to: 'api', label: 'POST + cookie' },
+  ]}
+  steps={[
+    {
+      caption: 'A change from the dashboard has the session cookie. ferryd accepts it.',
+      flow: ['dash>api'],
+      cut: ['other>api'],
+      tones: { api: 'success' },
+    },
+    {
+      caption: 'A change from a page of a different origin has the cookie too. ferryd refuses it.',
+      flow: ['other>api'],
+      cut: ['dash>api'],
+      tones: { api: 'danger', other: 'danger' },
+      notes: { api: '403' },
+    },
+  ]}
+/>
+
+`ferryd` checks where a change with the <Term id="session-cookie" /> comes from.
+
+## The rule
+
+The rule applies to a request that has these two properties:
+
+- the session cookie is its proof
+- its <Term id="http-method" /> changes something: `POST`, `PUT`, `PATCH` or `DELETE`
+
+This request must come from the <Term id="origin" /> of the dashboard. If not, the answer is 403 `cross_site_request`.
+
+## How ferryd checks
+
+`ferryd` reads the header `Sec-Fetch-Site`. If the request does not have it, `ferryd` compares the header `Origin` with the host.
+
+See [Changes come from the dashboard only](/docs/architecture/security/cross-site).

@@ -1,0 +1,60 @@
+---
+title: When a deploy fails
+description: A failed deploy never changes what is live.
+---
+
+<Diagram
+  nodes={[
+    { id: 'build', at: [0, 0], icon: 'hammer', label: 'Build' },
+    { id: 'start', at: [1.25, 0], icon: 'play', label: 'Start' },
+    { id: 'health', at: [2.5, 0], icon: 'health', label: 'Health check' },
+    { id: 'new', at: [1.25, 1], icon: 'box', label: 'New instances' },
+    { id: 'old', at: [2.5, 1], icon: 'box', label: 'Old instances', note: 'live', tone: 'success' },
+  ]}
+  edges={[
+    { from: 'build', to: 'start' },
+    { from: 'start', to: 'health' },
+    { from: 'start', to: 'new' },
+  ]}
+  steps={[
+    {
+      caption: 'A failure before the image is ready gives the status build_failed.',
+      hide: ['new'],
+      cut: ['build>start', 'start>health'],
+      tones: { build: 'danger', start: 'muted', health: 'muted' },
+      notes: { build: 'build_failed' },
+    },
+    {
+      caption: 'A failure at the start or at the health checks gives the status deploy_failed.',
+      tones: { start: 'danger', health: 'danger', new: 'danger' },
+      notes: { health: 'deploy_failed' },
+    },
+    {
+      caption: 'The engine removes the new instances. The old instances continue to answer.',
+      hide: ['new'],
+      tones: { start: 'muted', health: 'muted', build: 'muted' },
+    },
+  ]}
+/>
+
+The <Term id="deploy" /> keeps a one-line `error`. The engine also writes it in the log:
+
+```text title="Deploy log" noCopy
+==> Build failed: …
+==> Deploy failed: …
+```
+
+| Status | The failure was |
+|---|---|
+| `build_failed` | In a step before the image was ready |
+| `deploy_failed` | At the start of the instances, or at the health checks |
+
+## What to do
+
+Correct the cause. Then deploy again.
+
+```bash title="Terminal"
+ferry deploy api --follow
+```
+
+Or [roll back](/docs/reference/cli#ferry-rollback) to an earlier deploy.

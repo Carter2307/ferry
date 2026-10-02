@@ -1,0 +1,80 @@
+---
+title: Build and deploy settings
+description: Each service keeps its settings. A change applies at the next deploy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'CLI', note: 'ferry update' },
+    { id: 'dash', at: [0, 1], icon: 'browser', label: 'Dashboard', note: 'Settings page' },
+    { id: 'api', at: [0, 2], icon: 'braces', label: 'API', note: 'PATCH' },
+    { id: 'settings', at: [1.5, 1], icon: 'sliders', label: 'Settings', note: 'of the service' },
+    { id: 'deploy', at: [3, 1], icon: 'deploy', label: 'Next deploy' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'settings' },
+    { from: 'dash', to: 'settings' },
+    { from: 'api', to: 'settings' },
+    { from: 'settings', to: 'deploy' },
+  ]}
+  steps={[
+    {
+      caption: 'You change a setting with the CLI, the dashboard or the API.',
+      flow: ['cli>settings', 'dash>settings', 'api>settings'],
+      tones: { settings: 'primary' },
+      notes: { settings: 'changed' },
+    },
+    {
+      caption: 'The next deploy uses the new value.',
+      flow: ['settings>deploy'],
+      tones: { deploy: 'success' },
+    },
+  ]}
+/>
+
+The number of instances is the exception: it applies immediately. The API route is `PATCH /api/v1/services/{id}`.
+
+## The settings
+
+| Setting | CLI <Term id="flag" /> | API field | Default |
+|---|---|---|---|
+| Repository | `--repo` | `repo_url` | none |
+| Branch | `--branch` | `branch` | `main` |
+| Image | `--image` | `image` | none |
+| Runtime | `--runtime` | `runtime` | `auto` |
+| Root directory | `--root-dir` | `root_dir` | the repository root |
+| Dockerfile path | `--dockerfile` | `dockerfile_path` | `Dockerfile` |
+| Build command | `--build-cmd` | `build_command` | the default of the runtime |
+| Start command | `--start-cmd` | `start_command` | the default of the runtime, or the command of the image |
+| Publish directory (static sites) | `--publish-dir` | `publish_dir` | detected |
+| Port | `--port` | `port` | detected |
+| Health check path | `--health` | `health_check_path` | none: a TCP check |
+| Instances | `--instances` | `instances` | `1` |
+| Cron schedule | `--schedule` | `schedule` | required for cron jobs |
+| Disk mount path | `--disk` | `disk_mount_path` | none |
+| Memory limit (each instance and job run) | `--memory` | `memory_limit_mb` | the limit of the server, 512 MiB by default |
+| CPU limit (each instance and job run) | `--cpu` | `cpu_limit` | the limit of the server, 1 CPU by default |
+| Custom domains | `--domain` (repeatable) | `custom_domains` | none |
+| Auto-deploy | `--no-auto-deploy`, `--auto-deploy` | `auto_deploy` | on |
+
+## Clear a setting
+
+```bash title="Terminal"
+ferry update api --start-cmd ""                    # clear a text setting
+ferry update api --port 0                          # Ferry detects the port again
+ferry update api --memory default --cpu default    # back to the limits of the server
+```
+
+<Accordions>
+  <Accordion title="Memory and CPU limits">
+    A change of the limits applies at the next deploy or restart. `ferry restart` is sufficient.
+  </Accordion>
+  <Accordion title="Where to read about each setting">
+    - Runtime, commands, root directory and publish directory: [Builds & runtimes](/docs/concepts/builds).
+    - Port: [The port of your app](/docs/concepts/deploys/ports).
+    - Health check: [Health checks](/docs/concepts/deploys/health-checks).
+    - Instances and disks: [Disks, scaling & suspend](/docs/concepts/scaling).
+    - Memory and CPU limits: [Resource limits](/docs/concepts/resource-limits).
+    - When a change applies: [Settings and the live deploy](/docs/concepts/deploys/snapshot).
+  </Accordion>
+</Accordions>

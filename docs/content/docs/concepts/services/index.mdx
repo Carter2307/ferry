@@ -1,0 +1,70 @@
+---
+title: Services
+description: A service is one app that Ferry builds and runs. Its type sets who can reach it.
+icon: Boxes
+---
+
+<Diagram
+  caption="Who can reach each service"
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.15, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'web', at: [2.3, 0], icon: 'globe', label: 'Web service' },
+    { id: 'site', at: [2.3, 1], icon: 'file', label: 'Static site' },
+    { id: 'worker', at: [2.3, 2], icon: 'repeat', label: 'Worker' },
+    { id: 'cron', at: [2.3, 3], icon: 'clock', label: 'Cron job' },
+    { id: 'pserv', at: [3.45, 1], icon: 'lock', label: 'Private service' },
+    { id: 'db', at: [3.45, 2], icon: 'database', label: 'Datastore' },
+  ]}
+  groups={[{ label: 'Private network', from: [2.3, 0], to: [3.45, 3] }]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'web' },
+    { from: 'proxy', to: 'site' },
+    { from: 'web', to: 'pserv' },
+    { from: 'web', to: 'db' },
+    { from: 'worker', to: 'db' },
+    { from: 'cron', to: 'pserv' },
+  ]}
+  steps={[
+    {
+      caption: 'A browser reaches a web service or a static site through the proxy.',
+      flow: ['browser>proxy', 'proxy>web', 'proxy>site'],
+      tones: { web: 'success', site: 'success' },
+      notes: { web: 'public URL', site: 'public URL' },
+    },
+    {
+      caption: 'A private service and a datastore have no public URL. Only the private network reaches them.',
+      flow: ['web>pserv', 'web>db'],
+      tones: { pserv: 'primary', db: 'primary' },
+      notes: { pserv: 'no public URL', db: 'no public URL' },
+    },
+    {
+      caption: 'A background worker and a cron job call other services. Nothing calls them.',
+      flow: ['worker>db', 'cron>pserv'],
+      tones: { worker: 'primary', cron: 'primary' },
+      notes: { worker: 'no port', cron: 'no port' },
+    },
+  ]}
+/>
+
+A <Term id="service" /> is one app that Ferry builds and runs as one or more Docker <Term id="container">containers</Term>.
+
+Each service has a name, a type, a <Term id="source" />, settings and <Term id="env-var">environment variables</Term>. The name is unique. A [deploy](/docs/concepts/deploys) puts the code into the containers.
+
+## Create a service
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --branch main
+```
+
+This command makes a <Term id="web-service" /> from a git <Term id="repository" />, then deploys it.
+
+## In this section
+
+<Cards>
+  <Card title="The five service types" href="/docs/concepts/services/types" description="Web, private, worker, cron job and static site." />
+  <Card title="Sources" href="/docs/concepts/services/sources" description="A git repository, a Docker image or an upload." />
+  <Card title="Internal hostnames" href="/docs/concepts/services/internal-hostnames" description="How one service calls another service." />
+  <Card title="States" href="/docs/concepts/services/states" description="What live, degraded and failed mean." />
+</Cards>

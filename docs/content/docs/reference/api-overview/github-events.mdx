@@ -1,0 +1,36 @@
+---
+title: GitHub events and answers
+description: A push to a branch deploys each service that follows the repository and the branch.
+---
+
+<Flow
+  steps={[
+    { icon: 'fingerprint', title: 'Signature', text: 'ferryd checks X-Hub-Signature-256. A bad signature gets the answer 401.', tone: 'warning' },
+    { icon: 'search', title: 'Match', text: 'ferryd finds each service with auto-deploy on, the same repository and the same branch.' },
+    { icon: 'deploy', title: 'Deploy', text: 'Each one gets a deploy with the trigger webhook, at the pushed commit.', tone: 'success' },
+  ]}
+/>
+
+## The answer to each event
+
+| Event | Response |
+|---|---|
+| `ping` | `{"ok": true}` |
+| `push` to a branch | `{"deploys": [...]}`: one deploy for each service that matches the push. Ferry skips suspended services. |
+| `push` that deletes a branch, or a push to a tag | `{"deploys": []}` |
+| A delivery that Ferry processed before | `{"deploys": [], "ignored": true, "reason": "this push was already processed (duplicate or replayed delivery)"}` |
+| Each other event | `{"ignored": true}` |
+| No signature, or a wrong signature | 401 `invalid or missing X-Hub-Signature-256` |
+
+A service matches a push when it has <Term id="auto-deploy" /> on and the same repository and branch.
+
+<Accordions>
+  <Accordion title="How Ferry compares repositories">
+    A service can use each URL form of its repository. Ferry compares the `clone_url`, `ssh_url`, `git_url`, `html_url` and `url` of the push. It first makes them all the same form.
+  </Accordion>
+  <Accordion title="How Ferry finds a copy">
+    - A delivery counts as processed when Ferry saw its exact body or its `X-GitHub-Delivery` id before.
+    - Ferry remembers the last 256 bodies and the last 256 ids.
+    - This protects against a <Term id="replay" />, because the signature of GitHub has no timestamp.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,71 @@
+---
+title: Self-healing
+description: Ferry compares what must run with what runs, and repairs the difference without your help.
+icon: HeartPulse
+---
+
+<Diagram
+  caption="The loop of the reconciler"
+  nodes={[
+    { id: 'want', at: [0, 0.5], icon: 'database', label: 'Desired state', note: '2 instances' },
+    { id: 'rec', at: [1.5, 0.5], icon: 'repeat', label: 'Reconciler', note: 'each 10 seconds' },
+    { id: 'a', at: [3, 0], icon: 'box', label: 'Instance 1', note: 'runs' },
+    { id: 'b', at: [3, 1], icon: 'box', label: 'Instance 2', note: 'runs' },
+  ]}
+  edges={[
+    { from: 'want', to: 'rec' },
+    { from: 'rec', to: 'a', both: true },
+    { from: 'rec', to: 'b', both: true },
+  ]}
+  groups={[{ label: 'Actual state: Docker', around: ['a', 'b'] }]}
+  steps={[
+    {
+      caption: 'The database of Ferry has the desired state: 2 instances must run.',
+      flow: ['want>rec'],
+      tones: { want: 'primary' },
+    },
+    {
+      caption: 'Docker has the actual state. One instance disappeared.',
+      cut: ['rec>b'],
+      tones: { b: 'danger' },
+      notes: { b: 'gone' },
+    },
+    {
+      caption: 'The reconciler compares the two states. It finds a difference.',
+      flow: ['want>rec', 'rec>a'],
+      cut: ['rec>b'],
+      tones: { rec: 'warning', b: 'danger' },
+      notes: { rec: '2 must run, 1 runs', b: 'gone' },
+    },
+    {
+      caption: 'The reconciler repairs the difference: it starts a new instance.',
+      flow: ['rec>b'],
+      tones: { rec: 'primary', b: 'primary' },
+      notes: { b: 'starts' },
+    },
+    {
+      caption: 'The two states are the same again. The loop continues.',
+      flow: ['want>rec'],
+      tones: { a: 'success', b: 'success' },
+    },
+  ]}
+/>
+
+Ferry keeps the <Term id="desired-state" /> in its <Term id="sqlite" /> database: services, live deploys, numbers of instances and datastores. The <Term id="reconciler" /> compares it with the <Term id="actual-state" /> in Docker.
+
+You do not restart a crashed app. You do not remove old containers.
+
+## See the state of a service
+
+```bash title="Terminal"
+ferry status api
+```
+
+## In this section
+
+<Cards>
+  <Card title="What the reconciler does" href="/docs/concepts/self-healing/reconciler" description="When it runs, and the four steps of one pass." />
+  <Card title="When a container crashes" href="/docs/concepts/self-healing/crash" description="One crash and its repair, step by step." />
+  <Card title="If ferryd stops" href="/docs/concepts/self-healing/server-down" description="Your apps continue to run. What stops, and what does not." />
+  <Card title="Shut down ferryd" href="/docs/concepts/self-healing/shutdown" description="The three steps of a graceful shutdown." />
+</Cards>

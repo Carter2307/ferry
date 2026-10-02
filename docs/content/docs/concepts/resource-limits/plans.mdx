@@ -1,0 +1,53 @@
+---
+title: Render plans
+description: Ferry changes each Render plan into a memory limit and a CPU limit.
+---
+
+```yaml title="render.yaml"
+services:
+  - type: web
+    name: api
+    plan: standard        # 2 GiB / 1 CPU
+databases:
+  - name: app-db
+    plan: basic-1gb       # 1 GiB of memory
+```
+
+A <Term id="render-plan" /> is a size name from Render. Ferry reads it in a <Term id="blueprint" />.
+
+## Plans of a service
+
+| Plan | Memory | CPU |
+|---|---|---|
+| `free`, `starter` | 512 MiB | 0.5 CPU |
+| `standard` | 2 GiB | 1 CPU |
+| `pro` | 4 GiB | 2 CPUs |
+| `pro plus` | 8 GiB | 4 CPUs |
+| `pro max` | 16 GiB | 4 CPUs |
+| `pro ultra` | 32 GiB | 8 CPUs |
+
+These are the values of Render, with one exception. On Render, `free` has 0.1 CPU. On Ferry, it gets 0.5 CPU, because a tenth of a core only makes an app slow on your own server.
+
+## Plans of a datastore
+
+The plan of a datastore sets only the memory.
+
+| Datastore | Plan | Memory |
+|---|---|---|
+| Postgres (`databases`) | `basic-256mb`, `basic-1gb`, `basic-4gb`, `pro-<size>`, `accelerated-<size>` | The size in the name: `pro-16gb` gives 16 GiB |
+| Postgres, old plans | `free`, `starter` | 256 MiB |
+| | `standard` | 1 GiB |
+| | `pro` | 4 GiB |
+| | `pro plus` | 8 GiB |
+| Key Value (`type: redis` or `keyvalue`) | `free`, `starter` | 256 MiB |
+| | `standard` | 1 GiB |
+| | `pro` | 5 GiB |
+| | `pro plus` | 10 GiB |
+
+<Accordions>
+  <Accordion title="How Ferry reads a plan name">
+    - Ferry ignores the case and the separators. `pro plus`, `Pro_Plus` and `pro-plus` are the same plan.
+    - A plan that Ferry does not know gives a warning. The entry gets no limits from it.
+    - A static site has no plans. Ferry ignores its `plan`.
+  </Accordion>
+</Accordions>

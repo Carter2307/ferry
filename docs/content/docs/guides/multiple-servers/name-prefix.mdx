@@ -1,0 +1,62 @@
+---
+title: The name prefix
+description: The prefix is part of each Docker name of a server. A server controls only the containers with its prefix.
+---
+
+<Diagram
+  nodes={[
+    { id: 'prod', at: [0, 0], icon: 'server', label: 'production', note: 'prefix ferry' },
+    { id: 'pbox', at: [1.75, 0], icon: 'box', label: 'ferry-api-…', note: 'its containers' },
+    { id: 'staging', at: [0, 1], icon: 'server', label: 'staging', note: 'prefix staging' },
+    { id: 'sbox', at: [1.75, 1], icon: 'box', label: 'staging-api-…', note: 'its containers' },
+  ]}
+  edges={[
+    { from: 'prod', to: 'pbox' },
+    { from: 'staging', to: 'sbox' },
+    { id: 'wrong', from: 'staging', to: 'pbox', tone: 'danger' },
+  ]}
+  steps={[
+    {
+      caption: 'Each Docker name of a server starts with its prefix.',
+      cut: ['wrong'],
+      flow: ['prod>pbox', 'staging>sbox'],
+    },
+    {
+      caption: 'A server lists and controls only the containers with its own prefix.',
+      cut: ['wrong'],
+      tones: { pbox: 'success', sbox: 'success' },
+    },
+    {
+      caption: 'Two servers with the same prefix: each server removes the containers of the other as orphans.',
+      cut: ['staging>sbox'],
+      flow: ['wrong'],
+      hide: ['sbox'],
+      tones: { staging: 'danger', pbox: 'danger' },
+      notes: { staging: 'prefix ferry', pbox: 'removed' },
+    },
+  ]}
+/>
+
+The <Term id="name-prefix" /> (default `ferry`) is part of each Docker name and <Term id="container-label" /> that a server creates.
+
+## The names
+
+| Resource | Name |
+|---|---|
+| Private network | `<prefix>` |
+| Service containers | `<prefix>-<service>-<deploy>-<random>` |
+| Job containers | `<prefix>-job-<service>-<job>` |
+| Datastore containers and volumes | `<prefix>-ds-<name>`, `<prefix>-ds-<name>-data` |
+| Service disks | `<prefix>-svc-<service id>-disk` |
+| Built images | `<prefix>/<service>:<deploy id>` |
+| Ownership marker volume | `<prefix>-owner` |
+
+Each container also has the label `ferry.instance=<prefix>`.
+
+## Why two servers must never share a prefix
+
+The <Term id="reconciler" /> of a server removes the containers under its prefix that it does not know. Such a container is an <Term id="orphan" />. With the same prefix, each server deletes the apps of the other. See [Self-healing](/docs/concepts/self-healing).
+
+## What different prefixes give you
+
+The servers stay apart. They have different networks, thus their services cannot call each other by name. They also have different images and volumes.

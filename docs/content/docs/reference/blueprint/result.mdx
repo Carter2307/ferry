@@ -1,0 +1,42 @@
+---
+title: The result of an apply
+description: The API answers with a BlueprintResult. It has the actions, the deploys and the warnings.
+---
+
+```json title="Response (dry run)"
+{
+  "dry_run": true,
+  "actions": [
+    { "resource": "datastore", "name": "sessions", "action": "create", "changes": [] },
+    { "resource": "service", "name": "queue", "action": "create", "changes": [] }
+  ],
+  "deploys": [],
+  "warnings": [
+    "blueprint: ignoring unsupported key 'x-defaults'",
+    "service 'queue': runtime 'elixir' is not supported natively; using auto-detection (add a Dockerfile)",
+    "service 'queue': ignoring unknown plan 'enterprise' (known plans: free, starter, standard, pro, pro plus, pro max, pro ultra); set memoryLimit / cpuLimit instead",
+    "service 'queue': ignoring unsupported key 'region'",
+    "key value 'sessions': ignoring unsupported key 'ipAllowList'"
+  ]
+}
+```
+
+The <Term id="api" /> returns a `BlueprintResult`. The CLI prints it as text. To get the raw <Term id="json" />, run `ferry --json blueprint apply`.
+
+## The fields
+
+| Field | Type | Description |
+|---|---|---|
+| `dry_run` | boolean | `true` for a dry run. |
+| `actions` | `BlueprintAction[]` | Each resource of the blueprint, in the order of the apply. |
+| `deploys` | `Deploy[]` | The deploys and restarts that the apply put in the queue. Empty for a dry run. |
+| `warnings` | `string[]` | Ignored keys, unknown plans, variables that you must set, services with no source, side effects that failed. |
+
+## The fields of an action
+
+| Field | Values |
+|---|---|
+| `resource` | `service`, `datastore` or `env_group` |
+| `name` | The name of the resource |
+| `action` | `create`, `update` or `unchanged` |
+| `changes` | For an update: a list of texts for people, such as `"memory_limit: 512 MiB → 2 GiB"` |

@@ -1,0 +1,56 @@
+---
+title: Deploy an app and check HTTPS
+description: Create a test service, then see Ferry get its certificate from Let's Encrypt.
+---
+
+<Flow
+  steps={[
+    { icon: 'deploy', title: 'Deploy', text: 'Ferry starts the service hello from the image nginx:alpine.' },
+    { icon: 'route', title: 'Route', text: 'The proxy routes the hostname hello.apps.example.com to the service.' },
+    { icon: 'hourglass', title: 'Wait', text: 'For some seconds, HTTPS answers with a self-signed certificate.', tone: 'warning' },
+    { icon: 'certificate', title: 'Certificate', text: 'Ferry gets the certificate from Let’s Encrypt. HTTPS is ready.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Create a service
+
+```bash title="Terminal"
+ferry create hello --image nginx:alpine --port 80 --follow
+```
+
+</Step>
+<Step>
+
+### Test HTTPS
+
+```bash title="Terminal"
+curl -I https://hello.apps.example.com
+```
+
+A new hostname gets its <Term id="certificate" /> some seconds after the proxy routes it. Until then, HTTPS answers with a <Term id="self-signed" />.
+
+</Step>
+<Step>
+
+### See the certificates
+
+```bash title="Terminal"
+ferry certificates
+```
+
+The command shows the state of each certificate.
+
+</Step>
+</Steps>
+
+## In the server log
+
+```text title="journalctl -u ferryd" noCopy
+requesting a TLS certificate for hello.apps.example.com
+obtained a TLS certificate for hello.apps.example.com
+```
+
+The first line shows the request. The second line shows that Ferry has the certificate. <Term id="tls" /> is the encryption of HTTPS.

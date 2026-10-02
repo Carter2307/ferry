@@ -1,0 +1,44 @@
+---
+title: A port is in use
+description: ferryd cannot listen on an address, because another program has it.
+---
+
+## What you see
+
+```text title="ferryd" noCopy
+Error: cannot listen on 0.0.0.0:80 (proxy address)
+
+Caused by:
+    Address already in use (os error 98)
+```
+
+## Why it occurs
+
+Another program, frequently a web server, listens on that address.
+
+The message tells you which address: `proxy`, `HTTPS proxy` or `API`. These are the addresses of the <Term id="proxy" /> and of the <Term id="api" />. The error number is `98` on Linux and `48` on macOS.
+
+## How to repair it
+
+Find the program that has the <Term id="port" />.
+
+<Tabs items={['Linux', 'macOS']}>
+<Tab value="Linux">
+```bash title="Terminal"
+sudo ss -ltnp 'sport = :80'
+```
+</Tab>
+<Tab value="macOS">
+```bash title="Terminal"
+sudo lsof -nP -iTCP:80 -sTCP:LISTEN
+```
+</Tab>
+</Tabs>
+
+Then choose one repair.
+
+| Repair | How |
+|---|---|
+| Stop the other program | |
+| Use another address | `--proxy-addr`, `--https-addr` or `--api-addr` |
+| Keep the other program | Run Ferry behind this <Term id="reverse-proxy" />. See [Production setup](/docs/guides/production). |

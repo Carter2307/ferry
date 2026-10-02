@@ -1,0 +1,48 @@
+---
+title: Authentication errors
+description: A request with no valid proof gets 401. A request with the wrong kind of proof gets 403.
+---
+
+<Diagram
+  caption="The check comes before the routes"
+  nodes={[
+    { id: 'req', at: [0, 1], icon: 'send', label: 'Request' },
+    { id: 'check', at: [1.5, 1], icon: 'shield', label: 'Check', note: 'before the routes' },
+    { id: 'no', at: [3, 0], icon: 'error', label: '401', note: 'no valid proof', tone: 'danger' },
+    { id: 'wrong', at: [3, 1], icon: 'ban', label: '403', note: 'wrong proof', tone: 'warning' },
+    { id: 'ok', at: [3, 2], icon: 'ok', label: 'Route', note: 'or 404', tone: 'success' },
+  ]}
+  edges={[
+    { from: 'req', to: 'check', flow: true },
+    { from: 'check', to: 'no' },
+    { from: 'check', to: 'wrong' },
+    { from: 'check', to: 'ok' },
+  ]}
+/>
+
+## For each request
+
+| Response | Message | When |
+|---|---|---|
+| 401 `unauthorized` | `not signed in: send an API token as 'Authorization: Bearer <token>', or sign in to the dashboard` | The request has no credentials. |
+| 401 `unauthorized` | `invalid API token` | The token is wrong, revoked or expired. |
+| 401 `unauthorized` | `your session has ended: sign in again` | The session of the cookie ended. |
+| 403 `session_required` | `this is only possible from the dashboard, signed in to the account (not with an API token)` | You called an account endpoint with an API token. |
+| 403 `cross_site_request` | `this request doesn't come from the dashboard` | A change with the session cookie came from a different origin. |
+
+## At sign-in and setup
+
+| Response | When |
+|---|---|
+| 401 `invalid_credentials` | The email or the password is wrong. |
+| 403 `invalid_setup_code` | The <Term id="setup-code" /> that you sent to create the account is wrong. |
+| 429 `too_many_attempts` | Too many failed sign-ins: 10 in 5 minutes, for the full server. |
+
+<Accordions>
+  <Accordion title="An unknown path below /api">
+    The check comes before the routes. Thus an unknown path below `/api` answers 401 without credentials, and 404 with them.
+  </Accordion>
+  <Accordion title="401 on a webhook">
+    The code `unauthorized` is also the answer to a wrong deploy hook key and to a bad webhook signature.
+  </Accordion>
+</Accordions>

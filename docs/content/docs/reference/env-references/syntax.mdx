@@ -1,0 +1,47 @@
+---
+title: Syntax
+description: "A reference has three parts between ${{ and }}: the kind, the name and the property."
+---
+
+<Diagram
+  nodes={[
+    { id: 'kind', at: [0, 0], label: 'datastore', note: 'kind' },
+    { id: 'name', at: [1.25, 0], label: 'app-db', note: 'name' },
+    { id: 'property', at: [2.5, 0], label: 'connectionString', note: 'property' },
+  ]}
+  steps={[
+    { caption: 'The kind tells if the target is a datastore or a service.', tones: { kind: 'primary' } },
+    { caption: 'The name is the name of the datastore or the service, exactly as you created it.', tones: { name: 'primary' } },
+    { caption: 'The property tells which value you want.', tones: { property: 'primary' } },
+  ]}
+/>
+
+A <Term id="reference" /> is `${{`, three parts with a dot between them, and `}}`. Example: `${{datastore.app-db.connectionString}}`.
+
+## The grammar
+
+```text title="Grammar" noCopy
+reference = "${{" , ws , kind , ws , "." , ws , name , ws , "." , ws , property , ws , "}}"
+kind      = "datastore" | "db" | "database" | "service" | "svc"     (case-insensitive)
+name      = the datastore or service name, exactly as created
+property  = one of the properties below                              (case-sensitive)
+ws        = optional spaces
+escape    = "$${{"                                                   (a literal "${{")
+```
+
+## The three parts
+
+| Part | Values | Upper and lower case |
+|---|---|---|
+| <Term id="reference-kind" /> | `datastore`, `db`, `database`, `service` or `svc` | Ferry ignores the case. |
+| name | The name of the datastore or the service | Exactly as you created it. |
+| <Term id="reference-property" /> | See the properties of a [datastore](/docs/reference/env-references/datastore) and of a [service](/docs/reference/env-references/service). | The case must be the same. |
+
+## The rules
+
+- You can put spaces around the parts. `${{ db.app-db.host }}` and `${{db.app-db.host}}` are the same.
+- A value can have many references with text between them: `postgres://${{db.pg.user}}:${{db.pg.password}}@${{db.pg.host}}/reports`.
+- Only `${{` starts a reference. `$HOME`, `${PATH}` and `{{mustache}}` are plain text.
+- Ferry gives plain text to the container with no change. It never runs a <Term id="shell" /> on your values.
+
+To write a literal `${{`, see [the escape rule](/docs/reference/env-references/escaping).

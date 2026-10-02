@@ -1,0 +1,50 @@
+---
+title: Requests to the API
+description: The dashboard uses only the public REST API, like the CLI. The browser sends the session cookie with each request.
+---
+
+<Diagram
+  nodes={[
+    { id: 'hook', at: [0, 0], icon: 'browser', label: 'A page', note: 'query or mutation' },
+    { id: 'client', at: [1.5, 0], icon: 'code', label: 'client.ts', note: 'wraps fetch' },
+    { id: 'api', at: [3, 0], icon: 'server', label: 'ferryd', note: '/api/v1/*' },
+    { id: 'error', at: [1.5, 1], icon: 'error', label: 'ApiError', note: 'from an error body' },
+  ]}
+  edges={[
+    { from: 'hook', to: 'client' },
+    { from: 'client', to: 'api', label: 'JSON + cookie' },
+    { from: 'client', to: 'error' },
+  ]}
+  steps={[
+    {
+      caption: 'A query or a mutation of a page calls client.ts.',
+      hide: ['error'],
+      flow: ['hook>client'],
+      tones: { client: 'primary' },
+    },
+    {
+      caption: 'The request is JSON, to the same origin. The browser adds the session cookie by itself.',
+      hide: ['error'],
+      flow: ['client>api'],
+      tones: { api: 'primary' },
+    },
+    {
+      caption: 'If the answer is an error, client.ts changes the body into an ApiError.',
+      flow: ['client>error'],
+      tones: { error: 'danger' },
+    },
+  ]}
+/>
+
+The dashboard uses only the public REST <Term id="api" />, like the CLI. See the [API overview](/docs/reference/api-overview).
+
+## The rules of a request
+
+| Subject | Rule |
+|---|---|
+| Format | A <Term id="data-query" /> or a <Term id="mutation" /> is a JSON call to `/api/v1/*`. |
+| Origin | The call goes to the same <Term id="origin" />. Thus <Term id="cors" /> is not necessary. |
+| Proof | The browser sends the <Term id="session-cookie" /> by itself. The app sets no `Authorization` header. |
+| Errors | `src/lib/api/client.ts` wraps `fetch`. It changes an error body into `ApiError { status, code, message }`. |
+
+[Sign-in and the session](/docs/contributing/web-client/sign-in) describes the cookie. [Live updates](/docs/contributing/web-client/live-updates) describes the streams.

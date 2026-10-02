@@ -1,0 +1,40 @@
+---
+title: The five service types
+description: The type of a service tells Ferry if it has a port and who can reach it.
+---
+
+<Diagram
+  caption="The five types, by who can reach them"
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'globe', label: 'Web service', note: '--type web' },
+    { id: 'site', at: [0, 1], icon: 'file', label: 'Static site', note: '--type static' },
+    { id: 'pserv', at: [1.25, 0], icon: 'lock', label: 'Private service', note: '--type pserv' },
+    { id: 'worker', at: [2.5, 0], icon: 'repeat', label: 'Worker', note: '--type worker' },
+    { id: 'cron', at: [2.5, 1], icon: 'clock', label: 'Cron job', note: '--type cron' },
+  ]}
+  groups={[
+    { label: 'Public URL', from: [0, 0], to: [0, 1] },
+    { label: 'Private network only', from: [1.25, 0], to: [1.25, 0] },
+    { label: 'No port', from: [2.5, 0], to: [2.5, 1] },
+  ]}
+/>
+
+Ferry has the same five <Term id="service-type">service types</Term> as <Term id="render">Render</Term>. You choose the type when you create a service. You cannot change it after that.
+
+## Compare the types
+
+| Type | `--type` (CLI) | `type` (API) | Has a <Term id="port" /> | Address | <Term id="instance">Instances</Term> |
+|---|---|---|---|---|---|
+| [Web service](/docs/concepts/services/web-services) | `web` | `web_service` | Yes | A public URL, plus custom domains | 1 to 50 |
+| [Private service](/docs/concepts/services/private-services) | `pserv` | `private_service` | Yes | The private network only | 1 to 50 |
+| [Background worker](/docs/concepts/services/background-workers) | `worker` | `background_worker` | No | None | 1 to 50 |
+| [Cron job](/docs/concepts/services/cron-jobs) | `cron` | `cron_job` | No | None | One container per run |
+| [Static site](/docs/concepts/services/static-sites) | `static` | `static_site` | Yes (nginx) | A public URL, plus custom domains | 1 to 50 |
+
+## Set the type
+
+```bash title="Terminal"
+ferry create search --type pserv --image getmeili/meilisearch:v1.10 --port 7700
+```
+
+`web` is the default type of `ferry create` and `ferry up`.

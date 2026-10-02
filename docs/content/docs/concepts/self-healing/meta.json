@@ -1,0 +1,14 @@
+{
+  "title": "Self-healing",
+  "icon": "HeartPulse",
+  "pages": [
+    "reconciler",
+    "other-repairs",
+    "crash",
+    "hung-app",
+    "server-down",
+    "server-start",
+    "shutdown",
+    "one-server"
+  ]
+}

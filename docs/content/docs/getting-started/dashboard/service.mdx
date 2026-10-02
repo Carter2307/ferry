@@ -1,0 +1,64 @@
+---
+title: The pages of a service
+description: A service has a header with the main buttons, and a side menu with six sections.
+---
+
+<Diagram
+  nodes={[
+    { id: 'overview', at: [0, 0], icon: 'gauge', label: 'Overview' },
+    { id: 'deploys', at: [0, 1], icon: 'deploy', label: 'Deploys' },
+    { id: 'logs', at: [0, 2], icon: 'logs', label: 'Logs' },
+    { id: 'jobs', at: [0, 3], icon: 'play', label: 'Jobs' },
+    { id: 'menu', at: [1.5, 1.5], icon: 'box', label: 'Side menu', note: 'of the service' },
+    { id: 'env', at: [3, 1], icon: 'variable', label: 'Environment' },
+    { id: 'settings', at: [3, 2], icon: 'sliders', label: 'Settings' },
+  ]}
+  edges={[
+    { from: 'menu', to: 'overview' },
+    { from: 'menu', to: 'deploys' },
+    { from: 'menu', to: 'logs' },
+    { from: 'menu', to: 'jobs' },
+    { from: 'menu', to: 'env' },
+    { from: 'menu', to: 'settings' },
+  ]}
+  groups={[
+    { label: 'General', around: ['overview', 'deploys', 'logs', 'jobs'] },
+    { label: 'Configuration', around: ['env', 'settings'] },
+  ]}
+  steps={[
+    { caption: 'Overview: what runs now, and the main actions.', flow: ['menu>overview'], tones: { overview: 'primary' } },
+    { caption: 'Deploys: each build and each release, the newest first.', flow: ['menu>deploys'], tones: { deploys: 'primary' } },
+    { caption: 'Logs: the output of the instances that run.', flow: ['menu>logs'], tones: { logs: 'primary' } },
+    { caption: 'Jobs: the one-off jobs and the cron runs.', flow: ['menu>jobs'], tones: { jobs: 'primary' } },
+    { caption: 'Environment: the variables and the linked env groups.', flow: ['menu>env'], tones: { env: 'primary' } },
+    { caption: 'Settings: the source, the build, the instances and the limits.', flow: ['menu>settings'], tones: { settings: 'primary' } },
+  ]}
+/>
+
+## The header
+
+The header shows the name, the state, the type and the URL of the <Term id="service" />. It has two buttons: **Open** and **Manual deploy**.
+
+## The arrow next to Manual deploy
+
+| Item | Use |
+|---|---|
+| **Deploy latest commit** | The deploy of a service from a git repository. |
+| **Pull & deploy image** | The deploy of a service from an image. Ferry pulls the image again. |
+| **Redeploy last upload** | The deploy of a service from an upload. |
+| **Clear build cache & deploy** | For a service that Ferry builds. |
+| **Restart service** | A [restart](/docs/concepts/deploys/restarts). |
+| **Suspend service** | Stop the service. See [Scaling](/docs/concepts/scaling). |
+
+The menu shows one of the first three items. The item depends on the source of the service.
+
+## The sections
+
+| Section | Page |
+|---|---|
+| **Overview** | [Overview](/docs/getting-started/dashboard/overview) |
+| **Deploys** | [Deploys](/docs/getting-started/dashboard/deploys) |
+| **Logs** | [Logs](/docs/getting-started/dashboard/logs) |
+| **Jobs** | [Jobs](/docs/getting-started/dashboard/jobs) |
+| **Environment** | [Environment](/docs/getting-started/dashboard/environment) |
+| **Settings** | [Settings](/docs/getting-started/dashboard/settings) |

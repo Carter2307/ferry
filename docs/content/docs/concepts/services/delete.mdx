@@ -1,0 +1,56 @@
+---
+title: Delete a service
+description: A delete removes the service and all that belongs to it. You cannot undo it.
+---
+
+```bash title="Terminal"
+ferry delete api
+```
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'globe', label: 'web', note: '${{service.api.…}}' },
+    { id: 'api', at: [1.75, 0], icon: 'box', label: 'api' },
+  ]}
+  edges={[{ from: 'web', to: 'api', label: 'reference' }]}
+  steps={[
+    {
+      caption: 'The service web has a reference to api in its environment.',
+      flow: ['web>api'],
+    },
+    {
+      caption: 'You delete api. Ferry refuses, and lists the services that have a reference to it.',
+      tones: { api: 'warning' },
+      notes: { api: 'delete refused' },
+    },
+    {
+      caption: 'With --force, Ferry deletes api. The next deploy or restart of web fails.',
+      hide: ['api'],
+      tones: { web: 'danger' },
+      notes: { web: 'bad reference' },
+    },
+  ]}
+/>
+
+## What Ferry removes
+
+- The containers of the service.
+- The images that Ferry built for it.
+- Its <Term id="disk" />.
+- Its <Term id="git-cache" /> and its uploads.
+- Its deploy logs and job logs.
+- Its settings and variables.
+
+<Callout type="warning" title="You cannot undo a delete">
+The data on the disk of the service goes too.
+</Callout>
+
+## If other services use it
+
+Other services can have a <Term id="reference" /> to the service in their environment: `${{service.api.…}}`. Then Ferry refuses the delete.
+
+```bash title="Terminal"
+ferry delete api --force
+```
+
+After a delete with `--force`, remove the reference from the other services. Until then, their deploys and restarts fail.

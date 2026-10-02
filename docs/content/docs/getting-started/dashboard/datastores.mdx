@@ -1,0 +1,67 @@
+---
+title: Datastores
+description: The Datastores page creates PostgreSQL and Redis datastores and gives the reference that a service uses.
+---
+
+<Diagram
+  nodes={[
+    { id: 'db', at: [0, 0], icon: 'database', label: 'app-db', note: 'a datastore' },
+    { id: 'ref', at: [1.6, 0], icon: 'copy', label: 'Reference', note: 'Use in a service' },
+    { id: 'svc', at: [3.2, 0], icon: 'box', label: 'Service', note: 'DATABASE_URL' },
+  ]}
+  edges={[
+    { from: 'db', to: 'ref' },
+    { from: 'ref', to: 'svc' },
+  ]}
+  steps={[
+    {
+      caption: 'New datastore creates a PostgreSQL or Redis datastore.',
+      hide: ['ref', 'svc'],
+      tones: { db: 'primary' },
+    },
+    {
+      caption: 'The page of the datastore gives the reference to paste.',
+      hide: ['svc'],
+      flow: ['db>ref'],
+      tones: { ref: 'primary' },
+    },
+    {
+      caption: 'You paste the reference into the environment of a service.',
+      flow: ['ref>svc'],
+      tones: { svc: 'primary' },
+    },
+    {
+      caption: 'Referenced by now lists this service on the page of the datastore.',
+      tones: { db: 'success', svc: 'success' },
+      notes: { db: 'Referenced by: 1' },
+    },
+  ]}
+/>
+
+## The list
+
+Each <Term id="datastore" /> is a card. The card shows the version, the private address, the status and the <Term id="host-port" />.
+
+Filter the list by **Type**, or search.
+
+## Create a datastore
+
+Click **New datastore**. Give the name, the kind and the version.
+
+For PostgreSQL, you can also give a database name and a user. Memory and CPU limits are optional.
+
+## The page of a datastore
+
+| Part | Content |
+|---|---|
+| **Connection** | Status, internal address, internal and external <Term id="connection-string">connection strings</Term>, username, password and database. Each value has a copy button. |
+| **Resources** | The memory and CPU limits of the container. **Apply limits** changes the container immediately, with no restart. |
+| **Use in a service** | The <Term id="reference" /> to paste, for example `DATABASE_URL=${{datastore.app-db.connectionString}}`. A table lists each property that you can reference. |
+| **Referenced by** | The services that use the datastore in their environment, or in a linked env group. |
+| **Danger zone** | Delete the datastore and its volume. |
+
+<Callout type="warning" title="A delete removes the data">
+After you delete a datastore, you cannot get its data back.
+</Callout>
+
+See [Datastores](/docs/concepts/datastores).

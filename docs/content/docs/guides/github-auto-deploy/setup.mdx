@@ -1,0 +1,95 @@
+---
+title: Set up the webhook
+description: Give ferryd a secret, create the service, add the webhook in GitHub, then push.
+---
+
+<Flow
+  steps={[
+    { icon: 'key', title: 'Secret', text: 'ferryd gets a webhook secret.' },
+    { icon: 'box', title: 'Service', text: 'You create a service from the repository.' },
+    { icon: 'webhook', title: 'Webhook', text: 'You add the webhook in GitHub, with the same secret.' },
+    { icon: 'branch', title: 'Push', text: 'You push a commit. Ferry deploys it.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Make a secret
+
+```bash title="Terminal"
+openssl rand -hex 32
+```
+
+The command prints a random <Term id="webhook-secret" />.
+
+</Step>
+<Step>
+
+### Give the secret to ferryd
+
+Start <Term id="ferryd" /> with the flag `--github-webhook-secret`, or with the variable `FERRY_GITHUB_WEBHOOK_SECRET`.
+
+```bash title="Terminal"
+ferryd --base-domain apps.example.com \
+  --proxy-addr 0.0.0.0:80 --https-addr 0.0.0.0:443 --acme-email you@example.com \
+  --dashboard-host ferry.apps.example.com \
+  --github-webhook-secret <the secret>
+```
+
+`ferry info` then shows `GitHub webhook:  enabled`. Without a secret, `/hooks/github` answers `404`.
+
+</Step>
+<Step>
+
+### Create a service from the repository
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --branch main --follow
+```
+
+<Term id="auto-deploy">Auto-deploy</Term> is on by default. The default branch is `main`. For a private repository, see [Private repositories](/docs/guides/github-auto-deploy/private-repos).
+
+</Step>
+<Step>
+
+### Add the webhook in GitHub
+
+In the repository, open **Settings → Webhooks → Add webhook**. Enter these values:
+
+| Field | Value |
+|---|---|
+| Payload URL | `https://ferry.apps.example.com/hooks/github` |
+| Content type | `application/json` (`application/x-www-form-urlencoded` works too) |
+| Secret | the secret that you gave to `ferryd` |
+| Events | Just the `push` event |
+
+GitHub sends a `ping` first. Ferry answers `200` with `{"ok":true}`. The webhook shows a green check.
+
+</Step>
+<Step>
+
+### Push
+
+Push a commit to `main`. Then list the deploys:
+
+```bash title="Terminal"
+ferry deploys api
+```
+
+```text title="Output" noCopy
+ID                         STATUS      TRIGGER   COMMIT                   CREATED    DURATION
+dep-c2225fad527c4b919c1b   deploying   webhook   fe41834 Add a comment    just now   1s
+dep-a53de39943a841aca2c3   live        create    d258434 Initial commit   just now   2s
+```
+
+The new deploy has the <Term id="trigger" /> `webhook`. It builds the exact <Term id="commit" /> of the push.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="The commit in your app">
+    The app gets the commit and the branch in the variables `FERRY_GIT_COMMIT` and `FERRY_GIT_BRANCH`.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,16 @@
+{
+  "title": "Reconciler",
+  "icon": "RefreshCw",
+  "pages": [
+    "when",
+    "pass",
+    "services",
+    "routes",
+    "datastores",
+    "orphans",
+    "route-watcher",
+    "oom-watcher",
+    "boot",
+    "never"
+  ]
+}

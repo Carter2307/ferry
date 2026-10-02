@@ -1,0 +1,60 @@
+---
+title: Ruby
+description: Ferry builds a Ruby app from its Gemfile and starts it with rackup.
+---
+
+<Flow
+  steps={[
+    { icon: 'search', title: 'Detect', text: 'Ferry finds a Gemfile.' },
+    { icon: 'package', title: 'Base image', text: 'ruby:3.3-slim by default.' },
+    { icon: 'download', title: 'Install', text: 'bundle install.' },
+    { icon: 'hammer', title: 'Build', text: 'Your build command, if you set one.' },
+    { icon: 'play', title: 'Start', text: 'bundle exec rackup, when the project has a config.ru.', tone: 'success' },
+  ]}
+/>
+
+## A minimal example
+
+<Files>
+  <Folder name="hello-ruby" defaultOpen>
+    <File name="Gemfile" />
+    <File name="Gemfile.lock" />
+    <File name="config.ru" />
+  </Folder>
+</Files>
+
+```ruby title="Gemfile"
+source "https://rubygems.org"
+
+gem "rack", "~> 3.1"
+gem "rackup", "~> 2.2"
+gem "puma", "~> 6.4"
+```
+
+```ruby title="config.ru"
+run ->(env) { [200, { "content-type" => "text/plain" }, ["Hello from Ruby on Ferry\n"]] }
+```
+
+```bash title="Terminal"
+ferry up hello-ruby --follow
+```
+
+## What Ferry generates
+
+| Step | What Ferry generates |
+|---|---|
+| <Term id="base-image">Base image</Term> | `ruby:<version>-slim`. The default is `3.3`. Ferry uses the `major.minor` of `.ruby-version`, or of the `ruby` line of the `Gemfile`, if there is one. |
+| System packages | `build-essential git libpq-dev libyaml-dev pkg-config`, plus `default-libmysqlclient-dev` for `mysql2`. |
+| Install | `bundle install` |
+| Build | Your build command, if you set one. |
+| Start | `bundle exec rackup -o 0.0.0.0 -p ${PORT:-10000}`, when the project has a `config.ru`. |
+
+## Rails
+
+Add a <Term id="procfile" />:
+
+```text title="Procfile"
+web: bundle exec rails server -b 0.0.0.0 -p $PORT
+```
+
+Then use `ferry env set` for the <Term id="env-var">environment variables</Term> that Rails needs in production (`RAILS_ENV`, `SECRET_KEY_BASE`…).

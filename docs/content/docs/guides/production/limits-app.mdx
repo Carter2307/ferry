@@ -1,0 +1,49 @@
+---
+title: Give one app more
+description: A service or a datastore can have its own limits, above or below the defaults of the server.
+---
+
+<Terminal
+  title="Terminal"
+  lines={[
+    '$ ferry update api --memory 1G --cpu 2',
+    "Updated 'api'",
+    'Resource limits apply to the next deploy or restart: ferry restart api',
+    '$ ferry restart api',
+    '# …',
+    '$ ferry db update app-db --memory 2G',
+    "Updated datastore 'app-db': memory limit 2 GiB",
+    'Applied to the running container (no restart).',
+  ]}
+/>
+
+## When the limits apply
+
+| Limits of | They apply |
+|---|---|
+| A service | To each instance and each job run, from the next deploy or restart. |
+| A datastore | Immediately, with no restart. |
+
+`--memory default` and `--cpu default` go back to the defaults of the server.
+
+<Callout type="warning" title="Do not go below what a datastore uses">
+If you lower the memory of a <Term id="datastore" /> below what it uses, the <Term id="kernel" /> can stop it.
+</Callout>
+
+## Other ways to set them
+
+- **Dashboard:** the **Resources** section, in the **Settings** of a service and on the page of a datastore.
+- **<Term id="blueprint">Blueprint</Term>:** `memoryLimit` and `cpuLimit`, or the `plan` of Render. See the [blueprint reference](/docs/reference/blueprint).
+
+See also [Resource limits](/docs/concepts/resource-limits), [`ferry update`](/docs/reference/cli#ferry-update) and [`ferry db update`](/docs/reference/cli#ferry-db-update).
+
+<Accordions>
+  <Accordion title="A CPU limit above the CPUs of the host">
+    Ferry lowers the limit to the number of CPUs of the host. The deploy log has a warning: `the CPU limit (8 CPUs) is more than the Docker host has: capped at 4 CPUs`.
+  </Accordion>
+  <Accordion title="Kernels without CPU CFS quotas">
+    Some NAS and ARM kernels have no CPU CFS quotas (see <Term id="cpu-quota" />). <Term id="rootless-docker" /> has none without the delegation of the cgroup v2 `cpu` controller. Docker refuses CPU limits there.
+
+    Then Ferry sets no CPU limit. `ferryd` says so at startup. The deploy logs say `the CPU limit (1 CPU) is not enforced: the Docker host's kernel has no CPU CFS quota support`.
+  </Accordion>
+</Accordions>

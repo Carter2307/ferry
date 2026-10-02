@@ -1,0 +1,67 @@
+---
+title: Before you push
+description: "Run the checks of each part that you changed: Rust, the dashboard and the docs."
+---
+
+<Diagram
+  caption="What you changed gives what you run"
+  nodes={[
+    { id: 'rust', at: [0, 0], icon: 'boxes', label: 'crates/', note: 'Rust code' },
+    { id: 'web', at: [0, 1], icon: 'monitor', label: 'web/', note: 'the dashboard' },
+    { id: 'api', at: [0, 2], icon: 'braces', label: 'A command', note: 'flag, route, DTO' },
+    { id: 'r1', at: [1.75, 0], icon: 'check', label: 'cargo', note: 'fmt, clippy, test' },
+    { id: 'r2', at: [1.75, 1], icon: 'check', label: 'npm in web/', note: 'test, lint, build' },
+    { id: 'r3', at: [1.75, 2], icon: 'check', label: 'npm in docs/', note: 'generate, build' },
+  ]}
+  edges={[
+    { from: 'rust', to: 'r1', flow: true },
+    { from: 'web', to: 'r2', flow: true },
+    { from: 'api', to: 'r3', flow: true },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Rust
+
+```bash title="Terminal"
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+If your change touches Docker, builds, the proxy or the engine, also run `FERRY_E2E=1 cargo test` for the crates that you changed.
+
+</Step>
+<Step>
+
+### Dashboard
+
+If `web/` changed, run these commands in `web/`:
+
+```bash title="Terminal"
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
+
+</Step>
+<Step>
+
+### Docs
+
+If a command, a flag, a route or a <Term id="dto" /> changed, run these commands in `docs/`:
+
+```bash title="Terminal"
+npm run generate
+npm run build
+```
+
+</Step>
+</Steps>
+
+<Callout type="warning" title="If tokens.css changed">
+The dashboard and the docs share `web/src/styles/tokens.css`. Build the two projects again.
+</Callout>

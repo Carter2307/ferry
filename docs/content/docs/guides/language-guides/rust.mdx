@@ -1,0 +1,95 @@
+---
+title: Rust
+description: Ferry compiles a Rust app with cargo, then runs the binary in a small image.
+---
+
+<Diagram
+  nodes={[
+    { id: 'src', at: [0, 0], icon: 'folder', label: 'Your source', note: 'Cargo.toml, src/' },
+    { id: 'build', at: [1.5, 0], icon: 'hammer', label: 'Build image', note: 'Rust and cargo' },
+    { id: 'cache', at: [3, 0], icon: 'archive', label: 'Cache', note: 'registry, target' },
+    { id: 'bin', at: [1.5, 1], icon: 'file-code', label: 'Binary' },
+    { id: 'run', at: [3, 1], icon: 'package', label: 'Runtime image', note: 'Debian, small' },
+  ]}
+  edges={[
+    { from: 'src', to: 'build' },
+    { from: 'build', to: 'cache', both: true },
+    { from: 'build', to: 'bin', label: 'cargo build' },
+    { from: 'bin', to: 'run' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry finds Cargo.toml and starts the build image: rust:1-slim-bookworm.',
+      hide: ['cache', 'bin', 'run'],
+      flow: ['src>build'],
+    },
+    {
+      caption: 'cargo build --release makes the binary.',
+      hide: ['cache', 'run'],
+      flow: ['build>bin'],
+      tones: { bin: 'primary' },
+    },
+    {
+      caption: 'Ferry keeps the Cargo registry and the target directory in a cache between builds.',
+      hide: ['run'],
+      flow: ['build>cache'],
+      tones: { cache: 'primary' },
+    },
+    {
+      caption: 'Ferry copies the binary into the runtime image: debian:bookworm-slim. The container starts it.',
+      flow: ['bin>run'],
+      tones: { run: 'success' },
+    },
+  ]}
+/>
+
+## A minimal example
+
+<Files>
+  <Folder name="hello-rust" defaultOpen>
+    <File name="Cargo.toml" />
+    <File name="Cargo.lock" />
+    <Folder name="src" defaultOpen>
+      <File name="main.rs" />
+    </Folder>
+  </Folder>
+</Files>
+
+```toml title="Cargo.toml"
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+```
+
+```rust title="src/main.rs"
+use std::io::{Read, Write};
+use std::net::TcpListener;
+
+fn main() {
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let listener = TcpListener::bind(format!("0.0.0.0:{port}")).expect("bind");
+    println!("listening on :{port}");
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { continue };
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let body = "Hello from Rust on Ferry\n";
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    }
+}
+```
+
+```bash title="Terminal"
+ferry up hello-rust --follow
+```
+
+## What Ferry generates
+
+| Step | What Ferry generates |
+|---|---|
+| Build image | `rust:1-slim-bookworm`. Ferry adds `pkg-config libssl-dev` when `Cargo.lock` contains `openssl-sys`. Ferry keeps the Cargo registry and the `target` directory in a cache between builds. |
+| Build | Your build command. If there is none: `cargo build --release`. |
+| <Term id="binary">Binary</Term> | `default-run` of `[package]`. If there is none: the package name (with `src/main.rs`), then the first `[[bin]]`, then the first file of `src/bin`. Ferry copies it to `/usr/local/bin`. |
+| Runtime image | `debian:bookworm-slim` with `ca-certificates` (and `libssl3` for OpenSSL). Your source tree is in `/app`. |
+| Start | `/usr/local/bin/<binary>`. A workspace with no root package needs `--start-cmd` with the name of the binary. |

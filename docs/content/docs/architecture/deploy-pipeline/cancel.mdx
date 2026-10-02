@@ -1,0 +1,41 @@
+---
+title: Cancel
+description: What a cancel does depends on the state of the deploy.
+---
+
+<Flow
+  caption="A cancel at each state"
+  steps={[
+    { icon: 'queue', title: 'queued', text: 'The engine cancels the deploy immediately.' },
+    { icon: 'hammer', title: 'building', text: 'The engine stops the build: it kills docker build.' },
+    { icon: 'health', title: 'Before the switch', text: 'The engine removes the new instances. The old instances continue to answer.' },
+    { icon: 'ban', title: 'After the switch', text: 'The engine refuses the cancel with the status code 409.', tone: 'danger' },
+    { icon: 'flag', title: 'Finished', text: 'The deploy has a final status. The engine refuses the cancel with the status code 409 too.', tone: 'muted' },
+  ]}
+/>
+
+## Send a cancel
+
+```bash title="Terminal"
+ferry cancel DEPLOY_ID
+```
+
+The API call is `POST /api/v1/deploys/{id}/cancel`.
+
+## The two refusals
+
+```text title="After the switch" noCopy
+too late to cancel: traffic was already switched to deploy dep-… (roll back to undo it)
+```
+
+```text title="Finished" noCopy
+deploy dep-… is already canceled
+```
+
+The second message gives the final status of the deploy, here `canceled`.
+
+## Suspend and delete
+
+If you suspend or delete a service, the engine cancels its queued deploys and its deploys in progress in the same way.
+
+For the user view, see [Cancel a deploy](/docs/concepts/deploys/cancel).

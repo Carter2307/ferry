@@ -1,0 +1,32 @@
+---
+title: Builds fail on an old Docker Engine
+description: A service with environment variables needs Docker Engine 27.3 or newer for its build.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+… (secret env mounts need Docker Engine 27.3 or newer: upgrade Docker on the Ferry server)
+```
+
+The deploy gets the status `build_failed`. The live deploy continues to answer.
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'vars', at: [0, 0], icon: 'variable', label: 'Variables', note: 'of the service' },
+    { id: 'secret', at: [1.5, 0], icon: 'key', label: 'BuildKit secret' },
+    { id: 'build', at: [3, 0], icon: 'hammer', label: 'docker build', note: 'needs Engine 27.3' },
+  ]}
+  edges={[
+    { from: 'vars', to: 'secret', flow: true },
+    { from: 'secret', to: 'build', flow: true },
+  ]}
+/>
+
+The service has <Term id="env-var">environment variables</Term>. They go to the <Term id="build" /> as BuildKit secrets. A BuildKit secret is a <Term id="build-secret" />. The Docker Engine of the server is older than 27.3.
+
+## How to repair it
+
+Upgrade Docker on the Ferry server.

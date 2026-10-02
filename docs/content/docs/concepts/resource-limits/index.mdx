@@ -1,0 +1,55 @@
+---
+title: Resource limits
+description: Each container has a limit of memory and CPU. One bad app cannot stop your server.
+icon: Gauge
+---
+
+<Diagram
+  caption="A limit keeps a bad app in its box"
+  nodes={[
+    { id: 'app', at: [0, 0], icon: 'box', label: 'App', note: '120 MiB' },
+    { id: 'db', at: [1.5, 0], icon: 'database', label: 'Database' },
+    { id: 'ferryd', at: [2.75, 0], icon: 'server', label: 'ferryd' },
+  ]}
+  groups={[{ label: 'Limit: 512 MiB, 1 CPU', around: ['app'] }]}
+  steps={[
+    {
+      caption: 'An app, a database and ferryd run on the same server.',
+    },
+    {
+      caption: 'The app has a bug. It uses more and more memory.',
+      tones: { app: 'warning' },
+      notes: { app: '480 MiB' },
+    },
+    {
+      caption: 'The app comes to its limit. The system stops only this app.',
+      tones: { app: 'danger', db: 'success', ferryd: 'success' },
+      notes: { app: 'stopped', db: 'safe', ferryd: 'safe' },
+    },
+    {
+      caption: 'Docker starts the app again. The database and ferryd did not stop.',
+      tones: { app: 'success', db: 'success', ferryd: 'success' },
+      notes: { app: 'started again', db: 'safe', ferryd: 'safe' },
+    },
+  ]}
+/>
+
+A <Term id="resource-limit" /> is the most memory and CPU that one <Term id="container" /> can use. Ferry puts limits on each container that it starts: instances, one-off jobs, cron runs and datastores.
+
+An app with a bug gets slower or stops. It cannot stop the server, `ferryd` or your databases.
+
+## Set a limit
+
+```bash title="Terminal"
+ferry update api --memory 2G
+ferry restart api --follow
+```
+
+## In this section
+
+<Cards>
+  <Card title="The five guards" href="/docs/concepts/resource-limits/guards" description="Memory, CPU, processes, logs and free disk space." />
+  <Card title="The memory limit" href="/docs/concepts/resource-limits/memory" description="A box that the container cannot grow out of." />
+  <Card title="Out-of-memory kills" href="/docs/concepts/resource-limits/oom-kills" description="See that an app had no memory left, and repair it." />
+  <Card title="Set the limits of a service" href="/docs/concepts/resource-limits/service" description="With the CLI, the dashboard, the API or a blueprint." />
+</Cards>

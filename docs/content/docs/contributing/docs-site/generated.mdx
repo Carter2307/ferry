@@ -1,0 +1,63 @@
+---
+title: Generated references
+description: Four reference files come from the Rust code. A script writes them, thus they always agree with the code.
+---
+
+<Diagram
+  nodes={[
+    { id: 'rust', at: [0, 1], icon: 'boxes', label: 'Rust code', note: 'help, annotations' },
+    { id: 'gen', at: [1.5, 1], icon: 'workflow', label: 'generate.mjs', note: 'npm run generate' },
+    { id: 'openapi', at: [3, 0], icon: 'braces', label: 'ferry.json', note: 'the OpenAPI file' },
+    { id: 'api', at: [3, 1], icon: 'file', label: 'API pages', note: 'reference/api/*' },
+    { id: 'cli', at: [3, 2], icon: 'terminal', label: 'cli.mdx', note: 'server-options.mdx' },
+  ]}
+  edges={[
+    { from: 'rust', to: 'gen', label: 'cargo run' },
+    { from: 'gen', to: 'openapi' },
+    { from: 'gen', to: 'api' },
+    { from: 'gen', to: 'cli' },
+  ]}
+  steps={[
+    {
+      caption: 'The help texts and the API annotations are in the Rust code.',
+      hide: ['openapi', 'api', 'cli'],
+      tones: { rust: 'primary' },
+    },
+    {
+      caption: 'The script runs cargo and reads them.',
+      hide: ['openapi', 'api', 'cli'],
+      flow: ['rust>gen'],
+      tones: { gen: 'primary' },
+    },
+    {
+      caption: 'The script writes the OpenAPI file and the reference pages.',
+      flow: ['gen>openapi', 'gen>api', 'gen>cli'],
+      tones: { openapi: 'primary', api: 'primary', cli: 'primary' },
+    },
+    {
+      caption: 'You commit the files. Thus npm run build works without Rust.',
+      tones: { openapi: 'success', api: 'success', cli: 'success' },
+    },
+  ]}
+/>
+
+<Callout type="warning" title="Never edit these files by hand">
+The script writes them again and your change goes away. To change them, see [Change a reference page](/docs/contributing/docs-site/regenerate).
+</Callout>
+
+## The four files
+
+| File | Source |
+|---|---|
+| `openapi/ferry.json` | `cargo run -p ferryd -- --dump-openapi`, with no change |
+| `content/docs/reference/api/*` | fumadocs-openapi: one page per <Term id="openapi">OpenAPI</Term> tag, plus `index.mdx` and `meta.json` |
+| `content/docs/reference/cli.mdx` | `cargo run -p ferry-cli -- markdown-help` (clap-markdown) |
+| `content/docs/reference/server-options.mdx` | `cargo run -p ferryd -- --dump-markdown-help`, plus the environment variables from `ferryd --help` |
+
+<Accordions>
+  <Accordion title="Why the API pages have no playground">
+    The API pages have no "try it" playground. `ferryd` sends no <Term id="cors" /> headers. Thus a browser cannot call it from the origin of the docs.
+
+    Each server serves its own <Term id="swagger-ui" /> at `/api/docs` for that.
+  </Accordion>
+</Accordions>

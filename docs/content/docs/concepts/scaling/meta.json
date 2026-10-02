@@ -1,0 +1,13 @@
+{
+  "title": "Disks, scaling & suspend",
+  "icon": "Layers",
+  "pages": [
+    "instances",
+    "scale",
+    "disks",
+    "disk-deploys",
+    "suspend",
+    "resume",
+    "restart"
+  ]
+}

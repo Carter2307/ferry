@@ -1,0 +1,31 @@
+---
+title: Limits
+description: A build has four limits. They are about uploads, registries, submodules and the CPU architecture.
+---
+
+<Diagram
+  caption="The limits of an upload"
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'laptop', label: 'ferry up' },
+    { id: 'arc', at: [1.5, 0], icon: 'archive', label: '.tar.gz', note: '512 MiB at most' },
+    { id: 'srv', at: [3, 0], icon: 'server', label: 'On the server', note: '2 GiB at most' },
+  ]}
+  edges={[
+    { from: 'you', to: 'arc', flow: true },
+    { from: 'arc', to: 'srv', flow: true },
+  ]}
+/>
+
+## The four limits
+
+| Subject | Limit |
+|---|---|
+| Uploads | A `ferry up` <Term id="archive" /> can be 512 <Term id="mib">MiB</Term> at most, compressed. On the server, it can expand to 2 GiB and 200,000 files, directories and links at most. |
+| Registries | Ferry pulls public images only. It has no <Term id="registry" /> authentication. |
+| Submodules | Ferry does not fetch <Term id="submodule">git submodules</Term>. |
+| Architecture | The Docker of the server builds and runs the images, for the <Term id="cpu-architecture" /> of the server. |
+
+## See also
+
+- [An upload](/docs/concepts/services/upload) tells you what `ferry up` puts into the archive.
+- [A Docker image](/docs/concepts/services/docker-image) tells you when Ferry pulls an image.

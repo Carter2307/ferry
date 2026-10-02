@@ -1,0 +1,58 @@
+---
+title: The CLI cannot reach the server
+description: The ferry command gets no answer at the address of the server.
+---
+
+## What you see
+
+```text title="ferry" noCopy
+Error: cannot reach Ferry server at http://127.0.0.1:7878 — is ferryd running?
+```
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'ferry CLI' },
+    { id: 'tunnel', at: [1.5, 0], icon: 'lock', label: 'SSH tunnel' },
+    { id: 'ferryd', at: [3, 0], icon: 'ship', label: 'ferryd', note: '127.0.0.1:7878' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'tunnel' },
+    { from: 'tunnel', to: 'ferryd' },
+  ]}
+  steps={[
+    {
+      caption: 'ferryd does not run.',
+      hide: ['tunnel'],
+      tones: { ferryd: 'danger' },
+      notes: { ferryd: 'not started' },
+    },
+    {
+      caption: 'The CLI uses a wrong URL.',
+      hide: ['tunnel'],
+      tones: { cli: 'warning' },
+      notes: { cli: 'wrong --server' },
+    },
+    {
+      caption: 'The server is remote, and the SSH tunnel does not run.',
+      cut: ['cli>tunnel'],
+      tones: { tunnel: 'danger' },
+      notes: { tunnel: 'not open' },
+    },
+  ]}
+/>
+
+Nothing answers the <Term id="cli" /> at that address.
+
+## How to repair it
+
+| Cause | Repair |
+|---|---|
+| <Term id="ferryd" /> does not run | Start `ferryd`. |
+| The URL is wrong | Check `--server` or `FERRY_SERVER`. |
+| The <Term id="ssh-tunnel" /> does not run | Open the tunnel with the command below. |
+
+```bash title="Terminal"
+ssh -N -L 7878:127.0.0.1:7878 you@your-server
+```

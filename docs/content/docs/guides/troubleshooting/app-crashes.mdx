@@ -1,0 +1,28 @@
+---
+title: The app crashes
+description: The app stopped with an error while Ferry waited for its health check.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+==> Deploy failed: instance d1c6b8 crashed (exit code 1)
+```
+
+The deploy gets the status `deploy_failed`. The previous deploy continues to answer.
+
+## Why it occurs
+
+The app stopped while Ferry waited for its <Term id="health-check" />. The <Term id="exit-code" /> is not 0, thus the app stopped with an error.
+
+Some exit codes add a hint, such as `127: command not found, check the start command`.
+
+## How to repair it
+
+Read the last lines of the output of the instance. Ferry copies them into the <Term id="deploy-log" />, immediately above the error.
+
+```bash title="Terminal"
+ferry logs --deploy DEPLOY_ID
+```
+
+Correct the cause, then deploy again.

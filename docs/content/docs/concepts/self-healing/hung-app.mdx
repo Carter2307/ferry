@@ -1,0 +1,54 @@
+---
+title: If an app hangs
+description: After a deploy, the proxy tests only that an instance accepts TCP connections.
+---
+
+<Diagram
+  nodes={[
+    { id: 'proxy', at: [0, 0], icon: 'route', label: 'Proxy' },
+    { id: 'app', at: [1.75, 0], icon: 'box', label: 'Instance', note: 'port open' },
+    { id: 'docker', at: [1.75, 1.25], icon: 'container', label: 'Docker' },
+  ]}
+  edges={[
+    { from: 'proxy', to: 'app', label: 'TCP test' },
+    { from: 'docker', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'After a deploy, the proxy tests one thing: the instance accepts TCP connections.',
+      flow: ['proxy>app'],
+      cut: ['docker>app'],
+      tones: { app: 'success' },
+    },
+    {
+      caption: 'The app hangs, but its port stays open. The proxy continues to send traffic.',
+      flow: ['proxy>app'],
+      cut: ['docker>app'],
+      tones: { app: 'warning' },
+      notes: { app: 'hangs, port open' },
+    },
+    {
+      caption: 'Your app exits when it cannot serve. Docker starts it again.',
+      cut: ['proxy>app'],
+      flow: ['docker>app'],
+      tones: { app: 'primary' },
+      notes: { app: 'starts again' },
+    },
+  ]}
+/>
+
+Ferry uses the path of the <Term id="health-check" /> (`--health`) only while a deploy starts new instances. After that, the <Term id="proxy" /> tests only the <Term id="tcp" />.
+
+An app that hangs with an open port keeps its traffic. Ferry does not see the problem.
+
+## What to do
+
+Make your app exit when it cannot serve. Docker then restarts the container, as for each crash.
+
+To see the restarts of each instance, use this command:
+
+```bash title="Terminal"
+ferry status api
+```
+
+See [Health checks](/docs/concepts/deploys/health-checks) and [When a container crashes](/docs/concepts/self-healing/crash).

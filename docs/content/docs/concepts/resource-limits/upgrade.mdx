@@ -1,0 +1,69 @@
+---
+title: Upgrade from a Ferry with no limits
+description: After the upgrade, a container gets its limits when a deploy or a restart replaces it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'old', at: [0, 0], icon: 'box', label: 'Old container', note: 'no limit' },
+    { id: 'restart', at: [1.5, 0], icon: 'restart', label: 'Deploy, restart' },
+    { id: 'new', at: [3, 0], icon: 'box', label: 'New container', note: '512 MiB, 1 CPU' },
+  ]}
+  edges={[
+    { from: 'old', to: 'restart' },
+    { from: 'restart', to: 'new' },
+  ]}
+  steps={[
+    {
+      caption: 'You upgrade Ferry. The containers that run continue with no limit.',
+      hide: ['new'],
+      cut: ['old>restart'],
+      tones: { old: 'warning' },
+    },
+    {
+      caption: 'A deploy or a restart replaces the container.',
+      hide: ['new'],
+      flow: ['old>restart'],
+      tones: { restart: 'primary' },
+    },
+    {
+      caption: 'The new container gets the limits of the service, or the server defaults.',
+      flow: ['restart>new'],
+      tones: { new: 'success', old: 'muted' },
+      notes: { old: 'removed' },
+    },
+  ]}
+/>
+
+An older Ferry started each <Term id="container" /> with no <Term id="resource-limit" />. The upgrade does not change a container that runs.
+
+<Callout type="warning" title="Set the limits of a large app first">
+The kernel stops an app or a database that needs more than 512 MiB when it gets the default limit. Give it sufficient memory immediately after the upgrade.
+</Callout>
+
+## Give more memory
+
+```bash title="Terminal"
+ferry update NAME --memory 2G      # a service
+ferry restart NAME
+ferry db update NAME --memory 2G   # a datastore: applies immediately
+```
+
+You can also start `ferryd` with a higher `--default-memory-limit`.
+
+## What changes, and when
+
+| Thing | After the upgrade |
+|---|---|
+| Containers of a service | No limit until a deploy or a restart replaces them. Then they get the limits of the service, or the server defaults (512 MiB, 1 CPU). |
+| A scale or a crash, before that deploy | The new container starts from the old deploy, with the server defaults. |
+| Datastores | No limit until you change their limits, or until Ferry creates their container again. Ferry applies nothing when `ferryd` starts. |
+| Blueprints | Before, Ferry ignored `plan`. The first apply restarts each live service with a `plan`, and changes the limits of each datastore with a `plan`. |
+
+<Accordions>
+  <Accordion title="Datastores: more cases">
+    A datastore also gets limits when Ferry provisions it again, for example a retry after a failure.
+
+    `ferry db update` puts the limit on the container that runs.
+  </Accordion>
+</Accordions>

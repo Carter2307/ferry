@@ -1,0 +1,67 @@
+---
+title: The free-disk check
+description: Before a deploy builds or pulls, Ferry makes sure that the disk has 1 GiB of free space.
+---
+
+<Diagram
+  nodes={[
+    { id: 'deploy', at: [0, 0], icon: 'deploy', label: 'Deploy' },
+    { id: 'check', at: [1.5, 0], icon: 'disk', label: 'Free-disk check', note: '1 GiB or more?' },
+    { id: 'build', at: [3, 0], icon: 'hammer', label: 'Build or pull' },
+  ]}
+  edges={[
+    { from: 'deploy', to: 'check' },
+    { from: 'check', to: 'build' },
+  ]}
+  steps={[
+    {
+      caption: 'A deploy starts. Ferry measures the free space of the disk.',
+      flow: ['deploy>check'],
+      cut: ['check>build'],
+      tones: { check: 'primary' },
+    },
+    {
+      caption: 'The disk has 1 GiB or more. Ferry builds or pulls the image.',
+      flow: ['check>build'],
+      tones: { check: 'success', build: 'success' },
+      notes: { check: '12 GiB free' },
+    },
+    {
+      caption: 'The disk has less than 1 GiB. The deploy fails before the build.',
+      cut: ['check>build'],
+      tones: { check: 'danger', build: 'muted' },
+      notes: { check: '812 MiB free', build: 'does not start' },
+    },
+  ]}
+/>
+
+Builds, image pulls and new volumes of datastores fill the disk. The <Term id="free-disk-check" /> stops a <Term id="deploy" /> that has too little space. The deploy gets the status `build_failed`.
+
+```text title="Deploy log" noCopy
+==> Build failed: not enough free disk space on /srv/ferry: 812 MiB free, Ferry needs at least 1 GiB (free some space, e.g. remove unused Docker images with `docker image prune`, or change the threshold with `ferryd --min-free-disk`, 0 = off)
+```
+
+## Make space
+
+```bash title="Terminal"
+docker image prune
+```
+
+To change the 1 GiB, start `ferryd` with `--min-free-disk`. The value `0` stops the check.
+
+## What Ferry tests
+
+| Ferry tests | Ferry does not test |
+|---|---|
+| A deploy from Git, from an upload or from an image, before it builds or pulls | A restart and a rollback: they use an image that exists |
+| A new datastore, before Ferry creates it or pulls its image | A new container for a datastore that exists, if Ferry does not pull its image again |
+
+<Accordions>
+  <Accordion title="Details">
+    - Ferry measures the filesystem of the data directory. It also measures the filesystem of the Docker root directory, if Docker is on the same machine.
+    - With Docker Desktop, the Docker root is in a virtual machine. Ferry does not measure it.
+    - A new datastore with too little space gets the status `failed`.
+    - The reconciler can repair a datastore on a full disk, because Ferry does not test that case.
+    - The check runs only on Unix systems.
+  </Accordion>
+</Accordions>

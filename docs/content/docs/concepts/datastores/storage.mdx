@@ -1,0 +1,45 @@
+---
+title: Where the data is
+description: A datastore keeps its data on a Docker volume. The volume stays when the container goes away.
+---
+
+<Diagram
+  nodes={[
+    { id: 'old', at: [0, 0], icon: 'database', label: 'Container', note: 'app-db' },
+    { id: 'new', at: [0, 1], icon: 'database', label: 'New container', note: 'app-db' },
+    { id: 'vol', at: [1.75, 0.5], icon: 'disk', label: 'Volume', note: 'the data' },
+  ]}
+  edges={[
+    { from: 'old', to: 'vol', both: true },
+    { from: 'new', to: 'vol', both: true },
+  ]}
+  steps={[
+    { caption: 'The container writes its data to the volume.', hide: ['new'], flow: ['old>vol'] },
+    { caption: 'The container crashes, or the server restarts. The volume stays.', hide: ['new'], cut: ['old>vol'], tones: { old: 'danger', vol: 'success' }, notes: { old: 'gone' } },
+    { caption: 'The new container gets the same volume. The data is there.', hide: ['old'], flow: ['new>vol'], tones: { new: 'success', vol: 'success' } },
+  ]}
+/>
+
+Each <Term id="datastore" /> has one named Docker <Term id="volume" />. The volume keeps the data through a restart of the server, the replacement of a crashed <Term id="container" />, and a new container.
+
+## The volume
+
+| | Postgres | Redis |
+|---|---|---|
+| Name of the volume | `<prefix>-ds-<name>-data` | The same |
+| Path in the container | `/var/lib/postgresql/data` | `/data` |
+
+With the default prefix, the volume of `app-db` is `ferry-ds-app-db-data`.
+
+<Term id="redis" /> runs with `--appendonly yes`. Thus Redis also writes its data to the volume.
+
+<Accordions>
+  <Accordion title="If a volume with the same name exists">
+    Ferry never gives a new datastore a volume that Ferry did not create for it. Such a volume can come from an earlier datastore, from another server, or from a manual `docker volume create`.
+
+    Then the creation fails. The message tells you what to do: remove the volume (`docker volume rm …`), or choose a different name.
+  </Accordion>
+  <Accordion title="The size of the volume">
+    A volume has no quota. It can grow until the disk of the server is full.
+  </Accordion>
+</Accordions>

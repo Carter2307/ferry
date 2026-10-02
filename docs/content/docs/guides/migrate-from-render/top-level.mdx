@@ -1,0 +1,43 @@
+---
+title: Top-level keys
+description: Ferry reads three top-level keys of render.yaml and ignores the others with a warning.
+---
+
+<Diagram
+  nodes={[
+    { id: 'services', at: [0, 0], label: 'services' },
+    { id: 'databases', at: [0, 1], label: 'databases' },
+    { id: 'groups', at: [0, 2], label: 'envVarGroups' },
+    { id: 'other', at: [0, 3], label: 'previews, …' },
+    { id: 'fservices', at: [1.75, 0], icon: 'box', label: 'Services', tone: 'primary' },
+    { id: 'fstores', at: [1.75, 1], icon: 'database', label: 'Datastores', note: 'Postgres', tone: 'primary' },
+    { id: 'fgroups', at: [1.75, 2], icon: 'variable', label: 'Env groups', tone: 'primary' },
+    { id: 'ignored', at: [1.75, 3], icon: 'ban', label: 'Ignored', note: 'with a warning', tone: 'muted' },
+  ]}
+  edges={[
+    { from: 'services', to: 'fservices', flow: true },
+    { from: 'databases', to: 'fstores', flow: true },
+    { from: 'groups', to: 'fgroups', flow: true },
+    { from: 'other', to: 'ignored', dashed: true },
+  ]}
+  groups={[
+    { label: 'render.yaml', around: ['services', 'databases', 'groups', 'other'] },
+    { label: 'Ferry', around: ['fservices', 'fstores', 'fgroups', 'ignored'] },
+  ]}
+/>
+
+| Key | On Ferry |
+|---|---|
+| `services` | Supported. |
+| `databases` | Supported (<Term id="postgres" />). |
+| `envVarGroups` | Supported. |
+| `projects` / `environments` | Ferry makes them flat. It applies the resources of each environment to this server, with a warning. |
+| All other keys (`previews`, …) | Ferry ignores them, with a warning. |
+
+## The details of each part
+
+- [Service types](/docs/guides/migrate-from-render/service-types)
+- [Service keys](/docs/guides/migrate-from-render/service-keys)
+- [Environment variables](/docs/guides/migrate-from-render/env-vars)
+- [Databases](/docs/guides/migrate-from-render/databases)
+- [Plans](/docs/guides/migrate-from-render/plans)

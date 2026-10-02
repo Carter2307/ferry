@@ -1,0 +1,27 @@
+---
+title: Delete a referenced target
+description: Ferry refuses to delete a datastore or a service that other services reference.
+---
+
+```json title="DELETE /api/v1/datastores/app-db → 409"
+{
+  "error": {
+    "code": "conflict",
+    "message": "datastore 'app-db' is referenced by service 'hello' (DATABASE_URL, EXT, PGHOST); they would fail to deploy or restart without it. Remove the references first, or delete with force=true"
+  }
+}
+```
+
+If you delete the target of a <Term id="reference" />, the next deploys of the services that use it fail. Thus Ferry refuses with a 409. The message lists the services and their variables, for example `datastore 'app-db' is referenced by service 'hello' (DATABASE_URL, PGHOST)`.
+
+## What to do
+
+| Interface | Do this |
+|---|---|
+| Each interface | Remove the references first. |
+| CLI | Or add `--force`. |
+| API | Or add `force=true`. |
+
+<Callout type="warning" title="After a forced delete">
+The services that reference the deleted target fail at their next deploy or restart.
+</Callout>

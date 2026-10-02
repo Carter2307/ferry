@@ -1,0 +1,61 @@
+---
+title: Changes come from the dashboard only
+description: The server refuses a change that has the session cookie but comes from another origin.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dash', at: [0, 0], icon: 'browser', label: 'Dashboard', note: 'same origin' },
+    { id: 'other', at: [0, 1], icon: 'globe', label: 'Another page', note: 'other origin' },
+    { id: 'server', at: [1.75, 0.5], icon: 'server', label: 'Server' },
+  ]}
+  edges={[
+    { from: 'dash', to: 'server' },
+    { from: 'other', to: 'server' },
+  ]}
+  steps={[
+    {
+      caption: 'The dashboard sends a change with the session cookie. The server accepts it.',
+      flow: ['dash>server'],
+      tones: { server: 'success' },
+      notes: { server: 'accepted' },
+    },
+    {
+      caption: 'A page of another origin sends a change from your browser, with the same cookie.',
+      flow: ['other>server'],
+      tones: { other: 'warning' },
+    },
+    {
+      caption: 'The request does not come from the dashboard. The server answers 403.',
+      tones: { other: 'danger', server: 'danger' },
+      notes: { server: '403' },
+    },
+  ]}
+/>
+
+A `POST`, `PUT`, `PATCH` or `DELETE` request with the <Term id="session-cookie" /> must come from the <Term id="origin" /> of the dashboard. This rule protects you when you open a bad page while your browser has a session.
+
+## How the server tests the request
+
+1. The server reads the `Sec-Fetch-Site` <Term id="header" />.
+2. If the browser did not send it, the server compares the `Origin` header with the host.
+
+If the test fails, the server sends this answer:
+
+| Answer | Message |
+|---|---|
+| 403 `cross_site_request` | `this request doesn't come from the dashboard` |
+
+You have nothing to set. The protection is always on.
+
+<Accordions>
+  <Accordion title="More protections in the browser">
+    `ferryd` sends no <Term id="cors" /> headers. Thus a page of another origin cannot call the API from a browser.
+
+    The pages of the dashboard and of Swagger UI have these headers:
+
+    - `X-Frame-Options: DENY`: another site cannot show the page in a frame.
+    - `Referrer-Policy: no-referrer`: the browser does not tell other sites which page you came from.
+    - `X-Content-Type-Options: nosniff`: the browser does not guess the type of a file.
+  </Accordion>
+</Accordions>

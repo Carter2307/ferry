@@ -1,0 +1,26 @@
+---
+title: How Ferry reads values
+description: Ferry keeps each value as you wrote it. The same key two times in one block is an error.
+---
+
+```yaml title="ferry.yaml"
+envVars:
+  - key: PYTHON_VERSION
+    value: 3.10        # stays 3.10 (not 3.1)
+  - key: ZIP_CODE
+    value: 0123        # stays 0123
+  - key: DEBUG
+    value: True        # stays True
+```
+
+These rules apply in each part of the file.
+
+## The rules
+
+| Subject | Rule |
+|---|---|
+| <Term id="scalar">Scalars</Term> | Ferry keeps them as you wrote them. `3.10` stays `3.10`, `0123` stays `0123` and `True` stays `True`. |
+| Quotes | Add quotes only where the <Term id="yaml" /> syntax needs them. |
+| <Term id="boolean">Booleans</Term> | `true`, `false`, `yes`, `no`, `on`, `off`, `1` and `0`, in upper or lower case. |
+| The same key two times in one <Term id="mapping" /> | An error. |
+| An empty file | Ferry accepts it, with the warning `the blueprint is empty`. |

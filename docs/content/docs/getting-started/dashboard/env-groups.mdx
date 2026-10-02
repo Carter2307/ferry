@@ -1,0 +1,60 @@
+---
+title: Env groups
+description: The Env groups page edits the sets of variables that many services share.
+---
+
+<Diagram
+  nodes={[
+    { id: 'group', at: [0, 0.5], icon: 'variable', label: 'Env group', note: 'shared variables' },
+    { id: 'a', at: [1.75, 0], icon: 'box', label: 'Service A' },
+    { id: 'b', at: [1.75, 1], icon: 'box', label: 'Service B' },
+  ]}
+  edges={[
+    { from: 'group', to: 'a' },
+    { from: 'group', to: 'b' },
+  ]}
+  steps={[
+    {
+      caption: 'An env group is one set of variables with a name.',
+      hide: ['a', 'b'],
+      tones: { group: 'primary' },
+    },
+    {
+      caption: 'Link service links a service to the group.',
+      hide: ['b'],
+      flow: ['group>a'],
+      tones: { a: 'primary' },
+    },
+    {
+      caption: 'Each linked service gets the variables of the group.',
+      flow: ['group>a', 'group>b'],
+    },
+    {
+      caption: 'Save & restart restarts the linked services that are live.',
+      flow: ['group>a', 'group>b'],
+      tones: { a: 'success', b: 'success' },
+      notes: { a: 'restart', b: 'restart' },
+    },
+  ]}
+/>
+
+## The list
+
+Each <Term id="env-group" /> is a card. The card shows the keys of the group and its linked services.
+
+## The page of a group
+
+| Part | Use |
+|---|---|
+| The variables | The same editor as on [the Environment page](/docs/getting-started/dashboard/environment) of a service. |
+| **Linked services** | The services that use the group. **Link service** adds one. |
+| **Danger zone** | Delete the group. |
+
+## Save
+
+| Button | Effect |
+|---|---|
+| **Save only** | Ferry keeps the variables for the next deploy or restart. |
+| **Save & restart** | Ferry restarts the linked services that are live. |
+
+See [Environment & env groups](/docs/concepts/environment).

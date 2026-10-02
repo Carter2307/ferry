@@ -1,0 +1,18 @@
+{
+  "title": "Datastores",
+  "icon": "Database",
+  "pages": [
+    "create",
+    "options",
+    "statuses",
+    "connection-strings",
+    "connect",
+    "external",
+    "storage",
+    "limits",
+    "repair",
+    "backup",
+    "delete",
+    "limitations"
+  ]
+}

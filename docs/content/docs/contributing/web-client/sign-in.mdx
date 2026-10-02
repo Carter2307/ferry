@@ -1,0 +1,62 @@
+---
+title: Sign-in and the session
+description: The app asks the server for the auth status, then shows the setup page, the login page or the dashboard.
+---
+
+<Diagram
+  nodes={[
+    { id: 'app', at: [0, 1], icon: 'browser', label: 'The app', note: 'GET auth/status' },
+    { id: 'setup', at: [1.75, 0], icon: 'user', label: '/setup', note: 'no account' },
+    { id: 'login', at: [1.75, 1], icon: 'login', label: '/login', note: 'no session' },
+    { id: 'dash', at: [1.75, 2], icon: 'monitor', label: 'Dashboard', note: 'signed in' },
+  ]}
+  edges={[
+    { from: 'app', to: 'setup' },
+    { from: 'app', to: 'login' },
+    { from: 'app', to: 'dash' },
+  ]}
+  steps={[
+    {
+      caption: 'The app first asks GET /api/v1/auth/status.',
+      cut: ['app>setup', 'app>login', 'app>dash'],
+      tones: { app: 'primary' },
+    },
+    {
+      caption: 'The server has no account: the app shows /setup.',
+      cut: ['app>login', 'app>dash'],
+      flow: ['app>setup'],
+      tones: { setup: 'warning' },
+    },
+    {
+      caption: 'This browser has no session: the app shows /login.',
+      cut: ['app>setup', 'app>dash'],
+      flow: ['app>login'],
+      tones: { login: 'primary' },
+    },
+    {
+      caption: 'The sign-in sets the session cookie. Then the app shows the dashboard.',
+      cut: ['app>setup', 'app>login'],
+      flow: ['app>dash'],
+      tones: { dash: 'success' },
+    },
+  ]}
+/>
+
+## What the status says
+
+`GET /api/v1/auth/status` gives two answers:
+
+- Does the server still need its account? If yes, the app shows `/setup`.
+- Is this browser signed in? If not, the app shows `/login`.
+
+## What the app knows
+
+The sign-in sets the <Term id="session-cookie" />. The cookie is <Term id="http-only" />: no script can read it.
+
+Thus `src/stores/auth.ts` knows only two facts: if a session exists, and who the account is.
+
+## Where the pages are
+
+The pages are in `src/pages/login/`. `/cli-login` is there too: this page approves a `ferry login`.
+
+[Sessions](/docs/architecture/security/sessions) describes the cookie from the side of the server.

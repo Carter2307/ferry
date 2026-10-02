@@ -1,0 +1,61 @@
+---
+title: What a token can do
+description: An API token has full access to the server, but not to the account.
+---
+
+<Diagram
+  nodes={[
+    { id: 'token', at: [0, 0.5], icon: 'key', label: 'API token' },
+    { id: 'all', at: [1.75, 0], icon: 'boxes', label: 'Services, data', note: 'full access' },
+    { id: 'acct', at: [1.75, 1], icon: 'user', label: 'Account', note: '/api/v1/auth/…' },
+  ]}
+  edges={[
+    { from: 'token', to: 'all' },
+    { from: 'token', to: 'acct' },
+  ]}
+  steps={[
+    {
+      caption: 'A token reads each variable and each datastore password through the API.',
+      flow: ['token>all'],
+      cut: ['token>acct'],
+      tones: { all: 'warning' },
+    },
+    {
+      caption: 'A token deploys, deletes or runs anything.',
+      flow: ['token>all'],
+      cut: ['token>acct'],
+      tones: { all: 'warning' },
+    },
+    {
+      caption: 'A token cannot use the account endpoints. The answer is 403 session_required.',
+      flow: ['token>acct'],
+      tones: { acct: 'danger' },
+      notes: { acct: '403' },
+    },
+    {
+      caption: 'The account endpoints accept only the session of the dashboard.',
+      cut: ['token>acct'],
+      tones: { acct: 'success' },
+      notes: { acct: 'session only' },
+    },
+  ]}
+/>
+
+<Callout type="danger" title="Treat a token like a root password">
+Each <Term id="api-token" /> has the same access. A person who has one token can read all your secrets and delete all your services.
+</Callout>
+
+## What a token cannot do
+
+A token cannot use the <Term id="account-endpoint">account endpoints</Term> (`/api/v1/auth/…`). They control:
+
+- the password
+- the sessions
+- the tokens
+- the approval of a `ferry login`
+
+These endpoints accept only the session of the dashboard. Thus a stolen token cannot change the password or make more tokens.
+
+## Each request needs a proof
+
+Each `/api/v1` request needs an API token or the session cookie. This includes routes that do not exist. The exceptions are in [Endpoints with no authentication](/docs/architecture/security/open-endpoints).

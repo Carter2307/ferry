@@ -1,0 +1,76 @@
+---
+title: Build from source
+description: Four steps make the two programs, ferryd and ferry, from the Ferry repository.
+---
+
+<Steps>
+<Step>
+
+### Get the code
+
+```bash title="Terminal"
+git clone https://github.com/Carter2307/ferry
+cd ferry
+```
+
+</Step>
+<Step>
+
+### Build the dashboard
+
+```bash title="Terminal"
+(cd web && npm ci && npm run build)
+```
+
+<Term id="npm" /> writes the dashboard to `web/dist`. The Rust build puts this folder into `ferryd`. Thus you must build the dashboard first.
+
+</Step>
+<Step>
+
+### Build the programs
+
+```bash title="Terminal"
+cargo build --release
+```
+
+<Term id="cargo" /> makes `target/release/ferryd` and `target/release/ferry`.
+
+</Step>
+<Step>
+
+### Put the programs on your PATH
+
+```bash title="Terminal"
+sudo install -m 0755 target/release/ferryd target/release/ferry /usr/local/bin/
+```
+
+This step is optional. Without it, type `./target/release/ferryd` and `./target/release/ferry`.
+
+</Step>
+</Steps>
+
+## What you have now
+
+<Files>
+  <Folder name="ferry" defaultOpen>
+    <Folder name="web" defaultOpen>
+      <Folder name="dist" />
+    </Folder>
+    <Folder name="target" defaultOpen>
+      <Folder name="release" defaultOpen>
+        <File name="ferryd" />
+        <File name="ferry" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
+
+The other pages name the programs `ferryd` and `ferry`. The <Term id="path-variable" /> lets you type these short names.
+
+<Accordions>
+  <Accordion title="If you did not build the dashboard">
+    `ferryd` compiles without Node.js. Then the page at `/` is a placeholder that tells you how to build the dashboard. The REST API and the CLI work normally.
+
+    You can build the dashboard later and not compile the server again. Start `ferryd` with `FERRY_UI_DIR=/path/to/web/dist`.
+  </Accordion>
+</Accordions>

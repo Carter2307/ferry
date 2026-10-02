@@ -1,0 +1,43 @@
+---
+title: Behind another reverse proxy
+description: If another program owns ports 80 and 443, run the Ferry proxy on a local port behind it.
+---
+
+<Diagram
+  caption="The reverse proxy owns ports 80 and 443 and does the TLS"
+  nodes={[
+    { id: 'net', at: [0, 0], icon: 'globe', label: 'Internet' },
+    { id: 'front', at: [1.25, 0], icon: 'shield', label: 'Reverse proxy', note: 'ports 80 and 443' },
+    { id: 'proxy', at: [2.5, 0], icon: 'route', label: 'Ferry proxy', note: '127.0.0.1:8080' },
+    { id: 'app', at: [2.5, 1], icon: 'boxes', label: 'Containers' },
+  ]}
+  edges={[
+    { from: 'net', to: 'front', flow: true },
+    { from: 'front', to: 'proxy', flow: true },
+    { from: 'proxy', to: 'app', flow: true },
+  ]}
+  groups={[{ label: 'Your server', from: [1.25, 0], to: [2.5, 1] }]}
+/>
+
+Use this setup in two cases:
+
+- A <Term id="reverse-proxy" /> or a cloud <Term id="load-balancer" /> has ports 80 and 443 on the server: nginx, Caddy or Traefik, for example.
+- <Term id="tls" /> must stop at another place.
+
+## Start ferryd on a local port
+
+```bash title="Terminal"
+ferryd --data-dir /var/lib/ferry \
+  --base-domain apps.example.com \
+  --proxy-addr 127.0.0.1:8080 \
+  --public-port 80
+```
+
+In this setup, Ferry does not do HTTPS itself. Leave out `--https-addr` and `--acme-email`.
+
+| Flag | Effect |
+|---|---|
+| `--proxy-addr 127.0.0.1:8080` | Only the reverse proxy can reach the Ferry proxy. No person can go around it. |
+| `--public-port 80` | The port in the URLs that Ferry prints and resolves: `ferry open`, the dashboard, `${{service.NAME.url}}`. Ferry leaves port `80` out, thus the URLs are `http://<name>.apps.example.com`. |
+
+Then [configure the reverse proxy](/docs/guides/production/nginx), and read [the limits of this setup](/docs/guides/production/proxy-limits).

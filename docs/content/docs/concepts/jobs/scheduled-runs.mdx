@@ -1,0 +1,43 @@
+---
+title: How scheduled runs work
+description: The scheduler starts each run at its time. Two runs of one cron job never overlap.
+---
+
+<Diagram
+  caption="A cron job with the schedule */15 * * * *"
+  nodes={[
+    { id: 'sch', at: [0, 0.5], icon: 'clock', label: 'Scheduler', note: 'each 15 seconds' },
+    { id: 'r1', at: [1.75, 0], icon: 'box', label: 'Run of 03:00' },
+    { id: 'r2', at: [1.75, 1], icon: 'box', label: 'Run of 03:15' },
+  ]}
+  edges={[
+    { from: 'sch', to: 'r1' },
+    { from: 'sch', to: 'r2' },
+  ]}
+  steps={[
+    { caption: 'The scheduler looks each 15 seconds. It starts each run that is due after its last look.', hide: ['r2'], flow: ['sch>r1'], tones: { r1: 'primary' }, notes: { r1: 'running' } },
+    { caption: 'At 03:15, the run of 03:00 is not complete.', hide: ['r2'], tones: { r1: 'warning' }, notes: { r1: 'not complete' } },
+    { caption: 'Ferry skips the run of 03:15. It writes a warning in the log of the first run.', cut: ['sch>r2'], tones: { r1: 'warning', r2: 'muted' }, notes: { r1: 'not complete', r2: 'skipped' } },
+    { caption: 'The first run ends. The run of 03:30 can start.', cut: ['sch>r2'], tones: { r1: 'success', r2: 'muted' }, notes: { r1: 'succeeded', r2: 'skipped' } },
+  ]}
+/>
+
+The <Term id="scheduler" /> starts the runs of each <Term id="cron-job" />. One cron job has one run at a time.
+
+```text title="Log of the run in progress" noCopy
+==> Warning: a scheduled run was skipped because this run is still running (for 48s); cancel it if it is stuck, or the schedule stays blocked
+```
+
+## What Ferry does not do
+
+| Case | Result |
+|---|---|
+| The server was down at the time of a run. | Ferry skips the run. It does not do it later. |
+| The cron job is suspended. | No run starts. |
+| The cron job has no <Term id="live-deploy" />. | No run starts. |
+| A run fails. | Ferry does not try again. |
+| A run takes a long time. | Ferry sets no time limit. |
+
+<Callout type="warning" title="A run that hangs blocks the schedule">
+No new run starts until that run ends. [Cancel it](/docs/concepts/jobs/cancel).
+</Callout>

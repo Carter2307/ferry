@@ -1,0 +1,54 @@
+---
+title: Injected variables
+description: Ferry adds PORT and the FERRY_* variables to each container of a service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 1], icon: 'ship', label: 'Ferry', note: 'PORT, FERRY_*' },
+    { id: 'svc', at: [1.75, 0], icon: 'box', label: 'Service', note: 'all of them' },
+    { id: 'job', at: [1.75, 1], icon: 'terminal', label: 'Job', note: 'all, but not PORT' },
+    { id: 'build', at: [1.75, 2], icon: 'hammer', label: 'Build', note: 'none of them' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'svc' },
+    { from: 'ferry', to: 'job' },
+    { from: 'ferry', to: 'build', dashed: true },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry adds its variables to each container of a service.',
+      flow: ['ferry>svc'],
+      tones: { svc: 'success' },
+    },
+    {
+      caption: 'A job gets the same variables, but not PORT.',
+      flow: ['ferry>job'],
+      tones: { job: 'success' },
+    },
+    {
+      caption: 'A build gets only your own variables.',
+      cut: ['ferry>build'],
+      tones: { build: 'muted' },
+    },
+  ]}
+/>
+
+An <Term id="injected-variable" /> comes from Ferry, not from you. Ferry adds these variables to each <Term id="container" /> of a service. If you set a variable with the same name, your value wins.
+
+## The variables
+
+| Variable | Value | Set for |
+|---|---|---|
+| `PORT` | The port Ferry routes to | Web services, private services, static sites |
+| `FERRY` | `true` | All |
+| `FERRY_SERVICE_ID` | For example `srv-5c57d756f6ad47f59800` | All |
+| `FERRY_SERVICE_NAME` | For example `echo` | All |
+| `FERRY_SERVICE_TYPE` | `web_service`, `private_service`, `background_worker`, `cron_job` or `static_site` | All |
+| `FERRY_DEPLOY_ID` | The deploy the container belongs to | All |
+| `FERRY_INTERNAL_HOSTNAME` | The service name (its private hostname) | All |
+| `FERRY_GIT_COMMIT`, `FERRY_GIT_BRANCH` | The deployed commit and the branch | Deploys from git |
+| `FERRY_EXTERNAL_HOSTNAME` | For example `echo.localhost` | Web services, static sites |
+| `FERRY_EXTERNAL_URL` | For example `http://echo.localhost:8080` | Web services, static sites |
+
+See [The PORT variable](/docs/concepts/environment/port) and [Builds & runtimes](/docs/concepts/builds).

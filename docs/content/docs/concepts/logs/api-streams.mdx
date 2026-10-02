@@ -1,0 +1,53 @@
+---
+title: Stream logs with the API
+description: The API sends each log line as one event on a connection that stays open.
+---
+
+```text title="curl -N 'http://127.0.0.1:7878/api/v1/jobs/job-48dd…/logs?access_token=…'" noCopy
+event: log
+data: {"ts":"2026-09-27T07:46:59.504869Z","stream":"system","line":"==> Running `npm run migrate`"}
+
+event: log
+data: {"ts":"2026-09-27T07:46:59.634761796Z","stream":"stdout","line":"> node migrate.js"}
+
+event: end
+data: 
+```
+
+The log endpoints use <Term id="sse" />. The answer has `Content-Type: text/event-stream`. Each line of the log is one `event: log`. Its `data` is a JSON object.
+
+See the [API overview](/docs/reference/api-overview) for the rules of all endpoints.
+
+## The endpoints
+
+| Endpoint | Query | The stream ends |
+|---|---|---|
+| `GET /api/v1/deploys/{deploy_id}/logs` | `follow=true`: continue while the deploy runs | When the deploy is complete. Without `follow`: immediately. |
+| `GET /api/v1/jobs/{job_id}/logs` | `follow=true` | When the run is complete. Without `follow`: immediately. |
+| `GET /api/v1/services/{id}/logs` | `follow=true`, `tail=N` lines for each instance | With `follow`: when you disconnect. Without `follow`: immediately. |
+
+## The fields of a line
+
+| Field | Type | Description |
+|---|---|---|
+| `ts` | RFC 3339 timestamp | When the program wrote the line |
+| `stream` | `stdout`, `stderr` or `system` | The source. `system` lines are from Ferry. |
+| `instance` | string, runtime logs only | The instance: the last 6 characters of the name of the container |
+| `line` | string | The text, without the newline |
+
+<Callout type="warning" title="A token in a URL can leak">
+A stream needs an <Term id="api-token" />, as each `/api/v1` request does. Send it in the `Authorization` header when you can. A token in a URL can go into logs and into the history of the browser.
+</Callout>
+
+<Accordions>
+  <Accordion title="The token in the URL">
+    The `EventSource` of a browser cannot send an `Authorization` header. Thus `GET` requests also accept the token as `?access_token=`.
+
+    The dashboard uses its session, not a token.
+  </Accordion>
+  <Accordion title="The end of a stream">
+    - A stream that has an end stops with `event: end` and an empty `data:` field.
+    - While a stream has no new line, Ferry sends a `: keep-alive` comment each 15 seconds.
+    - All streams close when the server shuts down.
+  </Accordion>
+</Accordions>

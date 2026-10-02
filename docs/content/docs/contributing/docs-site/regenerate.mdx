@@ -1,0 +1,55 @@
+---
+title: Change a reference page
+description: To change a generated page, change the Rust side. Then run the generator and commit the result.
+---
+
+<Flow
+  steps={[
+    { icon: 'pencil', title: 'Change Rust', text: 'The text of the reference pages is in the Rust code.' },
+    { icon: 'workflow', title: 'Generate', text: 'npm run generate writes the files again.' },
+    { icon: 'check', title: 'Check', text: 'npm run generate:check fails if a file is stale.', tone: 'warning' },
+    { icon: 'commit', title: 'Commit', text: 'The generated files go into git.', tone: 'success' },
+  ]}
+/>
+
+Do these steps after you change a command, a flag, an API handler or a <Term id="dto" />.
+
+<Steps>
+<Step>
+
+### Change the Rust side
+
+| To change | Edit |
+|---|---|
+| The text of the CLI and server pages | The <Term id="clap" /> help of `ferry` and `ferryd` |
+| The text of the API pages | The `#[utoipa::path]` annotations of <Term id="utoipa" /> and the <Term id="doc-comment">doc comments</Term> of the schemas, in `ferry-api` and `ferry-core` |
+| How the script makes the pages | `scripts/generate.mjs` |
+
+</Step>
+<Step>
+
+### Regenerate
+
+```bash title="Terminal"
+cd docs
+npm run generate         # runs cargo in the repository root
+```
+
+</Step>
+<Step>
+
+### Check
+
+```bash title="Terminal"
+npm run generate:check   # CI: exits 1 when a committed file is stale
+```
+
+</Step>
+<Step>
+
+### Commit the result
+
+The generated files are in git. Thus `npm run build` works without Rust.
+
+</Step>
+</Steps>

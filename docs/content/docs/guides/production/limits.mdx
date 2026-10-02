@@ -1,0 +1,57 @@
+---
+title: Size the container limits
+description: Each container has a memory limit, a CPU limit and a process limit, thus one bad app cannot stop the server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'api', at: [0, 0], icon: 'box', label: 'api', note: 'limit 512 MiB' },
+    { id: 'worker', at: [1.25, 0], icon: 'box', label: 'worker', note: 'limit 512 MiB' },
+    { id: 'db', at: [2.5, 0], icon: 'database', label: 'Postgres', note: 'limit 512 MiB' },
+  ]}
+  groups={[{ label: 'Your server', from: [0, 0], to: [2.5, 0] }]}
+  steps={[
+    { caption: 'Each container that Ferry starts has its own limits.' },
+    {
+      caption: 'The app api has a memory leak. It gets to its limit.',
+      tones: { api: 'warning' },
+      notes: { api: 'at 512 MiB' },
+    },
+    {
+      caption: 'The kernel stops only this container. Docker starts it again.',
+      tones: { api: 'danger' },
+      notes: { api: 'stopped' },
+    },
+    {
+      caption: 'The other containers, ferryd and the server continue to run.',
+      tones: { worker: 'success', db: 'success' },
+    },
+  ]}
+/>
+
+Each <Term id="container" /> that Ferry starts has four guards: a memory limit, a CPU limit, a process limit and <Term id="log-rotation" />. This applies to service instances, one-off jobs, cron runs and datastores.
+
+An app can leak memory, use all the CPU or start processes without end. Ferry stops or slows down only this app. The server, `ferryd` and your databases continue.
+
+## The three limits
+
+| Flag and variable | Default | What it limits (`0` turns it off) |
+|---|---|---|
+| `--default-memory-limit` `FERRY_DEFAULT_MEMORY_LIMIT` | `512M` | The memory of each container whose service or datastore sets no limit of its own (`512M`, `1G`, `1.5G`). No <Term id="swap" /> above it. |
+| `--default-cpu-limit` `FERRY_DEFAULT_CPU_LIMIT` | `1` | The CPUs of each such container (`0.5`, `2`, `500m`). The kernel can <Term id="throttle" /> a busy container, but never stops it. |
+| `--pids-limit` `FERRY_PIDS_LIMIT` | `1024` | The processes and threads of each container. It is a guard against a <Term id="fork-bomb" />. |
+
+## See the defaults
+
+`ferry info` shows the defaults next to what the <Term id="docker-host" /> has.
+
+```text title="ferry info (excerpt)" noCopy
+Default limits:  512 MiB memory, 1 CPU per container
+Docker host:     4 CPUs, 7.8 GiB memory
+```
+
+<Callout type="warning" title="Builds have no limit">
+`docker build` runs in <Term id="buildkit" />, which has no limit for each build.
+</Callout>
+
+[Resource limits](/docs/concepts/resource-limits) explains how the limits work. The next pages help you choose them for your server.

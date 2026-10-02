@@ -1,0 +1,54 @@
+---
+title: Roll back
+description: Ferry keeps each deploy. One command brings an earlier deploy back.
+---
+
+<Steps>
+<Step>
+
+### List the deploys
+
+<Terminal
+  lines={[
+    '$ ferry deploys node-hello',
+    'ID                         STATUS        TRIGGER   COMMIT   CREATED   DURATION',
+    'dep-ba5a7fce730d4061aaa7   live          upload    -        5s ago    1s',
+    'dep-3493c505ea9b4415b359   deactivated   upload    -        23s ago   2s',
+  ]}
+/>
+
+Copy the ID of the first deploy. It is on the last line.
+
+</Step>
+<Step>
+
+### Roll back to it
+
+<Terminal
+  lines={[
+    '$ ferry rollback node-hello dep-3493c505ea9b4415b359 --follow',
+    'Deploy dep-16d99450e6984bb18843 queued (rollback), streaming logs…',
+    '09:36:49 ==> Rolling back to deploy dep-3493c505ea9b4415b359 (deploy dep-16d99450e6984bb18843)',
+    '09:36:49 ==> Reusing image ferry/node-hello:dep-3493c505ea9b4415b359 of deploy dep-3493c505ea9b4415b359',
+    '09:36:49 ==> Using port 10000 (default port)',
+    '09:36:49 ==> Limits: 512 MiB memory, 1 CPU per instance',
+    '09:36:49 ==> Starting 1 instance(s)',
+    '…',
+    '09:36:51 ==> Health check passed',
+    '09:36:51 ==> Routing traffic to the new instance(s)',
+    '09:36:53 ==> Stopping 1 old instance(s)',
+    '09:36:53 ==> Your service is live 🎉',
+    'Deploy dep-16d99450e6984bb18843 is live at http://node-hello.localhost:8080',
+  ]}
+/>
+
+</Step>
+</Steps>
+
+## What Ferry did
+
+[`ferry rollback`](/docs/reference/cli#ferry-rollback) uses the <Term id="image" /> of that deploy again. Ferry builds nothing.
+
+A <Term id="rollback" /> is a new deploy with the <Term id="trigger" /> `rollback`. It shows at the top of `ferry deploys`. You can roll it back too.
+
+More in [Roll back](/docs/concepts/deploys/rollbacks).

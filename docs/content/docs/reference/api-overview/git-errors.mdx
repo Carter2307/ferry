@@ -1,0 +1,73 @@
+---
+title: Git errors
+description: Four error codes tell that GitHub, GitLab or a git remote refused a request or gave no answer.
+---
+
+<Diagram
+  nodes={[
+    { id: 'client', at: [0, 0.5], icon: 'terminal', label: 'Client' },
+    { id: 'ferry', at: [1.5, 0.5], icon: 'ship', label: 'ferryd' },
+    { id: 'provider', at: [3, 0], icon: 'cloud', label: 'GitHub, GitLab' },
+    { id: 'remote', at: [3, 1], icon: 'repo', label: 'Repository', note: 'git remote' },
+  ]}
+  edges={[
+    { from: 'client', to: 'ferry' },
+    { from: 'ferry', to: 'provider' },
+    { from: 'ferry', to: 'remote' },
+  ]}
+  steps={[
+    {
+      caption: 'GitLab needs an OAuth application first: 400 git_application_required.',
+      flow: ['client>ferry'],
+      cut: ['ferry>provider'],
+      tones: { ferry: 'warning' },
+      notes: { ferry: '400' },
+    },
+    {
+      caption: 'The provider refuses an authorization: git_authorization_rejected.',
+      flow: ['client>ferry', 'ferry>provider'],
+      tones: { provider: 'danger' },
+      notes: { provider: 'refuses' },
+    },
+    {
+      caption: 'ferryd cannot reach the provider: 502 git_provider_unavailable.',
+      flow: ['client>ferry'],
+      cut: ['ferry>provider'],
+      tones: { provider: 'danger' },
+      notes: { provider: 'no answer' },
+    },
+    {
+      caption: 'The remote of a repository gives no good answer: 502 git_remote_unreachable.',
+      flow: ['client>ferry'],
+      cut: ['ferry>remote'],
+      tones: { remote: 'danger' },
+      notes: { remote: 'no answer' },
+    },
+  ]}
+/>
+
+These codes come from the <Term id="git-provider" />, not from the authentication of Ferry. See [Connect GitHub or GitLab](/docs/guides/git-accounts).
+
+## The codes
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `git_application_required` | GitLab needs an <Term id="oauth-app" /> for this server before an account can authorize it. |
+| 400, 409 | `git_authorization_rejected` | GitHub or GitLab refused an authorization. |
+| 502 | `git_provider_unavailable` | The server cannot reach GitHub or GitLab, or the provider answered with an error. |
+| 502 | `git_remote_unreachable` | The remote of a repository refused, was not there, or gave no answer in time. |
+
+<Accordions>
+  <Accordion title="git_application_required">
+    Send the `client_id` and the `client_secret` of the application with `POST /api/v1/git/authorize`.
+  </Accordion>
+  <Accordion title="git_authorization_rejected: 400 or 409">
+    - `400`: for the authorization that you make now. Examples: the provider refused a token or a code, or the user said no.
+    - `409`: for the authorization that a <Term id="git-connection" /> has in the store. This authorization is no longer valid: expired, revoked, uninstalled or not complete.
+    - Never `401`. This status is for the authentication of Ferry itself.
+  </Accordion>
+  <Accordion title="When each 502 occurs">
+    - `git_provider_unavailable`: while you authorize an account, or while Ferry lists the repositories of a git connection.
+    - `git_remote_unreachable`: while Ferry lists the branches of a repository (`GET /api/v1/git/branches`). The message tells why. It also tells what to do when the repository looks private.
+  </Accordion>
+</Accordions>

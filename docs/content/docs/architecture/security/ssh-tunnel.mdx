@@ -1,0 +1,66 @@
+---
+title: Reach the API through SSH
+description: Keep the API on localhost. An SSH tunnel brings its port to your machine.
+---
+
+<Diagram
+  nodes={[
+    { id: 'laptop', at: [0, 0], icon: 'laptop', label: 'Your machine', note: '127.0.0.1:7878' },
+    { id: 'ssh', at: [1.5, 0], icon: 'lock', label: 'SSH tunnel', note: 'encrypted' },
+    { id: 'api', at: [3, 0], icon: 'shield-check', label: 'API', note: '127.0.0.1:7878' },
+  ]}
+  groups={[{ label: 'Your server', around: ['api'] }]}
+  edges={[
+    { from: 'laptop', to: 'ssh' },
+    { from: 'ssh', to: 'api' },
+  ]}
+  steps={[
+    {
+      caption: 'The API listens only on 127.0.0.1 of the server. The internet cannot reach it.',
+      tones: { api: 'success' },
+    },
+    {
+      caption: 'ssh -L opens port 7878 on your machine. SSH carries this port to the server.',
+      flow: ['laptop>ssh'],
+      tones: { ssh: 'primary' },
+    },
+    {
+      caption: 'The CLI and the browser on your machine use http://127.0.0.1:7878.',
+      flow: ['laptop>ssh', 'ssh>api'],
+      tones: { api: 'success' },
+    },
+  ]}
+/>
+
+This is the safer default for a production server. The API stays on <Term id="localhost" />, and the <Term id="ssh-tunnel" /> encrypts the traffic.
+
+## Do it
+
+<Steps>
+<Step>
+
+### Open the tunnel
+
+Run this command on your machine. Keep it open.
+
+```bash title="Terminal"
+ssh -L 7878:127.0.0.1:7878 you@your-server
+```
+
+</Step>
+<Step>
+
+### Connect the CLI
+
+Run this command in a second terminal.
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878
+```
+
+</Step>
+</Steps>
+
+The dashboard is at `http://127.0.0.1:7878` in your browser.
+
+The other way is [the dashboard on a hostname](/docs/architecture/security/dashboard-host), with HTTPS.

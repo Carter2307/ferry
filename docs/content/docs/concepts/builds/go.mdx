@@ -1,0 +1,55 @@
+---
+title: Go
+description: What the generated Dockerfile does for a Go project, when you set no build or start command.
+---
+
+<Diagram
+  nodes={[
+    { id: 'builder', at: [0, 0], label: 'golang:1.23-alpine', note: 'the build image' },
+    { id: 'bin', at: [1.5, 0], icon: 'file', label: 'Binary', note: '/usr/local/bin/app' },
+    { id: 'run', at: [3, 0], label: 'alpine:3.20', note: 'the run image' },
+  ]}
+  edges={[
+    { from: 'builder', to: 'bin' },
+    { from: 'bin', to: 'run' },
+  ]}
+  steps={[
+    {
+      caption: 'The build image downloads the modules with go mod download.',
+      cut: ['builder>bin', 'bin>run'],
+      tones: { builder: 'primary', bin: 'muted', run: 'muted' },
+    },
+    {
+      caption: 'The build image compiles the app into one binary.',
+      cut: ['bin>run'],
+      flow: ['builder>bin'],
+      tones: { bin: 'primary', run: 'muted' },
+    },
+    {
+      caption: 'The run image is small. It gets the binary and your source tree.',
+      flow: ['bin>run'],
+      tones: { run: 'success' },
+    },
+  ]}
+/>
+
+A Go build uses two images. The first image has the Go tools and compiles the app. The second image only runs the <Term id="binary" />.
+
+## The defaults
+
+| Step | What Ferry does |
+|---|---|
+| Build image | `golang:<version>-alpine`. The version comes from the `go` line of `go.mod`. The default is 1.23. |
+| Run image | `alpine:3.20` |
+| Dependencies | `go mod download`, in a cached layer of its own. |
+| Build | `CGO_ENABLED=0 go build` of the root package when it is `package main`. If not, of the only main package below `cmd/<name>`. |
+| Start | The binary: `/usr/local/bin/app`. |
+
+<Accordions>
+  <Accordion title="Your own build command">
+    Your build command must write its binaries to `/out`. Ferry installs them in `/usr/local/bin`.
+  </Accordion>
+  <Accordion title="Files that the app reads when it runs">
+    The run image also has your source tree in `/app`. This is the directory where the app starts. Thus the app finds its templates and other files.
+  </Accordion>
+</Accordions>

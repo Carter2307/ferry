@@ -1,0 +1,56 @@
+---
+title: What you need
+description: You need Rust and Docker for the server, and Node.js for the dashboard and the docs.
+---
+
+<Diagram
+  nodes={[
+    { id: 'rust', at: [0, 0], icon: 'wrench', label: 'Rust', note: '1.89 or newer' },
+    { id: 'docker', at: [0, 1], icon: 'container', label: 'Docker', note: 'the daemon' },
+    { id: 'clis', at: [0, 2], icon: 'terminal', label: 'git, docker', note: 'the two CLIs' },
+    { id: 'node', at: [0, 3], icon: 'wrench', label: 'Node.js', note: '20.19 or newer' },
+    { id: 'compile', at: [1.75, 0], icon: 'hammer', label: 'Compile', note: 'each crate' },
+    { id: 'run', at: [1.75, 1], icon: 'server', label: 'Run ferryd', note: 'end-to-end tests' },
+    { id: 'builds', at: [1.75, 2], icon: 'package', label: 'Builds', note: 'ferry-build' },
+    { id: 'front', at: [1.75, 3], icon: 'monitor', label: 'web/, docs/', note: 'the two sites' },
+  ]}
+  edges={[
+    { from: 'rust', to: 'compile' },
+    { from: 'docker', to: 'run' },
+    { from: 'clis', to: 'builds' },
+    { from: 'node', to: 'front' },
+  ]}
+  steps={[
+    {
+      caption: 'Rust compiles ferryd, ferry and each crate.',
+      flow: ['rust>compile'],
+      tones: { rust: 'primary', compile: 'primary' },
+    },
+    {
+      caption: 'Docker runs the containers of ferryd and of the end-to-end tests.',
+      flow: ['docker>run'],
+      tones: { docker: 'primary', run: 'primary' },
+    },
+    {
+      caption: 'A build of a service calls the git CLI and the docker CLI.',
+      flow: ['clis>builds'],
+      tones: { clis: 'primary', builds: 'primary' },
+    },
+    {
+      caption: 'Node.js builds the dashboard and the docs site.',
+      flow: ['node>front'],
+      tones: { node: 'primary', front: 'primary' },
+    },
+  ]}
+/>
+
+## The tools
+
+| Tool | Version | Use |
+|---|---|---|
+| <Term id="rust" /> | 1.89 or newer (edition 2024) | `ferryd`, `ferry` and each <Term id="crate" /> |
+| <Term id="docker" /> | <Term id="docker-desktop" /> on macOS works | To run `ferryd` and the <Term id="e2e-test">end-to-end tests</Term> |
+| `git` and `docker` CLIs | On the <Term id="path-variable" /> | Builds: `ferry-build` runs them |
+| <Term id="nodejs" /> | 20.19 or newer, with <Term id="npm" /> | The dashboard (`web/`) and the docs (`docs/`) |
+
+Then [build Ferry](/docs/contributing/development/build).

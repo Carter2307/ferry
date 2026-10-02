@@ -1,0 +1,23 @@
+---
+title: Known limitations
+description: What the security model of Ferry does not have. Read this before you put a server on the internet.
+---
+
+<Diagram
+  caption="What Ferry does not have"
+  nodes={[
+    { id: 'users', at: [0, 0], icon: 'ban', label: 'Other users', note: 'roles, audit log', tone: 'muted' },
+    { id: 'crypt', at: [1.25, 0], icon: 'ban', label: 'Encryption', note: 'of secrets at rest', tone: 'muted' },
+    { id: 'ip', at: [2.5, 0], icon: 'ban', label: 'IP allow lists', tone: 'muted' },
+    { id: 'build', at: [0.6, 1], icon: 'ban', label: 'Build limits', note: 'disk quotas', tone: 'muted' },
+    { id: 'reg', at: [1.9, 1], icon: 'ban', label: 'Private images', note: 'registry login', tone: 'muted' },
+  ]}
+/>
+
+## The list
+
+- **One administrator account.** No other users, teams, roles or audit log exist. Each API token has the same access. See [What a token can do](/docs/architecture/security/token-access).
+- **No encryption at rest.** Ferry stores secrets in plain text in `ferry.db`. See [The data directory](/docs/architecture/security/data-directory).
+- **No IP allow lists.** The only rate limits are the [connection limits](/docs/architecture/security/proxy-limits) and the [limit on failed sign-ins](/docs/architecture/security/sign-in-limit), which is for the full server.
+- **Gaps in the limits.** Builds have no memory limit and no CPU limit. Disks have no quotas. Disk and network I/O have no limit. Each container can reach each service and datastore on the private network. See [What Ferry does not contain](/docs/architecture/security/not-contained).
+- **No private registry.** Docker must pull each image with no login. Ferry does not support the credentials of a private <Term id="registry" />.

@@ -1,0 +1,47 @@
+---
+title: Back up your data
+description: Ferry makes no backup for you. Three places hold your data, and each has its own method.
+---
+
+<Diagram
+  caption="Three places hold your data"
+  nodes={[
+    { id: 'data', at: [0, 0], icon: 'folder', label: 'Data directory', note: '/var/lib/ferry' },
+    { id: 'ds', at: [0, 1], icon: 'database', label: 'Datastores', note: 'Docker volumes' },
+    { id: 'disks', at: [0, 2], icon: 'disk', label: 'Disks', note: 'Docker volumes' },
+    { id: 'backup', at: [1.75, 1], icon: 'backup', label: 'Your backups', note: 'off the server', tone: 'success' },
+  ]}
+  edges={[
+    { from: 'data', to: 'backup', flow: true },
+    { from: 'ds', to: 'backup', flow: true },
+    { from: 'disks', to: 'backup', flow: true },
+  ]}
+/>
+
+<Callout type="warning" title="Keep the backups off the server, and encrypt them">
+The data directory and the dumps contain each secret of your apps.
+</Callout>
+
+## 1. The data directory
+
+`/var/lib/ferry` is the <Term id="data-directory" />. It holds the state of Ferry: services, settings, variables, deploy history, datastore passwords, certificates and logs.
+
+```bash title="Terminal"
+sqlite3 /var/lib/ferry/ferry.db ".backup /backup/ferry.db"
+```
+
+This command copies `ferry.db`, the <Term id="sqlite" /> database, safely while `ferryd` runs. Then copy the rest of the directory: `api_token`, `instance_id` and `certs/`.
+
+As an alternative, stop `ferryd` and copy the full directory.
+
+## 2. The datastores
+
+Their data is in the Docker <Term id="volume">volumes</Term> `<prefix>-ds-<name>-data`. For Postgres, use <Term id="pg-dump" />: see [Datastores](/docs/concepts/datastores). Redis saves its data to its volume. If you need this data, copy the volume.
+
+## 3. The disks
+
+The data of each <Term id="disk" /> is in a Docker volume `<prefix>-svc-<service id>-disk`. Copy the volume with a temporary container, for example:
+
+```bash title="Terminal"
+docker run --rm -v ferry-svc-srv-…-disk:/data:ro -v "$PWD":/backup alpine tar czf /backup/disk.tgz -C /data .
+```

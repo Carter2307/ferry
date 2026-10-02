@@ -1,0 +1,86 @@
+---
+title: Set the limits of a datastore
+description: The limits of a datastore apply to its container immediately, with no restart.
+---
+
+<Terminal
+  lines={[
+    '$ ferry db update app-db --memory 2G --cpu 1',
+    "Updated datastore 'app-db': memory limit 2 GiB, CPU limit 1 CPU",
+    'Applied to the running container (no restart).',
+  ]}
+/>
+
+A <Term id="datastore" /> has one container. Its limits change in place: the container that runs gets them immediately. A service is different, because it needs a restart. See [Datastores](/docs/concepts/datastores).
+
+## Choose your tool
+
+<Tabs items={['CLI', 'Dashboard', 'API', 'Blueprint']} groupId="interface" persist>
+<Tab value="CLI">
+
+```bash title="Terminal"
+ferry db create cache --kind redis --memory 256M
+ferry db update app-db --memory 2G --cpu 1
+ferry db update app-db --cpu default         # back to the server default
+```
+
+[`ferry db show`](/docs/reference/cli#ferry-db-show) prints the limits as `Memory limit` and `CPU limit`.
+
+</Tab>
+<Tab value="Dashboard">
+
+- **New datastore:** the dialog has a **Memory limit** and a **CPU limit**. You can leave them empty.
+- **Current datastore:** open its page. Go to **Resources**. Click **Apply limits**.
+
+</Tab>
+<Tab value="API">
+
+```bash title="Terminal"
+curl -X PATCH http://127.0.0.1:7878/api/v1/datastores/app-db \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"memory_limit_mb": 2048}'
+```
+
+The two fields are optional. A field that you do not send keeps its value. `0` goes back to the server default.
+
+See [Change a datastore's resource limits](/docs/reference/api/datastores#change-a-datastores-resource-limits).
+
+</Tab>
+<Tab value="Blueprint">
+
+```yaml title="render.yaml"
+databases:
+  - name: app-db
+    plan: basic-1gb       # 1 GiB of memory
+    cpuLimit: 2
+services:
+  - type: keyvalue
+    name: cache
+    memoryLimit: 256M
+```
+
+An apply also changes the limits of a datastore that exists, in place.
+
+</Tab>
+</Tabs>
+
+<Accordions>
+  <Accordion title="If you lower the memory">
+    A limit below the memory that the datastore uses now can fail. It can also cause an OOM kill of the datastore.
+
+    If Ferry cannot apply the new limits, it saves them and the error tells you. Run the same update again to try again.
+  </Accordion>
+  <Accordion title="The status of the datastore">
+    The limits apply for each status.
+
+    - `creating`: Ferry applies the limits to the container, or creates the container with them.
+    - `failed`, for example after an OOM kill: the datastore keeps the new limits for its next start.
+  </Accordion>
+  <Accordion title="Create a datastore with the API">
+    `POST /api/v1/datastores` accepts the same fields: `memory_limit_mb` and `cpu_limit`.
+  </Accordion>
+  <Accordion title="Redis">
+    Ferry also sets the `maxmemory` of Redis. See [Redis and its memory limit](/docs/concepts/resource-limits/redis).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,44 @@
+---
+title: Errors
+description: Each error has the same JSON body, with a stable code and a message for people.
+---
+
+```json title="404 Not Found"
+{ "error": { "code": "not_found", "message": "service 'ghost' not found" } }
+```
+
+| Field | For | Notes |
+|---|---|---|
+| `code` | Programs | The <Term id="error-code" /> is stable. |
+| `message` | People | It tells what went wrong. |
+
+## The codes
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_request` | Bad JSON, an unknown field, a bad query string, or a value that fails the validation. |
+| 404 | `not_found` | No such resource, or no such route (`no API route for /api/v1/nope`). |
+| 405 | `method_not_allowed` | The path exists, but not with this method. |
+| 409 | `conflict`, `canceled` | The request conflicts with the current state. |
+| 413 | `payload_too_large` | The body is above the [limit](/docs/reference/api-overview/size-limits) of the endpoint. |
+| 500 | `database_error`, `io_error`, `build_failed`, `internal_error` | A failure in the server. The `ferryd` log has the details. |
+| 502 | `docker_error` | The Docker daemon failed, or the server cannot reach it. |
+
+More codes: [authentication errors](/docs/reference/api-overview/auth-errors) (401, 403, 429) and [git errors](/docs/reference/api-overview/git-errors).
+
+<Accordions>
+  <Accordion title="An example of a 400">
+    `invalid name 'Bad_Name': use 1-40 lowercase letters, digits or '-', starting with a letter`
+  </Accordion>
+  <Accordion title="Causes of a 409">
+    - A name is in use already.
+    - A deploy is complete already: `deploy dep-… is already deactivated`.
+    - A suspended service.
+    - Other resources reference the resource. Try again with `force=true`.
+  </Accordion>
+  <Accordion title="A 409 from references">
+    The message lists what would break. See [Delete a referenced target](/docs/reference/env-references/delete) for the full answer.
+
+    `datastore 'app-db' is referenced by service 'hello' (DATABASE_URL, EXT, PGHOST); they would fail to deploy or restart without it. Remove the references first, or delete with force=true`
+  </Accordion>
+</Accordions>

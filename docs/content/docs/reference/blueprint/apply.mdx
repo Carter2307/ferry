@@ -1,0 +1,58 @@
+---
+title: Apply a blueprint
+description: The CLI, the API and the dashboard send the same YAML file to the server.
+---
+
+<Diagram
+  caption="Three ways to send the file"
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'CLI', note: 'blueprint apply' },
+    { id: 'script', at: [0, 1], icon: 'code', label: 'Your script', note: 'curl' },
+    { id: 'dash', at: [0, 2], icon: 'monitor', label: 'Dashboard', note: 'Blueprints page' },
+    { id: 'api', at: [1.75, 1], icon: 'plug', label: 'API', note: '/blueprints/apply' },
+    { id: 'ferry', at: [3.25, 1], icon: 'ship', label: 'Ferry', note: 'dry run or apply' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'api', flow: true },
+    { from: 'script', to: 'api', flow: true },
+    { from: 'dash', to: 'api', flow: true },
+    { from: 'api', to: 'ferry', flow: true },
+  ]}
+/>
+
+An <Term id="apply" /> sends a <Term id="blueprint" /> to the server. Do a <Term id="dry-run" /> first: it shows the changes and writes nothing.
+
+## Do it
+
+<Tabs items={['CLI', 'API', 'Dashboard']} groupId="interface" persist>
+<Tab value="CLI">
+
+```bash title="Terminal"
+ferry blueprint apply --dry-run   # show what would change
+ferry blueprint apply             # apply ./ferry.yaml, else ./render.yaml
+ferry blueprint apply infra/render.yaml
+```
+
+Without a `FILE`, the <Term id="cli" /> looks for `./ferry.yaml`, then for `./render.yaml`. See [`ferry blueprint apply`](/docs/reference/cli#ferry-blueprint-apply).
+
+</Tab>
+<Tab value="API">
+
+Send the YAML itself with a YAML <Term id="content-type" />. Add `?dry_run=true` for a dry run.
+
+```bash title="Terminal"
+curl -X POST "http://127.0.0.1:7878/api/v1/blueprints/apply?dry_run=true" \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H "Content-Type: application/yaml" \
+  --data-binary @ferry.yaml
+```
+
+You can also send <Term id="json" />: `{"yaml": "<the file>", "dry_run": true}`. See [Apply a blueprint](/docs/reference/api/blueprints#apply-a-blueprint).
+
+</Tab>
+<Tab value="Dashboard">
+
+Open **Blueprints** in the <Term id="dashboard" />. Paste the YAML. Run a dry run and read the planned actions. Then apply. See [Blueprints](/docs/getting-started/dashboard/blueprints).
+
+</Tab>
+</Tabs>

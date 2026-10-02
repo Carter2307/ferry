@@ -1,0 +1,49 @@
+---
+title: Deploy other things
+description: Ferry deploys a folder, a git repository or a Docker image, as each type of service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dir', at: [0, 0], icon: 'folder', label: 'A folder', note: 'ferry up' },
+    { id: 'git', at: [0, 1], icon: 'branch', label: 'A git repo', note: 'create --repo' },
+    { id: 'img', at: [0, 2], icon: 'package', label: 'A Docker image', note: 'create --image' },
+    { id: 'ferry', at: [1.75, 1], icon: 'ship', label: 'Ferry', tone: 'primary' },
+    { id: 'svc', at: [3.25, 1], icon: 'box', label: 'A service', note: 'web, static, cron' },
+  ]}
+  edges={[
+    { from: 'dir', to: 'ferry', flow: true },
+    { from: 'git', to: 'ferry', flow: true },
+    { from: 'img', to: 'ferry', flow: true },
+    { from: 'ferry', to: 'svc', flow: true },
+  ]}
+/>
+
+`ferry up` works for each folder that Ferry can build. `ferry create` makes a <Term id="service" /> from a <Term id="repository" /> or an <Term id="image" />.
+
+## Four examples
+
+```bash title="A static site: nginx serves the folder as it is"
+ferry up my-site --dir ./public --type static
+```
+
+```bash title="A git repository, with 2 instances and an HTTP health check"
+ferry create api --repo https://github.com/you/api --branch main --instances 2 --health /healthz --follow
+```
+
+```bash title="A prebuilt image"
+ferry create hello --image nginx:alpine --port 80
+```
+
+```bash title="A cron job that runs each night at 03:00 UTC"
+ferry create nightly --type cron --image busybox:stable --schedule "0 3 * * *" --start-cmd 'echo hello'
+```
+
+## Read next
+
+| Subject | Page |
+|---|---|
+| The five service types, their sources, URLs and states | [Services](/docs/concepts/services) |
+| Triggers, statuses, health checks, rollbacks and cancels | [Deploys](/docs/concepts/deploys) |
+| Runtime detection, Dockerfiles and build variables | [Builds & runtimes](/docs/concepts/builds) |
+| Each `ferry` command and option | [CLI reference](/docs/reference/cli) |

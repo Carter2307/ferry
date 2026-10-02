@@ -1,0 +1,68 @@
+---
+title: ferry login
+description: ferry login gets an API token for one terminal. You approve the request in the dashboard.
+---
+
+<Diagram
+  nodes={[
+    { id: 'term', at: [0, 0], icon: 'terminal', label: 'Terminal', note: 'ferry login' },
+    { id: 'dash', at: [0, 1], icon: 'browser', label: 'Dashboard', note: 'you are signed in' },
+    { id: 'server', at: [1.75, 0.5], icon: 'server', label: 'Server' },
+  ]}
+  edges={[
+    { from: 'term', to: 'server' },
+    { from: 'dash', to: 'server' },
+  ]}
+  steps={[
+    {
+      caption: 'ferry login asks the server for a login request. It prints a page and a code.',
+      flow: ['term>server'],
+      notes: { term: 'code MRDB-M7EE' },
+    },
+    {
+      caption: 'You open the page in the dashboard. It shows the code and who asks.',
+      flow: ['dash>server'],
+      notes: { term: 'code MRDB-M7EE', dash: 'code MRDB-M7EE' },
+    },
+    {
+      caption: 'The two codes are the same. You approve the request.',
+      tones: { dash: 'success' },
+      notes: { term: 'code MRDB-M7EE', dash: 'approved' },
+    },
+    {
+      caption: 'The terminal gets a token of its own. The name of the token is user@host.',
+      tones: { term: 'success' },
+      notes: { term: 'has a token', dash: 'approved' },
+    },
+  ]}
+/>
+
+`ferry login` gets an <Term id="api-token" /> for the terminal where you run it. The proof is your session in the dashboard.
+
+## What you see
+
+<Terminal
+  lines={[
+    '$ ferry login --server http://127.0.0.1:7878',
+    'To connect this terminal, open this page and sign in:',
+    '  http://127.0.0.1:7878/cli-login?id=d54ce0ee…',
+    'Approve the request there if it shows this code:  MRDB-M7EE',
+    'Waiting for the approval... (Ctrl-C to cancel)',
+    'Logged in to http://127.0.0.1:7878 (Ferry 0.1.0)',
+    'Saved to /home/you/.config/ferry/config.json',
+  ]}
+/>
+
+<Callout type="warning" title="Compare the code before you approve">
+Approve a request only if the page shows the code of your terminal and your `user@host`. If not, deny the request.
+</Callout>
+
+## The rules
+
+- A request expires after 10 minutes.
+- The token is in the list of **Server → Account**. You can revoke it like the other [API tokens](/docs/architecture/security/api-tokens).
+- `ferry login` saves the server and the token in the <Term id="config-file" />.
+
+| File | Mode |
+|---|---|
+| `~/.config/ferry/config.json`, or `$XDG_CONFIG_HOME/ferry/config.json` | `0600`, in a `0700` directory |

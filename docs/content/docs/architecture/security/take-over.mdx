@@ -1,0 +1,29 @@
+---
+title: The --take-over flag
+description: --take-over gives a name prefix to another data directory. Use it only for a data directory that lost its instance_id.
+---
+
+<Flow
+  caption="Which case is yours?"
+  steps={[
+    { icon: 'folder', title: 'Moved directory', text: 'A moved data directory keeps its instance_id. Start it with the same --name-prefix and no other flag.', tone: 'success' },
+    { icon: 'backup', title: 'Lost instance_id', text: 'For example, you restored only ferry.db. Start ferryd with --take-over.', tone: 'warning' },
+    { icon: 'ban', title: 'Prefix in use', text: 'Another server uses the prefix. Never use --take-over.', tone: 'danger' },
+  ]}
+/>
+
+The file `instance_id` is the claim of a data directory on its <Term id="name-prefix" />. A data directory with no `instance_id` cannot prove that the prefix is its own.
+
+## Take the prefix back
+
+```bash title="On the server"
+ferryd --take-over
+```
+
+`--take-over` is only for a data directory that lost its `instance_id`.
+
+<Callout type="danger" title="Never while another server uses the prefix">
+The server that takes over removes the containers of the other server as <Term id="orphan">orphans</Term>.
+</Callout>
+
+See [One server per data directory and prefix](/docs/architecture/security/one-server) for the rule that this flag overrides.

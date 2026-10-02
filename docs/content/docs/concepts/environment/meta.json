@@ -1,0 +1,17 @@
+{
+  "title": "Environment & env groups",
+  "icon": "Braces",
+  "pages": [
+    "set-variables",
+    "limits",
+    "when-changes-apply",
+    "env-groups",
+    "precedence",
+    "references",
+    "datastore-properties",
+    "service-properties",
+    "broken-references",
+    "injected-variables",
+    "port"
+  ]
+}

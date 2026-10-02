@@ -1,0 +1,70 @@
+---
+title: Jobs & cron
+description: A job runs one command in a new container, then stops. You start it, or a schedule starts it.
+icon: Clock
+---
+
+<Diagram
+  caption="One run of a job"
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'terminal', label: 'ferry run', note: 'one-off job' },
+    { id: 'cron', at: [0, 1], icon: 'calendar', label: 'Schedule', note: 'cron job' },
+    { id: 'run', at: [1.5, 0.5], icon: 'box', label: 'New container', note: 'one command' },
+    { id: 'log', at: [3, 0.5], icon: 'logs', label: 'Log', note: 'of this run' },
+  ]}
+  edges={[
+    { from: 'you', to: 'run' },
+    { from: 'cron', to: 'run' },
+    { from: 'run', to: 'log' },
+  ]}
+  steps={[
+    {
+      caption: 'A run starts in two ways: you start it, or a schedule starts it.',
+      hide: ['run', 'log'],
+      tones: { you: 'primary', cron: 'primary' },
+    },
+    {
+      caption: 'Ferry starts one new container from the live image of the service.',
+      hide: ['log'],
+      flow: ['you>run', 'cron>run'],
+      tones: { run: 'primary' },
+      notes: { run: 'starts' },
+    },
+    {
+      caption: 'The container runs one command. Its output goes to the log of the run.',
+      flow: ['run>log'],
+      tones: { run: 'warning' },
+      notes: { run: 'running' },
+    },
+    {
+      caption: 'The command ends. Ferry removes the container and keeps the log.',
+      hide: ['run'],
+      tones: { log: 'success' },
+      notes: { log: 'succeeded' },
+    },
+  ]}
+/>
+
+A <Term id="job-run" /> is one <Term id="container" /> that runs one command, then stops. A run ends with one of three statuses: `succeeded` (<Term id="exit-code" /> 0), `failed` or `canceled`.
+
+## The two kinds
+
+| Kind | What starts a run | Example |
+|---|---|---|
+| <Term id="one-off-job">One-off job</Term> | You, with `ferry run`, on a deployed service | A database migration |
+| <Term id="cron-job">Cron job</Term> | Its <Term id="cron-schedule" />. A cron job is a [type of service](/docs/concepts/services). | A command each day at 03:00 UTC |
+
+## Run a job
+
+```bash title="Terminal"
+ferry run api --follow -- npm run migrate
+```
+
+## In this section
+
+<Cards>
+  <Card title="Run a one-off job" href="/docs/concepts/jobs/one-off" description="One command in the image of a service." />
+  <Card title="Create a cron job" href="/docs/concepts/jobs/cron" description="A command that runs on a schedule." />
+  <Card title="Schedule syntax" href="/docs/concepts/jobs/schedule" description="The five fields of a cron expression." />
+  <Card title="List and follow runs" href="/docs/concepts/jobs/runs" description="The status and the log of each run." />
+</Cards>

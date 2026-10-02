@@ -1,0 +1,56 @@
+---
+title: Run and deploy keys
+description: These keys set the port, the health check, the number of instances, auto-deploy and the schedule.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: hello
+    port: 80                 # the app listens here
+    healthCheckPath: /       # the test before the deploy is live
+    numInstances: 2
+  - type: cron
+    name: nightly
+    schedule: "0 3 * * *"    # each day at 03:00 UTC
+```
+
+## The keys
+
+| Key | Type | Default | Ferry setting and notes |
+|---|---|---|---|
+| `port` | integer | detected | `port`, a <Term id="ferry-extension" />: the <Term id="port" /> of the app, 1 to 65535. |
+| `healthCheckPath` | string | TCP check | `health_check_path`: an HTTP path. Its answer must be below 400 before a deploy goes live. |
+| `numInstances` | integer | `1` | `instances`, 1 to 50. |
+| `autoDeploy` | boolean | `true` | `auto_deploy`: deploy at each push to `branch`. |
+| `autoDeployTrigger` | string | none | The newer key of Render. It wins over `autoDeploy`. |
+| `schedule` | string | required for cron | `schedule`: a <Term id="cron-expression" /> of 5 fields in <Term id="utc" />, for example `"*/15 * * * *"` or `@hourly`. |
+
+See [Health checks](/docs/concepts/deploys/health-checks), [GitHub auto-deploy](/docs/guides/github-auto-deploy) and [Schedule syntax](/docs/concepts/jobs/schedule).
+
+## The values of autoDeployTrigger
+
+| Value | Auto-deploy |
+|---|---|
+| `commit` | On |
+| `off` | Off |
+| `checksPass` | On, with a warning: Ferry does not wait for checks. |
+
+<Accordions>
+  <Accordion title="Which services can use a key">
+    - `healthCheckPath`: only services that listen on a port.
+    - `schedule`: only cron jobs.
+    - `numInstances`: Ferry ignores it on a cron job, with a warning.
+  </Accordion>
+  <Accordion title="If the entry has no port">
+    Ferry uses the first value that it finds, in this order:
+
+    1. `PORT` from the environment
+    2. the hint of the build
+    3. the one port that the image exposes
+    4. the `--default-port` of the server
+  </Accordion>
+  <Accordion title="If the entry has no numInstances">
+    A service that exists keeps its number of instances.
+  </Accordion>
+</Accordions>

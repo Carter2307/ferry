@@ -1,0 +1,57 @@
+---
+title: How an apply works
+description: An apply has four steps. Ferry writes nothing before the full file is valid.
+---
+
+<Flow
+  steps={[
+    { icon: 'file-code', title: 'Parse', text: 'Ferry reads the YAML into services, datastores and env groups. It reads each plan into limits.', tone: 'warning' },
+    { icon: 'search', title: 'Plan', text: 'Ferry tests each entry against the server. Each resource gets an action: create, update or unchanged.', tone: 'warning' },
+    { icon: 'save', title: 'Write', text: 'Ferry writes the env groups, then the datastores, then the services.' },
+    { icon: 'deploy', title: 'Deploy', text: 'Ferry puts in the queue the deploys and the restarts that the changes need.', tone: 'success' },
+  ]}
+/>
+
+An <Term id="apply" /> can fail only in the first two steps. Then the server stays as it was.
+
+## Parse
+
+An error in the structure stops the apply with a 400 error. The error gives the name of the entry:
+
+```text noCopy
+service 'a': envVars[0] (A): needs a value, generateValue: true, fromDatabase, fromService or sync: false
+```
+
+A key that Ferry does not support and a plan that Ferry does not know only add [warnings](/docs/reference/blueprint/warnings).
+
+## Plan
+
+The <Term id="validation" /> of each <Term id="blueprint-entry" /> comes before each write. If one entry is not valid, the full apply fails and Ferry writes nothing.
+
+Then each <Term id="resource" /> gets a <Term id="blueprint-action" />. An `update` has a list of changes.
+
+## Write and deploy
+
+Ferry writes in the order of the dependencies. Then it starts the deploys and restarts: see [What an apply deploys](/docs/reference/blueprint/apply-deploys).
+
+<Accordions>
+  <Accordion title="Examples of errors in the structure">
+    - an entry with no `name`
+    - an unknown service `type`
+    - a variable with no source for its value
+    - a `memoryLimit` that is not a size
+  </Accordion>
+  <Accordion title="What the plan step tests">
+    - the names
+    - the settings of each service, with the same rules as `ferry create`
+    - the resource limits
+    - the custom domains
+    - the references
+    - the size limits of each environment
+  </Accordion>
+  <Accordion title="The order of the writes">
+    1. The env groups.
+    2. The datastores. Ferry creates and prepares the new ones. The ones that exist get their new limits.
+    3. The services, with their variables and their links to env groups.
+  </Accordion>
+</Accordions>

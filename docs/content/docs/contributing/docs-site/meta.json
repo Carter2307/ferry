@@ -1,0 +1,24 @@
+{
+  "title": "Docs site",
+  "icon": "BookOpen",
+  "pages": [
+    "---Start---",
+    "develop",
+    "scripts",
+    "---Write---",
+    "write-a-page",
+    "files-and-urls",
+    "frontmatter",
+    "links",
+    "components",
+    "figures",
+    "code-blocks",
+    "---Generate and build---",
+    "generated",
+    "regenerate",
+    "build",
+    "---Inside---",
+    "design",
+    "folders"
+  ]
+}

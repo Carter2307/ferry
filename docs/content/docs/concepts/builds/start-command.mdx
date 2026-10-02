@@ -1,0 +1,57 @@
+---
+title: Start command
+description: The start command starts your app in each container. Ferry finds it in three places, in order.
+---
+
+<Flow
+  caption="Ferry uses the first start command that it finds"
+  steps={[
+    { icon: 'terminal', title: 'The service', text: 'The start command of the service (--start-cmd).' },
+    { icon: 'file', title: 'Procfile', text: 'An entry of a Procfile in the root directory.' },
+    { icon: 'settings', title: 'Runtime default', text: 'The default of the runtime, for example npm start.', tone: 'muted' },
+  ]}
+/>
+
+This order is for the images that Ferry generates.
+
+## Set the start command
+
+```bash title="Terminal"
+ferry create mailer --type worker --repo https://github.com/you/app --start-cmd "node worker.js"
+```
+
+Ferry runs the <Term id="start-command" /> with `/bin/sh -c`. Thus `$PORT` and other variables expand.
+
+## The Procfile entry
+
+| Service type | Entry of the <Term id="procfile" /> |
+|---|---|
+| Web service, private service, static site | `web:` |
+| Background worker | `worker:` |
+| Cron job | `cron:`. If there is none, `worker:`. |
+
+A cron job needs no start command: its command can come when it runs.
+
+## See the choice
+
+The build log shows the start command and its origin.
+
+```text title="Deploy log" noCopy
+==> Start command: npm start (the "start" script of package.json)
+```
+
+If an instance stops immediately, read this line. A default such as the `main` file of a library does not always start a server. See [The app exits right away](/docs/guides/troubleshooting).
+
+<Accordions>
+  <Accordion title="If Ferry finds no start command">
+    The build fails and tells you what to add. An example:
+
+```text noCopy
+cannot determine how to start this Node.js app: set a start command, add a Procfile with a `web:` entry, a "start" script to package.json, or a server.js / index.js file
+```
+
+  </Accordion>
+  <Accordion title="The default of each runtime">
+    See [Node.js](/docs/concepts/builds/node), [Python](/docs/concepts/builds/python), [Go](/docs/concepts/builds/go), [Rust](/docs/concepts/builds/rust) and [Ruby](/docs/concepts/builds/ruby).
+  </Accordion>
+</Accordions>

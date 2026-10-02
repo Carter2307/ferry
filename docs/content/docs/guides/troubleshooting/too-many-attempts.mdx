@@ -1,0 +1,30 @@
+---
+title: Too many failed attempts
+description: After 10 failed sign-ins in 5 minutes, the server refuses new sign-ins for a short time.
+---
+
+## What you see
+
+```text title="Dashboard" noCopy
+too many failed attempts: try again in 4 minutes
+```
+
+## Why it occurs
+
+10 sign-ins failed in 5 minutes.
+
+The limit counts for the full server, not for each address. Thus it is possible that the failures are not yours.
+
+## How to repair it
+
+Wait. The server accepts sign-ins again when the oldest failure is 5 minutes old.
+
+## If it occurs again and again
+
+Another person tries to sign in. Keep the <Term id="api" /> on `127.0.0.1`, and reach it through an <Term id="ssh-tunnel" />.
+
+```bash title="Terminal"
+ssh -N -L 7878:127.0.0.1:7878 you@your-server
+```
+
+See [Security model](/docs/architecture/security).

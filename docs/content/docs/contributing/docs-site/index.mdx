@@ -1,0 +1,60 @@
+---
+title: Docs site
+description: This site is a project of its own in docs/. The build changes MDX pages into a static site.
+icon: BookOpen
+---
+
+<Diagram
+  caption="From MDX pages to a static site"
+  nodes={[
+    { id: 'rust', at: [0, 0], icon: 'boxes', label: 'Rust code', note: 'help, OpenAPI' },
+    { id: 'mdx', at: [0, 1], icon: 'file', label: 'MDX pages', note: 'content/docs/' },
+    { id: 'build', at: [1.6, 1], icon: 'hammer', label: 'npm run build', note: 'Next.js, Fumadocs' },
+    { id: 'out', at: [3.2, 1], icon: 'globe', label: 'docs/out/', note: 'a static site' },
+  ]}
+  edges={[
+    { from: 'rust', to: 'mdx', label: 'generate' },
+    { from: 'mdx', to: 'build' },
+    { from: 'build', to: 'out' },
+  ]}
+  steps={[
+    {
+      caption: 'You write the pages as MDX files in content/docs/.',
+      hide: ['rust'],
+      cut: ['mdx>build', 'build>out'],
+      tones: { mdx: 'primary' },
+    },
+    {
+      caption: 'The reference pages are different: npm run generate writes them from the Rust code.',
+      cut: ['mdx>build', 'build>out'],
+      flow: ['rust>mdx'],
+      tones: { rust: 'primary' },
+    },
+    {
+      caption: 'The build exports a static site to docs/out/ and checks each link.',
+      flow: ['mdx>build', 'build>out'],
+      tones: { out: 'success' },
+    },
+  ]}
+/>
+
+This site is in `docs/`. It is a project of its own, like the dashboard in `web/`.
+
+It uses <Term id="fumadocs" /> on <Term id="nextjs" /> 16 (App Router, React 19, TypeScript strict, Tailwind CSS v4). The build makes a <Term id="static-export" /> in `docs/out/`.
+
+## Start the dev server
+
+```bash title="Terminal"
+cd docs
+npm install
+npm run dev                    # → http://localhost:3000
+```
+
+## In this section
+
+<Cards>
+  <Card title="Write a page" href="/docs/contributing/docs-site/write-a-page" description="The short version of the rules of AUTHORING.md." />
+  <Card title="Figures" href="/docs/contributing/docs-site/figures" description="Diagram, Flow, Terminal, Mermaid and Term." />
+  <Card title="Generated references" href="/docs/contributing/docs-site/generated" description="The pages that come from the Rust code." />
+  <Card title="Build and deploy" href="/docs/contributing/docs-site/build" description="The static export and the link check." />
+</Cards>

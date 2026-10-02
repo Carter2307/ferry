@@ -1,0 +1,49 @@
+---
+title: Quote the references
+description: Put a value with a reference in single quotes. If not, your shell changes it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'terminal', label: 'You type', note: '${{…}}' },
+    { id: 'shell', at: [1.5, 0], icon: 'code', label: 'Shell' },
+    { id: 'ferry', at: [3, 0], icon: 'ship', label: 'ferry' },
+  ]}
+  edges={[
+    { from: 'you', to: 'shell' },
+    { from: 'shell', to: 'ferry' },
+  ]}
+  steps={[
+    {
+      caption: 'Your shell reads each command before ferry gets it.',
+      flow: ['you>shell'],
+      tones: { shell: 'primary' },
+    },
+    {
+      caption: 'With no quotes, the shell tries to expand the reference.',
+      cut: ['shell>ferry'],
+      tones: { shell: 'danger' },
+      notes: { shell: 'expands ${{…}}' },
+    },
+    {
+      caption: 'In single quotes, the shell does not touch the text. ferry gets the reference.',
+      flow: ['you>shell', 'shell>ferry'],
+      tones: { shell: 'success', ferry: 'success' },
+      notes: { shell: 'no change', ferry: '${{…}}' },
+    },
+  ]}
+/>
+
+A <Term id="reference" /> is a value in the form `${{…}}`. It points to a datastore or to a service.
+
+Your <Term id="shell" /> also uses `$` and `{`. Thus it tries to expand the reference.
+
+## Do it
+
+Put the full `KEY=value` text in single quotes.
+
+```bash title="Terminal"
+ferry env set api 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+```
+
+See [Environment & env groups](/docs/concepts/environment) and [Env var references](/docs/reference/env-references).

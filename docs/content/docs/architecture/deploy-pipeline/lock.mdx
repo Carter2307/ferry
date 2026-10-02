@@ -1,0 +1,55 @@
+---
+title: The service lock
+description: The service lock lets one operation at a time change the containers of a service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'deploy', at: [0, 0], icon: 'deploy', label: 'Deploy' },
+    { id: 'reconciler', at: [0, 1], icon: 'restart', label: 'Reconciler' },
+    { id: 'lock', at: [1.5, 0.5], icon: 'lock', label: 'Service lock', note: 'free' },
+    { id: 'boxes', at: [3, 0.5], icon: 'boxes', label: 'Containers', note: 'of the service' },
+  ]}
+  edges={[
+    { from: 'deploy', to: 'lock' },
+    { from: 'reconciler', to: 'lock' },
+    { from: 'lock', to: 'boxes' },
+  ]}
+  steps={[
+    {
+      caption: 'Before it starts instances, the deploy takes the lock of the service.',
+      flow: ['deploy>lock'],
+      cut: ['reconciler>lock'],
+      tones: { lock: 'primary' },
+      notes: { lock: 'held by the deploy' },
+    },
+    {
+      caption: 'The deploy holds the lock. Only the deploy changes the containers.',
+      flow: ['deploy>lock', 'lock>boxes'],
+      cut: ['reconciler>lock'],
+      tones: { lock: 'primary', deploy: 'primary' },
+      notes: { lock: 'held by the deploy' },
+    },
+    {
+      caption: 'The reconciler tries to take the lock and does not wait. The service is busy, thus the reconciler skips it.',
+      cut: ['reconciler>lock'],
+      tones: { lock: 'primary', reconciler: 'muted' },
+      notes: { lock: 'held by the deploy', reconciler: 'skips the service' },
+    },
+    {
+      caption: 'The deploy ends and releases the lock. At its next pass, the reconciler takes the lock.',
+      flow: ['reconciler>lock', 'lock>boxes'],
+      cut: ['deploy>lock'],
+      tones: { lock: 'success', reconciler: 'primary' },
+      notes: { lock: 'held by reconciler' },
+    },
+  ]}
+/>
+
+Each service has one <Term id="service-lock" />. A <Term id="deploy" /> takes it at the start of the state `deploying` and keeps it until the deploy ends.
+
+## Why it exists
+
+Many parts of the engine change containers: a deploy, the <Term id="reconciler" />, a scale, a suspend. With the lock, they do not touch the containers of a deploy in progress.
+
+The reconciler never waits for the lock. It [skips a busy service](/docs/architecture/reconciler/services) until its next pass. Thus the reconciler never works against a deploy.

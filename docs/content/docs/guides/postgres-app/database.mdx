@@ -1,0 +1,28 @@
+---
+title: Create the database
+description: One command creates a Postgres datastore and prints its internal URL.
+---
+
+<Terminal
+  lines={[
+    '$ ferry db create notes-db --wait',
+    "Waiting for postgres 'notes-db' to become available…",
+    "Created postgres datastore 'notes-db' (dbs-be901a454ec7413aa1a2) — available",
+    'Internal URL: postgresql://notes_db:6dd99f93338045919b9e682913c3c6a4@notes-db:5432/notes_db',
+  ]}
+/>
+
+Ferry runs `postgres:16-alpine` as a <Term id="datastore" />. Its data is on a Docker <Term id="volume" />.
+
+## What is in the URL
+
+The <Term id="internal-url" /> has all that the app needs to connect.
+
+| Part | Value | Where it comes from |
+|---|---|---|
+| User | `notes_db` | The name of the datastore |
+| Password | `6dd99f93…` | Ferry makes it |
+| Host and port | `notes-db:5432` | The name of the datastore, on the private network |
+| Database | `notes_db` | The name of the datastore |
+
+See [Datastores](/docs/concepts/datastores) for the versions, the storage and the limits.

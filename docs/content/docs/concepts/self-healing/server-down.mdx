@@ -1,0 +1,62 @@
+---
+title: If ferryd stops
+description: When ferryd stops, your containers continue to run. Public traffic, cron runs and deploys stop.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'ferryd', at: [1.5, 0], icon: 'server', label: 'ferryd', note: 'proxy, cron' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'Service' },
+    { id: 'db', at: [3, 1.25], icon: 'database', label: 'Datastore' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'ferryd' },
+    { from: 'ferryd', to: 'app' },
+    { from: 'app', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'ferryd runs. Its proxy sends the public traffic to your services.',
+      flow: ['browser>ferryd', 'ferryd>app', 'app>db'],
+    },
+    {
+      caption: 'ferryd stops. The containers of services and datastores continue to run.',
+      cut: ['ferryd>app'],
+      flow: ['app>db'],
+      tones: { ferryd: 'danger', app: 'success', db: 'success' },
+      notes: { ferryd: 'stopped', app: 'runs', db: 'runs' },
+    },
+    {
+      caption: 'No public traffic arrives. No cron schedule starts a run. No deploy runs.',
+      cut: ['ferryd>app', 'browser>ferryd'],
+      tones: { ferryd: 'danger', browser: 'warning' },
+      notes: { ferryd: 'stopped', browser: 'no answer' },
+    },
+    {
+      caption: 'Services continue to reach each other and their datastores on the private network.',
+      cut: ['ferryd>app', 'browser>ferryd'],
+      flow: ['app>db'],
+      tones: { ferryd: 'danger', app: 'success', db: 'success' },
+      notes: { ferryd: 'stopped' },
+    },
+  ]}
+/>
+
+<Term id="ferryd" /> controls Docker, but it is not your apps. When it stops, Docker continues to run each <Term id="container" />.
+
+## While ferryd is down
+
+| Thing | State |
+|---|---|
+| Containers of services and datastores | They run |
+| The [private network](/docs/concepts/networking) | It works |
+| Public traffic | Stopped: no <Term id="proxy" /> |
+| Schedules of each <Term id="cron-job" /> | Stopped. Ferry skips the runs that it did not start. It does not run them later. |
+| Deploys | Stopped |
+
+## After that
+
+When `ferryd` starts, it repairs the state. See [When ferryd starts again](/docs/concepts/self-healing/server-start).
+
+To make systemd start `ferryd` after a crash or a reboot, see [Production setup](/docs/guides/production).

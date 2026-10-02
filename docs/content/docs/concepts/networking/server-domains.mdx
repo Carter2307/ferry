@@ -1,0 +1,73 @@
+---
+title: Domains of the server
+description: A domain of the server gives each public service a name under it, with one DNS record.
+---
+
+<Diagram
+  nodes={[
+    { id: 'record', at: [0, 1], icon: 'globe', label: '*.example.com', note: 'one DNS record' },
+    { id: 'proxy', at: [1.5, 1], icon: 'route', label: 'Proxy', note: 'your server' },
+    { id: 'shop', at: [3, 0], icon: 'box', label: 'shop', note: 'shop.example.com' },
+    { id: 'blog', at: [3, 1], icon: 'box', label: 'blog', note: 'blog.example.com' },
+    { id: 'docs', at: [3, 2], icon: 'box', label: 'docs', note: 'docs.example.com' },
+  ]}
+  edges={[
+    { from: 'record', to: 'proxy' },
+    { from: 'proxy', to: 'shop' },
+    { from: 'proxy', to: 'blog' },
+    { from: 'proxy', to: 'docs' },
+  ]}
+  steps={[
+    {
+      caption: 'You connect example.com and create one wildcard DNS record.',
+      hide: ['docs'],
+      cut: ['proxy>shop', 'proxy>blog'],
+      tones: { record: 'primary' },
+    },
+    {
+      caption: 'Each name under example.com now goes to your server.',
+      hide: ['docs'],
+      cut: ['proxy>shop', 'proxy>blog'],
+      flow: ['record>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'Each web service and static site answers at its name under example.com.',
+      hide: ['docs'],
+      flow: ['record>proxy', 'proxy>shop', 'proxy>blog'],
+      tones: { shop: 'success', blog: 'success' },
+    },
+    {
+      caption: 'A new service needs no new record.',
+      flow: ['record>proxy', 'proxy>docs'],
+      tones: { docs: 'success' },
+    },
+  ]}
+/>
+
+A <Term id="server-domain" /> is a name that Ferry serves your services under. Connect `example.com`: then each <Term id="web-service" /> and <Term id="static-site" /> also answers at `<name>.example.com`.
+
+One <Term id="wildcard-record" /> (`*.example.com`) covers each service, present and future.
+
+## Connect a domain
+
+```bash title="Terminal"
+ferry domains connect example.com   # prints the DNS record to create
+ferry domains                       # status of each domain, and what its last verification found
+```
+
+In the <Term id="dashboard" />, use **Server → Domains**. For the complete procedure, follow [Connect a domain](/docs/guides/domains).
+
+## The three names
+
+| Name | Meaning |
+|---|---|
+| <Term id="base-domain">Base domain</Term> | The first domain of a server (`--base-domain`). Ferry always serves it. |
+| Connected domain | A domain that you add. It starts as [`pending`](/docs/concepts/networking/domain-status). |
+| <Term id="default-domain">Default domain</Term> | The domain that Ferry shows service URLs with: the dashboard, `ferry open`, `FERRY_EXTERNAL_URL`. |
+
+<Accordions>
+  <Accordion title="Change the default domain">
+    If the default is a <Term id="local-name" />, the first domain that reaches the server becomes the default. To change it, use `ferry domains default`.
+  </Accordion>
+</Accordions>

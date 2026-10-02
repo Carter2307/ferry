@@ -1,0 +1,35 @@
+---
+title: Check the connection
+description: ferry info shows the server that the CLI uses and its main settings.
+---
+
+<Terminal
+  lines={[
+    '$ ferry info',
+    'Server:          http://127.0.0.1:7878',
+    'Version:         0.1.0 (CLI 0.1.0)',
+    'Proxy:           http://localhost:8080',
+    'Base domain:     localhost',
+    'Apps:            <name>.localhost',
+    'TLS:             disabled',
+    'Dashboard:       http://ferry.localhost:8080',
+    'GitHub webhook:  disabled',
+    'Docker:          29.2.0',
+    'Default limits:  512 MiB memory, 1 CPU per container',
+    'Docker host:     8 CPUs, 7.7 GiB memory',
+  ]}
+/>
+
+Run [`ferry info`](/docs/reference/cli#ferry-info) at each time that you want to test the connection.
+
+If the command prints these lines, the server URL and the <Term id="api-token" /> are good.
+
+## What ferry login tests
+
+`ferry login` calls `GET /api/v1/info` with the token before it saves the login.
+
+Thus a bad URL or a bad token fails immediately. `ferry login` saves nothing.
+
+## If it fails
+
+The error tells you what to do. See [Exit codes and errors](/docs/getting-started/cli/exit-codes).

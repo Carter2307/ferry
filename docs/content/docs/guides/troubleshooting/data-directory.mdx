@@ -1,0 +1,31 @@
+---
+title: Another ferryd uses the data directory
+description: Only one ferryd can use a data directory at a time.
+---
+
+## What you see
+
+```text title="ferryd" noCopy
+Error: another ferryd is already running with data directory /var/lib/ferry
+```
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'first', at: [0, 0], icon: 'ship', label: 'ferryd', note: 'runs', tone: 'success' },
+    { id: 'second', at: [0, 1], icon: 'ship', label: 'Second ferryd', note: 'stops', tone: 'danger' },
+    { id: 'dir', at: [1.75, 0.5], icon: 'folder', label: '/var/lib/ferry', note: 'data directory' },
+  ]}
+  edges={[
+    { from: 'first', to: 'dir', flow: true },
+    { from: 'second', to: 'dir', dashed: true, tone: 'danger' },
+  ]}
+/>
+
+A second `ferryd` started with the same `--data-dir`. Only one server can use a <Term id="data-directory" /> at a time.
+
+## How to repair it
+
+- Stop the other process.
+- Or give this `ferryd` its own data directory with `--data-dir`.

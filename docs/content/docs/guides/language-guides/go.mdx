@@ -1,0 +1,100 @@
+---
+title: Go
+description: Ferry compiles a Go app in a build image, then runs the binary in a small image.
+---
+
+<Diagram
+  nodes={[
+    { id: 'src', at: [0, 0], icon: 'folder', label: 'Your source', note: 'go.mod, main.go' },
+    { id: 'build', at: [1.5, 0], icon: 'hammer', label: 'Build image', note: 'golang:1.23-alpine' },
+    { id: 'bin', at: [1.5, 1], icon: 'file-code', label: 'Binary', note: '/out/app' },
+    { id: 'run', at: [3, 1], icon: 'package', label: 'Runtime image', note: 'alpine:3.20' },
+  ]}
+  edges={[
+    { from: 'src', to: 'build' },
+    { from: 'build', to: 'bin', label: 'go build' },
+    { from: 'bin', to: 'run' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry finds go.mod. The build image has the Go version of go.mod.',
+      hide: ['bin', 'run'],
+      flow: ['src>build'],
+    },
+    {
+      caption: 'go build makes one binary: /out/app.',
+      hide: ['run'],
+      flow: ['build>bin'],
+      tones: { bin: 'primary' },
+    },
+    {
+      caption: 'Ferry copies the binary to /usr/local/bin in the runtime image.',
+      flow: ['bin>run'],
+    },
+    {
+      caption: 'The container starts /usr/local/bin/app.',
+      tones: { run: 'success' },
+      notes: { run: '/usr/local/bin/app' },
+    },
+  ]}
+/>
+
+## A minimal example
+
+<Files>
+  <Folder name="hello-go" defaultOpen>
+    <File name="go.mod" />
+    <File name="main.go" />
+  </Folder>
+</Files>
+
+```go title="go.mod"
+module example.com/hello
+
+go 1.23
+```
+
+```go title="main.go"
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+)
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3000"
+	}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "Hello from Go on Ferry")
+	})
+	log.Printf("listening on :%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+```
+
+```bash title="Terminal"
+ferry up hello-go --follow
+```
+
+## What Ferry generates
+
+| Step | What Ferry generates |
+|---|---|
+| Build image | `golang:<version>-alpine`, with the `go` version of `go.mod` (`1.23` by default). `go mod download` runs in its own <Term id="layer" />, which Docker keeps in its cache. |
+| Build | `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app <package>`. The package is the root, if the root is `package main`. If not, it is the only main package below `cmd/<name>`. |
+| Runtime image | `alpine:3.20` with `ca-certificates` and `tzdata`. The binaries of `/out` go to `/usr/local/bin`. Ferry copies your source tree to `/app` (the work directory). Thus templates and static files are there. |
+| Start | `/usr/local/bin/app` |
+
+## More than one command
+
+Your project can have more than one command below `cmd/`, or a different layout. Then set a build command that writes the <Term id="binary" /> to `/out`:
+
+| Flag | Example |
+|---|---|
+| `--build-cmd` | `"go build -o /out/api ./cmd/api"` |
+| `--start-cmd` | `api` (or the full path) |

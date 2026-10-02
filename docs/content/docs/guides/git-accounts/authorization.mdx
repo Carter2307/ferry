@@ -1,0 +1,71 @@
+---
+title: How the authorization works
+description: The provider sends your browser back to Ferry with a code. Ferry exchanges the code for the access.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Your browser' },
+    { id: 'ferry', at: [2, 0], icon: 'ship', label: 'Ferry server' },
+    { id: 'provider', at: [2, 1], icon: 'shield-check', label: 'Provider', note: 'GitHub or GitLab' },
+  ]}
+  edges={[
+    { id: 'ask', from: 'browser', to: 'ferry' },
+    { id: 'page', from: 'ferry', to: 'browser' },
+    { id: 'confirm', from: 'browser', to: 'provider' },
+    { id: 'code', from: 'provider', to: 'browser' },
+    { id: 'exchange', from: 'ferry', to: 'provider', label: 'exchange' },
+  ]}
+  steps={[
+    {
+      caption: 'You click Connect. Your browser calls POST /api/v1/git/authorize.',
+      flow: ['ask'],
+      cut: ['page', 'code', 'exchange'],
+    },
+    {
+      caption: 'Ferry answers with the page of the provider to open, and a one-time state.',
+      flow: ['page'],
+      cut: ['ask', 'code', 'exchange'],
+    },
+    {
+      caption: 'You confirm on the page of the provider.',
+      flow: ['confirm'],
+      cut: ['page', 'code', 'exchange'],
+      tones: { provider: 'warning' },
+      notes: { provider: 'you confirm' },
+    },
+    {
+      caption: 'The provider sends your browser back to /git/callback with a code.',
+      flow: ['code'],
+      cut: ['page', 'confirm', 'exchange'],
+    },
+    {
+      caption: 'Your browser gives the code to Ferry: POST /api/v1/git/callback.',
+      flow: ['ask'],
+      cut: ['page', 'code', 'exchange'],
+    },
+    {
+      caption: 'Ferry exchanges the code for the key of the app or for the tokens. The connection is ready.',
+      flow: ['exchange'],
+      cut: ['page', 'code'],
+      tones: { ferry: 'success' },
+      notes: { ferry: 'connected' },
+    },
+  ]}
+/>
+
+<Callout title="The internet does not need to reach your server">
+GitHub and GitLab never call your server for the authorization. They send **your browser** back to the <Term id="dashboard" />. The dashboard gives the answer to the server. A server on <Term id="localhost" />, or on a network that the internet cannot reach, works if it can reach the provider.
+</Callout>
+
+## The state
+
+The state is a random value. Ferry makes one for each authorization and accepts it one time, for one hour. Ferry refuses an answer that does not have it.
+
+## Two round trips on GitHub
+
+On GitHub, the browser makes the round trip two times: one time to create the <Term id="github-app" />, one time to install it.
+
+## If you stop before the end
+
+You can close the tab on GitHub, or refuse on GitLab. Then the connection stays in the list as **Not finished**. Click **Finish connecting** to continue from the same step.

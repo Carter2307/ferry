@@ -1,0 +1,25 @@
+---
+title: Check the docs site
+description: Three commands in docs/ check the types, the links and the generated reference pages.
+---
+
+<Flow
+  steps={[
+    { icon: 'braces', title: 'typecheck', text: 'TypeScript checks the types of the site.' },
+    { icon: 'link', title: 'build', text: 'The build exports the site. Then it checks each internal link and anchor.', tone: 'warning' },
+    { icon: 'file-code', title: 'generate:check', text: 'It fails when a generated reference page is stale.', tone: 'warning' },
+  ]}
+/>
+
+## Run the checks
+
+```bash title="Terminal"
+cd docs
+npm run typecheck
+npm run build            # static export, then a check of every internal link and anchor
+npm run generate:check   # fails when a generated reference page is stale (needs cargo)
+```
+
+`npm run generate:check` needs <Term id="cargo" />. The other two commands need only <Term id="nodejs" />.
+
+See [Docs site](/docs/contributing/docs-site). [Generated references](/docs/contributing/docs-site/generated) explains the stale pages.

@@ -1,0 +1,59 @@
+---
+title: Design tokens
+description: The colors, the radii and the fonts are in one CSS file. The dashboard and the docs site read it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'tokens', at: [0, 0.5], icon: 'sliders', label: 'tokens.css', note: 'web/src/styles/' },
+    { id: 'web', at: [1.75, 0], icon: 'monitor', label: 'Dashboard', note: 'globals.css' },
+    { id: 'docs', at: [1.75, 1], icon: 'book', label: 'Docs site', note: 'app/global.css' },
+  ]}
+  edges={[
+    { from: 'tokens', to: 'web', label: 'import' },
+    { from: 'tokens', to: 'docs', label: 'import' },
+  ]}
+  steps={[
+    {
+      caption: 'One file has the colors, the radii and the font families.',
+      cut: ['tokens>web', 'tokens>docs'],
+      tones: { tokens: 'primary' },
+    },
+    {
+      caption: 'The dashboard imports the file from globals.css.',
+      cut: ['tokens>docs'],
+      flow: ['tokens>web'],
+      tones: { web: 'primary' },
+    },
+    {
+      caption: 'The docs site imports the same file. Thus the two always agree.',
+      flow: ['tokens>web', 'tokens>docs'],
+      tones: { web: 'success', docs: 'success' },
+    },
+  ]}
+/>
+
+A <Term id="design-token" /> is a value of the design with a name. The file is `web/src/styles/tokens.css`.
+
+The tokens are plain <Term id="css-custom-property">CSS custom properties</Term>:
+
+| Selector | Values |
+|---|---|
+| `:root` | The light values |
+| `.dark` | The dark values |
+
+<Callout type="warning" title="Change colors in tokens.css only">
+The two projects depend on this file. After a change, run the commands below.
+</Callout>
+
+## After a change
+
+```bash title="In web/"
+npm run typecheck
+npm run build
+npm test
+```
+
+```bash title="In docs/"
+npm run build
+```

@@ -1,0 +1,44 @@
+---
+title: Service entries
+description: Each entry of services needs a type and a name. The other keys are optional.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: web            # required
+    name: hello          # required
+    runtime: image       # optional, as each other key
+    image:
+      url: nginx:alpine
+```
+
+Each <Term id="blueprint-entry" /> of `services` describes one <Term id="service" />. Two <Term id="yaml-key">keys</Term> are necessary: `type` and `name`.
+
+## type and name
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `type` | string | required | The <Term id="service-type" />. See the table below. |
+| `name` | string | required | 1 to 40 lowercase letters, digits or `-`. It starts with a letter. No other service or datastore has the same name. |
+
+The name is also the <Term id="hostname" /> on the <Term id="private-network" /> and the start of the default URL.
+
+## The values of type
+
+| `type` | Ferry name, also accepted | Result |
+|---|---|---|
+| `web` | `web_service` | A <Term id="web-service" />. With `runtime: static`, a static site, as on Render. |
+| `pserv` | `private_service` | A <Term id="private-service" /> |
+| `worker` | `background_worker` | A <Term id="worker" /> |
+| `cron` | `cron_job` | A <Term id="cron-job" /> |
+| `static` | `static_site` | A <Term id="static-site" /> |
+| `redis`, `keyvalue` | | A [Redis datastore](/docs/reference/blueprint/redis), not a service |
+
+## The other keys
+
+- [Source](/docs/reference/blueprint/source): `runtime`, `repo`, `branch`, `image`
+- [Build](/docs/reference/blueprint/build): `rootDir`, `dockerfilePath`, `buildCommand`, `startCommand`
+- [Run and deploy](/docs/reference/blueprint/runtime): `port`, `healthCheckPath`, `numInstances`, `autoDeploy`, `schedule`
+- [Disk](/docs/reference/blueprint/disks) and [domains](/docs/reference/blueprint/domains)
+- [Limits](/docs/reference/blueprint/limits): `plan`, `memoryLimit`, `cpuLimit`
+- [Variables](/docs/reference/blueprint/env-vars): `envVars`

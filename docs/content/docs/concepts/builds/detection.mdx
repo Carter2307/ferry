@@ -1,0 +1,49 @@
+---
+title: Detection
+description: With the runtime auto, Ferry finds the runtime from the files in the root directory.
+---
+
+<Flow
+  caption="Ferry looks for these files in this order. The first file that it finds wins."
+  steps={[
+    { icon: 'file-code', title: 'Dockerfile', text: 'The runtime is docker.' },
+    { icon: 'file', title: 'package.json', text: 'The runtime is node. The files bun.lockb and bun.lock give the same result.' },
+    { icon: 'file', title: 'requirements.txt', text: 'The runtime is python. The files pyproject.toml and Pipfile give the same result.' },
+    { icon: 'file', title: 'go.mod', text: 'The runtime is go.' },
+    { icon: 'file', title: 'Cargo.toml', text: 'The runtime is rust.' },
+    { icon: 'file', title: 'Gemfile', text: 'The runtime is ruby.' },
+    { icon: 'file', title: 'index.html', text: 'The runtime is static.' },
+  ]}
+/>
+
+## The files
+
+These files tell Ferry the <Term id="runtime" />.
+
+| File in the root directory | Runtime |
+|---|---|
+| `Dockerfile` | `docker` |
+| `package.json`, `bun.lockb` or `bun.lock` | `node` |
+| `requirements.txt`, `pyproject.toml` or `Pipfile` | `python` |
+| `go.mod` | `go` |
+| `Cargo.toml` | `rust` |
+| `Gemfile` | `ruby` |
+| `index.html` | `static` |
+
+Ferry looks in the <Term id="root-directory" /> only, not in the folders below it.
+
+## See the result
+
+```text title="Deploy log" noCopy
+==> Detected Node.js runtime
+```
+
+## If no file is there
+
+| Case | Result |
+|---|---|
+| The Dockerfile path is not `Dockerfile` (`--dockerfile`) | The runtime is `docker`. |
+| The service is a static site | nginx serves the files as they are. |
+| All other cases | The build fails with `could not detect the runtime`. |
+
+To correct the failure, add one of the files, or [set the runtime](/docs/concepts/builds/runtimes).

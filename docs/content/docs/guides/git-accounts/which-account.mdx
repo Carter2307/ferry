@@ -1,0 +1,62 @@
+---
+title: Which account clones a repository
+description: At each deploy, Ferry reads the URL of the repository and chooses the account.
+---
+
+<Diagram
+  nodes={[
+    { id: 'url', at: [0, 0.5], icon: 'link', label: 'Repository URL', note: 'github.com/acme' },
+    { id: 'owner', at: [2, 0], icon: 'user', label: 'Account acme', note: 'the owner' },
+    { id: 'newest', at: [2, 1], icon: 'user', label: 'Account you', note: 'newest connection' },
+  ]}
+  edges={[
+    { from: 'url', to: 'owner' },
+    { from: 'url', to: 'newest' },
+  ]}
+  steps={[
+    {
+      caption: 'At each deploy, Ferry reads the URL of the repository.',
+      tones: { url: 'primary' },
+    },
+    {
+      caption: 'The account that owns the repository clones it.',
+      flow: ['url>owner'],
+      cut: ['url>newest'],
+      tones: { owner: 'success' },
+    },
+    {
+      caption: 'If no connected account owns it, the newest connection of that host clones it.',
+      hide: ['owner'],
+      flow: ['url>newest'],
+      tones: { newest: 'success' },
+    },
+    {
+      caption: 'For an SSH URL, a path on the server or a different host, Ferry uses no account.',
+      cut: ['url>owner', 'url>newest'],
+      tones: { owner: 'muted', newest: 'muted' },
+      notes: { url: 'git@github.com:…' },
+    },
+  ]}
+/>
+
+You choose nothing for each <Term id="service" />. Ferry reads the URL of the <Term id="repository" /> each time it deploys. This applies to a service from the dashboard, the <Term id="cli" />, a <Term id="blueprint" /> or the <Term id="api" />.
+
+Example: you connect the account `you`. Immediately, Ferry <Term id="clone">clones</Term> each repository on `github.com/you/…` with it.
+
+## URLs that get an account
+
+| URL of the repository | Account |
+|---|---|
+| `https://` or `http://`, on the host of a connected account (for example `github.com`) | Yes |
+| An SSH URL | No |
+| A path on the server | No |
+| A different host | No |
+| A URL with its own credentials | No |
+
+## An organization on GitHub
+
+A <Term id="github-app" /> reads only the account where you installed it. To deploy the repositories of an organization, connect the organization too.
+
+## See the account of a service
+
+Open **Settings → Build & deploy** of the service. The page shows the account that clones the repository. It has the same **Branch** list.

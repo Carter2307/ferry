@@ -1,0 +1,55 @@
+---
+title: Blue-green and recreate
+description: The engine starts new instances next to the old ones, or after them for a service with a disk.
+---
+
+<Diagram
+  nodes={[
+    { id: 'old', at: [0, 0], icon: 'box', label: 'Old instance', note: 'answers' },
+    { id: 'new', at: [2.5, 0], icon: 'box', label: 'New instance' },
+    { id: 'disk', at: [1.25, 1], icon: 'disk', label: 'Disk', note: 'one container only' },
+  ]}
+  edges={[
+    { from: 'old', to: 'disk' },
+    { from: 'new', to: 'disk' },
+  ]}
+  steps={[
+    {
+      caption: 'Blue-green, the default: the old instances continue to answer while the new instances start.',
+      hide: ['disk'],
+      tones: { old: 'success', new: 'primary' },
+      notes: { new: 'starts' },
+    },
+    {
+      caption: 'Recreate, for a service with a disk: the old instance uses the disk.',
+      hide: ['new'],
+      flow: ['old>disk'],
+      tones: { old: 'success' },
+    },
+    {
+      caption: 'The engine stops the old instance first. The service is not available for a short time.',
+      hide: ['new'],
+      cut: ['old>disk'],
+      tones: { old: 'danger' },
+      notes: { old: 'stopped' },
+    },
+    {
+      caption: 'Then the new instance starts with the disk.',
+      hide: ['old'],
+      flow: ['new>disk'],
+      tones: { new: 'success' },
+      notes: { new: 'starts' },
+    },
+  ]}
+/>
+
+| Strategy | For | What the engine does |
+|---|---|---|
+| <Term id="blue-green">Blue-green</Term> (default) | A service with no disk | It starts the new instances next to the old instances. The old instances answer until the switch. |
+| <Term id="recreate">Recreate</Term> | A service with a <Term id="disk" /> | It stops the old instance first. Then it starts the new instance. |
+
+## Why recreate exists
+
+Two containers cannot share a disk safely. Thus a service with a disk has no <Term id="zero-downtime" /> deploy.
+
+For the user view, see [Scaling](/docs/concepts/scaling).

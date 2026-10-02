@@ -1,0 +1,30 @@
+{
+  "title": "Builds & runtimes",
+  "icon": "Hammer",
+  "pages": [
+    "---How a build works---",
+    "steps",
+    "runtimes",
+    "detection",
+    "dockerfile",
+    "generated",
+    "---Languages---",
+    "node",
+    "python",
+    "go",
+    "rust",
+    "ruby",
+    "start-command",
+    "---Static sites---",
+    "static-sites",
+    "static-build",
+    "publish-directory",
+    "---Options---",
+    "root-directory",
+    "build-env",
+    "build-secrets",
+    "cache",
+    "images",
+    "limits"
+  ]
+}

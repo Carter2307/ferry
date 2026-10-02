@@ -1,0 +1,69 @@
+---
+title: Load balancing
+description: The proxy gives each new request to the next instance of the service, in turn.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 1], icon: 'route', label: 'Proxy', note: 'round-robin' },
+    { id: 'a', at: [2.5, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [2.5, 1], icon: 'box', label: 'Instance 2' },
+    { id: 'c', at: [2.5, 2], icon: 'box', label: 'Instance 3' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'a' },
+    { from: 'proxy', to: 'b' },
+    { from: 'proxy', to: 'c' },
+  ]}
+  steps={[
+    {
+      caption: 'The first request goes to instance 1.',
+      flow: ['browser>proxy', 'proxy>a'],
+      tones: { a: 'primary' },
+    },
+    {
+      caption: 'The next request goes to instance 2.',
+      flow: ['browser>proxy', 'proxy>b'],
+      tones: { b: 'primary' },
+    },
+    {
+      caption: 'The next request goes to instance 3. Then the list starts again.',
+      flow: ['browser>proxy', 'proxy>c'],
+      tones: { c: 'primary' },
+    },
+    {
+      caption: 'Instance 2 accepts no connection. The proxy sends it no traffic.',
+      cut: ['proxy>b'],
+      flow: ['browser>proxy', 'proxy>a'],
+      tones: { a: 'primary', b: 'danger' },
+      notes: { b: 'no connection' },
+    },
+  ]}
+/>
+
+A <Term id="service" /> can have more than one <Term id="instance" />. Then the <Term id="proxy" /> shares the requests between them. This is <Term id="load-balancing" />.
+
+The rule is <Term id="round-robin" />: each instance gets a request in its turn.
+
+## The rules
+
+- A route points only at instances that accept <Term id="tcp">TCP connections</Term>.
+- A `GET` or `HEAD` request with no body cannot reach an instance: the proxy tries it one more time on a different instance.
+- The proxy does not try other requests again.
+- During a <Term id="deploy" />, the proxy moves to the new instances in one step, after they pass their <Term id="health-check" />. See [Deploys](/docs/concepts/deploys).
+
+## Add instances
+
+```bash title="Terminal"
+ferry scale shop 3
+```
+
+See [Disks, scaling & suspend](/docs/concepts/scaling).
+
+<Accordions>
+  <Accordion title="On the private network">
+    The proxy balances only the public traffic. Between services, the DNS of Docker gives the addresses of all the instances. See [Private network](/docs/concepts/networking/private-network).
+  </Accordion>
+</Accordions>

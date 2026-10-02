@@ -1,0 +1,77 @@
+---
+title: Upgrade Ferry
+description: Replace the two binaries and restart the unit. Your containers continue to run during the restart.
+---
+
+<Diagram
+  nodes={[
+    { id: 'net', at: [0, 0], icon: 'globe', label: 'Internet' },
+    { id: 'ferryd', at: [1.25, 0], icon: 'ship', label: 'ferryd', note: 'with its proxy' },
+    { id: 'app', at: [2.5, 0], icon: 'boxes', label: 'Containers' },
+  ]}
+  edges={[
+    { from: 'net', to: 'ferryd' },
+    { from: 'ferryd', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'Before the upgrade, the proxy of ferryd sends the public traffic to your containers.',
+      flow: ['net>ferryd', 'ferryd>app'],
+    },
+    {
+      caption: 'ferryd restarts. The containers continue to run, but no public traffic gets to them.',
+      cut: ['ferryd>app'],
+      tones: { ferryd: 'warning', app: 'success' },
+      notes: { ferryd: 'restarts' },
+    },
+    {
+      caption: 'ferryd is back with the new version. The traffic flows again.',
+      flow: ['net>ferryd', 'ferryd>app'],
+      tones: { ferryd: 'success' },
+      notes: { ferryd: 'new version' },
+    },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Build the new version
+
+See [Installation](/docs/getting-started/installation).
+
+</Step>
+<Step>
+
+### Replace the binaries
+
+Replace the two <Term id="binary">binaries</Term> in `/usr/local/bin`. Use the same command as for the first install.
+
+```bash title="Terminal"
+sudo install -m 755 ferryd ferry /usr/local/bin/
+```
+
+</Step>
+<Step>
+
+### Restart the unit
+
+```bash title="Terminal"
+sudo systemctl restart ferryd
+```
+
+</Step>
+</Steps>
+
+<Callout type="warning" title="Deploys in progress fail">
+A deploy that is in progress at the moment of the restart gets a failed status. See [Self-healing](/docs/concepts/self-healing).
+</Callout>
+
+<Accordions>
+  <Accordion title="From a version without resource limits">
+    - The containers that run continue without limits until Ferry replaces them. Deploys, restarts, the <Term id="reconciler" /> and job runs start new containers with limits: the limits of the service, or the defaults of the server. `ferry restart NAME` gives a service its limits without a build.
+    - A datastore from before the upgrade runs without limits until you change its limits or Ferry creates its container again. `ferry db update NAME --memory default` applies the server defaults in place.
+    - Before, Ferry ignored `plan:` in a `render.yaml`. Now the first apply of such a file restarts the live services whose `plan:` sets their limits, without a build. It also applies the plans of its databases and key value stores to their containers in place.
+    - With the default memory, the kernel stops an app or a database that needs more. First give it its own limit (`ferry update NAME --memory 2G`, `ferry db update NAME --memory 2G`), or raise `--default-memory-limit`.
+  </Accordion>
+</Accordions>

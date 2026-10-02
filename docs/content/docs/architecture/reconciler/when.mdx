@@ -1,0 +1,32 @@
+---
+title: When it runs
+description: The reconciler runs a pass at boot, each 10 seconds, and when an operation asks for it.
+---
+
+<Flow
+  steps={[
+    { icon: 'power', title: 'Boot pass', text: 'At startup, before the proxy accepts traffic.' },
+    { icon: 'timer', title: 'After 2 seconds', text: 'The first periodic pass.' },
+    { icon: 'repeat', title: 'Each 10 seconds', text: 'A full pass over each service and each datastore.' },
+    { icon: 'zap', title: 'On demand', text: 'After each deploy, and on scale and resume.', tone: 'primary' },
+  ]}
+/>
+
+A <Term id="reconciler-pass" /> is one run of the <Term id="reconciler" />.
+
+| Pass | When | Notes |
+|---|---|---|
+| Boot | At startup, before the proxy accepts traffic | The engine installs the routes first, and it waits for them. Thus the proxy serves the live instances from its first request. The rest of the work for each service continues in the background. |
+| Periodic | Each 10 seconds. The first one comes 2 seconds after boot. | A full pass over each service and each datastore. |
+| On demand | After each deploy. On scale and resume. | A full pass runs immediately after a deploy ends. It applies what changed during the deploy, for example a scale. A scale and a resume reconcile only their own service, immediately. |
+
+## Passes do not overlap
+
+Two passes never run at the same time. Each pass runs in its own task. If a pass fails, the engine logs the failure and the next pass starts on time.
+
+## Between the passes
+
+Two watchers run next to the passes:
+
+- The [route watcher](/docs/architecture/reconciler/route-watcher) follows the host ports each second.
+- The [OOM watcher](/docs/architecture/reconciler/oom-watcher) logs each out-of-memory kill.

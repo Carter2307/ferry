@@ -1,0 +1,71 @@
+---
+title: References
+description: A reference is a value that Ferry replaces with the real value each time a container starts.
+---
+
+<Diagram
+  nodes={[
+    { id: 'saved', at: [0, 0], icon: 'save', label: 'Saved value', note: '${{…}}' },
+    { id: 'ferry', at: [1.5, 0], icon: 'ship', label: 'Ferry', note: 'at each start' },
+    { id: 'box', at: [3, 0], icon: 'box', label: 'Container', note: 'real value' },
+    { id: 'db', at: [1.5, 1], icon: 'database', label: 'app-db', note: 'datastore' },
+  ]}
+  edges={[
+    { from: 'saved', to: 'ferry' },
+    { from: 'db', to: 'ferry' },
+    { from: 'ferry', to: 'box' },
+  ]}
+  steps={[
+    {
+      caption: 'You save DATABASE_URL=${{datastore.app-db.connectionString}}.',
+      tones: { saved: 'primary' },
+    },
+    {
+      caption: 'A container starts. Ferry reads the current host, port and password of app-db.',
+      flow: ['db>ferry'],
+      tones: { db: 'primary', ferry: 'primary' },
+    },
+    {
+      caption: 'Ferry replaces the reference with the real value.',
+      flow: ['saved>ferry', 'ferry>box'],
+      tones: { ferry: 'primary' },
+    },
+    {
+      caption: 'The app gets DATABASE_URL=postgresql://app_db:…@app-db:5432/app_db.',
+      tones: { box: 'success' },
+      notes: { box: 'postgresql://…' },
+    },
+  ]}
+/>
+
+A value can contain a <Term id="reference" />: `${{kind.name.property}}`. Ferry resolves it each time a <Term id="container" /> starts. Thus an app always gets the current host, port or password.
+
+## The three parts
+
+| Part | Meaning | Example |
+|---|---|---|
+| `kind` | `datastore` or `service` | `datastore` |
+| `name` | The name of the <Term id="datastore" /> or the <Term id="service" /> | `app-db` |
+| `property` | What you want from it | `connectionString` |
+
+See the properties of a [datastore](/docs/concepts/environment/datastore-properties) and of a [service](/docs/concepts/environment/service-properties).
+
+## Use references
+
+```bash title="Terminal"
+ferry env set api \
+  'DATABASE_URL=${{datastore.app-db.connectionString}}' \
+  'REDIS_URL=${{datastore.cache.connectionString}}' \
+  'SEARCH_URL=${{service.search.internalUrl}}/v1'
+```
+
+The [reference syntax page](/docs/reference/env-references) has the full grammar.
+
+<Accordions>
+  <Accordion title="Write a literal ${{">
+    To write a literal `${{`, escape it as `$${{`. The value `$${{ not.a.ref }}` reaches the app as `${{ not.a.ref }}`.
+  </Accordion>
+  <Accordion title="References in a build">
+    References also reach <Term id="build">builds</Term>: Ferry gives the variables to the build with their references resolved. If Ferry cannot resolve a reference yet, it leaves the variable out of the build. The build log has a warning.
+  </Accordion>
+</Accordions>

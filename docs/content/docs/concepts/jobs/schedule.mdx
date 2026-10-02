@@ -1,0 +1,46 @@
+---
+title: Schedule syntax
+description: A schedule is a cron expression of five fields. Ferry reads it in UTC.
+---
+
+```text
+┌───────────── minute        0-59
+│ ┌─────────── hour          0-23
+│ │ ┌───────── day of month  1-31
+│ │ │ ┌─────── month         1-12
+│ │ │ │ ┌───── day of week   0-7 (0 and 7 are Sunday)
+│ │ │ │ │
+* * * * *
+```
+
+A <Term id="cron-schedule" /> uses the standard <Term id="cron-expression" /> of 5 fields. Ferry reads it in <Term id="utc" />, to the minute. A `*` means each value.
+
+## Examples
+
+| Schedule | A run starts |
+|---|---|
+| `*/15 * * * *` | each 15 minutes |
+| `0 3 * * *` | each day at 03:00 UTC |
+| `30 8 * * 1-5` | at 08:30 UTC, Monday to Friday |
+| `0 0 1 * *` | at midnight UTC on the first day of each month |
+| `@hourly` | at minute 0 of each hour |
+
+The aliases are `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight` and `@hourly`.
+
+## Change a schedule
+
+```bash title="Terminal"
+ferry update nightly --schedule "0 4 * * *"
+```
+
+The change applies at the next check of the <Term id="scheduler" />.
+
+<Accordions>
+  <Accordion title="What Ferry refuses">
+    Ferry refuses these schedules, with a message that names the problem:
+
+    - an expression of 6 fields (with seconds)
+    - an unknown alias
+    - a schedule with no possible date, such as `0 0 30 2 *`
+  </Accordion>
+</Accordions>

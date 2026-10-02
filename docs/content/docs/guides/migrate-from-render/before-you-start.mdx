@@ -1,0 +1,30 @@
+---
+title: Before you migrate
+description: You need a Ferry server, the ferry CLI, and repositories that the server can clone.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0.5], icon: 'terminal', label: 'ferry CLI', note: 'logged in' },
+    { id: 'server', at: [1.5, 0.5], icon: 'server', label: 'Ferry server', note: 'with Docker' },
+    { id: 'repo', at: [3, 0], icon: 'repo', label: 'Repositories', note: 'the server clones' },
+    { id: 'domain', at: [3, 1], icon: 'globe', label: 'Your domains', note: 'reach the server' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'server', flow: true },
+    { from: 'server', to: 'repo', flow: true },
+    { from: 'domain', to: 'server' },
+  ]}
+/>
+
+| You need | Details |
+|---|---|
+| A Ferry server with <Term id="docker" /> | The internet must reach it at the domains that you use. See [Production setup](/docs/guides/production). |
+| The `ferry` <Term id="cli" /> | Log in to the server with it. |
+| <Term id="repository">Repositories</Term> that the server can reach | Public, or with credentials in the URL, or over <Term id="ssh" />. See [Auto-deploy from GitHub](/docs/guides/github-auto-deploy). |
+
+## Private repositories on GitHub or GitLab
+
+[Connect the account](/docs/guides/git-accounts) to the server before you apply the <Term id="blueprint" />.
+
+Then Ferry clones each repository of that account with it. You add nothing to the blueprint.

@@ -1,0 +1,51 @@
+---
+title: Change feed
+description: The change feed tells a client what changed. The client then gets only that again.
+---
+
+<Terminal
+  lines={[
+    '$ curl -N -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/events',
+    'event: ready',
+    'data: {}',
+    '',
+    'event: change',
+    'data: {"kind":"env_group","id":"evg-c15c37b6f91044ff920b","service_id":null,"action":"created"}',
+    '',
+    'event: change',
+    'data: {"kind":"env_group","id":"evg-c15c37b6f91044ff920b","service_id":null,"action":"updated"}',
+    '',
+    'event: change',
+    'data: {"kind":"env_group","id":"evg-c15c37b6f91044ff920b","service_id":null,"action":"deleted"}',
+  ]}
+/>
+
+`GET /api/v1/events` is the <Term id="change-feed" />. With it, a client does not need <Term id="polling" />.
+
+## The two events
+
+| Event | Meaning |
+|---|---|
+| `ready` | It comes first, when the feed watches the store. The feed reports each change after it. Get your data **after** `ready`. |
+| `change` | Something changed. Its `data` is a `ChangeEvent`. |
+
+## The fields of a ChangeEvent
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | `"service"`, `"deploy"`, `"datastore"`, `"env_group"`, `"job"`, `"git_connection"` or `"all"` | What changed. |
+| `id` | string | The id of the changed resource. It is `*` with `resync`. |
+| `service_id` | string or null | For a service: its own id. For a deploy or a job: the id of its service. If not: null. |
+| `action` | `"created"`, `"updated"`, `"deleted"` or `"resync"` | What occurred. |
+
+Each `ChangeEvent` has all four fields.
+
+<Accordions>
+  <Accordion title="resync: your client is too slow">
+    A client that is more than 1024 changes behind gets `{"kind":"all","id":"*","service_id":null,"action":"resync"}`. Then get all your data again.
+  </Accordion>
+  <Accordion title="How fast a change arrives">
+    - The feed reports a write from the API immediately.
+    - The engine also makes changes: the progress of a deploy, the creation of a datastore, cron runs. To find them, the server compares the store each second while one client or more listens. Thus they arrive in about one second.
+  </Accordion>
+</Accordions>

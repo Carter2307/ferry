@@ -1,0 +1,33 @@
+---
+title: Databases
+description: Each entry of databases becomes a Postgres datastore on the Ferry server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'entry', at: [0, 0], icon: 'file-code', label: 'databases', note: 'in render.yaml' },
+    { id: 'store', at: [1.75, 0], icon: 'database', label: 'Datastore', note: 'postgres:16-alpine', tone: 'primary' },
+    { id: 'volume', at: [3.25, 0], icon: 'disk', label: 'Volume', note: 'keeps the data' },
+  ]}
+  edges={[
+    { from: 'entry', to: 'store', label: 'one entry', flow: true },
+    { from: 'store', to: 'volume' },
+  ]}
+/>
+
+| Key | On Ferry |
+|---|---|
+| `name` | Supported. |
+| `postgresMajorVersion` | The <Term id="postgres" /> version: `postgres:<version>-alpine`. The default is `16`. |
+| `databaseName`, `user` | Supported. |
+| `plan` | The <Term id="memory-limit" /> of the <Term id="container" />. See [Plans](/docs/guides/migrate-from-render/plans). |
+| `memoryLimit`, `cpuLimit` | Ferry keys: they set the limits directly and replace the limits of the plan. |
+| All other keys (`region`, `ipAllowList`, `readReplicas`, …) | Ferry ignores them, with a warning. |
+
+## See the result
+
+```bash title="Terminal"
+ferry db show shop-db
+```
+
+To copy the data, see [Move your Postgres data](/docs/guides/migrate-from-render/postgres-data).

@@ -1,0 +1,64 @@
+---
+title: A render.yaml after a Ferry upgrade
+description: Older Ferry versions ignored plan. The first apply after the upgrade gives each entry with a plan its limits.
+---
+
+<Diagram
+  nodes={[
+    { id: 'file', at: [0, 0.5], icon: 'file-code', label: 'render.yaml', note: 'with a plan' },
+    { id: 'ferry', at: [1.5, 0.5], icon: 'ship', label: 'Ferry' },
+    { id: 'svc', at: [3, 0], icon: 'box', label: 'Live service' },
+    { id: 'db', at: [3, 1], icon: 'database', label: 'Datastore' },
+  ]}
+  edges={[
+    { from: 'file', to: 'ferry' },
+    { from: 'ferry', to: 'svc' },
+    { from: 'ferry', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'An older Ferry ignored plan. The containers have the server defaults.',
+      flow: ['file>ferry'],
+      notes: { ferry: 'old version', svc: 'server default', db: 'server default' },
+    },
+    {
+      caption: 'You upgrade Ferry and apply the same file. Now each plan gives limits.',
+      flow: ['file>ferry'],
+      tones: { ferry: 'primary' },
+      notes: { ferry: 'new version', svc: 'server default', db: 'server default' },
+    },
+    {
+      caption: 'Each live service with a plan restarts with its limits.',
+      flow: ['ferry>svc'],
+      tones: { svc: 'warning' },
+      notes: { ferry: 'new version', svc: 'restart', db: 'server default' },
+    },
+    {
+      caption: 'Each datastore with a plan gets its limits in place.',
+      flow: ['ferry>db'],
+      tones: { db: 'success' },
+      notes: { ferry: 'new version', svc: 'new limits', db: 'new limits' },
+    },
+  ]}
+/>
+
+Older Ferry versions ignored `plan`. After the upgrade, the first apply of a `render.yaml` that you applied before gives each entry with a `plan` its limits.
+
+## What the first apply does
+
+| Entry with a `plan` | Result |
+|---|---|
+| A live service | It restarts. |
+| A datastore | Ferry changes its limits in place. |
+
+## Before you apply
+
+Run a <Term id="dry-run" />:
+
+```bash title="Terminal"
+ferry blueprint apply --dry-run
+```
+
+These entries show below **Would update**, with changes such as `memory_limit: (server default) → 512 MiB`.
+
+See [Upgrade from a Ferry with no limits](/docs/concepts/resource-limits/upgrade).

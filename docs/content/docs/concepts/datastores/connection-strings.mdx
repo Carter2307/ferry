@@ -1,0 +1,37 @@
+---
+title: Connection strings
+description: A datastore has two URLs. The internal URL is for your services. The external URL is for the server itself.
+---
+
+<Terminal
+  lines={[
+    '$ ferry db show app-db',
+    'Name:           app-db',
+    'ID:             dbs-be901a454ec7413aa1a2',
+    'Kind:           postgres 16',
+    'Status:         available',
+    'Database:       app_db',
+    'User:           app_db',
+    'Password:       6dd99f93338045919b9e682913c3c6a4',
+    'Internal host:  app-db:5432',
+    'Internal URL:   postgresql://app_db:6dd99f93338045919b9e682913c3c6a4@app-db:5432/app_db',
+    'External URL:   postgresql://app_db:6dd99f93338045919b9e682913c3c6a4@127.0.0.1:62975/app_db',
+    'Memory limit:   server default (512 MiB)',
+    'CPU limit:      server default (1 CPU)',
+    'Created:        just now',
+  ]}
+/>
+
+A <Term id="connection-string" /> is one URL with the user, the password, the host, the port and the database. The two URLs go to the same <Term id="datastore" />. Only the host and the port are different.
+
+## The two URLs
+
+| URL | Format | Use it from |
+|---|---|---|
+| <Term id="internal-url">Internal</Term> | `postgresql://USER:PASSWORD@NAME:5432/DATABASE` <br /> `redis://default:PASSWORD@NAME:6379` | Services and jobs, on the [private network](/docs/concepts/networking) |
+| <Term id="external-url">External</Term> | The same, with `127.0.0.1:<host port>` | The server itself, or your machine through an <Term id="ssh-tunnel" /> |
+
+## Use them
+
+- For a service, see [Connect a service](/docs/concepts/datastores/connect).
+- For your machine, see [Connect from your machine](/docs/concepts/datastores/external).

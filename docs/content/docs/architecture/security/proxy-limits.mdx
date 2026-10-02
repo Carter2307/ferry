@@ -1,0 +1,39 @@
+---
+title: Timeouts and limits
+description: The proxy puts a limit on each client connection. A slow or idle client cannot keep it open.
+---
+
+<Flow
+  caption="The limits of one client connection"
+  steps={[
+    { icon: 'plug', title: 'Connect', text: 'One client address can have 256 connections.' },
+    { icon: 'lock', title: 'TLS handshake', text: 'The handshake has 10 seconds.' },
+    { icon: 'inbox', title: 'Request head', text: 'The head of a request has 30 seconds to arrive.' },
+    { icon: 'upload', title: 'Request body', text: 'After a pause of 60 seconds in the body, the proxy answers 408.', tone: 'warning' },
+    { icon: 'hourglass', title: 'Idle', text: 'A connection with no request closes after 60 seconds.' },
+  ]}
+/>
+
+## The limits of the proxy
+
+| Limit | Value |
+|---|---|
+| Open connections | The limit comes from the open-file limit of the process: 10,000 at most. At startup, `ferryd` raises its soft open-file limit to the hard limit. |
+| Connections per client address | 256. An IPv6 client counts per /64. The limit does not apply to loopback clients, such as a local front proxy or a tunnel. |
+| <Term id="tls" /> handshake | 10 seconds |
+| First request head, and each next head on HTTP/1 | 30 seconds. This also limits an idle HTTP/1 keep-alive connection. |
+| Idle connection (no request in progress) | 60 seconds. 5 seconds while the server is at the connection limit. |
+| Pause while a client sends a request body | 60 seconds, then `408` |
+
+## What the timeouts never cut
+
+- Requests in progress: streamed answers such as <Term id="sse" />, long downloads, uploads that continue to send.
+- <Term id="websocket" /> tunnels.
+
+## The limits of the API
+
+| Body | Largest size |
+|---|---|
+| A request body | 2 MiB |
+| A source upload | 512 MiB |
+| A GitHub delivery | 25 MiB |

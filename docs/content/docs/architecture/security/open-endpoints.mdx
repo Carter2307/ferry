@@ -1,0 +1,65 @@
+---
+title: Endpoints with no authentication
+description: Each API request needs a session or a token. A few endpoints that show nothing secret need none.
+---
+
+<Diagram
+  nodes={[
+    { id: 'any', at: [0, 0.5], icon: 'user', label: 'Any caller', note: 'no proof' },
+    { id: 'api', at: [1.75, 0], icon: 'shield-check', label: '/api/v1/…', note: 'needs a proof' },
+    { id: 'open', at: [1.75, 1], icon: 'health', label: '/healthz', note: 'nothing secret' },
+  ]}
+  edges={[
+    { from: 'any', to: 'api' },
+    { from: 'any', to: 'open' },
+  ]}
+  steps={[
+    {
+      caption: 'A request to /api/v1 with no session and no token gets the answer 401.',
+      flow: ['any>api'],
+      tones: { api: 'danger' },
+      notes: { api: '401' },
+    },
+    {
+      caption: 'A route that does not exist gives the same 401. The server tests the proof first.',
+      flow: ['any>api'],
+      tones: { api: 'danger' },
+      notes: { api: '401' },
+    },
+    {
+      caption: 'A few endpoints answer with no proof. They show nothing secret.',
+      flow: ['any>open'],
+      tones: { open: 'success' },
+      notes: { open: 'answers' },
+    },
+  ]}
+/>
+
+<Term id="authentication">Authentication</Term> is the rule. The <Term id="endpoint">endpoints</Term> in these two tables are the exceptions.
+
+## Open because they show nothing secret
+
+| Endpoint | Note |
+|---|---|
+| `/healthz` | Tells that the server is alive. |
+| `/api/openapi.json` | The <Term id="openapi" />. |
+| `/api/docs` | <Term id="swagger-ui" />. It asks for an API token to send requests. |
+| The static files of the dashboard | The dashboard asks you to sign in before it shows data. |
+
+## Open because the caller has no proof yet
+
+| Endpoint | Who calls it |
+|---|---|
+| `/api/v1/auth`: `status`, `setup`, `login`, `logout` | A browser, before it signs in |
+| `/api/v1/auth`: the two calls of `ferry login` | A terminal, to start a login and to get its token |
+
+<Accordions>
+  <Accordion title="Endpoints with their own secret">
+    Webhooks do not use the account or an API token. See [Deploy hook keys](/docs/architecture/security/hook-keys) and [GitHub webhooks](/docs/architecture/security/github-webhooks).
+
+    The proxy answers one path with no authentication. See [The domain check path](/docs/architecture/security/domain-check).
+  </Accordion>
+  <Accordion title="Calls from a browser">
+    `ferryd` sends no CORS headers, and its pages have protective headers. See [Changes come from the dashboard only](/docs/architecture/security/cross-site).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,55 @@
+---
+title: The DNS record
+description: One record with the name * sends each name under the domain to your server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'shop', at: [0, 0], label: 'shop.example.com' },
+    { id: 'api', at: [0, 1], label: 'api.example.com' },
+    { id: 'root', at: [0, 2], label: 'example.com' },
+    { id: 'star', at: [1.5, 0.5], icon: 'globe', label: 'A  *', note: 'necessary' },
+    { id: 'at', at: [1.5, 2], icon: 'globe', label: 'A  @', note: 'optional' },
+    { id: 'server', at: [3, 1], icon: 'server', label: 'Your server', note: '203.0.113.10' },
+  ]}
+  edges={[
+    { from: 'shop', to: 'star' },
+    { from: 'api', to: 'star' },
+    { from: 'root', to: 'at' },
+    { from: 'star', to: 'server' },
+    { from: 'at', to: 'server' },
+  ]}
+  steps={[
+    {
+      caption: 'The record * answers for each name under the domain.',
+      flow: ['shop>star', 'api>star', 'star>server'],
+      tones: { star: 'primary' },
+    },
+    {
+      caption: 'The record @ answers for the domain itself.',
+      flow: ['root>at', 'at>server'],
+      tones: { at: 'primary' },
+    },
+  ]}
+/>
+
+Add the <Term id="dns-record">records</Term> that Ferry shows at your <Term id="dns-provider" />.
+
+| Type | Name | Value | Use |
+|---|---|---|---|
+| `A` | `*` | The public <Term id="ip-address" /> of the server | Necessary: each service |
+| `A` | `@` | The same | Optional: only to serve the domain itself |
+
+## What the names mean
+
+- **`*` is a wildcard.** One <Term id="wildcard-record" /> answers for each name under the domain. Thus a new service needs no new record.
+- **`@` is the domain itself.** You need it only to serve something at `example.com`, as a [custom domain](/docs/guides/custom-domains-https) of one service.
+
+<Accordions>
+  <Accordion title="If you connect a subdomain">
+    The names are relative to the domain. Example: you connect `apps.example.com`, and your <Term id="dns-zone" /> is `example.com`. Then name the records `*.apps` and `apps` in that zone. Ferry shows the two forms.
+  </Accordion>
+  <Accordion title="IPv6">
+    If the server knows its own <Term id="ipv6" /> address (`--public-ip`), Ferry also shows `AAAA` records. They are optional next to the `A` records. See [The public address of the server](/docs/guides/domains/public-address).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,29 @@
+---
+title: At boot
+description: At boot, the engine first closes what a previous process did not complete, then runs the boot pass.
+---
+
+<Flow
+  steps={[
+    { icon: 'error', title: 'Deploys', text: 'Deploys that were not complete fail.', tone: 'danger' },
+    { icon: 'calendar', title: 'Job runs', text: 'Job runs that were not complete fail with the same error.', tone: 'danger' },
+    { icon: 'trash', title: 'Build folders', text: 'The engine deletes the scratch directories of builds that remain.' },
+    { icon: 'route', title: 'Routes', text: 'The boot pass installs the routes of each live deploy.' },
+    { icon: 'play', title: 'Instances', text: 'The boot pass starts the instances that are not there, for example after a reboot of the machine.', tone: 'success' },
+  ]}
+/>
+
+The first three steps come before the first <Term id="reconciler-pass" />.
+
+## Deploys that were not complete
+
+| Status at the stop | New status |
+|---|---|
+| `queued` or `building` | `build_failed` |
+| `deploying` | `deploy_failed` |
+
+The error is `interrupted by server restart`. The job runs with the status pending or `running` get the same error.
+
+The containers of these deploys never got traffic. The first pass removes them immediately.
+
+See also [Server shutdown and restart](/docs/architecture/deploy-pipeline/shutdown).

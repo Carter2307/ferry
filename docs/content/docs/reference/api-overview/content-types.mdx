@@ -1,0 +1,48 @@
+---
+title: Request bodies
+description: The body of a request is JSON. Two endpoints also take a different content type.
+---
+
+<Diagram
+  caption="The content type of a request body"
+  nodes={[
+    { id: 'json', at: [0, 0], icon: 'braces', label: 'JSON', note: 'the default' },
+    { id: 'gzip', at: [0, 1], icon: 'archive', label: '.tar.gz', note: 'application/gzip' },
+    { id: 'yaml', at: [0, 2], icon: 'file-code', label: 'YAML', note: 'application/yaml' },
+    { id: 'all', at: [1.75, 0], icon: 'plug', label: 'Each endpoint' },
+    { id: 'upload', at: [1.75, 1], icon: 'upload', label: 'Source upload' },
+    { id: 'blueprint', at: [1.75, 2], icon: 'file-code', label: 'Blueprint apply' },
+  ]}
+  edges={[
+    { from: 'json', to: 'all', flow: true },
+    { from: 'gzip', to: 'upload', flow: true },
+    { from: 'yaml', to: 'blueprint', flow: true },
+  ]}
+/>
+
+Send the <Term id="request-body" /> as <Term id="json" />.
+
+## The rules of a body
+
+| Subject | Rule |
+|---|---|
+| The `Content-Type` header | The server does not require it. |
+| An empty body | It counts as `{}`. |
+| A field that the endpoint does not know | A 400 error. A wrong field name never passes with no effect. |
+| [Source upload](/docs/reference/api/deploys#deploy-uploaded-source-code) | The <Term id="content-type" /> `application/gzip`: a `.tar.gz` of 512 MiB at most. |
+| [Blueprint apply](/docs/reference/api/blueprints#apply-a-blueprint) | It also accepts raw YAML: `application/yaml`. |
+
+The error for an unknown field:
+
+```text noCopy
+invalid JSON body: unknown field 'nope', expected one of 'name', 'type', 'repo_url', …
+```
+
+## Booleans in the query string
+
+A <Term id="boolean" /> flag in the <Term id="query-string" /> accepts these values:
+
+| Meaning | Values |
+|---|---|
+| True | `true`, `1`, `yes`, `on`, `y`, or the flag with no value (`?follow`) |
+| False | `false`, `0`, `no`, `off`, `n` |

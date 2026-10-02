@@ -1,0 +1,66 @@
+---
+title: "API overview"
+description: The dashboard and the CLI use one JSON REST API. These pages give the rules of all its endpoints.
+icon: Plug
+---
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'CLI' },
+    { id: 'dash', at: [0, 1], icon: 'monitor', label: 'Dashboard' },
+    { id: 'script', at: [0, 2], icon: 'code', label: 'Your script' },
+    { id: 'api', at: [1.75, 1], icon: 'plug', label: 'API', note: '/api/v1' },
+    { id: 'ferry', at: [3.25, 1], icon: 'ship', label: 'ferryd' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'api' },
+    { from: 'dash', to: 'api' },
+    { from: 'script', to: 'api' },
+    { from: 'api', to: 'ferry' },
+  ]}
+  steps={[
+    {
+      caption: 'The CLI, the dashboard and your scripts all use the same API.',
+      flow: ['cli>api', 'dash>api', 'script>api'],
+    },
+    {
+      caption: 'Each request has a proof: an API token, or the session cookie of the dashboard.',
+      flow: ['cli>api', 'dash>api', 'script>api'],
+      tones: { api: 'primary' },
+      notes: { cli: 'API token', dash: 'session cookie', script: 'API token' },
+    },
+    {
+      caption: 'ferryd checks the proof. Then it does the work.',
+      flow: ['api>ferry'],
+      tones: { ferry: 'primary' },
+    },
+    {
+      caption: 'The answer is JSON. An error has a code and a message.',
+      tones: { api: 'success' },
+      notes: { api: 'JSON answer' },
+    },
+  ]}
+/>
+
+All that the <Term id="dashboard" /> and the `ferry` <Term id="cli" /> do goes through one JSON <Term id="rest-api" />. <Term id="ferryd" /> serves it.
+
+These pages give the rules that each <Term id="endpoint" /> follows. The [API reference](/docs/reference/api) describes the endpoints one by one.
+
+## Send a first request
+
+The examples use <Term id="curl" />.
+
+```bash title="Terminal"
+# On the server itself: the server token. Elsewhere, an API token created in the dashboard.
+export FERRY_TOKEN="$(cat ferry-data/api_token)"
+curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/info
+```
+
+## In this section
+
+<Cards>
+  <Card title="Authentication" href="/docs/reference/api-overview/authentication" description="An API token or the session cookie." />
+  <Card title="Errors" href="/docs/reference/api-overview/errors" description="One body for each error, with a stable code." />
+  <Card title="Server-Sent Events" href="/docs/reference/api-overview/sse" description="Logs and changes as streams." />
+  <Card title="Webhooks" href="/docs/reference/api-overview/webhooks" description="Deploy hooks and the GitHub webhook." />
+</Cards>

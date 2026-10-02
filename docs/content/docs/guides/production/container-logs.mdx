@@ -1,0 +1,44 @@
+---
+title: Container logs
+description: Ferry rotates the log of each container, thus a log cannot fill the disk.
+---
+
+<Diagram
+  caption="About 30 MiB of log at most for each container"
+  nodes={[
+    { id: 'app', at: [0, 0], icon: 'box', label: 'Container', note: 'stdout, stderr' },
+    { id: 'docker', at: [1.25, 0], icon: 'logs', label: 'Docker log', note: '3 files × 10 MiB' },
+    { id: 'cli', at: [2.5, 0], icon: 'terminal', label: 'ferry logs' },
+  ]}
+  edges={[
+    { from: 'app', to: 'docker', flow: true },
+    { from: 'docker', to: 'cli', flow: true },
+  ]}
+/>
+
+Docker stores what each container writes to <Term id="stdout" /> and <Term id="stderr" />. With `json-file`, the default <Term id="log-driver" /> of Docker, Ferry sets the <Term id="log-rotation" />.
+
+| Flag and variable | Default | Meaning |
+|---|---|---|
+| `--log-max-size` `FERRY_LOG_MAX_SIZE` | `10M` | Ferry rotates the log of each container at this size. |
+| `--log-max-files` `FERRY_LOG_MAX_FILES` | `3` | The number of files that Ferry keeps, the current file included. |
+
+`ferry logs NAME` reads this output from Docker. Thus it goes back only as far as those files.
+
+Docker fixes the log settings when it creates a container. Thus a change applies only to the containers that Ferry creates after it.
+
+## Where the other logs go
+
+| Log | Place |
+|---|---|
+| The server log of `ferryd` | Its standard output. systemd sends it to the <Term id="journal" /> (`journalctl -u ferryd`), which has its own size limits. |
+| Deploy logs and job logs | Files in the data directory. |
+| `<data-dir>/ferryd.log` | Only a server that you start in the background with `ferryd start` writes this file. |
+
+<Accordions>
+  <Accordion title="Another log driver">
+    You can configure the Docker daemon with another default log driver (journald, syslog, fluentd, `local`…). Then Ferry keeps it and sets no rotation. The limits of that driver apply. The `Limits` line of the startup banner says so, for example `Docker's journald log driver (kept)`.
+
+    `--log-max-size 0` also leaves the log configuration of the daemon as it is.
+  </Accordion>
+</Accordions>

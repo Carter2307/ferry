@@ -1,0 +1,32 @@
+---
+title: Manage domains
+description: List the domains of the server, test one, change the default, or disconnect one.
+---
+
+```bash title="Terminal"
+ferry domains                          # the domains, their status, the record to create
+ferry domains verify example.com       # check now
+ferry domains default example.com      # the domain service URLs are shown with
+ferry domains disconnect example.com   # services stop being served under it
+ferry certificates                     # every hostname with the state of its certificate
+```
+
+## Disconnect a domain
+
+- Ferry no longer serves the services under the domain. This is immediate.
+- The DNS records stay at your DNS provider.
+- If it was the default domain, the <Term id="base-domain" /> becomes the default again.
+
+## The rules
+
+| Domain | Rule |
+|---|---|
+| The base domain (`--base-domain`) | Ferry always serves it. You cannot disconnect it. To change it, change the option. |
+| A <Term id="local-name" /> (`*.localhost`, `.test`, `.internal`, `.local`) | It needs no DNS. Ferry does not verify it. It gets no certificate. |
+| A connected domain | A server can have 20 connected domains at most. |
+
+<Accordions>
+  <Accordion title="When Ferry refuses a domain">
+    Ferry refuses a domain that puts a service on a hostname that another service has. Example: the hostname is a <Term id="custom-domain" /> of another service.
+  </Accordion>
+</Accordions>

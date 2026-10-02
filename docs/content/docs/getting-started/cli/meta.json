@@ -1,0 +1,23 @@
+{
+  "title": "Set up the CLI",
+  "icon": "Terminal",
+  "pages": [
+    "---Connect---",
+    "install",
+    "login",
+    "check",
+    "token-login",
+    "remote-server",
+    "server",
+    "config-file",
+    "ci",
+    "---Use---",
+    "commands",
+    "output",
+    "json",
+    "follow",
+    "confirmations",
+    "exit-codes",
+    "quoting"
+  ]
+}

@@ -1,0 +1,59 @@
+---
+title: What the deploy did
+description: From a folder with two files, ferry up made a web service with a URL.
+---
+
+<Flow
+  steps={[
+    { icon: 'archive', title: 'Pack', text: 'ferry up packs the current folder and sends the archive.' },
+    { icon: 'box', title: 'Service', text: 'It creates a web service with the name of the folder: node-hello.' },
+    { icon: 'search', title: 'Runtime', text: 'There is no Dockerfile. Ferry finds Node.js from package.json and writes a Dockerfile.' },
+    { icon: 'hammer', title: 'Build', text: 'Docker builds the image.' },
+    { icon: 'plug', title: 'Port', text: 'The app sets no port. Ferry chooses the default, 10000, and gives it in PORT.' },
+    { icon: 'gauge', title: 'Limits', text: 'The container gets the default limits: 512 MiB of memory and 1 CPU.' },
+    { icon: 'route', title: 'Traffic', text: 'Ferry starts the container, waits for its port, then sends the traffic to it.', tone: 'success' },
+  ]}
+/>
+
+## Find each step in the log
+
+```text title="Output of ferry up --follow" noCopy
+Packing /home/you/ferry/examples/node-hello …
+Packed 2 file(s), 576 B
+Created web service 'node-hello' (srv-8593a88388f349feade2)
+Uploading 576 B …
+Deploy dep-3493c505ea9b4415b359 queued (upload), streaming logs…
+09:36:21 ==> Starting deploy dep-3493c505ea9b4415b359 (trigger: upload)
+09:36:21 ==> Extracting uploaded source archive
+09:36:21 ==> Extracted 2 files (791 B)
+09:36:21 ==> Detected Node.js runtime
+09:36:21 ==> Generated Dockerfile.ferry for the Node.js runtime
+09:36:21 ==> Building image ferry/node-hello:dep-3493c505ea9b4415b359
+09:36:21 #1 [internal] load build definition from Dockerfile.ferry
+…
+09:36:21 ==> Build successful 🎉
+09:36:21 ==> Using port 10000 (default port)
+09:36:21 ==> Limits: 512 MiB memory, 1 CPU per instance
+09:36:21 ==> Starting 1 instance(s)
+09:36:21 ==> Started instance 82e2be (port 10000, published on 127.0.0.1:62694)
+09:36:21 ==> Waiting for 1 instance(s) to become healthy: the port must accept TCP connections (timeout 120s)
+09:36:21 [82e2be] > node-hello@1.0.0 start
+09:36:21 [82e2be] > node server.js
+09:36:22 [82e2be] node-hello listening on :10000
+09:36:23 ==> Health check passed
+09:36:23 ==> Routing traffic to the new instance(s)
+09:36:23 ==> Your service is live 🎉
+09:36:23 ==> Available at http://node-hello.localhost:8080
+Deploy dep-3493c505ea9b4415b359 is live at http://node-hello.localhost:8080
+```
+
+## Read more
+
+| Step | Detail | Page |
+|---|---|---|
+| <Term id="runtime">Runtime</Term> | The <Term id="dockerfile" /> for Node.js uses `node:22-alpine`, `npm install`, then `npm start`. | [Builds & runtimes](/docs/concepts/builds) |
+| <Term id="port">Port</Term> | `server.js` reads the `PORT` variable. | [The port of your app](/docs/concepts/deploys/ports) |
+| <Term id="resource-limit">Limits</Term> | The `Limits` line shows them. | [Resource limits](/docs/concepts/resource-limits) |
+| Traffic | The test is: the port must accept connections. | [Deploys](/docs/concepts/deploys) |
+
+The command is [`ferry up`](/docs/reference/cli#ferry-up).

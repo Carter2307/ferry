@@ -1,0 +1,56 @@
+---
+title: API tokens
+description: The CLI, scripts and CI prove who they are with an API token.
+---
+
+<Diagram
+  caption="Each program sends its token with each request"
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'CLI', note: 'token from login' },
+    { id: 'ci', at: [0, 1], icon: 'workflow', label: 'CI, scripts', note: 'a named token' },
+    { id: 'local', at: [0, 2], icon: 'server', label: 'Server scripts', note: 'the server token' },
+    { id: 'api', at: [2, 1], icon: 'braces', label: 'API', note: 'Bearer fy_…', tone: 'primary' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'api', flow: true },
+    { from: 'ci', to: 'api', flow: true },
+    { from: 'local', to: 'api', flow: true },
+  ]}
+/>
+
+The dashboard signs in with the account. All other programs send an <Term id="api-token" />: `fy_`, then 40 hex characters.
+
+```text title="HTTP header" noCopy
+Authorization: Bearer <token>
+```
+
+## Three types of token
+
+| Token | Source | Use |
+|---|---|---|
+| The token of a terminal | [`ferry login`](/docs/getting-started/cli) asks for one. You approve the request in the dashboard. | The CLI on your machine |
+| A named token | **Server → Account → API tokens** in the [dashboard](/docs/getting-started/dashboard). It has a name and an optional expiry. The dashboard shows it one time. | <Term id="ci" />, scripts and machines without a browser |
+| The <Term id="server-token" /> | `<data-dir>/api_token` (mode `0600`). `ferryd` makes it at the first start and uses it again at each start. | Scripts on the server |
+
+## Use the server token
+
+```bash title="Terminal"
+# On the server itself, without logging in
+export FERRY_TOKEN="$(cat ferry-data/api_token)"
+ferry services
+```
+
+<Callout type="warning" title="A token is as strong as a root password">
+An API token can use the full API. But it cannot manage the account, its sessions or its tokens. Do not commit a token. Revoke each token that you do not use. See [Security model](/docs/architecture/security).
+</Callout>
+
+<Accordions>
+  <Accordion title="List and revoke tokens">
+    **Server → Account** lists the first two types. It shows the last 4 characters of each token and its last use. You can revoke a token there immediately.
+
+    The server token is different. Ferry does not print it and does not list it in the dashboard. You cannot revoke it there.
+  </Accordion>
+  <Accordion title="Choose the server token">
+    Start `ferryd` with `--api-token` or `FERRY_API_TOKEN`. This value comes before the file.
+  </Accordion>
+</Accordions>

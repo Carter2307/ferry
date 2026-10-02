@@ -1,0 +1,77 @@
+---
+title: Inside Ferry
+description: All of Ferry runs in one process, ferryd. Docker runs your apps on the same machine.
+---
+
+<Diagram
+  nodes={[
+    { id: 'client', at: [0, 0], icon: 'browser', label: 'Browser, curl' },
+    { id: 'tools', at: [0, 1], icon: 'terminal', label: 'CLI, dashboard' },
+    { id: 'proxy', at: [1.25, 0], icon: 'route', label: 'ferry-proxy', note: ':8080 / :443' },
+    { id: 'api', at: [1.25, 1], icon: 'braces', label: 'ferry-api', note: ':7878' },
+    { id: 'store', at: [1.25, 2], icon: 'database', label: 'SQLite', note: 'ferry.db' },
+    { id: 'engine', at: [2.25, 1], icon: 'settings', label: 'ferry-engine' },
+    { id: 'build', at: [2.25, 2], icon: 'hammer', label: 'ferry-build' },
+    { id: 'apps', at: [3.5, 0], icon: 'box', label: 'App containers', note: 'ferry network' },
+    { id: 'docker', at: [3.5, 1.5], icon: 'container', label: 'Docker daemon' },
+  ]}
+  edges={[
+    { from: 'client', to: 'proxy' },
+    { from: 'tools', to: 'api' },
+    { from: 'proxy', to: 'apps', label: '127.0.0.1:port' },
+    { from: 'api', to: 'store' },
+    { from: 'api', to: 'engine' },
+    { from: 'engine', to: 'store' },
+    { from: 'engine', to: 'proxy' },
+    { from: 'engine', to: 'build' },
+    { from: 'engine', to: 'docker' },
+    { from: 'build', to: 'docker' },
+    { from: 'docker', to: 'apps' },
+  ]}
+  groups={[{ label: 'ferryd, one process', around: ['proxy', 'api', 'store', 'engine', 'build'] }]}
+  steps={[
+    {
+      caption: 'A request goes to the proxy. The proxy sends it to the correct container.',
+      flow: ['client>proxy', 'proxy>apps'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'The CLI and the dashboard talk to the API. Webhooks arrive there too.',
+      flow: ['tools>api'],
+      tones: { api: 'primary' },
+    },
+    {
+      caption: 'The API saves the desired state in SQLite and calls the engine.',
+      flow: ['api>store', 'api>engine'],
+      tones: { store: 'primary' },
+    },
+    {
+      caption: 'The engine builds images and starts containers through Docker.',
+      flow: ['engine>build', 'build>docker', 'engine>docker', 'docker>apps'],
+      tones: { engine: 'primary', build: 'primary' },
+    },
+    {
+      caption: 'The engine gives the new routes to the proxy.',
+      flow: ['engine>proxy', 'engine>store'],
+      tones: { engine: 'primary', proxy: 'success' },
+    },
+  ]}
+/>
+
+## The parts of ferryd
+
+| Part | Work |
+|---|---|
+| `ferry-proxy` | The public <Term id="proxy" />: routes by <Term id="host-header" />, and <Term id="tls" /> |
+| `ferry-api` | REST, <Term id="sse" /> and webhooks, for the dashboard and the CLI |
+| `ferry-engine` | Deploys, the <Term id="reconciler" />, cron and datastores |
+| `ferry-build` | `git` and `docker build` |
+| <Term id="sqlite" /> | The <Term id="desired-state" />, in `ferry.db` |
+
+## What the engine does
+
+- **A deploy.** The <Term id="engine" /> clones the repository, or unpacks an upload. It detects the runtime and builds an image.
+- **The switch.** The engine starts new containers next to the old containers and tests their health. Then it moves the proxy to them in one step. It drains and stops the old containers. See [The steps of a deploy](/docs/concepts/deploys/steps).
+- **A repair.** The reconciler replaces each container that crashed. It also keeps the number of instances correct and updates the routes.
+
+Read more in [Architecture](/docs/architecture/overview).

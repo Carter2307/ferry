@@ -1,0 +1,59 @@
+---
+title: GitHub webhooks
+description: GitHub signs each delivery with a shared secret. Ferry refuses a bad signature and ignores a copy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'gh', at: [0, 0], icon: 'webhook', label: 'GitHub', note: 'signs the body' },
+    { id: 'ferry', at: [1.75, 0], icon: 'ship', label: 'Ferry', note: 'has the secret' },
+    { id: 'copy', at: [0, 1], icon: 'copy', label: 'A copy', note: 'an old delivery' },
+  ]}
+  edges={[
+    { from: 'gh', to: 'ferry', label: 'signature' },
+    { from: 'copy', to: 'ferry' },
+  ]}
+  steps={[
+    {
+      caption: 'With no --github-webhook-secret, the endpoint answers 404.',
+      hide: ['copy'],
+      tones: { ferry: 'muted' },
+      notes: { ferry: '404' },
+    },
+    {
+      caption: 'GitHub signs each delivery with the secret. The signature is in X-Hub-Signature-256.',
+      flow: ['gh>ferry'],
+      hide: ['copy'],
+    },
+    {
+      caption: 'Ferry calculates the HMAC-SHA256 of the raw body. It compares the two values in constant time.',
+      hide: ['copy'],
+      tones: { ferry: 'success' },
+      notes: { ferry: 'signature is good' },
+    },
+    {
+      caption: 'A person sends a copy of an old delivery. Ferry ignores it.',
+      flow: ['copy>ferry'],
+      tones: { copy: 'danger' },
+      notes: { ferry: 'ignored' },
+    },
+  ]}
+/>
+
+A GitHub <Term id="webhook" /> does not use the account or an API token. Its proof is an <Term id="hmac" /> signature made with the <Term id="webhook-secret" />.
+
+## The rules
+
+| Rule | Detail |
+|---|---|
+| Off by default | The endpoint answers 404 until you set `--github-webhook-secret`. |
+| Signature | `X-Hub-Signature-256`: HMAC-SHA256 of the raw body, compared in <Term id="constant-time">constant time</Term>. |
+| No <Term id="replay" /> | Ferry ignores a delivery if it processed the same body or the same delivery id before. |
+
+## Turn it on
+
+```bash title="On the server"
+ferryd --github-webhook-secret <secret>
+```
+
+Give the same secret to GitHub. [GitHub auto-deploy](/docs/guides/github-auto-deploy) shows each step. The [API overview](/docs/reference/api-overview/github-webhook) has the details.

@@ -1,0 +1,97 @@
+---
+title: Development setup
+description: Ferry is one repository with three projects. Build it from source, run it, then follow the rules for a change.
+icon: Wrench
+---
+
+<Diagram
+  caption="Three projects in one repository"
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'monitor', label: 'web/', note: 'the dashboard' },
+    { id: 'docs', at: [0, 1], icon: 'book', label: 'docs/', note: 'this site' },
+    { id: 'crates', at: [0, 2], icon: 'boxes', label: 'crates/', note: 'the Rust code' },
+    { id: 'dist', at: [1.75, 0], icon: 'folder', label: 'web/dist', note: 'the built files' },
+    { id: 'bin', at: [1.75, 2], icon: 'server', label: 'ferryd', note: 'and the ferry CLI' },
+  ]}
+  edges={[
+    { from: 'crates', to: 'bin', label: 'cargo build' },
+    { from: 'web', to: 'dist', label: 'npm run build' },
+    { from: 'dist', to: 'bin', label: 'embed' },
+    { from: 'web', to: 'docs', label: 'tokens.css' },
+    { from: 'crates', to: 'docs', label: 'reference pages' },
+  ]}
+  steps={[
+    {
+      caption: 'The repository has three projects: the Rust code, the dashboard and this site.',
+      hide: ['dist', 'bin'],
+      cut: ['web>docs', 'crates>docs'],
+      tones: { web: 'primary', docs: 'primary', crates: 'primary' },
+    },
+    {
+      caption: 'cargo build makes the two programs from the crates. The Rust build never runs Node.',
+      hide: ['dist'],
+      cut: ['web>docs', 'crates>docs'],
+      flow: ['crates>bin'],
+      tones: { crates: 'primary' },
+    },
+    {
+      caption: 'If web/dist exists, the Rust build puts the dashboard into ferryd.',
+      cut: ['web>docs', 'crates>docs'],
+      flow: ['web>dist', 'dist>bin'],
+      tones: { web: 'primary', bin: 'success' },
+    },
+    {
+      caption: 'The docs site uses the colors of the dashboard. Its reference pages come from the Rust code.',
+      flow: ['web>docs', 'crates>docs'],
+      tones: { docs: 'primary' },
+    },
+  ]}
+/>
+
+<Files>
+  <Folder name="ferry" defaultOpen>
+    <Folder name="crates" defaultOpen>
+      <File name="ferry-core — models, DTOs, config, Store, env resolution, traits" />
+      <File name="ferry-docker — Docker Engine API wrapper" />
+      <File name="ferry-build — fetch, detect, Dockerfile generation, docker build" />
+      <File name="ferry-scm — the git providers: GitHub and GitLab" />
+      <File name="ferry-proxy — reverse proxy and route table" />
+      <File name="ferry-tls — ACME certificates" />
+      <File name="ferry-engine — deploys, reconciler, cron, datastores, logs" />
+      <File name="ferry-api — REST, SSE, webhooks, blueprints, OpenAPI" />
+      <File name="ferry-cli — the ferry binary" />
+      <File name="ferryd — the server binary (wiring)" />
+    </Folder>
+    <Folder name="examples">
+      <File name="node-hello, python-hello, static-site, docker-echo, worker, blueprint" />
+    </Folder>
+    <File name="web/ — the React dashboard (own package.json)" />
+    <File name="docs/ — this documentation site (own package.json)" />
+    <File name="DESIGN.md — the design and the contract between crates" />
+    <File name="README.md" />
+    <File name="Cargo.toml — the workspace" />
+    <File name="rustfmt.toml" />
+  </Folder>
+</Files>
+
+Ferry is a Rust <Term id="workspace" /> with two front-end projects next to it: the <Term id="dashboard" /> in `web/` and this site in `docs/`.
+
+Each <Term id="crate" /> has <Term id="unit-test">unit tests</Term> next to its code and <Term id="integration-test">integration tests</Term> in `crates/<crate>/tests/`. [The crates](/docs/architecture/overview/crates) shows how they depend on each other.
+
+Read `DESIGN.md` before you change a behavior. It is the contract between the crates.
+
+## Build and start
+
+```bash title="Terminal"
+cargo build
+./target/debug/ferryd run --data-dir ./ferry-data
+```
+
+## In this section
+
+<Cards>
+  <Card title="Build Ferry" href="/docs/contributing/development/build" description="The dashboard first, then the two programs." />
+  <Card title="Deploy an example" href="/docs/contributing/development/deploy" description="Point the CLI at your development server." />
+  <Card title="Branches and commits" href="/docs/contributing/development/branches" description="Start from dev. Name the area in each commit." />
+  <Card title="Coding rules" href="/docs/contributing/development/coding-rules" description="The rules that each crate follows." />
+</Cards>

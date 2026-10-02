@@ -1,0 +1,55 @@
+---
+title: Create a service
+description: The New service button opens one form. You fill it from the top to the bottom.
+---
+
+<Flow
+  caption="The sections of the form"
+  steps={[
+    { icon: 'boxes', title: 'Service type', text: 'Choose what the service is, for example a web service.' },
+    { icon: 'tag', title: 'General', text: 'Enter the name. The form shows the public URL of the service.' },
+    { icon: 'repo', title: 'Source', text: 'Choose where the code or the image comes from.' },
+    { icon: 'hammer', title: 'Build & deploy', text: 'Set the runtime, the commands, the port and the instances.' },
+    { icon: 'variable', title: 'Domains and env', text: 'Add custom domains, variables and env groups.' },
+    { icon: 'rocket', title: 'Create and deploy', text: 'Ferry creates the service. If it has a source, the first deploy goes in the queue.', tone: 'success' },
+  ]}
+/>
+
+## Do it
+
+On the [Services page](/docs/getting-started/dashboard/services), click **+ New service**. Fill the sections. Then click **Create and deploy**.
+
+## The sections
+
+| Section | What you set |
+|---|---|
+| **Service type** | Web service, private service, background worker, cron job or static site. See [Services](/docs/concepts/services). |
+| **General** | The name. |
+| **Source** | **Git repository**, **Docker image** or **Upload later**. |
+| **Build & deploy** | The <Term id="runtime" /> (auto-detect or one that you choose), the build command, the start command, the port and the instances. |
+| **Custom domains** | More hostnames for the service. |
+| **Environment** | Variables. Add them one by one, import a `.env` file, or insert a <Term id="reference" /> to a datastore. |
+| **Env groups** | The groups to link. |
+
+<Accordions>
+  <Accordion title="Source: a Git repository">
+    - **Connected account** lists the repositories of a [connected GitHub or GitLab account](/docs/guides/git-accounts). Search the list and choose one.
+    - **Add account** authorizes one more account on the page of the provider. Then you come back to the form. The form keeps what you entered.
+    - **Repository URL** accepts each git URL.
+    - With the two choices, **Branch** is a list that Ferry reads from the repository. The two choices have the <Term id="auto-deploy" /> switch.
+  </Accordion>
+  <Accordion title="Source: Upload later">
+    Ferry creates the service with no source. Then you send the code with `ferry up`: an <Term id="upload" />.
+  </Accordion>
+  <Accordion title="Build & deploy: a cron job or a static site">
+    A cron job has no start command. It has a command and a schedule. A static site has a publish directory.
+  </Accordion>
+  <Accordion title="Advanced">
+    **Advanced** adds these settings:
+
+    - The root directory and the Dockerfile path, for a <Term id="monorepo" />.
+    - The health check path.
+    - A persistent disk.
+    - The memory limit and the CPU limit of each instance. See [Resource limits](/docs/concepts/resource-limits).
+  </Accordion>
+</Accordions>

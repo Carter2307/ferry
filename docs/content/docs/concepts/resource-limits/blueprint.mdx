@@ -1,0 +1,73 @@
+---
+title: Limits in a blueprint
+description: In a blueprint, a plan or the keys memoryLimit and cpuLimit set the limits.
+---
+
+```yaml title="render.yaml"
+services:
+  - type: web
+    name: api
+    plan: standard        # 2 GiB / 1 CPU
+    cpuLimit: 500m        # but only half a core
+```
+
+<Diagram
+  nodes={[
+    { id: 'plan', at: [0, 0], icon: 'tag', label: 'plan: standard' },
+    { id: 'key', at: [0, 1], icon: 'pencil', label: 'cpuLimit: 500m' },
+    { id: 'mem', at: [1.75, 0], icon: 'memory', label: 'Memory limit', note: '2 GiB' },
+    { id: 'cpu', at: [1.75, 1], icon: 'cpu', label: 'CPU limit', note: '1 CPU' },
+  ]}
+  edges={[
+    { from: 'plan', to: 'mem' },
+    { from: 'plan', to: 'cpu' },
+    { from: 'key', to: 'cpu' },
+  ]}
+  steps={[
+    {
+      caption: 'The plan gives a memory limit and a CPU limit.',
+      hide: ['key'],
+      flow: ['plan>mem', 'plan>cpu'],
+    },
+    {
+      caption: 'The key cpuLimit replaces the CPU value of the plan.',
+      cut: ['plan>cpu'],
+      flow: ['plan>mem', 'key>cpu'],
+      tones: { cpu: 'primary', key: 'primary' },
+      notes: { cpu: '0.5 CPU' },
+    },
+  ]}
+/>
+
+A <Term id="blueprint" /> is a `render.yaml` or a `ferry.yaml` file. The <Term id="render-plan" /> of a service or a database becomes its limits. See [Render plans](/docs/concepts/resource-limits/plans).
+
+`memoryLimit` and `cpuLimit` are keys of Ferry. Each key replaces one value of the plan.
+
+## See the changes first
+
+A <Term id="dry-run" /> lists the changes of limits.
+
+```text title="ferry blueprint apply render.yaml --dry-run" noCopy
+Blueprint render.yaml — dry run, nothing was changed
+
+Would update:
+  ~ service api
+      - memory_limit: (server default) → 2 GiB
+      - cpu_limit: (server default) → 1 CPU
+
+Run without --dry-run to apply.
+```
+
+The apply restarts each live service whose limits change. It changes the limits of a datastore in place.
+
+<Accordions>
+  <Accordion title="The rules of the keys">
+    - `memoryLimit` and `cpuLimit` accept the same sizes as the CLI: `768M`, `1.5G`, `500m`.
+    - `0` means the server default.
+    - If an entry has no `plan`, no `memoryLimit` and no `cpuLimit`, the service or the datastore keeps its limits.
+    - A static site has no plans. Ferry ignores its `plan`, but `memoryLimit` and `cpuLimit` apply.
+  </Accordion>
+  <Accordion title="All the keys">
+    See the [Blueprint spec](/docs/reference/blueprint).
+  </Accordion>
+</Accordions>

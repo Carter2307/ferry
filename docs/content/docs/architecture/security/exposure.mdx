@@ -1,0 +1,60 @@
+---
+title: What listens where
+description: Only the proxy accepts connections from other machines. All other ports are on 127.0.0.1.
+---
+
+<Diagram
+  nodes={[
+    { id: 'net', at: [0, 0], icon: 'globe', label: 'Internet' },
+    { id: 'proxy', at: [1.25, 0], icon: 'route', label: 'Proxy', note: '0.0.0.0:8080' },
+    { id: 'app', at: [2.5, 0], icon: 'box', label: 'App container', note: '127.0.0.1:<random>' },
+    { id: 'api', at: [1.25, 1], icon: 'shield-check', label: 'API + dashboard', note: '127.0.0.1:7878' },
+    { id: 'ds', at: [2.5, 1], icon: 'database', label: 'Datastore', note: '127.0.0.1' },
+  ]}
+  groups={[{ label: 'Your server', around: ['proxy', 'app', 'api', 'ds'] }]}
+  edges={[
+    { from: 'net', to: 'proxy' },
+    { from: 'proxy', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'The proxy listens on 0.0.0.0. Each machine can reach it: it is the public edge.',
+      flow: ['net>proxy'],
+      tones: { proxy: 'warning' },
+      notes: { proxy: 'open to all' },
+    },
+    {
+      caption: 'The API and the dashboard listen on 127.0.0.1. Only the server itself reaches them.',
+      tones: { api: 'success' },
+      notes: { api: 'localhost only' },
+    },
+    {
+      caption: 'App containers and datastores publish their ports on 127.0.0.1 too.',
+      tones: { app: 'success', ds: 'success' },
+      notes: { app: 'localhost only', ds: 'localhost only' },
+    },
+    {
+      caption: 'The public reaches an app only through the proxy.',
+      flow: ['net>proxy', 'proxy>app'],
+    },
+  ]}
+/>
+
+A listener on `127.0.0.1` (<Term id="localhost" />) accepts connections only from the server itself. A listener on `0.0.0.0` accepts connections from each machine.
+
+## The listeners
+
+| Listener | Default | Who can reach it |
+|---|---|---|
+| API and dashboard (`--api-addr`) | `127.0.0.1:7878` | The server itself only |
+| <Term id="proxy">Proxy</Term> (`--proxy-addr`, `--https-addr`) | `0.0.0.0:8080` | Everywhere: this is the public edge |
+| App containers | `127.0.0.1:<random>` | The server itself only. The public reaches them through the proxy. |
+| Datastores | `127.0.0.1:<fixed port>` | The server itself only |
+
+The [networking model](/docs/architecture/networking-model) tells why the ports of the containers are on `127.0.0.1`.
+
+## What to do
+
+Keep `--api-addr` on `127.0.0.1`. To use the API from another machine, read [Reach the API through SSH](/docs/architecture/security/ssh-tunnel).
+
+[Production setup](/docs/guides/production) gives a complete hardened setup.

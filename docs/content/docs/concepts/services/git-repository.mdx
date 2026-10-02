@@ -1,0 +1,79 @@
+---
+title: A git repository
+description: Ferry clones the repository, checks out the branch and builds the code.
+---
+
+<Diagram
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'laptop', label: 'You' },
+    { id: 'repo', at: [1.15, 0], icon: 'repo', label: 'Repository', note: 'branch main' },
+    { id: 'ferry', at: [2.3, 0], icon: 'ship', label: 'Ferry' },
+    { id: 'image', at: [3.45, 0], icon: 'package', label: 'Image' },
+  ]}
+  edges={[
+    { from: 'you', to: 'repo' },
+    { from: 'repo', to: 'ferry' },
+    { from: 'ferry', to: 'image' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry clones the repository and checks out the branch.',
+      flow: ['repo>ferry'],
+      tones: { repo: 'primary' },
+      notes: { ferry: 'clone' },
+    },
+    {
+      caption: 'Ferry builds the newest commit of the branch.',
+      flow: ['ferry>image'],
+      tones: { image: 'success' },
+      notes: { ferry: 'build' },
+    },
+    {
+      caption: 'With auto-deploy, a push to the branch starts a new deploy.',
+      flow: ['you>repo', 'repo>ferry'],
+      tones: { you: 'primary' },
+      notes: { you: 'git push' },
+    },
+  ]}
+/>
+
+## Create a service from a repository
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --branch main
+```
+
+`--repo` is the URL of the <Term id="repository" />. The default <Term id="branch" /> is `main`.
+
+## Which commit Ferry builds
+
+A deploy builds the newest <Term id="commit" /> of the branch. To build an exact commit, give its SHA.
+
+```bash title="Terminal"
+ferry deploy api --commit <sha>
+```
+
+## Auto-deploy
+
+<Term id="auto-deploy">Auto-deploy</Term> is on by default. If you set up the [GitHub webhook](/docs/guides/github-auto-deploy), a push to the branch deploys the service. To turn it off, use `--no-auto-deploy`.
+
+<Accordions>
+  <Accordion title="Repository URLs">
+    Ferry accepts these forms:
+
+    - `https://`, `ssh://` and `git://` URLs.
+    - The scp form: `git@github.com:you/api.git`.
+    - `file:///path`.
+    - The absolute path of a repository on the server.
+
+    With `ferry create`, a relative path that exists on your machine becomes an absolute path.
+  </Accordion>
+  <Accordion title="Private repositories">
+    - [Connect your GitHub or GitLab account](/docs/guides/git-accounts) to the server. You authorize it on the page of the provider. Then Ferry clones the repositories of the account, for each service.
+    - Or put a token in an HTTPS URL: `https://user:token@github.com/you/api`. Ferry never prints the token in logs or errors.
+    - SSH URLs use the SSH keys of the user that runs `ferryd`, in batch mode. Ferry accepts new host keys and refuses changed host keys.
+  </Accordion>
+  <Accordion title="Git submodules">
+    Ferry does not fetch <Term id="submodule">git submodules</Term>.
+  </Accordion>
+</Accordions>

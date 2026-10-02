@@ -1,0 +1,33 @@
+---
+title: Call the API from a browser
+description: EventSource cannot set headers, and ferryd sends no CORS headers. A page must respect two rules.
+---
+
+```js title="events.js"
+const events = new EventSource(`/api/v1/events?access_token=${encodeURIComponent(token)}`);
+events.addEventListener('ready', () => refetchEverything());
+events.addEventListener('change', (e) => {
+  const change = JSON.parse(e.data);
+  if (change.action === 'resync') refetchEverything();
+  else invalidate(change.kind, change.id, change.service_id);
+});
+```
+
+In a browser, <Term id="event-source" /> reads a stream and connects again by itself.
+
+## Rule 1: the token goes in the URL
+
+`EventSource` cannot set headers. Thus the <Term id="api-token" /> goes in the URL, as `?access_token=`. Only `GET` requests accept it there.
+
+<Callout type="warning" title="A token in a URL can leak">
+A URL goes into the history of the browser and into the logs of each proxy before the server. Use the `Authorization` header when you can.
+</Callout>
+
+## Rule 2: the same origin only
+
+`ferryd` sends no <Term id="cors" /> headers. Thus a page can call the API only from the <Term id="origin" /> of the server itself. The dashboard does this, with its session cookie as the proof.
+
+From a different origin, you have two solutions:
+
+- a proxy on the same origin as your page
+- a call from your backend

@@ -1,0 +1,67 @@
+---
+title: Deploy an app with Postgres
+description: Deploy a small notes API that keeps its data in a Postgres datastore.
+icon: Database
+---
+
+<Diagram
+  caption="The app gets the address of the database through a reference"
+  nodes={[
+    { id: 'var', at: [0, 0], icon: 'variable', label: 'DATABASE_URL', note: '${{…}} reference' },
+    { id: 'app', at: [0, 1], icon: 'box', label: 'notes', note: 'your app' },
+    { id: 'db', at: [2, 1], icon: 'database', label: 'notes-db', note: 'Postgres' },
+  ]}
+  edges={[
+    { from: 'var', to: 'db', label: 'points to' },
+    { from: 'var', to: 'app' },
+    { from: 'app', to: 'db', label: 'notes-db:5432' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry runs a Postgres datastore with the name notes-db.',
+      hide: ['var', 'app'],
+      tones: { db: 'primary' },
+    },
+    {
+      caption: 'The variable DATABASE_URL of the app keeps a reference to the datastore.',
+      cut: ['app>db', 'var>app'],
+      flow: ['var>db'],
+      tones: { var: 'primary' },
+    },
+    {
+      caption: 'When a container starts, Ferry replaces the reference with the real URL.',
+      cut: ['app>db', 'var>db'],
+      flow: ['var>app'],
+      tones: { var: 'success' },
+      notes: { var: 'postgresql://…' },
+    },
+    {
+      caption: 'The app connects to the datastore on the private network.',
+      cut: ['var>db'],
+      flow: ['app>db'],
+      tones: { app: 'success', db: 'success' },
+      notes: { var: 'postgresql://…' },
+    },
+  ]}
+/>
+
+In this guide, you deploy a small notes API that uses <Term id="postgres" />. You create the database. Then you give its <Term id="connection-string" /> to the app with a <Term id="reference" />.
+
+## The main command
+
+```bash title="Terminal"
+ferry up notes -e 'DATABASE_URL=${{datastore.notes-db.connectionString}}' --follow
+```
+
+## Before you start
+
+You need a Ferry server that runs, and the `ferry` <Term id="cli" /> with a login to it. See the [Quickstart](/docs/getting-started/quickstart).
+
+## The steps
+
+<Cards>
+  <Card title="1. Create the database" href="/docs/guides/postgres-app/database" description="One command, one Postgres datastore." />
+  <Card title="2. Write the app" href="/docs/guides/postgres-app/app" description="Three files that read DATABASE_URL." />
+  <Card title="3. Deploy with a reference" href="/docs/guides/postgres-app/deploy" description="The app gets the URL when it starts." />
+  <Card title="4. Run the migration" href="/docs/guides/postgres-app/migrate" description="Create the table with a one-off job, then try the app." />
+</Cards>

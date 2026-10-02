@@ -1,0 +1,46 @@
+---
+title: The process limit
+description: A container can have 1024 processes and threads at most.
+---
+
+<Diagram
+  nodes={[
+    { id: 'app', at: [0, 0], icon: 'box', label: 'Container', note: '12 processes' },
+    { id: 'host', at: [1.75, 0], icon: 'server', label: 'Server', note: 'process table' },
+  ]}
+  groups={[{ label: 'Pids limit: 1024', around: ['app'] }]}
+  steps={[
+    {
+      caption: 'An app starts processes and threads. This is normal.',
+    },
+    {
+      caption: 'A bug starts new processes with no end. This is a fork bomb.',
+      tones: { app: 'warning' },
+      notes: { app: '900 processes' },
+    },
+    {
+      caption: 'At 1024, the container cannot start one more process.',
+      tones: { app: 'danger' },
+      notes: { app: '1024: fork fails' },
+    },
+    {
+      caption: 'The process table of the server does not change.',
+      tones: { app: 'danger', host: 'success' },
+      notes: { app: '1024: fork fails', host: 'not full' },
+    },
+  ]}
+/>
+
+The <Term id="pids-limit" /> counts the <Term id="os-process">processes</Term> and the <Term id="thread">threads</Term> of one container together. The default is 1024.
+
+At the limit, <Term id="fork" /> fails in the container. A <Term id="fork-bomb" /> stops there.
+
+## Change the limit
+
+| Flag of `ferryd` | Default | Off |
+|---|---|---|
+| `--pids-limit` | 1024 | `--pids-limit 0` |
+
+Some apps run thousands of threads. For them, start `ferryd` with a higher `--pids-limit`.
+
+See [Server defaults](/docs/concepts/resource-limits/defaults).

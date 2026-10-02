@@ -1,0 +1,31 @@
+---
+title: What Ferry does not do
+description: You create the DNS record and you set the HTTPS options. Ferry does the other steps.
+---
+
+<Diagram
+  caption="You do the two steps in the middle. Ferry does the rest."
+  nodes={[
+    { id: 'you', at: [0, 0.5], icon: 'user', label: 'You' },
+    { id: 'record', at: [1.5, 0], icon: 'globe', label: 'DNS record', note: 'at your provider' },
+    { id: 'options', at: [1.5, 1], icon: 'terminal', label: 'ferryd options', note: 'HTTPS, dashboard' },
+    { id: 'ferry', at: [3, 0.5], icon: 'ship', label: 'Ferry', note: 'verifies, routes', tone: 'primary' },
+  ]}
+  edges={[
+    { from: 'you', to: 'record' },
+    { from: 'you', to: 'options' },
+    { from: 'record', to: 'ferry' },
+    { from: 'options', to: 'ferry' },
+  ]}
+/>
+
+| Not in Ferry | What to do |
+|---|---|
+| <Term id="wildcard-certificate">Wildcard certificates</Term> | Nothing. Ferry asks for one certificate for each hostname. |
+| The DNS record | Create the record at your <Term id="dns-provider" />. |
+| The dashboard under a connected domain | Set the hostname of the dashboard at the start of the server: `--dashboard-host`. |
+| HTTPS from the dashboard | Set the HTTPS options at the start of `ferryd`. |
+
+## Why
+
+One certificate for `*.example.com` needs access to the <Term id="api" /> of your DNS provider. Ferry does not have this access. For the same reason, Ferry cannot create the DNS record for you.

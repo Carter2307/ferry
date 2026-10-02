@@ -1,0 +1,56 @@
+---
+title: Instance status and metrics
+description: ferry status shows the state, the CPU and the memory of each instance at this moment.
+---
+
+```text title="ferry status api" noCopy
+api: degraded — 1/2 instance(s) running
+INSTANCE   DEPLOY     STATE                                    PORT    CPU              MEMORY                  RESTARTS   STARTED
+3f2a1c     7d0e52aa   running                                  63012   2.1% / 0.5 CPU   301.4 MiB / 512.0 MiB   0          12m ago
+9b4e07     7d0e52aa   restarting (OOM killed, exit code 137)   -       -                -                       3          -
+note: instance 9b4e07 was killed for running out of memory (limit 512 MiB). Raise the limit with 'ferry update api --memory <SIZE>', then 'ferry restart api'.
+```
+
+The command shows one line for each <Term id="instance" />. Ferry reads these <Term id="metric">metrics</Term> from Docker when you ask. It does not keep a history of them.
+
+## Read the columns
+
+| Column | Meaning |
+|---|---|
+| `STATE` | The state from Docker. For a stopped instance, it adds the cause: the <Term id="exit-code" />, such as `exited (exit code 1)`, or `OOM killed`. |
+| `PORT` | The port of the instance |
+| `CPU` | The use in percent of one core, then the [CPU limit](/docs/concepts/resource-limits/cpu) |
+| `MEMORY` | The use, then the [memory limit](/docs/concepts/resource-limits/memory) |
+| `RESTARTS` | The number of restarts |
+| `STARTED` | The start time |
+
+A container with no limit shows only the use.
+
+## Get the status
+
+```bash title="Terminal"
+ferry status NAME
+```
+
+In the dashboard, the **Overview** of the service shows the same data for each instance, with an **OOM killed** badge.
+
+<Accordions>
+  <Accordion title="The note line">
+    `OOM killed` means that the kernel stopped the instance because it went above its memory limit. The `note:` line tells you how to raise the limit. The CLI prints it on standard error.
+  </Accordion>
+  <Accordion title="API fields">
+    `GET /api/v1/services/{id}/status` gives these fields for each instance, and more. See [Runtime status](/docs/reference/api/services#runtime-status).
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `cpu_percent` | number or `null` | The CPU use, in percent of one core. `null` if Ferry does not know it, for example for a stopped container. |
+    | `memory_bytes` | integer or `null` | The memory use. `null` if Ferry does not know it. |
+    | `cpu_limit` | number or `null` | The CPU limit of the container, in CPUs. `null` if it has no limit. |
+    | `memory_limit_bytes` | integer or `null` | The memory limit of the container. `null` if it has no limit. |
+    | `oom_killed` | boolean | At its last exit, the kernel stopped the process of the container because it went above its memory limit. |
+    | `exit_code` | integer or `null` | The exit code of the last exit, for a container that exited or that restarts. |
+  </Accordion>
+  <Accordion title="The OOM mark does not stay">
+    Docker clears the mark when the container runs again. Thus `oom_killed` is `true` only while an instance is `restarting` or stopped. The [server log](/docs/concepts/logs/server-logs) keeps the kills of the past.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,49 @@
+---
+title: Roll back
+description: A rollback is a new deploy that uses the image of an earlier deploy.
+---
+
+```bash title="Terminal"
+ferry rollback api dep-3493c505ea9b4415b359 --follow
+```
+
+In the dashboard, open **Deploys**. In the menu of a deploy, choose **Roll back to this deploy**.
+
+<Diagram
+  nodes={[
+    { id: 'v1', at: [0, 0], icon: 'package', label: 'Deploy 1', note: 'deactivated' },
+    { id: 'v2', at: [1.25, 0], icon: 'package', label: 'Deploy 2', note: 'deactivated' },
+    { id: 'v3', at: [2.5, 0], icon: 'package', label: 'Deploy 3', note: 'live', tone: 'success' },
+    { id: 'v4', at: [2.5, 1], icon: 'rollback', label: 'Deploy 4', note: 'image of deploy 2' },
+  ]}
+  edges={[
+    { from: 'v1', to: 'v2' },
+    { from: 'v2', to: 'v3' },
+    { from: 'v2', to: 'v4', label: 'rollback' },
+  ]}
+  steps={[
+    { caption: 'Deploy 3 is live, but it has a bug.', hide: ['v4'], tones: { v3: 'danger' }, notes: { v3: 'live, with a bug' } },
+    { caption: 'You roll back to deploy 2. Ferry makes deploy 4 with the same image.', flow: ['v2>v4'], tones: { v4: 'primary', v3: 'danger' } },
+    { caption: 'Deploy 4 passes the health check and goes live. Ferry builds nothing.', tones: { v4: 'success', v3: 'muted' }, notes: { v4: 'live', v3: 'deactivated' } },
+  ]}
+/>
+
+## The rules
+
+- You can roll back to a deploy with the status `live` or `deactivated`. A failed or canceled deploy was never live: you cannot roll back to it.
+- A rollback gives you the old **code**. The instances start with the **current** settings and variables.
+- Ferry keeps the 5 newest images of each service, and the live image.
+
+<Accordions>
+  <Accordion title="If the image is gone">
+    Ferry removes older images (`--keep-images` on `ferryd` sets the number). Then the rollback fails with the cause. Deploy from the source again.
+
+    Ferry removes only the tags that it made. It does not delete a public image that you pulled.
+  </Accordion>
+  <Accordion title="Images from a registry">
+    Ferry pins the image of each deploy with its own tag: `<prefix>/<service>:<deploy-id>`. A rollback runs the exact image of that deploy, even if the tag in the registry moved.
+  </Accordion>
+  <Accordion title="API">
+    [`POST /api/v1/services/{id}/rollback`](/docs/reference/api/services#roll-back-to-an-earlier-deploy)
+  </Accordion>
+</Accordions>

@@ -1,0 +1,56 @@
+---
+title: When references resolve
+description: Ferry resolves the references when a deploy starts containers. It saves the result with the deploy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'start', at: [0, 1], icon: 'deploy', label: 'Deploy', note: 'restart, rollback' },
+    { id: 'env', at: [1.5, 1], icon: 'save', label: 'Resolved env', note: 'saved with deploy' },
+    { id: 'heal', at: [3, 0], icon: 'restart', label: 'Reconciler', note: 'after a crash' },
+    { id: 'scale', at: [3, 1], icon: 'scale', label: 'Scale up', note: 'and resume' },
+    { id: 'jobs', at: [3, 2], icon: 'terminal', label: 'Jobs', note: 'cron and one-off' },
+  ]}
+  edges={[
+    { from: 'start', to: 'env' },
+    { from: 'env', to: 'heal' },
+    { from: 'env', to: 'scale' },
+    { from: 'env', to: 'jobs' },
+  ]}
+  steps={[
+    {
+      caption: 'A deploy, a restart or a rollback starts containers. Ferry resolves each reference.',
+      hide: ['heal', 'scale', 'jobs'],
+      flow: ['start>env'],
+      tones: { start: 'primary' },
+    },
+    {
+      caption: 'Ferry saves the resolved environment with the deploy.',
+      hide: ['heal', 'scale', 'jobs'],
+      tones: { env: 'primary' },
+    },
+    {
+      caption: 'Later, each new container of this deploy gets the saved environment.',
+      flow: ['env>heal', 'env>scale', 'env>jobs'],
+      tones: { env: 'primary' },
+    },
+  ]}
+/>
+
+Ferry resolves each <Term id="reference" /> at a <Term id="deploy" />, a <Term id="restart" /> or a <Term id="rollback" />.
+
+## Who uses the saved environment
+
+- the [reconciler](/docs/architecture/reconciler), when it replaces a crashed instance
+- a scale up and a resume
+- cron runs and one-off jobs
+
+## If the target changes
+
+When a datastore or a referenced service changes, the containers that run keep the old values. They keep them until the next deploy or restart.
+
+To get the new values:
+
+```bash title="Terminal"
+ferry restart NAME
+```

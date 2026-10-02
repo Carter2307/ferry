@@ -1,0 +1,36 @@
+---
+title: Precedence
+description: Ferry builds the environment in three layers, then resolves the references.
+---
+
+<Flow
+  steps={[
+    { icon: 'ship', title: '1. Ferry', text: 'The variables that Ferry injects: PORT and FERRY_*.' },
+    { icon: 'layers', title: '2. Env groups', text: 'The variables of the linked env groups, in the order of the links.' },
+    { icon: 'variable', title: '3. Service', text: 'The own variables of the service. A later layer wins.' },
+    { icon: 'link', title: 'Resolve', text: 'Ferry resolves the references after it merges the layers.', tone: 'success' },
+  ]}
+/>
+
+Ferry builds the environment of a container in layers. A later layer wins. This is the <Term id="precedence" />.
+
+Ferry resolves the references after the merge. Thus a <Term id="reference" /> can be in an <Term id="env-group" />, and each linked service gets it.
+
+## See the merged set
+
+```bash title="Terminal"
+ferry env NAME --effective
+```
+
+The command prints the <Term id="merged-env" /> before Ferry resolves the references.
+
+## The variables that Ferry injects
+
+| Variable | For |
+|---|---|
+| `PORT` | Services that listen on a port |
+| `FERRY=true`, `FERRY_SERVICE_ID`, `FERRY_SERVICE_NAME`, `FERRY_SERVICE_TYPE`, `FERRY_DEPLOY_ID`, `FERRY_INTERNAL_HOSTNAME` | Each service |
+| `FERRY_GIT_COMMIT`, `FERRY_GIT_BRANCH` | Deploys from git |
+| `FERRY_EXTERNAL_HOSTNAME`, `FERRY_EXTERNAL_URL` | Public services |
+
+See [Environment and env groups](/docs/concepts/environment) and [Injected variables](/docs/concepts/environment/injected-variables).

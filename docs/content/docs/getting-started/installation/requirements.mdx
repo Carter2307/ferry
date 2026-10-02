@@ -1,0 +1,44 @@
+---
+title: What you need
+description: You need Docker and git to run Ferry, and Rust and Node.js to build it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'rust', at: [0, 0], icon: 'wrench', label: 'Rust', note: '1.89 or newer' },
+    { id: 'node', at: [1, 0], icon: 'wrench', label: 'Node.js', note: '20.19 or newer' },
+    { id: 'docker', at: [2.15, 0], icon: 'container', label: 'Docker', note: '27.3 or newer' },
+    { id: 'git', at: [3.15, 0], icon: 'branch', label: 'git', note: 'a recent version' },
+  ]}
+  groups={[
+    { label: 'Only to build Ferry', around: ['rust', 'node'] },
+    { label: 'To run Ferry', around: ['docker', 'git'] },
+  ]}
+  steps={[
+    {
+      caption: 'To build Ferry, you need Rust and Node.js.',
+      tones: { rust: 'primary', node: 'primary', docker: 'muted', git: 'muted' },
+    },
+    {
+      caption: 'To run Ferry, you need only Docker, and git for git deploys.',
+      tones: { docker: 'success', git: 'success', rust: 'muted', node: 'muted' },
+    },
+  ]}
+/>
+
+Ferry runs on Linux and macOS.
+
+| Tool | Version | Use |
+|---|---|---|
+| <Term id="docker" /> | Engine 27.3 or newer, or <Term id="docker-desktop" /> | Runs everything. Builds use the `docker` CLI with <Term id="buildkit" />. |
+| git | A recent version | Clones repositories for git deploys |
+| <Term id="rust" /> | Stable 1.89 or newer (install it with [rustup](https://rustup.rs)) | Builds `ferryd` and `ferry` |
+| Node.js | 20.19 or newer, with <Term id="npm" /> | Builds the dashboard |
+
+<Accordions>
+  <Accordion title="Why Docker 27.3">
+    Your build gets its environment variables as BuildKit secrets (`RUN --mount=type=secret,…,env=…`). These secrets need Docker Engine 27.3 or newer.
+
+    With an older engine, a build that uses environment variables fails. The message tells you to upgrade. See [Builds & runtimes](/docs/concepts/builds).
+  </Accordion>
+</Accordions>

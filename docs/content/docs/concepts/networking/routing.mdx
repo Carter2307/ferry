@@ -1,0 +1,44 @@
+---
+title: How the proxy routes a request
+description: The proxy reads the Host header of each request, finds the service and sends the request to one instance.
+---
+
+<Flow
+  caption="What the proxy does for each request"
+  steps={[
+    { icon: 'certificate', title: 'ACME challenge', text: 'With HTTPS on, the proxy answers the ACME HTTP-01 challenges at /.well-known/acme-challenge/ on plain HTTP.', tone: 'muted' },
+    { icon: 'search', title: 'Domain check', text: 'The proxy answers the verification of a domain at /.well-known/ferry-domain-check/, for each host.', tone: 'muted' },
+    { icon: 'eye', title: 'Read the host', text: 'The proxy reads the host from the Host header, or from :authority in HTTP/2.' },
+    { icon: 'lock', title: 'Redirect', text: 'If the host has a certificate, the proxy redirects plain HTTP to HTTPS with a 308.' },
+    { icon: 'split', title: 'Choose', text: 'The proxy finds the service that owns the host. It chooses one of its instances, round-robin.' },
+    { icon: 'send', title: 'Forward', text: 'The proxy sends the request to that instance with HTTP/1.1 and the original Host header.', tone: 'success' },
+  ]}
+/>
+
+The <Term id="proxy" /> does these steps in this order. The first two steps apply only to two special paths.
+
+## The host
+
+The <Term id="host-header" /> gives the <Term id="hostname" /> that the client wants. This is how one proxy serves many services on one <Term id="ip-address" />.
+
+When the proxy reads the host, it ignores:
+
+- the case of the letters
+- the port
+- a dot at the end
+
+## Related pages
+
+| Step | Page |
+|---|---|
+| <Term id="http-01">ACME challenge</Term> | [Automatic HTTPS](/docs/concepts/networking/https) |
+| Domain check | [The status of a domain](/docs/concepts/networking/domain-status) |
+| <Term id="redirect">Redirect</Term> | [The life of a certificate](/docs/concepts/networking/certificates) |
+| Choose, <Term id="round-robin" /> | [Load balancing](/docs/concepts/networking/load-balancing) |
+| No service owns the host | [Error pages](/docs/concepts/networking/error-pages) |
+
+<Accordions>
+  <Accordion title="For engineers">
+    The [networking model](/docs/architecture/networking-model) page describes the proxy, the routes and the container ports in `ferryd`.
+  </Accordion>
+</Accordions>

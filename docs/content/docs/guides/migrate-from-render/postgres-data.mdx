@@ -1,0 +1,75 @@
+---
+title: Move your Postgres data
+description: Write the Render database into a file with pg_dump, then load the file into the Ferry datastore.
+---
+
+<Diagram
+  nodes={[
+    { id: 'render', at: [0, 0], icon: 'database', label: 'Render', note: 'your database' },
+    { id: 'dump', at: [1.5, 0], icon: 'download', label: 'pg_dump' },
+    { id: 'file', at: [1.5, 1], icon: 'file', label: 'shop.sql' },
+    { id: 'ferry', at: [3, 1], icon: 'database', label: 'shop-db', note: 'ferry-ds-shop-db' },
+  ]}
+  edges={[
+    { from: 'render', to: 'dump' },
+    { from: 'dump', to: 'file' },
+    { from: 'file', to: 'ferry', label: 'psql' },
+  ]}
+  steps={[
+    { caption: 'pg_dump reads the Render database through its external URL.', flow: ['render>dump'], hide: ['file'] },
+    { caption: 'pg_dump writes all the data into the file shop.sql.', flow: ['dump>file'], tones: { file: 'primary' } },
+    { caption: 'psql loads the file into the container of the Ferry datastore.', flow: ['file>ferry'], tones: { ferry: 'success' } },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Stop the writes on Render
+
+Stop the writes while you copy, or plan a short maintenance period.
+
+</Step>
+<Step>
+
+### Write the Render database into a file
+
+```bash title="Terminal"
+docker run --rm postgres:16-alpine pg_dump --no-owner --no-acl "$RENDER_EXTERNAL_DATABASE_URL" > shop.sql
+```
+
+<Term id="pg-dump" /> runs from an <Term id="image" />. Use an image that is as new as the <Term id="postgres" /> version of the Render server, or newer.
+
+</Step>
+<Step>
+
+### Find the user and the database
+
+```bash title="Terminal"
+ferry db show shop-db    # prints the Database and User to load into
+```
+
+</Step>
+<Step>
+
+### Load the file into the Ferry datastore
+
+```bash title="Terminal"
+docker exec -i ferry-ds-shop-db psql -U shop_db shop_db < shop.sql
+```
+
+<Term id="psql" /> runs in the <Term id="container" /> of the <Term id="datastore" />. Replace `shop_db` with the `User` and the `Database` that `ferry db show` prints.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="Where the names come from">
+    - The name of the container is `<prefix>-ds-<name>`: `ferry-ds-shop-db` with the default prefix.
+    - The user and the database come from `user` and `databaseName` in your `render.yaml`.
+    - Without these keys, the two get the name of the datastore, with `_` in the place of `-`. Here, it is `shop_db`.
+  </Accordion>
+  <Accordion title="Redis">
+    Ferry has no import tool for Redis. A key value store starts empty.
+  </Accordion>
+</Accordions>

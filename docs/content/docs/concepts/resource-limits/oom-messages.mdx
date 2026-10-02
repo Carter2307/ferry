@@ -1,0 +1,43 @@
+---
+title: What follows an OOM kill
+description: After an OOM kill, the result is different for an instance, a deploy, a job and a datastore.
+---
+
+<Diagram
+  caption="The kernel stops the process. What follows depends on the container."
+  nodes={[
+    { id: 'kernel', at: [0, 1.5], icon: 'skull', label: 'OOM kill', tone: 'danger' },
+    { id: 'live', at: [1.75, 0], icon: 'box', label: 'Live instance', note: 'Docker restarts it' },
+    { id: 'new', at: [1.75, 1], icon: 'deploy', label: 'New instance', note: 'the deploy fails' },
+    { id: 'job', at: [1.75, 2], icon: 'terminal', label: 'Job run', note: 'the run fails' },
+    { id: 'db', at: [1.75, 3], icon: 'database', label: 'Datastore', note: 'failed or restarts' },
+  ]}
+  edges={[
+    { from: 'kernel', to: 'live' },
+    { from: 'kernel', to: 'new' },
+    { from: 'kernel', to: 'job' },
+    { from: 'kernel', to: 'db' },
+  ]}
+/>
+
+An <Term id="oom" /> comes from the <Term id="kernel" />. Ferry reports it in a different place for each type of container.
+
+## The result and the message
+
+| Container | What occurs | Message |
+|---|---|---|
+| Instance of a live service | Docker restarts it. `ferry status` and the dashboard show the kill while it restarts. | Server log: `instance a1b2c3 of service 'api' ran out of memory (limit 512 MiB) — raise the service's memory limit` |
+| New instance in a deploy | The deploy fails, even if Docker restarted the instance. | `instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit` |
+| Job run | The run fails. | `the job ran out of memory (limit 64 MiB) — raise the service's memory limit` |
+| Datastore that Ferry creates | The datastore gets the status `failed`. | `the redis container ran out of memory (limit 256 MiB) — raise the datastore's memory limit` |
+| Datastore that runs | If the datastore stops, Docker restarts it. | Server log: `datastore 'app-db' ran out of memory (limit 1 GiB) — raise the datastore's memory limit` |
+
+`ferryd` writes each kill of an instance and of a datastore in the [server log](/docs/concepts/logs/server-logs).
+
+## Read the server log
+
+```bash title="Terminal"
+journalctl -u ferryd
+```
+
+This command works when systemd runs `ferryd`. To repair the cause, see [Out-of-memory kills](/docs/concepts/resource-limits/oom-kills).

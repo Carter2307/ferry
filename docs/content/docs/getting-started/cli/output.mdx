@@ -1,0 +1,67 @@
+---
+title: Output for people
+description: By default, ferry prints text for people. The results and the progress messages use two different channels.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0.5], icon: 'terminal', label: 'ferry' },
+    { id: 'out', at: [1.6, 0], label: 'stdout', note: 'the results' },
+    { id: 'err', at: [1.6, 1], label: 'stderr', note: 'progress, errors' },
+    { id: 'next', at: [3.2, 0], icon: 'workflow', label: 'Next command', note: 'after a pipe' },
+    { id: 'screen', at: [3.2, 1], icon: 'monitor', label: 'Your screen' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'out' },
+    { from: 'ferry', to: 'err' },
+    { from: 'out', to: 'next' },
+    { from: 'err', to: 'screen' },
+  ]}
+  steps={[
+    {
+      caption: 'ferry writes the results to stdout.',
+      hide: ['next', 'screen'],
+      flow: ['ferry>out'],
+      tones: { out: 'primary' },
+    },
+    {
+      caption: 'ferry writes the progress messages and the warnings to stderr.',
+      hide: ['next', 'screen'],
+      flow: ['ferry>err'],
+      tones: { err: 'warning' },
+    },
+    {
+      caption: 'A pipe gives only the results to the next command.',
+      flow: ['ferry>out', 'out>next', 'ferry>err', 'err>screen'],
+      tones: { next: 'success' },
+    },
+  ]}
+/>
+
+## The two channels
+
+| Channel | What `ferry` writes |
+|---|---|
+| <Term id="stdout" /> | The results. |
+| <Term id="stderr" /> | The progress (`Packing …`, `Uploading …`), the warnings and the errors. |
+
+## What the text looks like
+
+`ferry` prints tables with aligned columns, and blocks of keys and values. See an example in [The commands that you use most](/docs/getting-started/cli/commands).
+
+| Text | Form |
+|---|---|
+| A log line | `HH:MM:SS [instance] line` |
+| A message from Ferry in a deploy log | It starts with `==>` |
+
+For a script, use [JSON output](/docs/getting-started/cli/json).
+
+<Accordions>
+  <Accordion title="Colors">
+    `ferry` uses colors only when these three conditions are true:
+
+    - The output is a terminal.
+    - `NO_COLOR` has no value.
+    - `TERM` is not `dumb`.
+  </Accordion>
+</Accordions>

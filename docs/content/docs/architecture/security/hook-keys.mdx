@@ -1,0 +1,59 @@
+---
+title: Deploy hook keys
+description: A deploy hook has its own key in its URL. The key can start a deploy and nothing else.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ci', at: [0, 0], icon: 'workflow', label: 'Your CI' },
+    { id: 'hook', at: [1.5, 0], icon: 'link', label: 'Deploy hook', note: '/hooks/deploy/…' },
+    { id: 'deploy', at: [3, 0], icon: 'deploy', label: 'New deploy' },
+  ]}
+  edges={[
+    { from: 'ci', to: 'hook' },
+    { from: 'hook', to: 'deploy' },
+  ]}
+  steps={[
+    {
+      caption: 'A request with the correct key starts a deploy. It can do nothing else.',
+      flow: ['ci>hook', 'hook>deploy'],
+      tones: { deploy: 'success' },
+    },
+    {
+      caption: 'A request with a wrong key gets the answer 401.',
+      flow: ['ci>hook'],
+      hide: ['deploy'],
+      tones: { hook: 'danger' },
+      notes: { hook: '401' },
+    },
+    {
+      caption: 'An unknown service id gets the same 401. Thus the hook does not tell which services exist.',
+      flow: ['ci>hook'],
+      hide: ['deploy'],
+      tones: { hook: 'danger' },
+      notes: { hook: '401' },
+    },
+  ]}
+/>
+
+```text title="The URL of a deploy hook"
+/hooks/deploy/<service id>?key=<key>
+```
+
+Webhooks do not use the account or an API token. Each one has its own secret. For a <Term id="deploy-hook" />, the secret is the key in the URL.
+
+The path takes the service id only, because names are easy to guess.
+
+<Callout type="warning" title="The URL is a password">
+Each person who has the URL can start deploys of the service, but nothing else.
+</Callout>
+
+## If the URL leaks
+
+Replace the key:
+
+```bash title="Terminal"
+ferry deploy-hook rotate NAME
+```
+
+[Deploy hooks](/docs/concepts/deploys/deploy-hooks) shows how to use a hook. The [API overview](/docs/reference/api-overview/deploy-hooks) has the details.

@@ -1,0 +1,53 @@
+---
+title: Manage the accounts
+description: One page lists the connections. There you repeat an authorization, replace a token or disconnect an account.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry', note: 'copy of the access' },
+    { id: 'provider', at: [2, 0], icon: 'shield-check', label: 'Provider', note: 'app or permission' },
+  ]}
+  edges={[{ from: 'ferry', to: 'provider' }]}
+  steps={[
+    {
+      caption: 'Ferry keeps a copy of each connection. The provider keeps the app or the authorization.',
+      flow: ['ferry>provider'],
+    },
+    {
+      caption: 'Disconnect deletes the copy in Ferry. It removes nothing on the provider.',
+      cut: ['ferry>provider'],
+      tones: { ferry: 'danger' },
+      notes: { ferry: 'copy deleted' },
+    },
+    {
+      caption: 'To remove the access there, delete the app or revoke the authorization on the provider.',
+      cut: ['ferry>provider'],
+      tones: { ferry: 'muted', provider: 'danger' },
+      notes: { ferry: 'copy deleted', provider: 'access removed' },
+    },
+  ]}
+/>
+
+Open **Server → Connections → Git accounts**. The page lists the <Term id="git-connection">connections</Term>, the method of each authorization and the services that each connection clones for.
+
+## The actions
+
+| Action | What it does |
+|---|---|
+| **Repositories** (GitHub) | Opens the page of the app on GitHub. There you add or remove repositories. |
+| **Authorize again** | Repeats the authorization. Use it after you revoke the authorization on GitLab. Also use it when the repository list shows that the provider refuses the authorization. |
+| **Finish connecting** | Continues an authorization that you did not complete. |
+| **Replace token** | For an account with an <Term id="access-token" />: stores a new token. |
+| **Disconnect** | Deletes the copy of the connection in Ferry. |
+
+## After a disconnect
+
+The services keep their repository. From then on, Ferry clones it with no credentials. A private repository then fails to deploy.
+
+## Remove the access on the provider
+
+| Provider | Do this |
+|---|---|
+| GitHub | Delete the GitHub App: **Settings → Developer settings → GitHub Apps**. |
+| GitLab | Revoke the authorization of the application: **User settings → Applications**. |

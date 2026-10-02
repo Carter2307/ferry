@@ -1,0 +1,30 @@
+---
+title: Enqueue, find the source
+description: To enqueue a deploy, the engine finds its source and stores the deploy as queued.
+---
+
+<Flow
+  caption="The engine uses the first source that it finds"
+  steps={[
+    { icon: 'commit', title: 'Explicit source', text: 'A source in the request: a commit, or the target of a rollback.' },
+    { icon: 'package', title: 'Image', text: 'The image of the service.' },
+    { icon: 'branch', title: 'Repository', text: 'The repo_url and the branch of the service.' },
+    { icon: 'upload', title: 'Upload', text: 'The most recent archive that ferry up uploaded.' },
+    { icon: 'ban', title: 'No source', text: 'The engine refuses the deploy.', tone: 'danger' },
+  ]}
+/>
+
+The function is `Engine::deploy`. After it finds the source, it stores the <Term id="deploy" /> with the status `queued`. Then the [queue and the worker](/docs/architecture/deploy-pipeline/queue) take the deploy.
+
+## Refused deploys
+
+The engine refuses a service with no source. It also refuses a suspended service, with the status code 409.
+
+```text title="Errors" noCopy
+service 'x' has no repository or image: upload code with `ferry up x`
+service 'x' is suspended: resume it before deploying
+```
+
+## The first deploy of a public service
+
+A public service with no deploy before gets an empty route immediately. While the first deploy runs, its URL answers 503 ("no healthy instances yet"), not 404.

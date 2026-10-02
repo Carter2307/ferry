@@ -1,0 +1,52 @@
+---
+title: Open the dashboard without a tunnel
+description: The flag --dashboard-host serves the dashboard, the API and the webhooks on their own hostname, with HTTPS.
+---
+
+<Diagram
+  caption="The proxy serves the dashboard on its own hostname"
+  nodes={[
+    { id: 'gh', at: [0, 0], icon: 'webhook', label: 'GitHub', note: 'webhooks' },
+    { id: 'you', at: [0, 1], icon: 'browser', label: 'Your browser' },
+    { id: 'proxy', at: [1.25, 0.5], icon: 'route', label: 'Ferry proxy', note: 'port 443, HTTPS' },
+    { id: 'dash', at: [2.5, 0.5], icon: 'monitor', label: 'Dashboard, API', note: 'its own hostname' },
+  ]}
+  edges={[
+    { from: 'gh', to: 'proxy', flow: true },
+    { from: 'you', to: 'proxy', flow: true },
+    { from: 'proxy', to: 'dash', flow: true },
+  ]}
+/>
+
+GitHub <Term id="webhook">webhooks</Term> and <Term id="deploy-hook">deploy hooks</Term> come from the internet. They cannot use your SSH tunnel. For them, serve the dashboard and the API through the <Term id="proxy" />.
+
+<Steps>
+<Step>
+
+### Add the flag
+
+Add `--dashboard-host` to `ExecStart` in the unit file.
+
+```bash title="Terminal"
+ferryd … --dashboard-host ferry.apps.example.com
+```
+
+</Step>
+<Step>
+
+### Restart ferryd
+
+```bash title="Terminal"
+sudo systemctl daemon-reload
+sudo systemctl restart ferryd
+```
+
+The dashboard is now at `https://ferry.apps.example.com`.
+
+</Step>
+</Steps>
+
+## The rules
+
+- Each API call still needs an API token or a signed-in <Term id="browser-session" />.
+- On a public base domain, the dashboard host is off unless you set it.

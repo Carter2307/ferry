@@ -1,0 +1,62 @@
+---
+title: Auto-deploy from GitHub
+description: With auto-deploy, each push to a branch on GitHub deploys the services that track it.
+icon: GitBranch
+---
+
+<Diagram
+  caption="From a push to a deploy"
+  nodes={[
+    { id: 'push', at: [0, 0], icon: 'laptop', label: 'git push', note: 'to main' },
+    { id: 'github', at: [1.1, 0], icon: 'repo', label: 'GitHub', note: 'push event' },
+    { id: 'ferry', at: [2.2, 0], icon: 'webhook', label: 'ferryd', note: '/hooks/github' },
+    { id: 'deploy', at: [3.3, 0], icon: 'deploy', label: 'New deploy', note: 'trigger: webhook' },
+  ]}
+  edges={[
+    { from: 'push', to: 'github' },
+    { from: 'github', to: 'ferry' },
+    { from: 'ferry', to: 'deploy' },
+  ]}
+  steps={[
+    {
+      caption: 'You push a commit to the branch.',
+      hide: ['deploy'],
+      flow: ['push>github'],
+    },
+    {
+      caption: 'GitHub sends a push event to the webhook endpoint of Ferry, with a signature.',
+      hide: ['deploy'],
+      flow: ['github>ferry'],
+    },
+    {
+      caption: 'Ferry checks the signature.',
+      hide: ['deploy'],
+      tones: { ferry: 'warning' },
+      notes: { ferry: 'checks signature' },
+    },
+    {
+      caption: 'Ferry deploys the commit of the push for each service that tracks this branch.',
+      flow: ['ferry>deploy'],
+      tones: { ferry: 'success', deploy: 'success' },
+    },
+  ]}
+/>
+
+When you <Term id="git-push">push</Term> to a <Term id="branch" />, GitHub sends a `push` event to the <Term id="webhook" /> endpoint of Ferry: `/hooks/github`. Ferry checks the <Term id="webhook-signature" />. Then Ferry deploys the <Term id="commit" /> of the push for each <Term id="service" /> that tracks this <Term id="repository" /> and this branch.
+
+## Create a service that deploys on a push
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --branch main --follow
+```
+
+<Term id="auto-deploy">Auto-deploy</Term> is on by default. The server also needs a <Term id="webhook-secret" />, and GitHub needs the address of the webhook.
+
+## In this section
+
+<Cards>
+  <Card title="Before you start" href="/docs/guides/github-auto-deploy/requirements" description="What GitHub must reach on your server." />
+  <Card title="Set up the webhook" href="/docs/guides/github-auto-deploy/setup" description="The secret, the service, the webhook, the first push." />
+  <Card title="Which services a push deploys" href="/docs/guides/github-auto-deploy/matching" description="The four conditions, and what Ferry ignores." />
+  <Card title="Deploy hooks" href="/docs/guides/github-auto-deploy/deploy-hooks" description="Deploy from your CI after the tests pass." />
+</Cards>

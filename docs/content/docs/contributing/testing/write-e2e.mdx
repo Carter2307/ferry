@@ -1,0 +1,62 @@
+---
+title: Write an end-to-end test
+description: Tests of different crates share one Docker daemon. Each test keeps its resources apart and removes them at the end.
+---
+
+<Diagram
+  nodes={[
+    { id: 'a', at: [0, 0], icon: 'check', label: 'Test of crate A', note: 'its own prefix' },
+    { id: 'b', at: [0, 1], icon: 'check', label: 'Test of crate B', note: 'its own prefix' },
+    { id: 'ca', at: [1.9, 0], icon: 'boxes', label: 'ferrytest-a-…', note: 'containers' },
+    { id: 'cb', at: [1.9, 1], icon: 'boxes', label: 'ferrytest-b-…', note: 'containers' },
+  ]}
+  edges={[
+    { from: 'a', to: 'ca' },
+    { from: 'b', to: 'cb' },
+  ]}
+  groups={[{ label: 'One Docker daemon', around: ['ca', 'cb'] }]}
+  steps={[
+    {
+      caption: 'Tests of different crates run at the same time against the same daemon.',
+      hide: ['ca', 'cb'],
+      tones: { a: 'primary', b: 'primary' },
+    },
+    {
+      caption: 'Each test uses its own name prefix, free ports and a temporary data directory.',
+      flow: ['a>ca', 'b>cb'],
+      tones: { ca: 'primary', cb: 'primary' },
+    },
+    {
+      caption: 'At the end, each test removes all that it created. It does so after a failure too.',
+      hide: ['ca', 'cb'],
+      tones: { a: 'success', b: 'success' },
+      notes: { a: 'clean', b: 'clean' },
+    },
+  ]}
+/>
+
+## The five rules
+
+Each test that needs Docker must obey these rules:
+
+1. **Check the gate first.** Without `FERRY_E2E=1`, print `skipped` and return.
+2. **Use your own name prefix**, such as `ferrytest-<crate>-<random>`. Also use free ports and a temporary data directory.
+3. **Remove all that the test creates, also after a failure**: containers, volumes, the network, and the images with its prefix. The suites that exist do it with a <Term id="drop-guard" />.
+4. **Use small base images only**: `python:3.12-alpine`, `node:22-alpine`, `nginx:alpine`, `busybox:stable`, `postgres:16-alpine`, `redis:7-alpine`.
+5. **Use the example apps** in `examples/` as <Term id="fixture">fixtures</Term>.
+
+## Deploy an example "from git"
+
+Copy the example to a temporary directory. Then run this command there:
+
+```bash title="Terminal"
+git init && git add -A && git commit
+```
+
+## If a run leaves containers
+
+A run that stops in the middle can leave containers. Remove them by prefix:
+
+```bash title="Terminal"
+docker ps -aq --filter label=ferry.instance=<prefix> | xargs docker rm -f
+```

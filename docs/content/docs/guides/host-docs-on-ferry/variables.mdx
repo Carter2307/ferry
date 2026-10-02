@@ -1,0 +1,24 @@
+---
+title: Build variables
+description: Three variables set the public URLs and the git branch that the build writes into the pages.
+---
+
+```bash title="Terminal"
+DOCS_SITE_URL=http://ferry-docs.localhost:8080 npm run build
+```
+
+The build reads three variables. Set them before `npm run build`.
+
+## The three variables
+
+| Variable | Default | Use |
+|---|---|---|
+| `DOCS_SITE_URL` | `http://localhost:3000` | The public URL of the site, for the <Term id="canonical-url" /> and the Open Graph URLs. Set it to the address where the site will be. |
+| `FERRY_DOCS_SERVER_URL` | `http://127.0.0.1:7878` | The "Dashboard" link of the header, and the server URL in the API examples. |
+| `DOCS_GIT_BRANCH` | `dev` | The branch of the "Edit on GitHub" links. It must contain `docs/`. |
+
+<Callout type="warning" title="Set FERRY_DOCS_SERVER_URL for a public site">
+With the default, the "Dashboard" link and the API examples point at `http://127.0.0.1:7878`. This address works only on the machine of the reader.
+
+For a site that other persons read, set it to the public dashboard URL of your server. For example, use `https://ferry.example.com` when `ferryd` runs with `--dashboard-host ferry.example.com` and HTTPS.
+</Callout>

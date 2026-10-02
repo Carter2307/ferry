@@ -1,0 +1,13 @@
+{
+  "title": "Auto-deploy from GitHub",
+  "icon": "GitBranch",
+  "pages": [
+    "requirements",
+    "setup",
+    "private-repos",
+    "matching",
+    "test",
+    "deploy-hooks",
+    "github-actions"
+  ]
+}

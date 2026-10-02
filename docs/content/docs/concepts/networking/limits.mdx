@@ -1,0 +1,37 @@
+---
+title: Connection limits
+description: The proxy protects itself with limits on the number of connections and on the time that each one waits.
+---
+
+<Flow
+  caption="The time limits of one connection"
+  steps={[
+    { icon: 'lock', title: 'TLS handshake', text: 'The client has 10 seconds to complete the TLS handshake.' },
+    { icon: 'inbox', title: 'Request head', text: 'The client has 30 seconds to send the head of each request.' },
+    { icon: 'upload', title: 'Request body', text: 'A pause of 60 seconds in the request body gives the answer 408.', tone: 'warning' },
+    { icon: 'hourglass', title: 'Idle', text: 'The proxy closes a connection that has no request in progress after 60 seconds.' },
+  ]}
+/>
+
+The <Term id="proxy" /> protects itself with connection limits. You cannot change them.
+
+## The limits
+
+| Limit | Value |
+|---|---|
+| Open connections | From the <Term id="open-file-limit" />, at most 10,000 |
+| Connections for each client address | 256 |
+| <Term id="tls" /> handshake | 10 s |
+| First request head, and each next one on an HTTP/1 connection | 30 s |
+| Idle connection with no request in progress | 60 s (5 s while the proxy is at its connection limit) |
+| Pause in a request body | 60 s, then `408` |
+
+A <Term id="timeout" /> of the proxy never cuts an answer in progress. See [WebSockets, SSE and HTTP/2](/docs/concepts/networking/streaming).
+
+<Accordions>
+  <Accordion title="How Ferry counts">
+    - At startup, `ferryd` raises its soft open-file limit to the hard limit.
+    - An IPv6 client counts as its /64.
+    - Loopback clients are exempt from the limit for each client address.
+  </Accordion>
+</Accordions>

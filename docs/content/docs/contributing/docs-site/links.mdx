@@ -1,0 +1,32 @@
+---
+title: Links and escapes
+description: Write each link as an absolute path with no slash at the end. Put braces and angle brackets in code.
+---
+
+```mdx title="A page"
+See [Deploys](/docs/concepts/deploys).
+Run [`ferry deploy`](/docs/reference/cli#ferry-deploy).
+```
+
+## Links
+
+A link is absolute and has no slash at the end.
+
+| Link to | Form | Example |
+|---|---|---|
+| A page | The path of the page | `/docs/concepts/deploys` |
+| A CLI command | The <Term id="anchor" /> `#ferry-<command>` | `/docs/reference/cli#ferry-deploy`, `#ferry-env-set` |
+| An API operation | An anchor from its summary | `/docs/reference/api/services#scale-a-service` |
+
+`npm run build` fails on a link or an anchor that goes nowhere. See [Build and deploy](/docs/contributing/docs-site/build).
+
+## Escapes
+
+<Term id="mdx" /> reads `{` and `<` as the start of code. Outside a code block, you have two solutions:
+
+| Solution | Example |
+|---|---|
+| Write a backslash before the character | `\{`, `\}` and `\<` |
+| Put the text in backticks | `` `<name>` `` |
+
+A reference such as `${{datastore.NAME.connectionString}}` always goes in backticks or in a code block.

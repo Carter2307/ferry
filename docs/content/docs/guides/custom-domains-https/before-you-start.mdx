@@ -1,0 +1,36 @@
+---
+title: Before you add a custom domain
+description: The server needs HTTPS on, and port 80 open to the internet for the test of Let's Encrypt.
+---
+
+<Diagram
+  caption="Who connects to which port"
+  nodes={[
+    { id: 'le', at: [0, 0], icon: 'certificate', label: "Let's Encrypt" },
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'p80', at: [1.5, 0], icon: 'plug', label: 'Port 80', note: 'test and redirect' },
+    { id: 'p443', at: [1.5, 1], icon: 'lock', label: 'Port 443', note: 'HTTPS' },
+    { id: 'proxy', at: [3, 0.5], icon: 'route', label: 'Proxy' },
+  ]}
+  edges={[
+    { from: 'le', to: 'p80', flow: true },
+    { from: 'browser', to: 'p443', flow: true },
+    { from: 'p80', to: 'proxy' },
+    { from: 'p443', to: 'proxy' },
+  ]}
+  groups={[{ label: 'Your server', around: ['p80', 'p443', 'proxy'] }]}
+/>
+
+| You need | How |
+|---|---|
+| <Term id="https" /> on the server | <Term id="ferryd" /> runs with `--https-addr 0.0.0.0:443` and `--acme-email`. |
+| <Term id="port">Port</Term> 80 open to the internet | The <Term id="proxy" /> of the server listens on it: `--proxy-addr 0.0.0.0:80`. |
+| A <Term id="web-service" /> or a <Term id="static-site" /> | <Term id="private-service">Private services</Term>, <Term id="worker">workers</Term> and <Term id="cron-job">cron jobs</Term> cannot have domains. |
+
+Without the two HTTPS options, the domain works over HTTP only. See [Production setup](/docs/guides/production).
+
+## Why port 80
+
+<Term id="lets-encrypt" /> connects to port 80 to validate the domain. The port of your site does not change this.
+
+It asks for `http://shop.example.com/.well-known/acme-challenge/…`. The proxy answers with the key authorization.

@@ -1,0 +1,62 @@
+---
+title: Connected git accounts
+description: A git connection has read access only. Its secret stays on the server and goes only to the provider.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0.5], icon: 'ship', label: 'Ferry', note: 'keeps the secret' },
+    { id: 'prov', at: [1.75, 0], icon: 'repo', label: 'Provider host', note: 'GitHub or GitLab' },
+    { id: 'other', at: [1.75, 1], icon: 'globe', label: 'Another host' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'prov' },
+    { from: 'ferry', to: 'other' },
+  ]}
+  steps={[
+    {
+      caption: 'You authorize Ferry on the page of the provider. Ferry gets read access only.',
+      cut: ['ferry>other'],
+      tones: { prov: 'primary' },
+    },
+    {
+      caption: 'Ferry keeps the secret of the connection on the server. The API never returns it.',
+      cut: ['ferry>other'],
+      tones: { ferry: 'success' },
+    },
+    {
+      caption: 'Ferry sends a token to the API of the provider, and to repositories on the same host.',
+      flow: ['ferry>prov'],
+      cut: ['ferry>other'],
+      notes: { prov: 'gets the token' },
+    },
+    {
+      caption: 'Ferry reads a repository on another host with no token.',
+      flow: ['ferry>other'],
+      tones: { other: 'muted' },
+      notes: { other: 'gets no token' },
+    },
+  ]}
+/>
+
+A <Term id="git-connection" /> lets Ferry read your repositories. You authorize it on the page of the provider itself. See [Git accounts](/docs/guides/git-accounts).
+
+## Read access only
+
+| Provider | What you authorize | Access |
+|---|---|---|
+| GitHub | A <Term id="github-app" /> that reads the repositories that you chose | `contents: read`, `metadata: read` |
+| GitLab | A GitLab application | The scopes `read_api` and `read_repository` |
+
+## What the server keeps
+
+The server keeps the private key of the app, the OAuth tokens and client secret, or a personal access token. The API never returns them.
+
+<Accordions>
+  <Accordion title="Details">
+    - For a personal token, a connection shows only `token_hint`: the last characters of the token.
+    - The tokens of a GitHub App last one hour. Ferry keeps them only in memory.
+    - "The same host" means the same scheme, host and port as the provider. Ferry sends the token there when it clones or lists branches.
+    - The provider sends its answers back through your browser. Ferry accepts an answer only with a random `state` that the server gave less than one hour before. Each `state` works one time.
+  </Accordion>
+</Accordions>

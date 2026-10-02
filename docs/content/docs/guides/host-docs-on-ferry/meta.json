@@ -1,0 +1,9 @@
+{
+  "title": "Host these docs on Ferry",
+  "icon": "BookOpen",
+  "pages": [
+    "upload",
+    "variables",
+    "git"
+  ]
+}
