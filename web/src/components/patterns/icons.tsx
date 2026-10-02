@@ -1,18 +1,20 @@
 import * as React from 'react'
 import { CalendarClock, Cog, Database, DatabaseZap, Globe, Lock, PanelsTopLeft, type LucideProps } from 'lucide-react'
 
+import ferryLogo from '@/assets/ferry-logo.svg'
 import type { DatastoreKind, GitProvider, ServiceType } from '@/lib/api/types'
 import { cn } from '@/lib/utils'
 
-/** Ferry mark: a hull on a wave, in the brand green. */
-export function FerryLogo({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+/** Ferry logo: a ferry seen from the bow, an image in its own colors (a little transparent in dark mode). */
+export function FerryLogo({ className, ...props }: React.ComponentProps<'img'>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className={cn('size-[18px]', className)} {...props}>
-      <path d="M4 13.5h16l-2.2 4.2a2 2 0 0 1-1.77 1.07H7.97A2 2 0 0 1 6.2 17.7L4 13.5Z" fill="var(--primary-solid)" />
-      <path d="M7.5 13.5V9.25c0-.69.56-1.25 1.25-1.25h6.5c.69 0 1.25.56 1.25 1.25v4.25" stroke="var(--primary-solid)" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M12 8V4.5" stroke="var(--primary-solid)" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M3 21.25c1.5 0 1.5-.9 3-.9s1.5.9 3 .9 1.5-.9 3-.9 1.5.9 3 .9 1.5-.9 3-.9 1.5.9 3 .9" stroke="var(--primary-bright)" strokeWidth="1.5" strokeLinecap="round" opacity=".55" />
-    </svg>
+    <img
+      src={ferryLogo}
+      alt=""
+      aria-hidden="true"
+      className={cn('size-[18px] opacity-(--logo-opacity)', className)}
+      {...props}
+    />
   )
 }
 

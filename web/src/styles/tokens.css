@@ -60,6 +60,8 @@
   --success: oklch(0.525 0.12 157.5);
   --success-soft: oklch(0.7 0.15 157.5 / 0.1);
   --brand: #3ecf8e;
+  /* logo: an image in its own colors, dark mode only makes it a little transparent */
+  --logo-opacity: 1;
 
   /* feedback */
   --warning: oklch(0.55 0.14 58);
@@ -128,6 +130,7 @@
   --primary-foreground: oklch(0.99 0 0);
   --success: oklch(0.76 0.15 157.5);
   --success-soft: oklch(0.76 0.15 157.5 / 0.1);
+  --logo-opacity: 0.85;
 
   --warning: oklch(0.8 0.14 75);
   --warning-soft: #341c00;

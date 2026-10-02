@@ -141,7 +141,7 @@ app/
   og/docs/                Open Graph images, one per page
   llms.txt, llms-full.txt, llms.mdx/   Markdown versions of the pages for LLMs
   global.css              Tailwind + Fumadocs presets, tokens → Fumadocs theme, prose tweaks
-  icon.svg                favicon (Ferry mark)
+  icon.svg                favicon (the Ferry logo in a square)
 components/
   layout/                 site header (theme menu), docs header slot, sidebar, site nav (drawer links)
   mdx/                    Callout, Card(s), Badge, Mermaid
@@ -151,5 +151,6 @@ components/
 content/docs/             the pages
 lib/                      source loader, OpenAPI loader, shared settings
 openapi/ferry.json        GENERATED
+public/logo.svg           the Ferry logo (header, footer, Open Graph images)
 scripts/                  generate.mjs, check-links.mjs
 ```

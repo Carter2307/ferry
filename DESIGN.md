@@ -1060,10 +1060,12 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   pids limit, `docker update` and real OOM kills) and
   `ferry-engine/tests/e2e.rs`
   (`resource_limits_apply_to_instances_jobs_and_datastores`,
-  `out_of_memory_kills_are_reported`). The job of the latter runs under a
-  shell that outlives the kill for a second, so that Docker records it
-  while the container is still there (§14); when its error is not the
-  expected one, the test prints Docker's events for the job's container.
+  `out_of_memory_kills_are_reported`). The container of
+  `oom_kills_are_reported` and the job of `out_of_memory_kills_are_reported`
+  run under a shell that outlives the kill for a second, so that Docker
+  records it while the container is still there (§14); when the job's error
+  is not the expected one, its test prints Docker's events for the job's
+  container.
 * Git connections (§18) never call the real providers in tests:
   `ferry-api/tests/git_connections.rs` runs a fake GitHub Enterprise /
   GitLab on a local socket — accounts, paginated repositories, rejected
