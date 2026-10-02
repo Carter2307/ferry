@@ -1,0 +1,47 @@
+---
+title: Redis and Key Value
+description: An entry of services with the type redis or keyvalue creates a Redis datastore, not a service.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: redis              # or keyvalue
+    name: cache
+    plan: starter            # 256 MiB of memory
+
+  - type: web
+    name: hello
+    envVars:
+      - key: REDIS_URL
+        fromService:         # the reference to the datastore
+          type: redis
+          name: cache
+          property: connectionString
+```
+
+`type: redis` (or `keyvalue`) creates a <Term id="redis" /> <Term id="datastore" /> with the name of the entry. Render names it a <Term id="key-value-store" />.
+
+## What Ferry creates
+
+| Part | Value |
+|---|---|
+| Image | `redis:7-alpine` |
+| Password | Ferry makes it. |
+| Data | Append-only persistence |
+| `maxmemory` | 3/4 of the memory limit |
+
+A Redis that is full refuses writes. Thus the <Term id="kernel" /> does not kill it. See [Redis and its memory limit](/docs/concepts/resource-limits/redis).
+
+## The keys that Ferry reads
+
+| Key | Notes |
+|---|---|
+| `type` | `redis` or `keyvalue` |
+| `name` | The name of the datastore |
+| `plan`, `memoryLimit`, `cpuLimit` | The limits. See [Resource limits](/docs/reference/blueprint/limits). |
+
+Ferry ignores each other key (`ipAllowList`, `maxmemoryPolicy`…) with a warning.
+
+## Use it from a service
+
+Write `fromService` with `type: redis` or `keyvalue`, as in the example. See [Reference properties](/docs/reference/blueprint/reference-properties).

@@ -1,0 +1,44 @@
+---
+title: Quickstart
+description: Start a server and deploy a Node.js app from your disk, in three commands.
+icon: Rocket
+---
+
+<Flow
+  steps={[
+    { icon: 'power', title: 'Start', text: 'The command ferryd starts the server.' },
+    { icon: 'user', title: 'Account', text: 'You create your account in the browser.' },
+    { icon: 'login', title: 'Log in', text: 'The command ferry login connects the CLI to the server.' },
+    { icon: 'upload', title: 'Deploy', text: 'The command ferry up sends the example app and deploys it.' },
+    { icon: 'globe', title: 'Live', text: 'The app answers at its URL.', tone: 'success' },
+  ]}
+/>
+
+You deploy `examples/node-hello`, a small Node.js <Term id="web-service" /> from the Ferry repository. Ferry takes it from your disk: you need no git repository and no <Term id="dockerfile" />.
+
+First, build `ferryd` and `ferry`. See [Installation](/docs/getting-started/installation).
+
+## The three commands
+
+```bash title="Terminal"
+# 1. Start the server. Then open the link that it prints.
+ferryd
+
+# 2. Connect the CLI.
+ferry login --server http://127.0.0.1:7878
+
+# 3. Deploy the app.
+cd examples/node-hello
+ferry up --follow
+```
+
+The output on the next pages comes from a real run. Ids, times and ports are different on your machine.
+
+## Step by step
+
+<Cards>
+  <Card title="1. Start the server" href="/docs/getting-started/quickstart/server" description="Run ferryd and create your account." />
+  <Card title="2. Log in with the CLI" href="/docs/getting-started/quickstart/login" description="Give your terminal its own API token." />
+  <Card title="3. Deploy the app" href="/docs/getting-started/quickstart/deploy" description="Run ferry up and open the URL." />
+  <Card title="Then: deploy a change" href="/docs/getting-started/quickstart/redeploy" description="Edit the code and run the same command again." />
+</Cards>

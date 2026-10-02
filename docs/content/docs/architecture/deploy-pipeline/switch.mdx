@@ -1,0 +1,69 @@
+---
+title: Switch and go live
+description: After the health checks pass, the engine changes the routes, marks the deploy live and stops the old instances.
+---
+
+<Diagram
+  nodes={[
+    { id: 'routes', at: [0, 0.5], icon: 'route', label: 'Route table' },
+    { id: 'old', at: [1.5, 0], icon: 'box', label: 'Old instances' },
+    { id: 'new', at: [1.5, 1], icon: 'box', label: 'New instances', note: 'healthy' },
+    { id: 'store', at: [3, 0.5], icon: 'database', label: 'Store', note: 'deploy: deploying' },
+  ]}
+  edges={[
+    { from: 'routes', to: 'old' },
+    { from: 'routes', to: 'new' },
+  ]}
+  steps={[
+    {
+      caption: 'All the new instances passed the health check. After this point, the deploy cannot go back.',
+      cut: ['routes>new'],
+      flow: ['routes>old'],
+      tones: { new: 'success' },
+    },
+    {
+      caption: 'The routes of each hostname of the service change to the new instances in one step.',
+      cut: ['routes>old'],
+      flow: ['routes>new'],
+      tones: { new: 'success', old: 'muted' },
+      notes: { old: 'no new requests' },
+    },
+    {
+      caption: 'The engine marks the deploy live immediately. The previous live deploy becomes deactivated.',
+      cut: ['routes>old'],
+      flow: ['routes>new'],
+      tones: { new: 'success', old: 'muted', store: 'success' },
+      notes: { store: 'deploy: live', old: 'no new requests' },
+    },
+    {
+      caption: 'The engine waits 2 seconds. The requests in progress on the old instances can end.',
+      cut: ['routes>old'],
+      flow: ['routes>new'],
+      tones: { new: 'success', old: 'warning', store: 'success' },
+      notes: { store: 'deploy: live', old: 'drains' },
+    },
+    {
+      caption: 'Each old instance has 10 seconds to stop. Then Docker kills it, and the engine removes it.',
+      hide: ['old'],
+      flow: ['routes>new'],
+      tones: { new: 'success', store: 'success' },
+      notes: { store: 'deploy: live', new: 'live' },
+    },
+  ]}
+/>
+
+After the <Term id="health-check" /> passes, the deploy cannot go back. A [cancel](/docs/architecture/deploy-pipeline/cancel) after the switch gets a refusal.
+
+## The order matters
+
+The engine marks the deploy `live` before it stops the old instances. If the server stops during the drain, it comes back with the new deploy.
+
+The change of routes and the wait of 2 seconds apply to web services and static sites. Other services have no route.
+
+## The end of the log
+
+```text title="Deploy log" noCopy
+==> Your service is live 🎉
+```
+
+The URLs of the service come after this line.

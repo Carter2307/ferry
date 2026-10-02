@@ -1,0 +1,50 @@
+---
+title: Back up and restore
+description: Ferry does not back up datastores. You dump the database to a file on a schedule.
+---
+
+<Diagram
+  nodes={[
+    { id: 'db', at: [0, 0], icon: 'database', label: 'notes-db' },
+    { id: 'file', at: [1.5, 0], icon: 'file', label: 'SQL file', note: 'the backup' },
+    { id: 'fresh', at: [3, 0], icon: 'database', label: 'New datastore' },
+  ]}
+  edges={[
+    { from: 'db', to: 'file', label: 'pg_dump' },
+    { from: 'file', to: 'fresh', label: 'psql' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry does not back up datastores. You dump the database to a file on a schedule.',
+      hide: ['fresh'],
+      flow: ['db>file'],
+      tones: { file: 'success' },
+    },
+    {
+      caption: 'To restore, you send the file to psql in a new datastore.',
+      cut: ['db>file'],
+      flow: ['file>fresh'],
+      tones: { db: 'muted', fresh: 'success' },
+    },
+  ]}
+/>
+
+## Back up
+
+Dump the database on a schedule, for example from a cron entry on the server. The tool is <Term id="pg-dump" />.
+
+```bash title="Terminal"
+docker exec ferry-ds-notes-db pg_dump -U notes_db notes_db > notes-$(date +%F).sql
+```
+
+## Restore
+
+Restore into a new <Term id="datastore" />:
+
+```bash title="Terminal"
+docker exec -i ferry-ds-notes-db psql -U notes_db notes_db < notes-2026-09-27.sql
+```
+
+<Callout type="warning" title="If you delete the datastore, you delete the data">
+`ferry db rm notes-db` removes the container and its <Term id="volume" />. While `notes` has a reference to the datastore, Ferry refuses, unless you add `--force`.
+</Callout>

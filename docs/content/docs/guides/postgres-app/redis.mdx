@@ -1,0 +1,23 @@
+---
+title: Add Redis
+description: A Redis datastore works the same way as Postgres. Create it, then give its URL with a reference.
+---
+
+<Terminal
+  lines={[
+    '$ ferry db create cache --kind redis --wait',
+    "$ ferry env set notes 'REDIS_URL=${{datastore.cache.connectionString}}'",
+    '# REDIS_URL=redis://default:<password>@cache:6379, and notes restarts',
+  ]}
+/>
+
+## What the two commands do
+
+| Command | Result |
+|---|---|
+| `ferry db create cache --kind redis --wait` | A <Term id="redis" /> datastore with the name `cache`. |
+| `ferry env set notes …` | `notes` gets `REDIS_URL` with a <Term id="reference" />, and restarts. |
+
+In the containers of `notes`, the value is `redis://default:<password>@cache:6379`.
+
+See [Datastores](/docs/concepts/datastores), [Environment](/docs/concepts/environment) and [Jobs & cron](/docs/concepts/jobs) for the full story.

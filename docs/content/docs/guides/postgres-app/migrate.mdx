@@ -1,0 +1,80 @@
+---
+title: Run the migration
+description: A one-off job runs the migration in a new container of the app, then stops.
+---
+
+<Diagram
+  nodes={[
+    { id: 'image', at: [0, 0], icon: 'package', label: 'Live image', note: 'of notes' },
+    { id: 'job', at: [1.5, 0], icon: 'terminal', label: 'Job container', note: 'npm run migrate' },
+    { id: 'db', at: [3, 0], icon: 'database', label: 'notes-db', note: 'no table' },
+  ]}
+  edges={[
+    { from: 'image', to: 'job' },
+    { from: 'job', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'The table does not exist yet. Thus the app answers 500 for now.',
+      hide: ['job'],
+      tones: { db: 'warning' },
+    },
+    {
+      caption: 'Ferry starts a container from the live image, with the same environment.',
+      flow: ['image>job'],
+      cut: ['job>db'],
+      tones: { job: 'primary', db: 'warning' },
+    },
+    {
+      caption: 'The container runs one command. The command creates the table.',
+      flow: ['job>db'],
+      tones: { job: 'primary', db: 'success' },
+      notes: { db: 'table notes' },
+    },
+    {
+      caption: 'The command ends and the container stops.',
+      hide: ['job'],
+      tones: { db: 'success' },
+      notes: { db: 'table notes' },
+    },
+  ]}
+/>
+
+This is a <Term id="one-off-job" />. See [Jobs & cron](/docs/concepts/jobs).
+
+<Steps>
+<Step>
+
+### Run the migration
+
+<Terminal
+  lines={[
+    '$ ferry run notes --follow -- npm run migrate',
+    'Job job-48dd0201159b41c3bb58 pending, streaming output…',
+    '==> Running `npm run migrate`',
+    '> migrate',
+    '> node migrate.js',
+    'migrations applied',
+    '==> Job succeeded',
+    'Job job-48dd0201159b41c3bb58 succeeded (exit code 0)',
+  ]}
+/>
+
+</Step>
+<Step>
+
+### Try the app
+
+<Terminal
+  lines={[
+    "$ curl -X POST --data 'hello from Ferry' http://notes.localhost:8080/notes",
+    'saved',
+    '$ curl http://notes.localhost:8080/',
+    '[{"id":1,"body":"hello from Ferry"}]',
+  ]}
+/>
+
+The first command saves a note. The second command lists the notes.
+
+</Step>
+</Steps>

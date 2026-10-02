@@ -1,0 +1,101 @@
+---
+title: Set the limits of a service
+description: The limits of a service apply to each instance and to each job run.
+---
+
+<Terminal
+  lines={[
+    '$ ferry update api --memory 2G',
+    "Updated 'api'",
+    'Resource limits apply to the next deploy or restart: ferry restart api',
+    '$ ferry restart api --follow',
+  ]}
+/>
+
+Each <Term id="instance" /> of the service gets the limits. Each job run gets them too, one-off or on a schedule.
+
+A new limit applies at the next deploy or restart. See [When a new limit applies](/docs/concepts/resource-limits/apply).
+
+## Choose your tool
+
+<Tabs items={['CLI', 'Dashboard', 'API', 'Blueprint']} groupId="interface" persist>
+<Tab value="CLI">
+
+`ferry create`, `ferry update` and `ferry up` accept `--memory` and `--cpu`.
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --memory 1G --cpu 0.5
+ferry update api --memory 2G           # change it
+ferry update api --cpu default         # back to the server default
+ferry up --memory 768M                 # ferry up takes them too
+```
+
+`default` (or `0`) means the server default. [`ferry show`](/docs/reference/cli#ferry-show) prints the limits of the service.
+
+```text title="ferry show api (excerpt)" noCopy
+Memory limit:      2 GiB
+CPU limit:         server default (1 CPU)
+```
+
+</Tab>
+<Tab value="Dashboard">
+
+- **New service:** open **Advanced**. Choose a **Memory limit** and a **CPU limit**.
+- **Current service:** open **Settings** → **Resources**. Change the limits. Click **Save changes**.
+
+</Tab>
+<Tab value="API">
+
+```bash title="Terminal"
+curl -X PATCH http://127.0.0.1:7878/api/v1/services/api \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"memory_limit_mb": 2048, "cpu_limit": 0.5}'
+```
+
+`memory_limit_mb` is in MiB. `cpu_limit` is in CPUs. `0` goes back to the server default.
+
+The request only saves the limits. It does not start a deploy. See [Update a service](/docs/reference/api/services#update-a-service).
+
+</Tab>
+<Tab value="Blueprint">
+
+```yaml title="render.yaml"
+services:
+  - type: web
+    name: api
+    plan: standard        # 2 GiB / 1 CPU
+    cpuLimit: 500m        # but only half a core
+  - type: worker
+    name: jobs
+    memoryLimit: 1G
+```
+
+See [Limits in a blueprint](/docs/concepts/resource-limits/blueprint).
+
+</Tab>
+</Tabs>
+
+## The range
+
+| Limit | Smallest | Largest |
+|---|---|---|
+| Memory | 16 MiB | 1 TiB |
+| CPU | 0.01 CPU | 512 CPUs |
+
+<Accordions>
+  <Accordion title="The menus of the dashboard">
+    Each limit is a menu with three types of choices:
+
+    - **Server default**, with the value of the server.
+    - Fixed values: from 256 MiB to 8 GiB of memory, or from 0.25 to 4 CPUs.
+    - **Custom…**, to type a size such as `768M` or `1500m`.
+
+    The dashboard disables the CPU values above the CPUs of the Docker host. It puts a mark on the memory values above the memory of the host.
+
+    After a save, the dashboard offers **Restart now** if the service is live. The restart gives the new limits to the instances.
+  </Accordion>
+  <Accordion title="Create a service with the API">
+    `POST /api/v1/services` accepts the same fields: `memory_limit_mb` and `cpu_limit`.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,80 @@
+---
+title: Production setup
+description: Put Ferry on one Linux server that hosts your apps with HTTPS, starts at boot and keeps its API private.
+icon: ServerCog
+---
+
+<Diagram
+  caption="The server at the end of this guide"
+  nodes={[
+    { id: 'net', at: [0, 0.5], icon: 'globe', label: 'Internet', note: 'your visitors' },
+    { id: 'proxy', at: [1.25, 0.5], icon: 'route', label: 'Ferry proxy', note: 'ports 80 and 443' },
+    { id: 'hello', at: [2.5, 0], icon: 'box', label: 'hello', note: 'container' },
+    { id: 'api', at: [2.5, 1], icon: 'box', label: 'api', note: 'container' },
+    { id: 'you', at: [0, 2], icon: 'laptop', label: 'You', note: 'SSH tunnel' },
+    { id: 'dash', at: [1.25, 2], icon: 'monitor', label: 'Dashboard, API', note: '127.0.0.1:7878' },
+  ]}
+  edges={[
+    { from: 'net', to: 'proxy' },
+    { from: 'proxy', to: 'hello' },
+    { from: 'proxy', to: 'api' },
+    { from: 'you', to: 'dash' },
+    { from: 'proxy', to: 'dash' },
+  ]}
+  groups={[{ label: 'Your server', from: [1.25, 0], to: [2.5, 2] }]}
+  steps={[
+    {
+      caption: 'A visitor opens https://hello.apps.example.com. The request comes to port 443 of your server.',
+      cut: ['proxy>dash'],
+      flow: ['net>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'The Ferry proxy sends the request to the container of the service.',
+      cut: ['proxy>dash'],
+      flow: ['net>proxy', 'proxy>hello'],
+      tones: { hello: 'success' },
+    },
+    {
+      caption: 'The dashboard and the API listen only on the server. You reach them through an SSH tunnel.',
+      cut: ['proxy>dash'],
+      flow: ['you>dash'],
+      tones: { dash: 'primary' },
+    },
+    {
+      caption: 'As an option, the proxy also serves the dashboard on its own hostname, with HTTPS.',
+      flow: ['net>proxy', 'proxy>dash'],
+      tones: { dash: 'primary' },
+      notes: { dash: 'its own hostname' },
+    },
+  ]}
+/>
+
+This guide sets up one Linux server. Your apps answer at `https://<name>.apps.example.com`, with certificates from <Term id="lets-encrypt" />.
+
+<Term id="systemd" /> starts <Term id="ferryd" /> at each boot. The <Term id="api" /> stays private.
+
+## The main command
+
+```bash title="Terminal"
+sudo systemctl enable --now ferryd
+```
+
+This command starts `ferryd` now and at each boot. First do the pages of part 1, in order.
+
+## The path
+
+| Part | Pages |
+|---|---|
+| 1. Set up the server | From [What you need](/docs/guides/production/checklist) to [Deploy an app and check HTTPS](/docs/guides/production/first-deploy) |
+| 2. Tune the guards | From [Size the container limits](/docs/guides/production/limits) to [Container logs](/docs/guides/production/container-logs) |
+| 3. Operate the server | From [Behind another reverse proxy](/docs/guides/production/reverse-proxy) to the [security checklist](/docs/guides/production/security) |
+
+## In this section
+
+<Cards>
+  <Card title="What you need" href="/docs/guides/production/checklist" description="The server, the ports, Docker and a domain." />
+  <Card title="The systemd unit" href="/docs/guides/production/unit" description="The file that starts ferryd at each boot." />
+  <Card title="Size the container limits" href="/docs/guides/production/limits" description="Memory, CPU and process limits for your server." />
+  <Card title="Security checklist" href="/docs/guides/production/security" description="What to close and what to protect." />
+</Cards>

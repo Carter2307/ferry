@@ -1,0 +1,40 @@
+---
+title: Coding rules
+description: The rules of DESIGN.md apply to each crate. Two commands check the format and the lints.
+---
+
+```bash title="Terminal"
+cargo fmt
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+The two commands must pass. `cargo fmt` is the <Term id="formatter" />: the `rustfmt.toml` of the repository sets a width of 120 columns. `cargo clippy` runs the <Term id="lint">lints</Term>.
+
+## The rules
+
+The rules come from the section "Coding rules" of `DESIGN.md`. They apply to each crate.
+
+| Subject | Rule |
+|---|---|
+| Rust | Rust 2024, stable toolchain. |
+| `unwrap()` and `expect()` | Not outside tests. The only exception is an <Term id="invariant" /> that a comment explains. |
+| `todo!()` | Leave none in the code. |
+| Errors | Use `ferry_core::Error`. Put context in the message: `pulling image nginx: …`. |
+| Logs | Use <Term id="tracing" />: `info` for lifecycle events, `debug` for detail. Never log secrets. |
+| <Term id="blocking-work">Blocking work</Term> | Run tar and heavy filesystem work in `spawn_blocking`. |
+| Public signatures | `crates/*/src/lib.rs` is the contract between crates. Change a signature on purpose, and say so in the change. You can organize private modules as you want. |
+| Dependencies | Add them to the `Cargo.toml` of the crate, with an explicit version. Do not add them to the workspace root. |
+| Crates | A crate must not depend on another crate outside the [dependency graph](/docs/architecture/overview/crates). |
+
+## The error gives the HTTP status
+
+The variant of `ferry_core::Error` decides the HTTP status of the answer. Examples:
+
+| Variant | Status |
+|---|---|
+| `Invalid` | 400 |
+| `NotFound` | 404 |
+| `Conflict` | 409 |
+| `Docker` | 502 |
+
+Then run the [tests](/docs/contributing/testing).

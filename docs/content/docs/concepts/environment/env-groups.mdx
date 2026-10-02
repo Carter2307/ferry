@@ -1,0 +1,64 @@
+---
+title: Env groups
+description: An env group is a set of variables with a name that you link to services.
+---
+
+<Diagram
+  nodes={[
+    { id: 'group', at: [0, 0.5], icon: 'layers', label: 'shared', note: 'LOG_LEVEL, REGION' },
+    { id: 'api', at: [1.75, 0], icon: 'box', label: 'api', note: 'service' },
+    { id: 'worker', at: [1.75, 1], icon: 'box', label: 'worker', note: 'service' },
+  ]}
+  edges={[
+    { from: 'group', to: 'api', label: 'link' },
+    { from: 'group', to: 'worker', label: 'link' },
+  ]}
+  steps={[
+    {
+      caption: 'You create the env group shared with two variables.',
+      cut: ['group>api', 'group>worker'],
+      tones: { group: 'primary' },
+    },
+    {
+      caption: 'You link the group to two services. Nothing restarts.',
+      tones: { group: 'primary' },
+    },
+    {
+      caption: 'At its next deploy or restart, each service gets the variables of the group.',
+      flow: ['group>api', 'group>worker'],
+      tones: { api: 'success', worker: 'success' },
+      notes: { api: 'REGION=eu', worker: 'REGION=eu' },
+    },
+    {
+      caption: 'You change REGION in the group. Ferry restarts each linked live service.',
+      flow: ['group>api', 'group>worker'],
+      tones: { group: 'warning', api: 'success', worker: 'success' },
+      notes: { group: 'REGION=us', api: 'REGION=us', worker: 'REGION=us' },
+    },
+  ]}
+/>
+
+An <Term id="env-group" /> is a set of variables with a name. You link it to each <Term id="service" /> that needs the same values.
+
+## Use an env group
+
+```bash title="Terminal"
+ferry env-group create shared LOG_LEVEL=info REGION=eu
+ferry env-group link api shared        # prints: Restart to apply: ferry restart api
+ferry env-group set shared REGION=us   # restarts the linked live services
+ferry env-group show shared            # variables and linked services
+ferry env-group unlink api shared
+ferry env-group rm shared
+```
+
+A group name has 1 to 64 characters: letters, digits, `-`, `_` or `.`.
+
+## What restarts
+
+| Action | Result |
+|---|---|
+| `link`, `unlink` | Nothing restarts. The change applies at the next deploy or restart of the service. |
+| `set`, `unset` | Ferry restarts each linked live service whose <Term id="merged-env" /> changed. Add `--no-restart` to prevent it. |
+| `rm` | Ferry refuses if the group has a link. |
+| `rm --force` | Ferry deletes the group. The linked services lose its variables at their next restart. |
+| `rm --force --restart` | Ferry deletes the group and restarts the linked services immediately. |

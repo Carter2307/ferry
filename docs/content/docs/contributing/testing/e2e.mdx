@@ -1,0 +1,71 @@
+---
+title: Docker end-to-end tests
+description: The tests that need Docker run only with FERRY_E2E=1. Without it, they print skipped and pass.
+---
+
+<Diagram
+  nodes={[
+    { id: 'test', at: [0, 0.5], icon: 'check', label: 'A Docker test' },
+    { id: 'gate', at: [1.5, 0.5], icon: 'flag', label: 'FERRY_E2E=1 ?', note: 'the gate' },
+    { id: 'skip', at: [3, 0], icon: 'ban', label: 'skipped', note: 'the test passes' },
+    { id: 'docker', at: [3, 1], icon: 'container', label: 'Docker daemon', note: 'real containers' },
+  ]}
+  edges={[
+    { from: 'test', to: 'gate' },
+    { from: 'gate', to: 'skip', label: 'not set' },
+    { from: 'gate', to: 'docker', label: 'set' },
+  ]}
+  steps={[
+    {
+      caption: 'Each test that needs Docker first reads the variable FERRY_E2E.',
+      flow: ['test>gate'],
+      tones: { gate: 'primary' },
+    },
+    {
+      caption: 'Without the variable, the test prints skipped and passes.',
+      cut: ['gate>docker'],
+      flow: ['gate>skip'],
+      tones: { skip: 'muted', docker: 'muted' },
+    },
+    {
+      caption: 'The variable is 1. The test runs against the real Docker daemon.',
+      cut: ['gate>skip'],
+      flow: ['gate>docker'],
+      tones: { docker: 'success', skip: 'muted' },
+    },
+  ]}
+/>
+
+A test of this type is a <Term id="gated-test" />.
+
+## Run all the suites
+
+```bash title="Terminal"
+cargo build -p ferryd                  # the CLI suite drives a real ferryd binary
+FERRY_E2E=1 cargo test --workspace
+```
+
+<Callout type="warning" title="Use a Docker daemon that you can share">
+The tests create containers, volumes, networks and images. They pull small public images and bind free local ports.
+
+They never touch the resources of a Ferry server, because each test uses its own <Term id="name-prefix" />. But run them where this load is acceptable.
+</Callout>
+
+## Run one suite
+
+Give the crate and the name of the test.
+
+```bash title="Terminal"
+FERRY_E2E=1 cargo test -p ferry-engine --test e2e
+FERRY_E2E=1 cargo test -p ferry-build --test build_e2e
+```
+
+[The suites](/docs/contributing/testing/e2e-suites) lists each name.
+
+<Accordions>
+  <Accordion title="Where the CLI suite finds ferryd">
+    The CLI suite looks for `ferryd` in the variable `FERRY_E2E_FERRYD`. Without the variable, it looks next to the test binary. For a debug test run, this is `target/debug/ferryd`.
+
+    Thus you run `cargo build -p ferryd` first.
+  </Accordion>
+</Accordions>

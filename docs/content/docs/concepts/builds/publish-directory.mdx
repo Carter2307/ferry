@@ -1,0 +1,61 @@
+---
+title: Publish directory
+description: The publish directory is the folder of a static site that nginx serves.
+---
+
+<Diagram
+  nodes={[
+    { id: 'flag', at: [0, 1], icon: 'sliders', label: '--publish-dir' },
+    { id: 'set', at: [1.5, 0], icon: 'folder', label: 'dist', note: 'the value you set' },
+    { id: 'root', at: [1.5, 1], icon: 'folder', label: 'Root directory', note: 'the value "."' },
+    { id: 'auto', at: [1.5, 2], icon: 'search', label: 'First match', note: 'dist, build, out…' },
+    { id: 'nginx', at: [3, 1], icon: 'server', label: 'nginx' },
+  ]}
+  edges={[
+    { from: 'flag', to: 'set' },
+    { from: 'flag', to: 'root' },
+    { from: 'flag', to: 'auto' },
+    { from: 'set', to: 'nginx' },
+    { from: 'root', to: 'nginx' },
+    { from: 'auto', to: 'nginx' },
+  ]}
+  steps={[
+    {
+      caption: 'You set a directory, for example dist. nginx serves that directory.',
+      flow: ['flag>set', 'set>nginx'],
+      tones: { set: 'primary' },
+    },
+    {
+      caption: 'You set a period. nginx serves the full root directory.',
+      flow: ['flag>root', 'root>nginx'],
+      tones: { root: 'primary' },
+    },
+    {
+      caption: 'You set nothing. Ferry looks for dist, build, out, public, _site and site, in this order.',
+      flow: ['flag>auto', 'auto>nginx'],
+      tones: { auto: 'primary' },
+    },
+  ]}
+/>
+
+## Set the publish directory
+
+```bash title="Terminal"
+ferry update docs --build-cmd "cd docs && npm ci --include=dev && npm run build" --publish-dir docs/out
+```
+
+## What nginx serves
+
+| <Term id="publish-directory">Publish directory</Term> (`--publish-dir`) | With a build step | With no build step |
+|---|---|---|
+| Set, for example `dist` | That directory. The build fails if it does not exist. | That directory |
+| `.` | The full root directory after the build | The root directory |
+| Not set | The first of `dist`, `build`, `out`, `public`, `_site` and `site` that the build made. The build fails if there is none. | See below |
+
+## Not set, with no build step
+
+Ferry uses the first of these that is true:
+
+1. The <Term id="root-directory" /> has an `index.html`: nginx serves the root directory.
+2. One of the six directories has an `index.html`: nginx serves the first one.
+3. If not, nginx serves the root directory.

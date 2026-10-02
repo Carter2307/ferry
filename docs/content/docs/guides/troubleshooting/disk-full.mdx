@@ -1,0 +1,32 @@
+---
+title: The disk is almost full
+description: Ferry refuses a build when the disk has less free space than the limit, 1 GiB by default.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+==> Build failed: not enough free disk space on /var/lib/ferry: 812 MiB free, Ferry needs at least 1 GiB (free some space, e.g. remove unused Docker images with `docker image prune`, or change the threshold with `ferryd --min-free-disk`, 0 = off)
+```
+
+## Why it occurs
+
+The disk of the <Term id="data-directory" />, or of the <Term id="docker-root" />, has less free space than `--min-free-disk`. The default is 1 GiB.
+
+| Ferry tests the disk | Ferry does not test it |
+|---|---|
+| Before a deploy builds or pulls | Before a <Term id="restart" /> |
+| Before it creates a <Term id="datastore" /> | Before a <Term id="rollback" /> |
+
+A deploy gets the status `build_failed`. A new datastore fails with the same message.
+
+## How to repair it
+
+```bash title="Terminal"
+docker image prune     # removes the images that nothing uses
+docker builder prune   # removes the build cache
+```
+
+To change the limit, start `ferryd` with `--min-free-disk`. The value `0` turns the test off.
+
+See [Resource limits](/docs/concepts/resource-limits).

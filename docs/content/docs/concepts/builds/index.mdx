@@ -1,0 +1,81 @@
+---
+title: Builds & runtimes
+description: A build makes a Docker image from your code. Ferry finds the language and writes the Dockerfile for you.
+icon: Hammer
+---
+
+<Diagram
+  caption="From your code to an image"
+  nodes={[
+    { id: 'code', at: [0, 0], icon: 'folder', label: 'Your code', note: 'git or upload' },
+    { id: 'runtime', at: [1.5, 0], icon: 'search', label: 'Runtime' },
+    { id: 'dockerfile', at: [3, 0], icon: 'file-code', label: 'Dockerfile' },
+    { id: 'docker', at: [3, 1], icon: 'hammer', label: 'docker build' },
+    { id: 'image', at: [1.5, 1], icon: 'package', label: 'Image' },
+  ]}
+  edges={[
+    { from: 'code', to: 'runtime' },
+    { from: 'runtime', to: 'dockerfile' },
+    { from: 'dockerfile', to: 'docker' },
+    { from: 'docker', to: 'image' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry gets your code from git or from an upload.',
+      hide: ['image'],
+      tones: { code: 'primary' },
+    },
+    {
+      caption: 'Ferry finds the runtime from your files, for example package.json.',
+      hide: ['image'],
+      flow: ['code>runtime'],
+      tones: { runtime: 'primary' },
+      notes: { runtime: 'detected: node' },
+    },
+    {
+      caption: 'Ferry uses your Dockerfile, or writes one for the runtime.',
+      hide: ['image'],
+      flow: ['runtime>dockerfile'],
+      tones: { dockerfile: 'primary' },
+      notes: { runtime: 'node', dockerfile: 'Dockerfile.ferry' },
+    },
+    {
+      caption: 'Docker builds the image from the Dockerfile.',
+      hide: ['image'],
+      flow: ['dockerfile>docker'],
+      tones: { docker: 'warning' },
+      notes: { runtime: 'node', dockerfile: 'Dockerfile.ferry' },
+    },
+    {
+      caption: 'The image is ready. The deploy starts the instances from it.',
+      flow: ['docker>image'],
+      tones: { image: 'success' },
+      notes: { runtime: 'node', dockerfile: 'Dockerfile.ferry', image: 'ready' },
+    },
+  ]}
+/>
+
+A <Term id="build" /> makes a Docker <Term id="image" /> from your code. Each deploy of a git service or an upload service builds an image.
+
+Ferry finds the <Term id="runtime" /> of your code: Node.js, Python, Go, Rust, Ruby or static files. Then it writes the <Term id="dockerfile" /> for you. Thus you can deploy with no knowledge of Docker.
+
+For full control, commit your own Dockerfile. Ferry then uses it.
+
+A service that deploys a prebuilt image has no build.
+
+## Start a build
+
+```bash title="Terminal"
+ferry deploy api --follow
+```
+
+The build is the first step of a [deploy](/docs/concepts/deploys). `--follow` shows its output.
+
+## In this section
+
+<Cards>
+  <Card title="The build step" href="/docs/concepts/builds/steps" description="From the source to an image, in five steps." />
+  <Card title="Detection" href="/docs/concepts/builds/detection" description="The files that tell Ferry the runtime." />
+  <Card title="Generated Dockerfiles" href="/docs/concepts/builds/generated" description="What Ferry writes for each language." />
+  <Card title="Start command" href="/docs/concepts/builds/start-command" description="How Ferry knows the command that starts your app." />
+</Cards>

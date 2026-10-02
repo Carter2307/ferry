@@ -1,0 +1,31 @@
+---
+title: Cancel a run
+description: A cancel stops the container of a run. The container has 10 seconds to stop by itself.
+---
+
+```bash title="Terminal"
+ferry jobs cancel job-d2ef824c6d6c446086e9
+```
+
+<Flow
+  steps={[
+    { icon: 'send', title: 'SIGTERM', text: 'Ferry asks the container to stop.' },
+    { icon: 'timer', title: '10 seconds', text: 'The container has 10 seconds to stop by itself.', tone: 'warning' },
+    { icon: 'skull', title: 'SIGKILL', text: 'After that time, Docker stops the container by force.', tone: 'danger' },
+    { icon: 'ban', title: 'Canceled', text: 'Ferry records the run with the status canceled.', tone: 'muted' },
+  ]}
+/>
+
+The 10 seconds are the <Term id="grace-period" />. <Term id="sigterm" /> and <Term id="sigkill" /> are signals: messages that the system sends to a program.
+
+You cannot cancel a <Term id="job-run" /> that is complete. The command gives an error.
+
+## Other causes that stop a run
+
+| Cause | Status of the run |
+|---|---|
+| You [suspend](/docs/concepts/scaling/suspend) or delete the service. | `canceled`, in the same way |
+| The server stops. | `failed`: "interrupted by server shutdown" |
+| The server crashes. | `failed`: "interrupted by server restart". Ferry writes it at the next start. |
+
+A run that hangs blocks the schedule of its cron job. Cancel it. See [How scheduled runs work](/docs/concepts/jobs/scheduled-runs).

@@ -1,0 +1,48 @@
+---
+title: Plans of a service
+description: The plan of a service gives the memory limit and the CPU limit of each instance and each job run.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: hello
+    numInstances: 2
+    plan: starter            # 512 MiB / 0.5 CPU per instance
+```
+
+A <Term id="render-plan" /> is an instance type of Render. These plans are for web services, private services, background workers and cron jobs.
+
+## The plans
+
+| `plan` | Memory | CPU |
+|---|---|---|
+| `free`, `starter` | 512 MiB | 0.5 |
+| `standard` | 2 GiB | 1 |
+| `pro` | 4 GiB | 2 |
+| `pro plus` | 8 GiB | 4 |
+| `pro max` | 16 GiB | 4 |
+| `pro ultra` | 32 GiB | 8 |
+
+The limits apply to each <Term id="instance" /> and to each job <Term id="job-run" />.
+
+## How Ferry reads the name
+
+Ferry ignores the case and the separator. `pro plus`, `Pro_Plus`, `pro-plus` and `proplus` are the same plan.
+
+## A plan that Ferry does not know
+
+The plan sets nothing. The warning lists the plans for that type of entry:
+
+```text noCopy
+service 'api': ignoring unknown plan 'enterprise' (known plans: free, starter, standard, pro, pro plus, pro max, pro ultra); set memoryLimit / cpuLimit instead
+```
+
+<Accordions>
+  <Accordion title="Why free has 0.5 CPU">
+    On Render, the `free` plan has 0.1 CPU. Ferry gives it 0.5 CPU, the same as `starter`. On your own server, a tenth of a core only makes a service slow to start and to pass its health check. It makes nothing free for the host.
+  </Accordion>
+  <Accordion title="Static sites">
+    Static sites have no plans on Render. Thus Ferry ignores their `plan`, with no warning. `memoryLimit` and `cpuLimit` apply to them, because Ferry serves a static site from a container.
+  </Accordion>
+</Accordions>

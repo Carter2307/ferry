@@ -1,0 +1,61 @@
+---
+title: Web client
+description: The dashboard is a single-page app in web/. Vite serves it in development, and ferryd serves it in production.
+icon: LayoutDashboard
+---
+
+<Diagram
+  caption="One source, two ways to serve it"
+  nodes={[
+    { id: 'src', at: [0, 0.5], icon: 'code', label: 'web/src', note: 'the React app' },
+    { id: 'vite', at: [1.5, 0], icon: 'zap', label: 'Vite', note: 'port 5173' },
+    { id: 'dist', at: [1.5, 1], icon: 'folder', label: 'web/dist', note: 'the built files' },
+    { id: 'ferryd', at: [3, 1], icon: 'server', label: 'ferryd', note: 'serves it at /' },
+  ]}
+  edges={[
+    { from: 'src', to: 'vite' },
+    { from: 'src', to: 'dist' },
+    { from: 'vite', to: 'ferryd', label: 'API calls' },
+    { from: 'dist', to: 'ferryd', label: 'embed' },
+  ]}
+  steps={[
+    {
+      caption: 'In development, Vite serves web/src with hot reload. It sends the API calls to ferryd.',
+      hide: ['dist'],
+      flow: ['src>vite', 'vite>ferryd'],
+      tones: { vite: 'primary' },
+      notes: { ferryd: 'only its API' },
+    },
+    {
+      caption: 'For production, npm run build writes the app to web/dist.',
+      cut: ['vite>ferryd', 'dist>ferryd'],
+      flow: ['src>dist'],
+      tones: { dist: 'primary', vite: 'muted' },
+    },
+    {
+      caption: 'The crate ferry-api embeds web/dist when it compiles. Then ferryd serves the dashboard at /.',
+      cut: ['vite>ferryd'],
+      flow: ['dist>ferryd'],
+      tones: { ferryd: 'success', vite: 'muted' },
+    },
+  ]}
+/>
+
+The <Term id="dashboard" /> is a <Term id="spa" /> in `web/`, with its own toolchain. `ferryd` serves it at `/`.
+
+The Rust build never runs Node. `ferry-api` embeds what `web/dist` contains when it compiles.
+
+## Start the dev server
+
+```bash title="Terminal"
+FERRY_API_URL=http://127.0.0.1:7878 npm run dev    # → http://localhost:5173
+```
+
+## In this section
+
+<Cards>
+  <Card title="The development loop" href="/docs/contributing/web-client/dev-loop" description="Run ferryd and Vite, then sign in." />
+  <Card title="Add an endpoint" href="/docs/contributing/web-client/add-endpoint" description="The four files to change when the API changes." />
+  <Card title="How the dashboard gets into ferryd" href="/docs/contributing/web-client/embed" description="From web/dist to the binary." />
+  <Card title="Requests to the API" href="/docs/contributing/web-client/api" description="JSON, the session cookie and errors." />
+</Cards>

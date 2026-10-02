@@ -1,0 +1,18 @@
+{
+  "title": "Connect a domain",
+  "icon": "Globe",
+  "pages": [
+    "server-or-custom",
+    "before-you-start",
+    "connect",
+    "dns-record",
+    "verify",
+    "verify-fails",
+    "statuses",
+    "default-domain",
+    "manage",
+    "public-address",
+    "certificates",
+    "not-yet"
+  ]
+}

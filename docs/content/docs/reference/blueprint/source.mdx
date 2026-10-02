@@ -1,0 +1,51 @@
+---
+title: Source keys
+description: A service gets its code from a git repository or from an image. Set repo or image, not the two.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: api
+    runtime: node
+    repo: https://github.com/render-examples/express-hello-world   # a repository
+    branch: main
+  - type: web
+    name: hello
+    image:
+      url: nginx:alpine                                            # or an image
+```
+
+These keys give the <Term id="source" /> of a service and its <Term id="runtime" />. Set `repo` or `image`, not the two.
+
+## The keys
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `runtime` | string | see notes | `docker`, `image`, `node`, `python`, `go`, `rust`, `ruby` or `static`. Other accepted names: `nodejs`, `javascript`, `bun`, `python3`, `golang`. |
+| `repo` | string | none | A git <Term id="repository" />: `https://`, `ssh://`, `git://`, `file://`, `git@host:path`, or an absolute path on the server. It becomes `repo_url`. |
+| `branch` | string | `main` | The <Term id="branch" /> that Ferry builds, and that <Term id="auto-deploy" /> follows. |
+| `image` | string or mapping | none | An <Term id="image" /> that exists already: `image: nginx:alpine` or `image: { url: nginx:alpine }`. |
+
+## The default of runtime
+
+| Entry | Default `runtime` |
+|---|---|
+| `image` has a value | `image` |
+| A static site | `static` |
+| Other entries | Ferry finds it from your files |
+
+Ferry also accepts the old key `env` for `runtime`.
+
+<Accordions>
+  <Accordion title="Special cases">
+    - A runtime that Ferry cannot build, for example `elixir`, gives a warning. Ferry then finds the runtime from your files. Add a `Dockerfile` to the repository.
+    - With an `image`, Ferry ignores `runtime` with a warning.
+    - Ferry ignores `image.creds` with a warning. Docker must be able to pull the image with no credentials.
+  </Accordion>
+  <Accordion title="A local path as repo">
+    - The server accepts only absolute local paths.
+    - The CLI changes a relative path (`./api`, `../shared`) into an absolute path. It does this when the directory exists next to the blueprint file.
+    - The CLI prints a `note:` line for each path that it changes.
+  </Accordion>
+</Accordions>

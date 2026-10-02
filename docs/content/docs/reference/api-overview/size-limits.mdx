@@ -1,0 +1,38 @@
+---
+title: Size limits
+description: A request body has 2 MiB at most. Uploads and GitHub deliveries have their own limits.
+---
+
+<Diagram
+  caption="Above the limit, the answer is 413 payload_too_large"
+  nodes={[
+    { id: 'body', at: [0, 0], icon: 'braces', label: 'Request body', note: '2 MiB' },
+    { id: 'upload', at: [0, 1], icon: 'upload', label: 'Source upload', note: '512 MiB' },
+    { id: 'github', at: [0, 2], icon: 'webhook', label: 'GitHub delivery', note: '25 MiB' },
+    { id: 'api', at: [1.75, 1], icon: 'ship', label: 'ferryd' },
+    { id: 'big', at: [3.25, 1], icon: 'error', label: '413', note: 'payload_too_large', tone: 'danger' },
+  ]}
+  edges={[
+    { from: 'body', to: 'api', flow: true },
+    { from: 'upload', to: 'api', flow: true },
+    { from: 'github', to: 'api', flow: true },
+    { from: 'api', to: 'big', dashed: true, label: 'too large' },
+  ]}
+/>
+
+## The limits of a request body
+
+| Request | Limit |
+|---|---|
+| Each request, but not the two below | 2 <Term id="mib" /> |
+| A source upload | 512 MiB |
+| A <Term id="delivery" /> from GitHub | 25 MiB |
+
+## The limits of variables
+
+| What | Limit |
+|---|---|
+| The value of one variable | 32 <Term id="kib" /> |
+| The <Term id="merged-env" /> of a service | 256 KiB |
+
+See [Limits of keys and values](/docs/concepts/environment/limits).

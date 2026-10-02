@@ -1,0 +1,57 @@
+---
+title: Your own Dockerfile
+description: A Dockerfile at the root always wins over the detection.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dockerfile', at: [0, 0], icon: 'file-code', label: 'Dockerfile' },
+    { id: 'pkg', at: [0, 1], icon: 'file', label: 'package.json' },
+    { id: 'ferry', at: [1.5, 0.5], icon: 'ship', label: 'Ferry' },
+    { id: 'image', at: [3, 0.5], icon: 'package', label: 'Image' },
+  ]}
+  edges={[
+    { from: 'dockerfile', to: 'ferry' },
+    { from: 'pkg', to: 'ferry', dashed: true },
+    { from: 'ferry', to: 'image' },
+  ]}
+  steps={[
+    {
+      caption: 'The root has a Dockerfile and a package.json.',
+      hide: ['image'],
+    },
+    {
+      caption: 'The Dockerfile always wins. Ferry writes no Dockerfile of its own.',
+      hide: ['image'],
+      flow: ['dockerfile>ferry'],
+      cut: ['pkg>ferry'],
+      tones: { dockerfile: 'primary', pkg: 'muted' },
+      notes: { ferry: 'runtime docker' },
+    },
+    {
+      caption: 'Docker builds the image from your Dockerfile.',
+      flow: ['ferry>image'],
+      cut: ['pkg>ferry'],
+      tones: { pkg: 'muted', image: 'success' },
+      notes: { ferry: 'runtime docker' },
+    },
+  ]}
+/>
+
+A <Term id="dockerfile" /> at the root always wins over the detection. Ferry builds the <Term id="image" /> from it.
+
+## A Dockerfile in a different place
+
+```bash title="Terminal"
+ferry up api --dockerfile docker/Dockerfile --follow
+```
+
+The path of `--dockerfile` is relative to the <Term id="root-directory" />. This flag also changes an `auto` service to Docker builds.
+
+## What changes with a Dockerfile
+
+| Setting | With your Dockerfile |
+|---|---|
+| Port | `--port`, a `PORT` variable, or the one port that the image exposes (`EXPOSE`). If there is none: `10000`. |
+| <Term id="start-command">Start command</Term> | It replaces the command of the image. Ferry runs it as `/bin/sh -c "<command>"`. |
+| Build command, publish directory | They do not apply. The Dockerfile does the build. |

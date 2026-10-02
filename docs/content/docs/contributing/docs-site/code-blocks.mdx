@@ -1,0 +1,38 @@
+---
+title: Code blocks
+description: Each code block has a language. Options add a title, line numbers or a mark on a line.
+---
+
+What you write:
+
+````text title="Example"
+```bash title="Terminal"
+ferry scale api 3 # [!code highlight]
+```
+````
+
+What the reader sees:
+
+```bash title="Terminal"
+ferry scale api 3 # [!code highlight]
+```
+
+## Options
+
+Always set a language. Write the options after the language.
+
+| Option | Effect |
+|---|---|
+| `title="Terminal"` | A title above the block |
+| `lineNumbers` | A number before each line |
+| `noCopy` | No copy button. Use it for output. |
+
+## Marks on a line
+
+Write the mark in a comment at the end of the line. Use the comment form of the language of the block.
+
+| Mark | Effect |
+|---|---|
+| `[!code highlight]` | The line has a color behind it. |
+| `[!code ++]` / `[!code --]` | The line shows as added or as removed. |
+| `[!code focus]` | The other lines step back. |

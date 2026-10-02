@@ -1,0 +1,42 @@
+---
+title: The default domain
+description: Ferry serves a service under each domain of the server, but shows its URL with one domain.
+---
+
+<Diagram
+  nodes={[
+    { id: 'shop', at: [0, 0.5], icon: 'box', label: 'shop' },
+    { id: 'main', at: [1.5, 0], label: 'shop.example.com', note: 'default domain', tone: 'primary' },
+    { id: 'local', at: [1.5, 1], label: 'shop.localhost', note: 'also online' },
+    { id: 'shown', at: [3, 0], icon: 'eye', label: 'The URL shown', note: 'in the dashboard' },
+  ]}
+  edges={[
+    { from: 'shop', to: 'main' },
+    { from: 'shop', to: 'local' },
+    { from: 'main', to: 'shown', flow: true },
+  ]}
+/>
+
+The <Term id="default-domain" /> sets the URL of a service in three places.
+
+| Place | What uses the default domain |
+|---|---|
+| The dashboard | The URL of each service |
+| The CLI | The command `ferry open` |
+| Your app | The <Term id="env-var">variable</Term> `FERRY_EXTERNAL_URL` |
+
+## Change the default domain
+
+<Terminal
+  lines={[
+    '$ ferry domains default example.com',
+    'example.com is the default domain: services are shown at https://<service>.example.com',
+  ]}
+/>
+
+## The rules
+
+- Only a domain that Ferry serves can be the default.
+- A service reads its new `FERRY_EXTERNAL_URL` at its next deploy or restart.
+- If the default was a <Term id="local-name" /> such as `localhost`, the first domain that becomes active becomes the default.
+- If you disconnect the default domain, the <Term id="base-domain" /> becomes the default again.

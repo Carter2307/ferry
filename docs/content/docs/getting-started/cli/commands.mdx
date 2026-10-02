@@ -1,0 +1,43 @@
+---
+title: The commands that you use most
+description: A short list of the ferry commands for each day, with a link to the full reference.
+---
+
+<Terminal
+  lines={[
+    '$ ferry services',
+    'NAME           TYPE     STATE   INSTANCES   URL                                  LAST DEPLOY',
+    'docker-echo    pserv    live    1           docker-echo:8000                     live · 4m ago',
+    'echo-worker    worker   live    1                                                live · 11m ago',
+    'nightly        cron     live    -           cron: 0 3 * * *                      live · 11m ago',
+    'node-hello     web      live    1           http://node-hello.localhost:8080     live · 1m ago',
+    'python-hello   web      live    2           http://python-hello.localhost:8080   live · 5m ago',
+  ]}
+/>
+
+## The commands
+
+| Command | Use |
+|---|---|
+| [`ferry services`](/docs/reference/cli#ferry-services) | List the services. |
+| [`ferry up`](/docs/reference/cli#ferry-up) | Upload a local folder and deploy it. |
+| [`ferry create`](/docs/reference/cli#ferry-create) | Create a service. |
+| [`ferry deploy`](/docs/reference/cli#ferry-deploy) | Start a deploy. |
+| [`ferry restart`](/docs/reference/cli#ferry-restart) | Deploy the live image again with the current settings. |
+| [`ferry rollback`](/docs/reference/cli#ferry-rollback) | Go back to the image of an earlier deploy. |
+| [`ferry logs`](/docs/reference/cli#ferry-logs) | Show the logs. |
+| [`ferry env set`](/docs/reference/cli#ferry-env-set) | Set variables of a service. |
+| [`ferry run`](/docs/reference/cli#ferry-run) | Run a one-off job. |
+| [`ferry info`](/docs/reference/cli#ferry-info) | Show the server. |
+
+The [CLI reference](/docs/reference/cli) has the full list, with each argument and each option.
+
+## Names or ids
+
+Some commands need a service, a datastore or an env group. Give its name or its id.
+
+| Thing | Id |
+|---|---|
+| Service | `srv-…` |
+| Datastore | `dbs-…` |
+| Env group | `evg-…` |

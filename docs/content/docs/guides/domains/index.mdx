@@ -1,0 +1,73 @@
+---
+title: Connect a domain
+description: Connect a domain that you own to your server. Each service then answers at its own subdomain.
+icon: Globe
+---
+
+<Diagram
+  caption="One DNS record for all your services"
+  nodes={[
+    { id: 'dns', at: [0, 0], icon: 'globe', label: 'DNS', note: 'A * → 203.0.113.10' },
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.5, 1], icon: 'route', label: 'Proxy', note: 'example.com' },
+    { id: 'shop', at: [3, 0.5], icon: 'box', label: 'shop' },
+    { id: 'api', at: [3, 1.5], icon: 'box', label: 'api' },
+  ]}
+  edges={[
+    { from: 'dns', to: 'proxy' },
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'shop' },
+    { from: 'proxy', to: 'api' },
+  ]}
+  groups={[{ label: 'Your server', around: ['proxy', 'shop', 'api'] }]}
+  steps={[
+    {
+      caption: 'You connect example.com. Ferry shows the DNS record to create.',
+      cut: ['dns>proxy'],
+      tones: { dns: 'warning', proxy: 'warning' },
+      notes: { dns: 'no record', proxy: 'waits for DNS' },
+    },
+    {
+      caption: 'You create one record. The name * points to your server.',
+      flow: ['dns>proxy'],
+      tones: { dns: 'primary', proxy: 'warning' },
+      notes: { proxy: 'waits for DNS' },
+    },
+    {
+      caption: 'Ferry verifies the domain. The domain is active.',
+      tones: { dns: 'success', proxy: 'success' },
+      notes: { proxy: 'active' },
+    },
+    {
+      caption: 'A request for shop.example.com goes to the service shop.',
+      flow: ['browser>proxy', 'proxy>shop'],
+      notes: { browser: 'shop.example.com' },
+      tones: { shop: 'success' },
+    },
+    {
+      caption: 'A request for api.example.com goes to the service api. No new record is necessary.',
+      flow: ['browser>proxy', 'proxy>api'],
+      notes: { browser: 'api.example.com' },
+      tones: { api: 'success' },
+    },
+  ]}
+/>
+
+A <Term id="server-domain" /> is a name that Ferry serves your services under. Connect `example.com`. Then each <Term id="web-service" /> and <Term id="static-site" /> answers at `<service>.example.com`.
+
+A server starts with one domain: its <Term id="base-domain" /> (`--base-domain`). The default is `localhost`, which works only on the machine itself. You connect more domains while the server runs: no <Term id="restart" />, no <Term id="deploy" />.
+
+## Connect a domain
+
+```bash title="Terminal"
+ferry domains connect example.com
+```
+
+## In this section
+
+<Cards>
+  <Card title="The three steps" href="/docs/guides/domains/connect" description="Connect, create the DNS record, wait. With the dashboard, the CLI or the API." />
+  <Card title="The DNS record" href="/docs/guides/domains/dns-record" description="What the names * and @ mean." />
+  <Card title="How Ferry verifies a domain" href="/docs/guides/domains/verify" description="The two checks, and what to do if one fails." />
+  <Card title="Certificates" href="/docs/guides/domains/certificates" description="The states of the certificate of each hostname." />
+</Cards>

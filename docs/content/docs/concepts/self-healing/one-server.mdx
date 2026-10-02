@@ -1,0 +1,75 @@
+---
+title: One server for each data directory
+description: Two protections make sure that only one server controls a set of resources.
+---
+
+<Diagram
+  nodes={[
+    { id: 'a', at: [0, 0], icon: 'server', label: 'ferryd A', note: 'runs' },
+    { id: 'b', at: [0, 1], icon: 'server', label: 'ferryd B' },
+    { id: 'dir', at: [1.75, 0], icon: 'folder', label: 'Data directory', note: 'ferryd.lock' },
+    { id: 'res', at: [1.75, 1], icon: 'container', label: 'Containers', note: 'prefix: ferry' },
+  ]}
+  edges={[
+    { from: 'a', to: 'dir' },
+    { from: 'a', to: 'res' },
+    { from: 'b', to: 'dir' },
+    { from: 'b', to: 'res' },
+  ]}
+  steps={[
+    {
+      caption: 'ferryd A locks its data directory. It owns the containers with the prefix ferry.',
+      hide: ['b'],
+      flow: ['a>dir', 'a>res'],
+      tones: { a: 'success' },
+    },
+    {
+      caption: 'ferryd B starts with the same data directory. The lock stops it.',
+      cut: ['b>res'],
+      flow: ['b>dir'],
+      tones: { a: 'success', b: 'danger', dir: 'warning' },
+      notes: { b: 'refuses to start' },
+    },
+    {
+      caption: 'ferryd B starts with a different data directory and the same prefix. It also refuses to start.',
+      cut: ['b>dir'],
+      flow: ['b>res'],
+      tones: { a: 'success', b: 'danger', res: 'warning' },
+      notes: { b: 'refuses to start' },
+    },
+  ]}
+/>
+
+## The lock of the data directory
+
+While it runs, `ferryd` holds an exclusive lock on `<data-dir>/ferryd.lock`. A second server with the same <Term id="data-directory" /> refuses to start.
+
+```text title="Error" noCopy
+Error: another ferryd is already running with data directory /var/lib/ferry
+```
+
+## The owner of the name prefix
+
+All Docker resources of a server have its <Term id="name-prefix" />: `--name-prefix`, default `ferry`. One prefix has one data directory as its owner.
+
+```text title="Error" noCopy
+Error: Docker resources with prefix 'ferry' belong to another Ferry server (data dir /var/lib/ferry). Run this server with a different --name-prefix, stop the other server, or pass --take-over to adopt the resources (the other server's containers will then be managed — and possibly removed — by this one).
+```
+
+<Callout type="warning" title="--take-over">
+Use `--take-over` only if you want this server to control the resources. An example: you restored a data directory without its `instance_id` file.
+</Callout>
+
+<Accordions>
+  <Accordion title="Why the prefix has an owner">
+    The reconciler removes each container with its prefix that it sees as an orphan. Two servers with the same prefix would remove the containers of each other.
+
+    Ferry records the owner on a marker volume: `<prefix>-owner`.
+  </Accordion>
+  <Accordion title="Which servers refuse to start">
+    - A server whose data directory does not own the prefix.
+    - A server with an empty data directory that finds containers with its prefix.
+
+    See [Multiple servers](/docs/guides/multiple-servers).
+  </Accordion>
+</Accordions>

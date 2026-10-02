@@ -1,0 +1,65 @@
+---
+title: The health check times out
+description: Ferry cannot connect to the port of the new instance. The app listens on the wrong address or port.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+==> Deploy failed: health check timed out after 120s: nothing accepts connections on container port 10000 (published as 127.0.0.1:…) yet: does the app listen on $PORT (10000) on 0.0.0.0? An app listening on 127.0.0.1 (localhost) inside its container can't be reached
+```
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry', note: 'health check' },
+    { id: 'app', at: [1.75, 0], icon: 'box', label: 'Your app', note: 'port 10000' },
+  ]}
+  edges={[{ from: 'ferry', to: 'app', label: 'port 10000' }]}
+  steps={[
+    {
+      caption: 'The app listens on 127.0.0.1 in its container. Ferry cannot reach it.',
+      cut: ['ferry>app'],
+      tones: { app: 'danger' },
+      notes: { app: '127.0.0.1:10000' },
+    },
+    {
+      caption: 'The app listens on a fixed port, not on $PORT.',
+      cut: ['ferry>app'],
+      tones: { app: 'danger' },
+      notes: { app: '0.0.0.0:3000' },
+    },
+    {
+      caption: 'The app listens on 0.0.0.0 and on $PORT. The health check passes.',
+      flow: ['ferry>app'],
+      tones: { app: 'success' },
+      notes: { app: '0.0.0.0:10000' },
+    },
+  ]}
+/>
+
+The <Term id="health-check" /> connects to the <Term id="port" /> of the new <Term id="instance" />. Nothing answers on that port.
+
+The deploy gets the status `deploy_failed`. The previous deploy continues to answer.
+
+## How to repair it
+
+Make the app listen on `0.0.0.0` and on the port in `$PORT`. As an alternative, give the port of your app to Ferry:
+
+```bash title="Terminal"
+ferry update NAME --port N
+```
+
+See [The port of your app](/docs/concepts/deploys/ports) and [Environment](/docs/concepts/environment).
+
+<Accordions>
+  <Accordion title="The app needs more time to start">
+    Give a longer timeout to the full server: `ferryd --health-check-timeout`.
+  </Accordion>
+  <Accordion title="You set PORT to another value">
+    If you set `PORT` to a value that is not the port of the service, the message is different:
+
+    `the app gets PORT=… from its environment but Ferry expects it to listen on port …`
+  </Accordion>
+</Accordions>

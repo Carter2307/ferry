@@ -1,0 +1,38 @@
+---
+title: Deploy pipeline
+description: The deploy pipeline is the list of steps that the engine runs to put a new version online.
+icon: Workflow
+---
+
+<Flow
+  steps={[
+    { icon: 'inbox', title: 'Enqueue', text: 'The engine finds the source and stores the deploy as queued.' },
+    { icon: 'queue', title: 'Queue and worker', text: 'The worker of the service runs its deploys one at a time, in order.' },
+    { icon: 'hammer', title: 'Build', text: 'The engine builds an image, pulls an image, or uses an image again.' },
+    { icon: 'play', title: 'Start', text: 'The engine starts the new instances next to the old instances.' },
+    { icon: 'health', title: 'Health check', text: 'Each new instance must pass a test.', tone: 'warning' },
+    { icon: 'switch', title: 'Switch', text: 'The routes change to the new instances. The deploy is live.', tone: 'success' },
+    { icon: 'trash', title: 'Clean up', text: 'The engine stops the old instances and deletes old images.' },
+  ]}
+/>
+
+A <Term id="deploy" /> changes a source into <Term id="instance">instances</Term> behind the <Term id="proxy" />. The source is a git commit, an uploaded folder, an image, or the image of an earlier deploy.
+
+The <Term id="engine" /> runs the deploy in the background. The API call that starts it only puts it in the queue and answers `202`.
+
+This section follows one deploy through `ferry-engine`. For the user view, see [Deploys](/docs/concepts/deploys).
+
+## Start a deploy
+
+```bash title="Terminal"
+ferry deploy api --follow
+```
+
+## In this section
+
+<Cards>
+  <Card title="States" href="/docs/architecture/deploy-pipeline/states" description="The state machine of a deploy." />
+  <Card title="Queue and worker" href="/docs/architecture/deploy-pipeline/queue" description="Why two deploys of a service never overlap." />
+  <Card title="Switch and go live" href="/docs/architecture/deploy-pipeline/switch" description="The point after which a deploy cannot stop." />
+  <Card title="When a deploy fails" href="/docs/architecture/deploy-pipeline/failures" description="What the engine removes and what it keeps." />
+</Cards>

@@ -1,0 +1,31 @@
+{
+  "title": "Dashboard tour",
+  "icon": "LayoutDashboard",
+  "pages": [
+    "---Start---",
+    "open",
+    "sign-in",
+    "layout",
+    "connect",
+    "command-palette",
+    "---Services---",
+    "services",
+    "new-service",
+    "service",
+    "overview",
+    "deploys",
+    "logs",
+    "jobs",
+    "environment",
+    "settings",
+    "---Data and files---",
+    "datastores",
+    "env-groups",
+    "blueprints",
+    "---Server---",
+    "server",
+    "server-domains",
+    "server-account",
+    "live-updates"
+  ]
+}

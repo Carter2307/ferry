@@ -1,0 +1,66 @@
+---
+title: Create your account
+description: Open an SSH tunnel to the private API, then create the administrator account in your browser.
+---
+
+<Diagram
+  caption="The tunnel brings port 7878 of the server to your machine"
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Your browser', note: '127.0.0.1:7878' },
+    { id: 'tunnel', at: [1.25, 0], icon: 'lock', label: 'SSH tunnel', note: 'through port 22' },
+    { id: 'dash', at: [2.5, 0], icon: 'monitor', label: 'Dashboard, API', note: '127.0.0.1:7878' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'tunnel', flow: true },
+    { from: 'tunnel', to: 'dash', flow: true },
+  ]}
+  groups={[{ label: 'Your server', from: [2.5, 0], to: [2.5, 0] }]}
+/>
+
+The API listens only on the <Term id="localhost" /> address of the server. An <Term id="ssh-tunnel" /> makes it available on your machine.
+
+<Steps>
+<Step>
+
+### Open the tunnel
+
+Run this command on your machine, not on the server.
+
+```bash title="Terminal"
+ssh -N -L 7878:127.0.0.1:7878 you@your-server &
+```
+
+The dashboard is now at `http://127.0.0.1:7878` on your machine.
+
+</Step>
+<Step>
+
+### Open the link
+
+Copy the `Create your account` link from the log of the server. Open it in your browser.
+
+</Step>
+<Step>
+
+### Enter your email and a password
+
+The password must have 8 characters or more. Ferry creates the <Term id="admin-account" /> of the server and signs you in.
+
+</Step>
+</Steps>
+
+<Callout type="warning" title="Create the account immediately">
+Until the account exists, each person who can read the link can create it.
+</Callout>
+
+<Accordions>
+  <Accordion title="If you lost the link">
+    Run this command on the server. It prints the link again.
+
+    ```bash title="Terminal (on the server)"
+    sudo ferryd status --data-dir /var/lib/ferry
+    ```
+
+    When the account exists, the line `Connect the CLI : ferry login` replaces the link.
+  </Accordion>
+</Accordions>

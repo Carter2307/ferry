@@ -1,0 +1,30 @@
+---
+title: Server shutdown and restart
+description: A deploy does not continue after ferryd stops, but a live deploy stays live.
+---
+
+<Flow
+  steps={[
+    { icon: 'power', title: 'Shutdown', text: 'ferryd gets the first SIGINT or SIGTERM.' },
+    { icon: 'error', title: 'Deploys fail', text: 'Queued deploys fail. The engine stops the deploys in progress in the same way.', tone: 'danger' },
+    { icon: 'play', title: 'Next start', text: 'Before all other work, ferryd fails the deploys that a previous process did not complete.' },
+    { icon: 'trash', title: 'Containers', text: 'The engine removes the containers of those deploys.' },
+    { icon: 'restart', title: 'Live deploys', text: 'Live deploys stay live. The reconciler starts their instances again.', tone: 'success' },
+  ]}
+/>
+
+## The error of the deploy
+
+A <Term id="deploy" /> in progress does not continue when <Term id="ferryd" /> stops.
+
+| When | Error | Status |
+|---|---|---|
+| At shutdown | `interrupted by server shutdown` | `build_failed` or `deploy_failed` |
+| At the next start | `interrupted by server restart` | `build_failed`, or `deploy_failed` if the deploy was in the state `deploying` |
+
+The second case applies after a kill or a crash: no process was there to stop the deploy.
+
+## Read more
+
+- [At boot](/docs/architecture/reconciler/boot): what the reconciler does at the start.
+- [If the server stops during a deploy](/docs/concepts/deploys/interrupted), for the user view.

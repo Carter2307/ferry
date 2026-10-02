@@ -1,0 +1,67 @@
+---
+title: The change feed
+description: The change feed is one stream that tells each change on the server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'api', at: [0, 0], icon: 'terminal', label: 'API', note: 'CLI, dashboard' },
+    { id: 'hook', at: [0, 1], icon: 'webhook', label: 'Webhook' },
+    { id: 'engine', at: [0, 2], icon: 'ship', label: 'Ferry', note: 'deploys, cron runs' },
+    { id: 'feed', at: [1.5, 1], icon: 'activity', label: 'Change feed', note: 'GET /api/v1/events', tone: 'primary' },
+    { id: 'dash', at: [3, 0.5], icon: 'monitor', label: 'Dashboard' },
+    { id: 'you', at: [3, 1.5], icon: 'code', label: 'Your script' },
+  ]}
+  edges={[
+    { from: 'api', to: 'feed', flow: true },
+    { from: 'hook', to: 'feed', flow: true },
+    { from: 'engine', to: 'feed', flow: true },
+    { from: 'feed', to: 'dash', flow: true },
+    { from: 'feed', to: 'you', flow: true },
+  ]}
+/>
+
+The <Term id="change-feed" /> reports each change to services, deploys, datastores, env groups and job runs. It sends one <Term id="event" /> for each change. The dashboard uses it to stay up to date. You can use it for your own automation.
+
+## Listen to the feed
+
+<Terminal
+  lines={[
+    '$ curl -N http://127.0.0.1:7878/api/v1/events -H "Authorization: Bearer $FERRY_TOKEN"',
+    'event: ready',
+    'data: {}',
+    '',
+    'event: change',
+    'data: {"kind":"service","id":"srv-6da2006dc52b4c6ca25f","service_id":"srv-6da2006dc52b4c6ca25f","action":"updated"}',
+    '',
+    'event: change',
+    'data: {"kind":"deploy","id":"dep-0d89a8b1d3ab43dc997f","service_id":"srv-7e321e187891447bb187","action":"created"}',
+  ]}
+/>
+
+## The events
+
+| Event | Meaning |
+|---|---|
+| `ready` | The feed is on. Get your data after it: the feed reports each later change. |
+| `change` | Something changed. The event tells what changed, not the new value. Get the resource to read its new state. |
+
+| Field of `change` | Values |
+|---|---|
+| `kind` | `service`, `deploy`, `datastore`, `env_group` or `job` |
+| `action` | `created`, `updated` or `deleted` |
+| `service_id` | Set for services, deploys and jobs |
+
+<Accordions>
+  <Accordion title="If your client is too slow">
+    A client that is too far behind gets `{"kind":"all","id":"*","service_id":null,"action":"resync"}`. Then get all your data again.
+  </Accordion>
+  <Accordion title="Which changes, and how fast">
+    - The feed reports a change from the API, from a webhook and from Ferry.
+    - The changes from Ferry are the progress of a deploy, the creation of a datastore and cron runs.
+    - While a client listens, the server compares its database each second. It also compares after each write from the API or a webhook. Thus a change arrives in about one second.
+  </Accordion>
+  <Accordion title="API reference">
+    See [Change feed (SSE)](/docs/reference/api/events).
+  </Accordion>
+</Accordions>

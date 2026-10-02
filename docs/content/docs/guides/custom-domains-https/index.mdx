@@ -1,0 +1,73 @@
+---
+title: Custom domains & HTTPS
+description: Serve a web service or a static site on your own domain, with a certificate from Let's Encrypt.
+icon: Globe
+---
+
+<Diagram
+  caption="From a name to an HTTPS site"
+  nodes={[
+    { id: 'dns', at: [0, 0], icon: 'globe', label: 'DNS record', note: 'shop.example.com' },
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'le', at: [1.5, 0], icon: 'certificate', label: "Let's Encrypt" },
+    { id: 'proxy', at: [1.5, 1], icon: 'route', label: 'Proxy', note: 'ports 80 and 443' },
+    { id: 'shop', at: [3, 1], icon: 'box', label: 'shop' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'dns' },
+    { from: 'browser', to: 'proxy' },
+    { from: 'le', to: 'proxy', both: true },
+    { from: 'proxy', to: 'shop' },
+  ]}
+  groups={[{ label: 'Your server', around: ['proxy', 'shop'] }]}
+  steps={[
+    {
+      caption: 'You create a DNS record. The name shop.example.com gives the address of your server.',
+      flow: ['browser>dns'],
+      tones: { dns: 'primary' },
+    },
+    {
+      caption: 'You add the name to the service. The proxy routes it immediately, over HTTP.',
+      flow: ['browser>proxy', 'proxy>shop'],
+      notes: { proxy: 'HTTP' },
+    },
+    {
+      caption: "Ferry orders a certificate. Let's Encrypt sends a test request to port 80.",
+      flow: ['le>proxy'],
+      tones: { le: 'primary', proxy: 'warning' },
+      notes: { proxy: 'answers the test' },
+    },
+    {
+      caption: "The answer is correct. Let's Encrypt gives the certificate.",
+      tones: { le: 'success', proxy: 'success' },
+      notes: { le: 'certificate', proxy: 'has a certificate' },
+    },
+    {
+      caption: 'The proxy serves the name over HTTPS. It redirects HTTP to HTTPS (308).',
+      flow: ['browser>proxy', 'proxy>shop'],
+      tones: { proxy: 'success', shop: 'success' },
+      notes: { proxy: 'HTTPS' },
+    },
+  ]}
+/>
+
+A <Term id="custom-domain" /> is one more <Term id="hostname" /> for a <Term id="web-service" /> or a <Term id="static-site" />. Ferry routes it when you add it.
+
+With automatic <Term id="https" /> on, Ferry gets a <Term id="certificate" /> from <Term id="lets-encrypt" />. The test of Let's Encrypt is the <Term id="http-01" />.
+
+To serve each service at `<service>.example.com` with one DNS record, [connect the domain to the server](/docs/guides/domains).
+
+## Add a custom domain
+
+```bash title="Terminal"
+ferry domains add shop shop.example.com
+```
+
+## In this section
+
+<Cards>
+  <Card title="1. Create the DNS record" href="/docs/guides/custom-domains-https/dns-record" description="Point the domain to the server." />
+  <Card title="2. Add the domain" href="/docs/guides/custom-domains-https/add" description="With the CLI, the API or a blueprint." />
+  <Card title="3. Wait for the certificate" href="/docs/guides/custom-domains-https/certificate" description="Follow the request, then test the site." />
+  <Card title="Problems" href="/docs/guides/custom-domains-https/problems" description="What to check when the certificate does not come." />
+</Cards>

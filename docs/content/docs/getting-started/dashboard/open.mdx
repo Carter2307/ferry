@@ -1,0 +1,60 @@
+---
+title: Open the dashboard
+description: The dashboard has two addresses on your machine. For a remote server, you open a tunnel first.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'api', at: [1.5, 0], label: '127.0.0.1:7878', note: 'the API address' },
+    { id: 'proxy', at: [1.5, 1], label: 'ferry.localhost:8080', note: 'through the proxy' },
+    { id: 'dash', at: [3, 0.5], icon: 'monitor', label: 'Dashboard', note: 'part of ferryd' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'api' },
+    { from: 'browser', to: 'proxy' },
+    { from: 'api', to: 'dash' },
+    { from: 'proxy', to: 'dash' },
+  ]}
+  steps={[
+    {
+      caption: 'The API address of ferryd serves the dashboard.',
+      flow: ['browser>api', 'api>dash'],
+      tones: { api: 'primary', proxy: 'muted' },
+    },
+    {
+      caption: 'The public proxy serves the same dashboard at a name.',
+      flow: ['browser>proxy', 'proxy>dash'],
+      tones: { proxy: 'primary', api: 'muted' },
+    },
+  ]}
+/>
+
+## The two addresses
+
+| Address | What it is |
+|---|---|
+| `http://127.0.0.1:7878` | The <Term id="api" /> address. |
+| `http://ferry.localhost:8080` | The public <Term id="proxy" />. It is on by default for a local base domain such as `localhost`. |
+
+These are the addresses with the default settings. Then [sign in](/docs/getting-started/dashboard/sign-in).
+
+## On a remote server
+
+Open an <Term id="ssh-tunnel" /> first. Then open `http://127.0.0.1:7878` in your browser.
+
+```bash title="Terminal"
+ssh -L 7878:127.0.0.1:7878 you@your-server
+```
+
+You can also put the dashboard on a public name with <Term id="https" />. See [Production setup](/docs/guides/production).
+
+<Callout type="warning" title="The dashboard is the admin API">
+A person who can sign in to the dashboard controls the full server. The server has one administrator <Term id="admin-account" />. It has no other users and no roles.
+</Callout>
+
+<Accordions>
+  <Accordion title="The dashboard on a public domain">
+    On a public domain, `ferryd` does not send the dashboard through the proxy. To change that, start `ferryd` with `--dashboard-host`. This flag sets the <Term id="dashboard-host" />. Do this only when HTTPS is on.
+  </Accordion>
+</Accordions>

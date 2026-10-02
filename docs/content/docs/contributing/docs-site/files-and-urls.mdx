@@ -1,0 +1,48 @@
+---
+title: Files, URLs and the sidebar
+description: The URL of a page follows the path of its file. A meta.json file gives the order in the sidebar.
+---
+
+```text title="File → URL" noCopy
+content/docs/concepts/deploys/steps.mdx   →   /docs/concepts/deploys/steps
+content/docs/concepts/deploys/index.mdx   →   /docs/concepts/deploys
+```
+
+<Files>
+  <Folder name="content/docs" defaultOpen>
+    <Folder name="concepts — a section of the sidebar" defaultOpen>
+      <Folder name="deploys — a subject" defaultOpen>
+        <File name="meta.json — title, icon and pages" />
+        <File name="index.mdx — keeps the URL of the subject" />
+        <File name="steps.mdx — one idea" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
+
+## Pages
+
+A page is an <Term id="mdx" /> file in `content/docs/`. The URL follows the path.
+
+A subject with more than one idea is a folder. Its `index.mdx` keeps the URL of the subject.
+
+## The sidebar
+
+Each folder has a `meta.json` file:
+
+```json title="content/docs/concepts/deploys/meta.json"
+{
+  "title": "Deploys",
+  "icon": "CloudUpload",
+  "pages": ["steps", "triggers", "deploy-hooks"]
+}
+```
+
+| Key | Use |
+|---|---|
+| `title` | The name of the folder in the sidebar |
+| `icon` | The icon of the folder |
+| `pages` | The pages, in order |
+
+- A top-level folder is a section of the sidebar.
+- If a page is not in `pages`, the build makes it but the sidebar does not list it.

@@ -1,0 +1,60 @@
+---
+title: Network, settings and tools
+description: Ferry has the private network, the domains, the limits and the logs of Render.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.1, 0.5], icon: 'route', label: 'Proxy', note: 'your domain' },
+    { id: 'a', at: [2.2, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [2.2, 1], icon: 'box', label: 'Instance 2' },
+    { id: 'db', at: [3.4, 0.5], icon: 'database', label: 'Postgres', note: 'no public URL' },
+  ]}
+  edges={[
+    { from: 'web', to: 'proxy' },
+    { from: 'proxy', to: 'a' },
+    { from: 'proxy', to: 'b' },
+    { from: 'a', to: 'db' },
+    { from: 'b', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'Your custom domain goes to the proxy. The proxy answers with HTTPS.',
+      flow: ['web>proxy'],
+      tones: { proxy: 'primary' },
+      notes: { proxy: 'HTTPS' },
+    },
+    {
+      caption: 'The proxy gives each request to the next instance, in turn.',
+      flow: ['web>proxy', 'proxy>a', 'proxy>b'],
+      tones: { a: 'primary', b: 'primary' },
+    },
+    {
+      caption: 'On the private network, the instances call a datastore by its name.',
+      flow: ['a>db', 'b>db'],
+      tones: { db: 'primary' },
+    },
+  ]}
+/>
+
+| Render feature | In Ferry |
+|---|---|
+| Environment variables, environment groups | Yes. Ferry does not have secret files. |
+| Private network (`service-name:port`) | Yes: a Docker <Term id="bridge-network" /> with DNS <Term id="alias">aliases</Term> |
+| Custom domains, free TLS | Yes: <Term id="lets-encrypt" /> (<Term id="acme" /> <Term id="http-01" />) |
+| Manual scaling | Yes: the instances are behind <Term id="round-robin" /> <Term id="load-balancing" /> in the proxy |
+| Instance types (`plan`) | Yes: [memory and CPU limits](/docs/concepts/resource-limits) for each service and datastore. The server defaults are 512 MiB and 1 CPU for each container. Ferry changes the <Term id="render-plan" /> of a blueprint into limits. |
+| Logs (build and runtime, live tail), basic metrics | Yes: <Term id="sse" /> streams. CPU and memory of each instance, next to its limits. Ferry flags each <Term id="oom" />. |
+| Dashboard, CLI, REST API | Yes |
+
+## See the use of each instance
+
+<Terminal
+  lines={[
+    '$ ferry status node-hello',
+    'node-hello: live — 1/1 instance(s) running',
+    'INSTANCE   DEPLOY     STATE     PORT    CPU            MEMORY                 RESTARTS   STARTED',
+    '82e2be     4415b359   running   62694   4.7% / 1 CPU   24.2 MiB / 512.0 MiB   0          8s ago',
+  ]}
+/>

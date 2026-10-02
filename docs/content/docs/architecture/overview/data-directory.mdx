@@ -1,0 +1,50 @@
+---
+title: The data directory
+description: The files of ferryd are in the data directory, and the containers are in Docker.
+---
+
+<Diagram
+  caption="Where the state is"
+  nodes={[
+    { id: 'ferryd', at: [0, 0.5], icon: 'server', label: 'ferryd' },
+    { id: 'dir', at: [1.75, 0], icon: 'folder', label: 'Data directory', note: './ferry-data', tone: 'primary' },
+    { id: 'docker', at: [1.75, 1], icon: 'container', label: 'Docker' },
+    { id: 'files', at: [3.25, 0], icon: 'file', label: 'Files', note: 'database, logs' },
+    { id: 'things', at: [3.25, 1], icon: 'boxes', label: 'Containers', note: 'images, volumes' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'dir', flow: true },
+    { from: 'ferryd', to: 'docker', flow: true },
+    { from: 'dir', to: 'files' },
+    { from: 'docker', to: 'things' },
+  ]}
+/>
+
+All that <Term id="ferryd" /> knows is in its <Term id="data-directory" />. The option is `--data-dir`. The default is `./ferry-data`.
+
+## The files
+
+| Path | Contents |
+|---|---|
+| `ferry.db` | SQLite: services, deploys, job runs, datastores, env groups, env vars, settings, the account, sessions, API tokens |
+| `api_token` | The <Term id="server-token" /> (mode `0600`) |
+| `setup_code` | The <Term id="setup-code" />, only while the server has no account (`0600`) |
+| `instance_id` | The owner id of the Docker name prefix (`0600`) |
+| `ferryd.lock` | Held while `ferryd` runs |
+| `logs/deploys/<deploy id>.log` | The log of one deploy: one JSON log line per line |
+| `logs/jobs/<job id>.log` | The log of one job |
+| `builds/` | Scratch build contexts. Ferry deletes them after each build. |
+| `repos/` | Git mirrors, one per service |
+| `uploads/` | Source archives that `ferry up` uploaded |
+| `certs/` | The ACME account, the certificates and the keys |
+
+## What is in Docker
+
+The state of the containers is in Docker, not in the data directory:
+
+- Images.
+- Containers.
+- The <Term id="private-network" />.
+- The <Term id="volume">volumes</Term> of the datastores and the disks of the services.
+
+See [Names and labels in Docker](/docs/architecture/overview/docker-names).

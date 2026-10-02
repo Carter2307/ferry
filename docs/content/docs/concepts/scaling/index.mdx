@@ -1,0 +1,71 @@
+---
+title: Disks, scaling & suspend
+description: Run more instances of a service, keep files on a disk, and stop, resume or restart a service.
+icon: Layers
+---
+
+<Diagram
+  caption="Scale, suspend and resume one service"
+  nodes={[
+    { id: 'proxy', at: [0, 1], icon: 'route', label: 'Proxy' },
+    { id: 'a', at: [1.75, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [1.75, 1], icon: 'box', label: 'Instance 2' },
+    { id: 'c', at: [1.75, 2], icon: 'box', label: 'Instance 3' },
+  ]}
+  edges={[
+    { from: 'proxy', to: 'a' },
+    { from: 'proxy', to: 'b' },
+    { from: 'proxy', to: 'c' },
+  ]}
+  steps={[
+    {
+      caption: 'A service starts with 1 instance.',
+      hide: ['a', 'c'],
+      flow: ['proxy>b'],
+      notes: { b: 'running' },
+    },
+    {
+      caption: 'Scale: Ferry starts more instances of the live deploy. They share the requests.',
+      flow: ['proxy>a', 'proxy>b', 'proxy>c'],
+      tones: { a: 'primary', c: 'primary' },
+      notes: { a: 'new', c: 'new' },
+    },
+    {
+      caption: 'Suspend: Ferry stops all the instances. The proxy answers 503.',
+      hide: ['a', 'b', 'c'],
+      tones: { proxy: 'warning' },
+      notes: { proxy: 'answers 503' },
+    },
+    {
+      caption: 'Resume: Ferry starts the instances again. It builds nothing.',
+      flow: ['proxy>a', 'proxy>b', 'proxy>c'],
+      tones: { a: 'success', b: 'success', c: 'success' },
+    },
+  ]}
+/>
+
+These operations change what runs. They build nothing new. A scale, a suspend and a resume start or stop <Term id="container">containers</Term> of the <Term id="live-deploy" />. A <Term id="restart" /> is a new deploy of the live image with the current settings.
+
+## The four operations
+
+| Operation | Command | New deploy? | Downtime |
+|---|---|---|---|
+| [Scale](/docs/concepts/scaling/scale) | `ferry scale NAME N` | No | None |
+| [Suspend](/docs/concepts/scaling/suspend) | `ferry suspend NAME` | No | Yes: the proxy answers `503` |
+| [Resume](/docs/concepts/scaling/resume) | `ferry resume NAME` | No | Until the instances accept connections |
+| [Restart](/docs/concepts/scaling/restart) | `ferry restart NAME` | Yes (trigger `restart`), with the live image | None, but for a service with a disk |
+
+## Scale a service
+
+```bash title="Terminal"
+ferry scale api 3
+```
+
+## In this section
+
+<Cards>
+  <Card title="Scale a service" href="/docs/concepts/scaling/scale" description="Run 1 to 50 instances." />
+  <Card title="Persistent disks" href="/docs/concepts/scaling/disks" description="Keep files between deploys." />
+  <Card title="Suspend a service" href="/docs/concepts/scaling/suspend" description="Stop a service and delete nothing." />
+  <Card title="Restart to apply changes" href="/docs/concepts/scaling/restart" description="Current settings, same image." />
+</Cards>

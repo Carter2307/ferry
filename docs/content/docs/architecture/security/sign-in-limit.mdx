@@ -1,0 +1,57 @@
+---
+title: The limit on failed sign-ins
+description: After 10 failed sign-ins in 5 minutes, the server refuses each sign-in for a short time.
+---
+
+<Diagram
+  nodes={[
+    { id: 'bad', at: [0, 0], icon: 'user', label: 'Another person', note: 'wrong password' },
+    { id: 'you', at: [0, 1], icon: 'user', label: 'Administrator' },
+    { id: 'server', at: [1.75, 0.5], icon: 'server', label: 'Server' },
+  ]}
+  edges={[
+    { from: 'bad', to: 'server' },
+    { from: 'you', to: 'server' },
+  ]}
+  steps={[
+    {
+      caption: 'A person tries wrong passwords. The server counts each failure.',
+      flow: ['bad>server'],
+      tones: { bad: 'warning' },
+      notes: { server: '10 failures' },
+    },
+    {
+      caption: 'After 10 failures in 5 minutes, the server refuses each sign-in. The answer is 429.',
+      tones: { bad: 'warning', server: 'danger' },
+      notes: { server: '429' },
+    },
+    {
+      caption: 'The limit is for the full server. The administrator must wait too.',
+      flow: ['you>server'],
+      tones: { you: 'warning', server: 'danger' },
+      notes: { server: '429', you: 'must wait' },
+    },
+    {
+      caption: 'When the oldest failure is 5 minutes old, sign-ins work again.',
+      flow: ['you>server'],
+      tones: { server: 'success' },
+      notes: { server: 'accepts sign-ins' },
+    },
+  ]}
+/>
+
+The limit makes it slow to guess the password. It applies to sign-ins and to attempts to create the account.
+
+| Rule | Value |
+|---|---|
+| Failures before the refusal | 10 in 5 minutes |
+| Answer during the refusal | 429 `too_many_attempts` |
+| End of the refusal | When the oldest failure is 5 minutes old |
+
+<Callout type="warning" title="The limit is not per IP address">
+The server has one counter for all callers. A person who can reach the API can thus delay the sign-in of the administrator. This is one more reason to keep the API on localhost or behind HTTPS.
+</Callout>
+
+## What to do
+
+Keep the API away from the internet. See [What listens where](/docs/architecture/security/exposure) and [Reach the API through SSH](/docs/architecture/security/ssh-tunnel).

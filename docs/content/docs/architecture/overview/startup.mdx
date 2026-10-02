@@ -1,0 +1,24 @@
+---
+title: How ferryd starts
+description: The ferryd program connects the other crates and starts the parts of the server in a fixed order.
+---
+
+<Flow
+  steps={[
+    { icon: 'sliders', title: 'Options', text: 'ferryd reads the server options.' },
+    { icon: 'lock', title: 'Lock', text: 'It locks the data directory.' },
+    { icon: 'tag', title: 'Prefix', text: 'It claims the Docker name prefix.' },
+    { icon: 'workflow', title: 'Engine', text: 'It starts the engine.' },
+    { icon: 'route', title: 'Proxy', text: 'It starts the proxy.' },
+    { icon: 'plug', title: 'API', text: 'It starts the API.', tone: 'success' },
+  ]}
+/>
+
+<Term id="ferryd" /> is the program of the server. Its <Term id="crate" /> connects all the other crates.
+
+| Step | More |
+|---|---|
+| Options | [Server options](/docs/reference/server-options) |
+| Lock | The file `ferryd.lock` of the [data directory](/docs/architecture/overview/data-directory). `ferryd` holds it while it runs. |
+| Prefix | The <Term id="name-prefix" /> of the [Docker names](/docs/architecture/overview/docker-names). See [the security model](/docs/architecture/security). |
+| Engine | The engine first repairs what a previous process left. See [At boot](/docs/architecture/reconciler/boot). |

@@ -1,0 +1,62 @@
+---
+title: Python
+description: What the generated Dockerfile does for a Python project, when you set no build or start command.
+---
+
+<Diagram
+  nodes={[
+    { id: 'req', at: [0, 0], label: 'requirements.txt' },
+    { id: 'pyp', at: [0, 1], label: 'pyproject.toml' },
+    { id: 'pf', at: [0, 2], label: 'Pipfile' },
+    { id: 'pip', at: [1.5, 0], icon: 'package', label: 'pip' },
+    { id: 'pm', at: [1.5, 1], icon: 'package', label: 'uv, Poetry, pip' },
+    { id: 'pipenv', at: [1.5, 2], icon: 'package', label: 'Pipenv' },
+    { id: 'img', at: [3, 1], icon: 'layers', label: 'Image', note: 'python:3.12-slim' },
+  ]}
+  edges={[
+    { from: 'req', to: 'pip' },
+    { from: 'pyp', to: 'pm' },
+    { from: 'pf', to: 'pipenv' },
+    { from: 'pip', to: 'img' },
+    { from: 'pm', to: 'img' },
+    { from: 'pipenv', to: 'img' },
+  ]}
+  steps={[
+    {
+      caption: 'With a requirements.txt, pip installs the dependencies.',
+      flow: ['req>pip', 'pip>img'],
+      tones: { req: 'primary', pip: 'primary' },
+    },
+    {
+      caption: 'With a pyproject.toml, Ferry uses uv, Poetry or pip.',
+      flow: ['pyp>pm', 'pm>img'],
+      tones: { pyp: 'primary', pm: 'primary' },
+    },
+    {
+      caption: 'With a Pipfile, Pipenv installs the dependencies.',
+      flow: ['pf>pipenv', 'pipenv>img'],
+      tones: { pf: 'primary', pipenv: 'primary' },
+    },
+  ]}
+/>
+
+The picture shows which <Term id="package-manager" /> installs the <Term id="dependency">dependencies</Term>.
+
+## The defaults
+
+| Step | What Ferry does |
+|---|---|
+| Base image | The <Term id="base-image" /> is `python:<version>-slim`. The version comes from `.python-version` or `runtime.txt` (`python-3.11.4`). The default is 3.12. |
+| Install with `requirements.txt` | `pip install -r requirements.txt` |
+| Install with `pyproject.toml` | uv when there is a `uv.lock`. Poetry for Poetry projects. If not, `pip install .` or the dependencies of the project. |
+| Install with `Pipfile` | Pipenv |
+| Build | None by default. Your build command runs after the install. |
+| Start | `python main.py`. If that file is not there, `python app.py`. |
+
+For a full generated file, see the [example](/docs/concepts/builds/generated).
+
+<Accordions>
+  <Accordion title="Database libraries">
+    A project that uses `psycopg2` or `mysqlclient` gets the system libraries that these packages compile against.
+  </Accordion>
+</Accordions>

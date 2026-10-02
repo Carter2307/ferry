@@ -1,0 +1,64 @@
+---
+title: A limit larger than the server
+description: Ferry reads the size of the Docker host and adjusts a limit that the host cannot apply.
+---
+
+<Diagram
+  nodes={[
+    { id: 'limit', at: [0, 0], icon: 'sliders', label: 'CPU limit', note: '8 CPUs' },
+    { id: 'host', at: [1.5, 0], icon: 'server', label: 'Docker host', note: '4 CPUs' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'Container', note: 'limit: 4 CPUs' },
+  ]}
+  edges={[
+    { from: 'limit', to: 'host' },
+    { from: 'host', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'The service has a CPU limit of 8 CPUs. The Docker host has 4 CPUs.',
+      hide: ['app'],
+      flow: ['limit>host'],
+      tones: { limit: 'warning' },
+    },
+    {
+      caption: 'Docker refuses a container with such a limit.',
+      hide: ['app'],
+      tones: { limit: 'warning', host: 'danger' },
+    },
+    {
+      caption: 'Thus Ferry lowers the limit to the 4 CPUs of the host, and tells you.',
+      flow: ['host>app'],
+      tones: { app: 'success' },
+    },
+  ]}
+/>
+
+The <Term id="docker-host" /> is the machine that Docker runs on. `ferryd` reads its CPUs, its memory and its functions one time, at the start.
+
+## The three cases
+
+| Limit | What Ferry does | Message |
+|---|---|---|
+| More CPU than the host has | Ferry lowers the limit to the number of CPUs of the host. | `the CPU limit (8 CPUs) is more than the Docker host has: capped at 4 CPUs` |
+| More memory than the host has | Docker accepts the limit, but the limit protects nothing. Ferry only gives a warning. | |
+| The kernel has no <Term id="cpu-quota" /> | Docker refuses each CPU limit. Thus Ferry sets no CPU limit. | `the CPU limit (1 CPU) is not enforced: the Docker host's kernel has no CPU CFS quota support` |
+
+## Where the warning goes
+
+| Container | Warning in |
+|---|---|
+| Instance of a service | The deploy log. For the CPU cap, also the server log. |
+| Job run | The job log |
+| Datastore | The server log |
+
+<Callout type="info" title="After you change the size of the host">
+Restart `ferryd`. This applies, for example, after a change of the virtual machine of Docker Desktop.
+</Callout>
+
+<Accordions>
+  <Accordion title="Kernels with no CPU quota">
+    Some kernels have no CPU CFS quotas: some NAS and ARM boards, and rootless Docker without delegation of the cgroup v2 `cpu` controller.
+
+    `ferryd` gives a warning when it starts. Each deploy repeats the message in its log.
+  </Accordion>
+</Accordions>

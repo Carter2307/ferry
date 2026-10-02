@@ -1,0 +1,75 @@
+---
+title: Test the endpoint
+description: Sign a request with your secret to test the webhook endpoint with no push.
+---
+
+<Diagram
+  nodes={[
+    { id: 'body', at: [0, 0], icon: 'file', label: 'Request body' },
+    { id: 'secret', at: [0, 1], icon: 'key', label: 'Secret' },
+    { id: 'sig', at: [1.5, 0.5], icon: 'fingerprint', label: 'Signature', note: 'HMAC-SHA256' },
+    { id: 'ferry', at: [3, 0.5], icon: 'ship', label: 'Ferry', note: 'has the secret' },
+  ]}
+  edges={[
+    { from: 'body', to: 'sig' },
+    { from: 'secret', to: 'sig' },
+    { from: 'sig', to: 'ferry', label: 'header' },
+  ]}
+  steps={[
+    {
+      caption: 'GitHub computes a signature from the raw body and the secret.',
+      flow: ['body>sig', 'secret>sig'],
+      cut: ['sig>ferry'],
+      tones: { sig: 'primary' },
+    },
+    {
+      caption: 'GitHub sends the signature in the header X-Hub-Signature-256.',
+      flow: ['sig>ferry'],
+    },
+    {
+      caption: 'Ferry computes the signature with its own secret. Same value: Ferry accepts the request.',
+      tones: { ferry: 'success' },
+      notes: { ferry: 'answer: 200' },
+    },
+    {
+      caption: 'Different value, or no signature: Ferry answers 401.',
+      tones: { ferry: 'danger' },
+      notes: { ferry: 'answer: 401' },
+    },
+  ]}
+/>
+
+GitHub signs each delivery with `X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the raw body>`. This <Term id="webhook-signature" /> is an <Term id="hmac" />. You can sign a request yourself to test your setup.
+
+## Send a signed ping
+
+```bash title="Terminal"
+SECRET='the secret'
+BODY='{"zen":"Keep it logically awesome."}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -s https://ferry.apps.example.com/hooks/github \
+  -H 'Content-Type: application/json' -H 'X-GitHub-Event: ping' \
+  -H "X-Hub-Signature-256: sha256=$SIG" -d "$BODY"
+# {"ok":true}
+```
+
+## The answers
+
+| Answer | Meaning |
+|---|---|
+| `200 {"ok":true}` | A signed `ping`: the secret matches. |
+| `200 {"deploys":[…]}` | Ferry processed a `push`. An empty list means that no service matched. |
+| `200 {"deploys":[],"ignored":true,"reason":"…"}` | A replayed or duplicate delivery. |
+| `401` `invalid or missing X-Hub-Signature-256` | The secret is different, or the request is not from GitHub. |
+| `404` | The server has no webhook secret. |
+| `413` | The payload is larger than 25 MiB. |
+
+## If a push deploys nothing
+
+Compare the repository URL and the branch of the service with the push:
+
+```bash title="Terminal"
+ferry show api
+```
+
+Make sure that auto-deploy is on. Make sure that you did not suspend the service.

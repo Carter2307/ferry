@@ -1,0 +1,49 @@
+---
+title: Orphans
+description: An orphan is a container of this server whose service or datastore is not in the store.
+---
+
+<Diagram
+  nodes={[
+    { id: 'store', at: [0, 0.5], icon: 'database', label: 'Store', note: 'services: api' },
+    { id: 'reconciler', at: [1.5, 0.5], icon: 'restart', label: 'Reconciler' },
+    { id: 'a', at: [3, 0], icon: 'box', label: 'Container', note: 'service: api' },
+    { id: 'b', at: [3, 1], icon: 'box', label: 'Container', note: 'service: old-app' },
+  ]}
+  edges={[
+    { from: 'store', to: 'reconciler' },
+    { from: 'reconciler', to: 'a' },
+    { from: 'reconciler', to: 'b' },
+  ]}
+  steps={[
+    {
+      caption: 'The reconciler lists the containers that have the prefix of this server.',
+      flow: ['reconciler>a', 'reconciler>b'],
+    },
+    {
+      caption: 'Then it reads the store. The service old-app is not there: its container is an orphan.',
+      flow: ['store>reconciler'],
+      tones: { b: 'warning' },
+      notes: { b: 'orphan' },
+    },
+    {
+      caption: 'The reconciler removes the orphan.',
+      hide: ['b'],
+      tones: { a: 'success' },
+    },
+  ]}
+/>
+
+## What the reconciler removes
+
+| Container | Result |
+|---|---|
+| Its service or datastore is not in the <Term id="store" /> | Removed |
+| The container of a job run that is complete or unknown | Removed |
+| Its `ferry.role` is unknown | Left alone |
+
+All these containers have the <Term id="name-prefix" /> of this server. The reconciler never touches a container of another prefix.
+
+## No false orphan
+
+The reconciler lists the containers before it reads the store. Thus it never sees a resource that you create during the pass as an <Term id="orphan" />.

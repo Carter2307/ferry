@@ -1,0 +1,37 @@
+---
+title: Before you connect a domain
+description: You need control of the DNS of the domain, and a server that the internet can reach on port 80.
+---
+
+<Diagram
+  caption="What the internet must reach"
+  nodes={[
+    { id: 'net', at: [0, 0.5], icon: 'cloud', label: 'Internet' },
+    { id: 'p80', at: [1.5, 0], icon: 'plug', label: 'Port 80', note: 'HTTP: necessary' },
+    { id: 'p443', at: [1.5, 1], icon: 'lock', label: 'Port 443', note: 'HTTPS: optional' },
+    { id: 'proxy', at: [3, 0.5], icon: 'route', label: 'Proxy' },
+  ]}
+  edges={[
+    { from: 'net', to: 'p80', flow: true },
+    { from: 'net', to: 'p443', flow: true },
+    { from: 'p80', to: 'proxy' },
+    { from: 'p443', to: 'proxy' },
+  ]}
+  groups={[{ label: 'Your server', around: ['p80', 'p443', 'proxy'] }]}
+/>
+
+| You need | How |
+|---|---|
+| Control of the <Term id="dns" /> of the domain | At your <Term id="registrar" /> or your <Term id="dns-provider" />. |
+| <Term id="port">Port</Term> 80 open to the internet | Start <Term id="ferryd" /> with `--proxy-addr 0.0.0.0:80`. |
+| For <Term id="https" />: port 443 and an email | Start `ferryd` with `--https-addr 0.0.0.0:443` and `--acme-email`. |
+
+Without the two HTTPS options, the domain works over HTTP only. See [Production setup](/docs/guides/production).
+
+A <Term id="subdomain" /> works too: `apps.example.com` gives `<service>.apps.example.com`.
+
+<Callout type="warning" title="On a public server without --base-domain, turn the dashboard host off">
+With the default base domain (`localhost`), the public <Term id="proxy" /> also answers for the host `ferry.localhost`. That host is the dashboard and the API.
+
+On a laptop, this is useful. On a server that the internet can reach, start `ferryd` with `--dashboard-host none`. As an alternative, give it your own hostname with HTTPS. See [Security model](/docs/architecture/security).
+</Callout>

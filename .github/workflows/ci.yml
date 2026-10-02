@@ -101,5 +101,7 @@ jobs:
       - name: Generated references match the code
         run: npm run generate:check
       - run: npm run typecheck
+      - name: Pages follow the writing rules (docs/AUTHORING.md)
+        run: npm run check-content -- --strict
       - name: Build (static export + link check)
         run: npm run build

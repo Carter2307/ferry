@@ -1,0 +1,37 @@
+---
+title: Connect to the database yourself
+description: Open psql in the container of the datastore, or connect from your machine through an SSH tunnel.
+---
+
+<Diagram
+  caption="From your machine, the path goes through an SSH tunnel"
+  nodes={[
+    { id: 'laptop', at: [0, 0], icon: 'laptop', label: 'Your machine', note: 'psql' },
+    { id: 'port', at: [1.75, 0], icon: 'lock', label: 'Server port', note: '127.0.0.1:62975' },
+    { id: 'db', at: [3.5, 0], icon: 'database', label: 'notes-db', note: 'ferry-ds-notes-db' },
+  ]}
+  edges={[
+    { from: 'laptop', to: 'port', label: 'SSH tunnel', flow: true },
+    { from: 'port', to: 'db', flow: true },
+  ]}
+  groups={[{ label: 'Your server', from: [1.75, 0], to: [3.5, 0] }]}
+/>
+
+## From the server
+
+Open <Term id="psql" /> in the <Term id="container" /> of the <Term id="datastore" />.
+
+```bash title="Terminal"
+docker exec -it ferry-ds-notes-db psql -U notes_db notes_db
+```
+
+The name of the container is `<prefix>-ds-<name>`. With the default prefix, it is `ferry-ds-notes-db`.
+
+## From your machine
+
+Use the <Term id="external-url" /> that `ferry db show notes-db` prints. Its port is open only on `127.0.0.1` of the server. Thus make an <Term id="ssh-tunnel" /> first.
+
+```bash title="Terminal"
+ssh -L 62975:127.0.0.1:62975 you@your-server
+psql 'postgresql://notes_db:…@127.0.0.1:62975/notes_db'
+```

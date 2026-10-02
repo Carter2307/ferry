@@ -1,0 +1,65 @@
+---
+title: Node.js
+description: Ferry builds a Node.js app from package.json, with npm, Yarn, pnpm or Bun.
+---
+
+<Flow
+  steps={[
+    { icon: 'search', title: 'Detect', text: 'Ferry finds package.json, bun.lock or bun.lockb.' },
+    { icon: 'package', title: 'Base image', text: 'node:22-alpine by default.' },
+    { icon: 'download', title: 'Install', text: 'npm ci --include=dev, if the project has a lockfile.' },
+    { icon: 'hammer', title: 'Build', text: 'npm run build, if package.json has a build script.' },
+    { icon: 'play', title: 'Start', text: 'npm start, if package.json has a start script.', tone: 'success' },
+  ]}
+/>
+
+## A minimal example
+
+<Files>
+  <Folder name="hello-node" defaultOpen>
+    <File name="package.json" />
+    <File name="package-lock.json" />
+    <File name="server.js" />
+  </Folder>
+</Files>
+
+```json title="package.json"
+{
+  "name": "hello-node",
+  "private": true,
+  "scripts": { "start": "node server.js" }
+}
+```
+
+```js title="server.js"
+const http = require("http");
+
+const port = Number(process.env.PORT || 3000);
+http
+  .createServer((req, res) => res.end("Hello from Node on Ferry\n"))
+  .listen(port, "0.0.0.0", () => console.log(`listening on :${port}`));
+```
+
+```bash title="Terminal"
+ferry up hello-node --follow
+```
+
+## What Ferry generates
+
+| Step | What Ferry generates |
+|---|---|
+| <Term id="base-image">Base image</Term> | `node:<major>-alpine`. The default is `22`. With `engines.node` in `package.json`, Ferry uses a major version that satisfies it: `"20.x"` gives `node:20-alpine`. Bun projects use `oven/bun:1-alpine`. |
+| <Term id="package-manager">Package manager</Term> | From the `packageManager` field. If there is none, from the <Term id="lockfile" />: `bun.lock`/`bun.lockb` → Bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → Yarn. If there is none, npm. Yarn and pnpm run through Corepack. |
+| Build | Your build command. If there is none: `<package manager> run build`, when `package.json` has a `build` script. Ferry sets `NODE_ENV=production` after the install. Thus the devDependencies are there for the build. |
+| Start | With a `start` script: `npm start` (`yarn start` with Yarn 2+, `bun run start` with Bun). With no `start` script: `node` with the `main` file of `package.json`, `server.js`, `index.js` or `app.js`. |
+
+## The install command
+
+| Package manager | Command |
+|---|---|
+| npm, with a lockfile | `npm ci --include=dev` |
+| npm, with no lockfile | `npm install --include=dev` |
+| Yarn 1 | `yarn install --frozen-lockfile --production=false` |
+| Yarn 2+ | `yarn install --immutable` |
+| pnpm | `pnpm install --frozen-lockfile` |
+| Bun | `bun install` |

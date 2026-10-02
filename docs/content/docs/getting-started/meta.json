@@ -5,6 +5,7 @@
     "installation",
     "quickstart",
     "dashboard",
-    "cli"
+    "cli",
+    "ferry-and-render"
   ]
 }

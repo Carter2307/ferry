@@ -1,0 +1,71 @@
+---
+title: What an apply deploys
+description: After the writes, Ferry starts only the deploys and restarts that the changes need.
+---
+
+<Diagram
+  caption="The change decides what Ferry starts"
+  nodes={[
+    { id: 'build', at: [0, 0], icon: 'hammer', label: 'Build setting', note: 'or a new service' },
+    { id: 'limits', at: [0, 1], icon: 'gauge', label: 'Limits', note: 'or variables' },
+    { id: 'other', at: [0, 2], icon: 'sliders', label: 'Instances', note: 'domains, schedule' },
+    { id: 'deploy', at: [1.75, 0], icon: 'deploy', label: 'Deploy', note: 'trigger blueprint', tone: 'primary' },
+    { id: 'restart', at: [1.75, 1], icon: 'restart', label: 'Restart', note: 'no build', tone: 'primary' },
+    { id: 'none', at: [1.75, 2], icon: 'check', label: 'No deploy', tone: 'muted' },
+  ]}
+  edges={[
+    { from: 'build', to: 'deploy', flow: true },
+    { from: 'limits', to: 'restart', flow: true },
+    { from: 'other', to: 'none' },
+  ]}
+/>
+
+## A deploy
+
+| Change | Result |
+|---|---|
+| A new service with a `repo` or an `image` | A deploy with the trigger `blueprint`. |
+| A new service with no `repo` and no `image` | No deploy, and a warning: ``service 'NAME' has no repo or image: deploy it with `ferry up NAME` ``. |
+| A build or deploy setting changed | A `blueprint` deploy. It also brings the new resource limits. |
+| A service that exists has a source but no deploy yet | Its first deploy. |
+
+## A restart
+
+| Change | Result |
+|---|---|
+| Only resource limits changed | A restart (trigger `restart`) when the service is live or has a deploy in progress. |
+| Only variables or links to env groups changed | A restart (trigger `env_change`) when the service is live and its effective environment changed. |
+| The `startCommand` of a cron job changed | A restart. |
+
+## No deploy
+
+| Change | Result |
+|---|---|
+| `numInstances` | Ferry scales the service. |
+| `domains` | Ferry refreshes the routes. |
+| `schedule` or `autoDeploy` | Ferry saves the value. |
+| The limits of a datastore that exists | Ferry applies them to its container in place, with no restart. |
+
+<Accordions>
+  <Accordion title="The build and deploy settings">
+    - the type, the source and the branch
+    - the runtime, the root directory and the Dockerfile path
+    - the build command and the start command
+    - the publish directory, the port, the health check path and the disk
+  </Accordion>
+  <Accordion title="Why a restart is sufficient">
+    - Ferry applies the limits when instances start. Thus no new build is necessary.
+    - The runs of a cron job use the command of the live deploy. Thus no new build is necessary.
+  </Accordion>
+  <Accordion title="Other services and suspended services">
+    - A service that is not in the blueprint can have a link to an env group that the apply changed. Ferry restarts it too.
+    - Ferry does not deploy and does not restart a suspended service. If its build settings or its limits changed, the apply tells you to resume it.
+  </Accordion>
+  <Accordion title="If a deploy or a restart fails to start">
+    At this step, the writes are complete. Thus Ferry reports a failure as a warning. Examples:
+
+    - Ferry cannot put a deploy or a restart in the queue.
+    - Ferry cannot prepare a new datastore.
+    - The container of a datastore cannot take its new limits.
+  </Accordion>
+</Accordions>

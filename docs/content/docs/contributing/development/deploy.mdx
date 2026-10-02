@@ -1,0 +1,84 @@
+---
+title: Deploy an example
+description: Two variables point the CLI at your development server. Then you deploy an example app.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'ferry up', note: 'in node-hello/' },
+    { id: 'ferryd', at: [1.5, 0], icon: 'server', label: 'ferryd', note: '127.0.0.1:7878' },
+    { id: 'curl', at: [0, 1], icon: 'terminal', label: 'curl' },
+    { id: 'proxy', at: [1.5, 1], icon: 'route', label: 'Proxy', note: 'port 8080' },
+    { id: 'app', at: [3, 0.5], icon: 'box', label: 'node-hello', note: 'a container' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'ferryd' },
+    { from: 'ferryd', to: 'app' },
+    { from: 'curl', to: 'proxy' },
+    { from: 'proxy', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'Two variables give the address of the server and the server token to the CLI.',
+      hide: ['app'],
+      tones: { cli: 'primary', ferryd: 'primary' },
+    },
+    {
+      caption: 'The CLI sends the folder of the example. The server builds it and starts a container.',
+      flow: ['cli>ferryd', 'ferryd>app'],
+      tones: { app: 'primary' },
+    },
+    {
+      caption: 'The request of curl goes through the proxy to the app.',
+      flow: ['curl>proxy', 'proxy>app'],
+      tones: { app: 'success' },
+    },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Point the CLI at the server
+
+```bash title="Terminal"
+export FERRY_SERVER=http://127.0.0.1:7878
+export FERRY_TOKEN="$(cat ferry-data/api_token)"
+```
+
+The two variables do not change the config that `ferry login` saved for your usual server.
+
+</Step>
+<Step>
+
+### Deploy the example
+
+```bash title="Terminal"
+cd examples/node-hello
+../../target/debug/ferry up --follow
+```
+
+`--follow` shows the log until the <Term id="deploy" /> is live.
+
+</Step>
+<Step>
+
+### Call the app
+
+```bash title="Terminal"
+curl http://node-hello.localhost:8080
+```
+
+The app answers with a line that starts with `Hello from Ferry (node)!`.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="The server token">
+    The <Term id="server-token" /> works without an account. You do not approve a login in the dashboard.
+  </Accordion>
+  <Accordion title="Run the CLI with cargo">
+    `cargo run -p ferry-cli -- <args>` works too.
+  </Accordion>
+</Accordions>

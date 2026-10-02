@@ -1,0 +1,58 @@
+---
+title: Server-Sent Events
+description: The API sends logs and changes as Server-Sent Events, on an HTTP answer that stays open.
+---
+
+<Diagram
+  nodes={[
+    { id: 'client', at: [0, 0], icon: 'terminal', label: 'Client' },
+    { id: 'server', at: [1.75, 0], icon: 'ship', label: 'ferryd' },
+  ]}
+  edges={[{ from: 'server', to: 'client', label: 'events' }]}
+  steps={[
+    {
+      caption: 'The client sends one GET request. The answer stays open.',
+      cut: ['server>client'],
+      tones: { client: 'primary' },
+      notes: { client: 'GET …/logs' },
+    },
+    {
+      caption: 'The server sends one event for each new line or change.',
+      flow: ['server>client'],
+      tones: { server: 'primary' },
+      notes: { server: 'event: log' },
+    },
+    {
+      caption: 'While there is nothing new, the server sends a keep-alive comment each 15 seconds.',
+      flow: ['server>client'],
+      notes: { server: ': keep-alive' },
+    },
+    {
+      caption: 'A stream with an end stops with event: end. All streams close when the server shuts down.',
+      cut: ['server>client'],
+      tones: { server: 'muted' },
+      notes: { server: 'event: end' },
+    },
+  ]}
+/>
+
+<Term id="sse" /> are a [standard of the web](https://html.spec.whatwg.org/multipage/server-sent-events.html). A <Term id="event-stream" /> is a plain HTTP answer.
+
+## The streams
+
+| Endpoint | Stream | Ends |
+|---|---|---|
+| `GET /api/v1/deploys/{deploy_id}/logs?follow=` | The build and deploy log of one deploy | After the saved lines. With `follow=true`: when the deploy is complete. |
+| `GET /api/v1/jobs/{job_id}/logs?follow=` | The output of one job run | After the saved lines. With `follow=true`: when the job is complete. |
+| `GET /api/v1/services/{id}/logs?follow=&tail=` | The runtime output of the current containers of the service | Without `follow`: after the recent lines. With `follow=true`: never. |
+| `GET /api/v1/events` | The [change feed](/docs/reference/api-overview/change-feed) | Never |
+
+## The headers of the answer
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `X-Accel-Buffering` | `no`. With it, a proxy such as nginx does not buffer the stream. |
+
+A <Term id="keep-alive" /> is the line `: keep-alive`.

@@ -1,0 +1,54 @@
+---
+title: Why 127.0.0.1
+description: Ports published on 127.0.0.1 work on each system, expose nothing by accident and never conflict.
+---
+
+<Diagram
+  nodes={[
+    { id: 'net', at: [0, 0.5], icon: 'globe', label: 'Internet' },
+    { id: 'proxy', at: [1.5, 0], icon: 'route', label: 'Proxy', note: 'the only way in' },
+    { id: 'box', at: [3, 0.5], icon: 'box', label: 'Instance', note: '127.0.0.1:63120' },
+  ]}
+  edges={[
+    { from: 'net', to: 'proxy' },
+    { from: 'proxy', to: 'box' },
+  ]}
+  groups={[{ label: 'The host', around: ['proxy', 'box'] }]}
+  steps={[
+    {
+      caption: 'The published port is on 127.0.0.1. Only the host itself can connect to it.',
+      cut: ['net>proxy'],
+      tones: { box: 'primary' },
+    },
+    {
+      caption: 'A machine on the internet cannot reach the app directly.',
+      cut: ['net>proxy', 'proxy>box'],
+      tones: { net: 'danger' },
+      notes: { net: 'no direct way' },
+    },
+    {
+      caption: 'The proxy is the only way in, with its routes, its TLS and its limits.',
+      flow: ['net>proxy', 'proxy>box'],
+      tones: { proxy: 'success' },
+    },
+  ]}
+/>
+
+## Three reasons
+
+| Reason | Detail |
+|---|---|
+| It works on <Term id="docker-desktop" /> | On macOS and Windows, containers run in a VM. The host, where `ferryd` runs, cannot reach their IP addresses. Published ports work on Docker Desktop and on Linux. |
+| Nothing is open by accident | An app is never on the public interfaces of the machine. A private service gets a published port too, for the health checks. Only the host can reach it. |
+| No port conflict | The old and the new instances of a <Term id="blue-green" /> listen on the same container port. Random host ports let any number of instances do that. |
+
+## The cost
+
+A <Term id="host-port" /> can change. When Docker restarts a crashed container, the new port can be different.
+
+The engine follows this change in two ways:
+
+- The [route watcher](/docs/architecture/reconciler/route-watcher) checks the instances each second.
+- The reconciler does a [full pass](/docs/architecture/reconciler/when) each 10 seconds.
+
+Thus the routes always have the current ports.

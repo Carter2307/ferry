@@ -1,0 +1,35 @@
+---
+title: Test the web client
+description: Four commands in web/ run the unit tests, the type check, the lints and the build of the dashboard.
+---
+
+<Flow
+  steps={[
+    { icon: 'zap', title: 'npm test', text: 'Vitest runs the unit tests.' },
+    { icon: 'braces', title: 'typecheck', text: 'TypeScript checks the types.' },
+    { icon: 'search', title: 'lint', text: 'ESLint looks for common errors.' },
+    { icon: 'hammer', title: 'build', text: 'The production build must pass.', tone: 'success' },
+  ]}
+/>
+
+## Run the checks
+
+```bash title="Terminal"
+cd web
+npm test              # Vitest: SSE parser, change feed, log helpers, formatting, .env parsing, resource limits
+npm run typecheck
+npm run lint
+npm run build
+```
+
+## Where the tests are
+
+The tests are next to the code: `src/**/*.test.ts` and `src/**/*.test.tsx`. Vitest finds these files.
+
+| Tool | Check |
+|---|---|
+| <Term id="vitest" /> | The unit tests |
+| <Term id="typescript" /> | The <Term id="type-check" /> |
+| <Term id="eslint" /> | The lints |
+
+See [Web client](/docs/contributing/web-client).

@@ -1,0 +1,67 @@
+---
+title: Queue and worker
+description: Each service has one worker that runs its deploys one at a time, in order.
+---
+
+<Diagram
+  nodes={[
+    { id: 'a1', at: [0, 0], icon: 'deploy', label: 'api: deploy 1' },
+    { id: 'a2', at: [0, 1], icon: 'deploy', label: 'api: deploy 2', note: 'queued' },
+    { id: 'b1', at: [0, 2], icon: 'deploy', label: 'web: deploy 1' },
+    { id: 'wa', at: [1.5, 0], icon: 'workflow', label: 'Worker of api' },
+    { id: 'wb', at: [1.5, 2], icon: 'workflow', label: 'Worker of web' },
+    { id: 'slots', at: [3, 1], icon: 'hammer', label: 'Build slots', note: '2 by default' },
+  ]}
+  edges={[
+    { from: 'a1', to: 'wa' },
+    { from: 'a2', to: 'wa' },
+    { from: 'b1', to: 'wb' },
+    { from: 'wa', to: 'slots' },
+    { from: 'wb', to: 'slots' },
+  ]}
+  steps={[
+    {
+      caption: 'Each service has one worker. The worker runs the deploys of its service one at a time, in order.',
+      hide: ['a2', 'b1', 'wb'],
+      flow: ['a1>wa'],
+      tones: { wa: 'primary' },
+    },
+    {
+      caption: 'Deploy 2 of api waits in the queue until deploy 1 ends. Two deploys of one service never overlap.',
+      hide: ['b1', 'wb'],
+      cut: ['a2>wa'],
+      flow: ['a1>wa'],
+      tones: { a2: 'warning', wa: 'primary' },
+    },
+    {
+      caption: 'Deploys of different services run at the same time.',
+      cut: ['a2>wa'],
+      flow: ['a1>wa', 'b1>wb'],
+      tones: { a2: 'warning', wa: 'primary', wb: 'primary' },
+    },
+    {
+      caption: 'A build needs a build slot. The server has 2 slots (--build-concurrency), for all the services together.',
+      cut: ['a2>wa'],
+      flow: ['wa>slots', 'wb>slots'],
+      tones: { a2: 'warning', slots: 'primary' },
+    },
+    {
+      caption: 'When its image is ready, a deploy releases its build slot immediately.',
+      cut: ['a2>wa'],
+      tones: { a2: 'warning', slots: 'success' },
+      notes: { slots: 'free again' },
+    },
+  ]}
+/>
+
+| Mechanism | What it is | Rule |
+|---|---|---|
+| <Term id="deploy-queue">Deploy queue</Term> | The deploys of one service with the status `queued` | A deploy waits for its turn. |
+| <Term id="deploy-worker">Deploy worker</Term> | A background task, one per service | Two deploys of one service never overlap. |
+| <Term id="build-slot">Build slot</Term> | The right to build one image | The server runs `--build-concurrency` builds at a time (default 2). |
+
+## Only the newest deploy matters
+
+A new deploy cancels the older deploys of the same service that wait in the queue. Their reason is `superseded by dep-…`.
+
+If a deploy waits in the queue, a restart request merges into that deploy. It adds no deploy, because that deploy starts with the current settings.

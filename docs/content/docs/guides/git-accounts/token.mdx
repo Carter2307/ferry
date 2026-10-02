@@ -1,0 +1,90 @@
+---
+title: Use an access token
+description: An access token connects the account that owns it. It is the method for scripts.
+---
+
+<Diagram
+  nodes={[
+    { id: 'token', at: [0, 0], icon: 'key', label: 'Access token', note: 'from the provider' },
+    { id: 'ferry', at: [1.5, 0], icon: 'ship', label: 'Ferry' },
+    { id: 'repos', at: [3, 0], icon: 'lock', label: 'Private repo' },
+  ]}
+  edges={[
+    { from: 'token', to: 'ferry' },
+    { from: 'ferry', to: 'repos' },
+  ]}
+  steps={[
+    {
+      caption: 'You create a token on GitHub or GitLab and paste it in Ferry.',
+      flow: ['token>ferry'],
+      cut: ['ferry>repos'],
+    },
+    {
+      caption: 'Ferry connects the account that owns the token and clones its repositories.',
+      flow: ['ferry>repos'],
+      tones: { ferry: 'success' },
+      notes: { ferry: 'connected' },
+    },
+    {
+      caption: 'The token expires. The deploys of private repositories fail.',
+      cut: ['ferry>repos'],
+      tones: { token: 'danger', repos: 'danger' },
+      notes: { token: 'expired' },
+    },
+    {
+      caption: 'You click Replace token and paste a new token. The deploys work again.',
+      flow: ['token>ferry', 'ferry>repos'],
+      tones: { token: 'success' },
+      notes: { token: 'new token' },
+    },
+  ]}
+/>
+
+An <Term id="access-token" /> is the method for scripts. It is also the method for a GitHub or GitLab server where you cannot create an application.
+
+## What the token needs
+
+| Provider | Token | It needs |
+|---|---|---|
+| GitHub | personal access token (classic) | the `repo` <Term id="scope" /> |
+| GitHub | fine-grained personal access token | read access to **Contents** and **Metadata** of the repositories to deploy |
+| GitLab | personal access token | the `read_api` and `read_repository` scopes |
+
+## Connect with a token
+
+<Steps>
+<Step>
+
+### Open the dialog
+
+Click **Connect GitHub** or **Connect GitLab**.
+
+</Step>
+<Step>
+
+### Choose the token method
+
+Click **Use an access token instead** at the bottom of the dialog.
+
+</Step>
+<Step>
+
+### Create the token
+
+Click **Create a token on GitHub** (or GitLab). The <Term id="git-provider" /> opens its token page. The page already has a name and the scopes.
+
+</Step>
+<Step>
+
+### Paste the token
+
+Paste the token in the dialog. Click **Connect GitHub** (or GitLab).
+
+</Step>
+</Steps>
+
+## When the token expires
+
+A token expires. Then the deploys of private repositories fail until you click **Replace token**.
+
+An authorization from the page of the provider renews itself.

@@ -1,0 +1,19 @@
+---
+title: Limits and the size of the server
+description: A limit is a ceiling. Ferry does not check that the sum of the limits fits the server.
+---
+
+```text title="Deploy log" noCopy
+the CPU limit (8 CPUs) is more than the Docker host has: capped at 4 CPUs
+```
+
+A limit is the most that one container can use. It does not reserve memory or CPU. Nothing checks that the sum of the limits fits your server.
+
+## A limit above the server
+
+| Limit | What Ferry does |
+|---|---|
+| A CPU limit above the CPU count of the <Term id="docker-host" /> | Ferry lowers it to the CPU count. The <Term id="deploy-log" /> tells you, as in the example above. |
+| A memory limit above the memory of the host | Ferry accepts it with a warning. This limit protects nothing. |
+
+See [A limit larger than the server](/docs/concepts/resource-limits/host).

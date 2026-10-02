@@ -1,0 +1,60 @@
+---
+title: Routes
+description: The reconciler makes the route table of the proxy again from what runs.
+---
+
+<Diagram
+  nodes={[
+    { id: 'reconciler', at: [0, 0.5], icon: 'restart', label: 'Reconciler' },
+    { id: 'routes', at: [1.5, 0.5], icon: 'route', label: 'Route table', note: 'web.localhost' },
+    { id: 'a', at: [3, 0], icon: 'box', label: 'Instance', note: '127.0.0.1:49321' },
+    { id: 'b', at: [3, 1], icon: 'box', label: 'Instance', note: '127.0.0.1:49322' },
+  ]}
+  edges={[
+    { from: 'reconciler', to: 'routes' },
+    { from: 'routes', to: 'a' },
+    { from: 'routes', to: 'b' },
+  ]}
+  steps={[
+    {
+      caption: 'The instances run and accept TCP connections. The route shares the requests over their addresses.',
+      flow: ['reconciler>routes', 'routes>a', 'routes>b'],
+      tones: { a: 'success', b: 'success' },
+    },
+    {
+      caption: 'No instance accepts connections yet. The route gives a 503 page with Retry-After.',
+      cut: ['routes>a', 'routes>b'],
+      tones: { routes: 'warning', a: 'warning', b: 'warning' },
+      notes: { routes: '503, Retry-After' },
+    },
+    {
+      caption: 'You suspend the service. The route gives a 503 page for a suspended service.',
+      hide: ['a', 'b'],
+      tones: { routes: 'warning' },
+      notes: { routes: '503 suspended' },
+    },
+    {
+      caption: 'You delete the service. The reconciler removes its routes, and its hostnames answer 404.',
+      hide: ['a', 'b'],
+      flow: ['reconciler>routes'],
+      tones: { routes: 'muted' },
+      notes: { routes: 'no route: 404' },
+    },
+  ]}
+/>
+
+| State of the service | Route |
+|---|---|
+| Instances run and accept TCP connections | <Term id="round-robin">Round-robin</Term> over their `127.0.0.1:<host port>` addresses |
+| No instance accepts connections yet | A 503 page with `Retry-After` |
+| Suspended | A 503 "suspended" page |
+| Deleted | No route: 404 for its hostnames |
+| Private services, workers, cron jobs | No route: they are not public |
+
+The <Term id="route-table" /> is in the memory of the proxy. The proxy reads it for each request.
+
+## The route of the dashboard
+
+`ferryd` installs the route of the dashboard, `ferry.<base-domain>`, when this route is on. The reconciler never removes it.
+
+See also [Errors of the proxy](/docs/architecture/networking-model/proxy-errors).

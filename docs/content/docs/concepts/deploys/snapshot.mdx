@@ -1,0 +1,66 @@
+---
+title: Settings and the live deploy
+description: A live deploy keeps a snapshot of its settings. A change applies at the next deploy or restart.
+---
+
+<Diagram
+  nodes={[
+    { id: 'settings', at: [0, 0], icon: 'sliders', label: 'Settings', note: 'what you change' },
+    { id: 'snapshot', at: [1.5, 0], icon: 'save', label: 'Snapshot', note: 'of the live deploy' },
+    { id: 'a', at: [3, 0], icon: 'box', label: 'Container' },
+    { id: 'b', at: [3, 1], icon: 'box', label: 'Container' },
+  ]}
+  edges={[
+    { from: 'settings', to: 'snapshot', label: 'next deploy' },
+    { from: 'snapshot', to: 'a' },
+    { from: 'snapshot', to: 'b' },
+  ]}
+  steps={[
+    {
+      caption: 'A deploy goes live. Ferry saves a snapshot of its image, variables, command, port, disk and limits.',
+      hide: ['b'],
+      flow: ['settings>snapshot'],
+      tones: { snapshot: 'primary' },
+    },
+    {
+      caption: 'Each container of this deploy starts from the snapshot.',
+      flow: ['snapshot>a', 'snapshot>b'],
+      tones: { snapshot: 'primary' },
+    },
+    {
+      caption: 'You change a setting. The containers do not change.',
+      cut: ['settings>snapshot'],
+      tones: { settings: 'warning' },
+      notes: { settings: 'changed' },
+    },
+    {
+      caption: 'The next deploy or restart makes a new snapshot with the change.',
+      flow: ['settings>snapshot', 'snapshot>a', 'snapshot>b'],
+      tones: { snapshot: 'success', a: 'success', b: 'success' },
+    },
+  ]}
+/>
+
+The <Term id="snapshot" /> is why all instances of a deploy are the same. A failed deploy cannot change what the live deploy runs. A bad value in a setting cannot break the containers that run.
+
+## When a change applies
+
+| You change | It applies |
+|---|---|
+| Variables (`ferry env set`, `ferry env unset`) | Immediately: Ferry restarts the service. With `--no-restart`, Ferry only saves them. |
+| Build and deploy settings (`ferry update`) | At the next deploy. Run `ferry deploy`, or `ferry restart` if no build is necessary. |
+| [Memory and CPU limits](/docs/concepts/resource-limits) | At the next deploy or restart. `ferry restart` is sufficient. |
+| The value behind a `${{…}}` reference | At the next restart. |
+| The number of instances (`ferry scale`) | Immediately, with the live snapshot. |
+| The command of a cron job | Immediately: Ferry restarts the cron job. |
+
+<Accordions>
+  <Accordion title="Who uses the snapshot">
+    - The reconciler, when it replaces a crashed instance.
+    - A scale up, and the resume of a suspended service.
+    - One-off jobs and cron runs.
+  </Accordion>
+  <Accordion title="Example: a datastore with a new password">
+    You delete a datastore with `--force` and create it again with the same name. The new datastore has a new password. Run `ferry restart`: the service gets the new connection string.
+  </Accordion>
+</Accordions>

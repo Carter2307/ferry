@@ -1,0 +1,49 @@
+---
+title: Connect a service
+description: A reference gives the internal URL of a datastore to your service. Do not paste the URL.
+---
+
+<Diagram
+  nodes={[
+    { id: 'var', at: [0, 0], icon: 'variable', label: 'DATABASE_URL', note: 'a reference' },
+    { id: 'svc', at: [1.5, 0], icon: 'box', label: 'Service', note: 'api' },
+    { id: 'ds', at: [3, 0], icon: 'database', label: 'Datastore', note: 'app-db:5432' },
+  ]}
+  edges={[
+    { from: 'var', to: 'svc' },
+    { from: 'svc', to: 'ds', label: 'by name' },
+  ]}
+  groups={[{ label: 'Private network', around: ['svc', 'ds'] }]}
+  steps={[
+    { caption: 'You set a variable. Its value is a reference to the datastore.', tones: { var: 'primary' } },
+    { caption: 'When the service starts, Ferry puts the internal URL in the variable.', flow: ['var>svc'], notes: { var: 'postgresql://…' }, tones: { svc: 'primary' } },
+    { caption: 'Your app reads the variable. It connects to the datastore by name.', flow: ['svc>ds'], tones: { ds: 'success' } },
+  ]}
+/>
+
+## Set the variable
+
+Give the URL of the <Term id="datastore" /> to your app in an <Term id="env-var" />.
+
+```bash title="Terminal"
+ferry env set api 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+ferry env set worker 'REDIS_URL=${{datastore.cache.connectionString}}'
+```
+
+`connectionString` is the <Term id="internal-url" />. It works on the <Term id="private-network" /> only.
+
+<Callout type="warning" title="Do not paste the URL">
+In a <Term id="service" />, use a <Term id="reference" />. Then the service always gets the current value.
+</Callout>
+
+## Other properties
+
+A reference can also give one part of the URL.
+
+| Property | Value |
+|---|---|
+| `host`, `port` | The internal host and port |
+| `user`, `password`, `database` | The parts of the connection string |
+| `externalConnectionString` | The external URL |
+
+[Environment](/docs/concepts/environment) explains the references. For a full example with migrations, see [Deploy an app with Postgres](/docs/guides/postgres-app).

@@ -1,0 +1,71 @@
+---
+title: Static sites
+description: A static site is files only. nginx serves them on port 80.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'nginx', at: [1.5, 1], icon: 'server', label: 'nginx:alpine', note: 'port 80' },
+    { id: 'about', at: [3, 0], icon: 'file', label: 'about.html' },
+    { id: 'docs', at: [3, 1], icon: 'file', label: 'docs/index.html' },
+    { id: 'missing', at: [3, 2], icon: 'file', label: '404.html' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'nginx' },
+    { from: 'nginx', to: 'about' },
+    { from: 'nginx', to: 'docs' },
+    { from: 'nginx', to: 'missing' },
+  ]}
+  steps={[
+    {
+      caption: 'A request for /about gets about.html.',
+      flow: ['browser>nginx', 'nginx>about'],
+      tones: { about: 'success' },
+      notes: { browser: 'GET /about' },
+    },
+    {
+      caption: 'A request for /docs/ gets docs/index.html.',
+      flow: ['browser>nginx', 'nginx>docs'],
+      tones: { docs: 'success' },
+      notes: { browser: 'GET /docs/' },
+    },
+    {
+      caption: 'An unknown path gets 404.html, if the publish directory has one.',
+      flow: ['browser>nginx', 'nginx>missing'],
+      tones: { missing: 'warning' },
+      notes: { browser: 'GET /unknown' },
+    },
+  ]}
+/>
+
+A <Term id="static-site" /> is files only. Ferry can build it first. Then <Term id="nginx" /> (`nginx:alpine`) serves the files on port 80. Create it with `--type static`.
+
+## Plain HTML
+
+<Files>
+  <Folder name="site" defaultOpen>
+    <File name="index.html" />
+    <File name="about.html" />
+    <File name="404.html" />
+  </Folder>
+</Files>
+
+```bash title="Terminal"
+ferry up site --type static --follow
+```
+
+With no build step, Ferry serves the first of these:
+
+1. The <Term id="publish-directory" /> (`--publish-dir`), if you set one.
+2. The root, when it has an `index.html`.
+3. The first of `dist`, `build`, `out`, `public`, `_site` and `site` that contains an `index.html`.
+
+A site with a build step is on the [next page](/docs/guides/language-guides/static-build).
+
+## What nginx does with the files
+
+- `try_files $uri $uri/ $uri.html`: `/about` gets `about.html`, and `/docs/` gets `docs/index.html`.
+- An unknown path gets `404.html` from the publish directory, if it has one.
+- gzip for text, CSS, JavaScript, JSON, XML and SVG.
+- nginx never serves dotfiles (`.git`, `.env`, `.npmrc`…). The exception is `/.well-known/`.

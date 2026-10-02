@@ -1,0 +1,89 @@
+---
+title: Troubleshooting
+description: Find the message that you see. Each page gives its cause and the repair.
+icon: LifeBuoy
+---
+
+<Flow
+  caption="Where the problem shows"
+  steps={[
+    { icon: 'server', title: 'Start ferryd', text: 'ferryd stops with an Error: line and its cause.' },
+    { icon: 'login', title: 'Sign in', text: 'The dashboard shows a message.' },
+    { icon: 'terminal', title: 'Use the CLI', text: 'The ferry command shows an error.' },
+    { icon: 'hammer', title: 'Build', text: 'The deploy gets the status build_failed.', tone: 'warning' },
+    { icon: 'health', title: 'Deploy', text: 'The deploy gets the status deploy_failed.', tone: 'warning' },
+    { icon: 'browser', title: 'Open the app', text: 'The proxy answers with its own error page.' },
+  ]}
+/>
+
+Each page shows a message as Ferry prints it. A `…` replaces the parts that change with your setup.
+
+For a failed deploy, the full story is in its <Term id="log" />. The page of the deploy in the dashboard shows the same log.
+
+```bash title="Terminal"
+ferry logs --deploy DEPLOY_ID
+```
+
+## Find your problem
+
+**When `ferryd` starts.** `ferryd` tests its data directory, its addresses and Docker before it starts.
+
+| What you see | Page |
+|---|---|
+| `cannot connect to Docker` | [ferryd cannot connect to Docker](/docs/guides/troubleshooting/docker-connect) |
+| `Address already in use` | [A port is in use](/docs/guides/troubleshooting/port-in-use) |
+| `Permission denied (os error 13)` | [Permission denied on port 80 or 443](/docs/guides/troubleshooting/permission-denied) |
+| `another ferryd is already running` | [Another ferryd uses the data directory](/docs/guides/troubleshooting/data-directory) |
+| `belong to another Ferry server` | [The Docker prefix belongs to another server](/docs/guides/troubleshooting/docker-prefix) |
+
+**When you sign in to the dashboard.**
+
+| What you see | Page |
+|---|---|
+| `This is not the setup code of this server.` | [The dashboard asks for a setup code](/docs/guides/troubleshooting/setup-code) |
+| You do not know the password | [I forgot the password](/docs/guides/troubleshooting/forgot-password) |
+| `too many failed attempts` | [Too many failed attempts](/docs/guides/troubleshooting/too-many-attempts) |
+
+**When you use the CLI.**
+
+| What you see | Page |
+|---|---|
+| `cannot reach Ferry server` | [The CLI cannot reach the server](/docs/guides/troubleshooting/cli-cannot-reach) |
+| `not logged in`, `invalid API token` | [Not logged in, or the token is wrong](/docs/guides/troubleshooting/not-logged-in) |
+| `the login request expired` | [ferry login does not finish](/docs/guides/troubleshooting/login-expired) |
+
+**During a build.** The live deploy continues to answer.
+
+| What you see | Page |
+|---|---|
+| `could not detect the runtime` | [Ferry cannot detect the runtime](/docs/guides/troubleshooting/runtime-not-detected) |
+| `secret env mounts need Docker Engine 27.3` | [Builds fail on an old Docker Engine](/docs/guides/troubleshooting/old-docker) |
+| `the docker CLI ('docker') was not found` | [ferryd cannot find the docker CLI](/docs/guides/troubleshooting/docker-cli-missing) |
+| `not enough free disk space` | [The disk is almost full](/docs/guides/troubleshooting/disk-full) |
+
+**During a deploy.** The previous deploy continues to answer. See [Health checks](/docs/concepts/deploys/health-checks).
+
+| What you see | Page |
+|---|---|
+| `nothing accepts connections on container port` | [The health check times out](/docs/guides/troubleshooting/health-check-timeout) |
+| `GET /healthz returned HTTP 404` | [The health check path answers with an error](/docs/guides/troubleshooting/health-check-path) |
+| `crashed (exit code 1)` | [The app crashes](/docs/guides/troubleshooting/app-crashes) |
+| `exited with code 0` | [The app exits immediately](/docs/guides/troubleshooting/app-exits) |
+| `ran out of memory` | [The app runs out of memory](/docs/guides/troubleshooting/out-of-memory) |
+
+**When you open your app.**
+
+| What you see | Page |
+|---|---|
+| `404`, `502` or `503` with an `x-ferry-error` header | [The proxy answers with an error](/docs/guides/troubleshooting/proxy-errors) |
+| A domain stays on **Waiting for DNS** | [If the verification fails](/docs/guides/domains/verify-fails) |
+| No certificate for a custom domain | [Problems with a custom domain](/docs/guides/custom-domains-https/problems) |
+
+## The most frequent problems
+
+<Cards>
+  <Card title="The health check times out" href="/docs/guides/troubleshooting/health-check-timeout" description="The app listens on the wrong address or port." />
+  <Card title="The app exits immediately" href="/docs/guides/troubleshooting/app-exits" description="The command ends with the code 0." />
+  <Card title="The CLI cannot reach the server" href="/docs/guides/troubleshooting/cli-cannot-reach" description="ferryd does not run, or the URL is wrong." />
+  <Card title="The proxy answers with an error" href="/docs/guides/troubleshooting/proxy-errors" description="404, 502 or 503 with an x-ferry-error header." />
+</Cards>

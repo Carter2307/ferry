@@ -1,0 +1,55 @@
+---
+title: Build Ferry
+description: Build the dashboard first. Then cargo builds the server and the CLI.
+---
+
+<Flow
+  steps={[
+    { icon: 'monitor', title: 'Dashboard', text: 'npm writes the dashboard to web/dist. This step is optional.', tone: 'muted' },
+    { icon: 'hammer', title: 'cargo build', text: 'cargo compiles each crate. The crate ferry-api embeds web/dist.' },
+    { icon: 'server', title: 'Two programs', text: 'You get target/debug/ferryd and target/debug/ferry.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Build the dashboard (optional)
+
+```bash title="Terminal"
+cd web && npm ci && npm run build && cd ..
+```
+
+`ferry-api` embeds `web/dist` when it compiles.
+
+</Step>
+<Step>
+
+### Build the programs
+
+```bash title="Terminal"
+cargo build
+```
+
+<Term id="cargo" /> makes a <Term id="debug-build" />: `target/debug/ferryd` and `target/debug/ferry`.
+
+</Step>
+</Steps>
+
+Then [start the server](/docs/contributing/development/run).
+
+## A release build
+
+```bash title="Terminal"
+cargo build --release
+```
+
+A <Term id="release-build" /> puts the programs in `target/release/`.
+
+<Accordions>
+  <Accordion title="If you do not build the dashboard">
+    The server works without `web/dist`. The page at `/` then explains how to build the dashboard.
+
+    To work on the dashboard itself, see [Web client](/docs/contributing/web-client).
+  </Accordion>
+</Accordions>

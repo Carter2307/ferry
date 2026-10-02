@@ -1,0 +1,60 @@
+---
+title: Unit and API tests
+description: cargo test runs each test that needs no Docker. The run takes seconds.
+---
+
+```bash title="Terminal"
+cargo test --workspace
+```
+
+<Diagram
+  caption="An API test"
+  nodes={[
+    { id: 'test', at: [0, 0.5], icon: 'check', label: 'API test' },
+    { id: 'router', at: [1.5, 0.5], icon: 'route', label: 'Real router', note: 'ferry-api' },
+    { id: 'store', at: [3, 0], icon: 'database', label: 'Store', note: 'in memory' },
+    { id: 'mock', at: [3, 1], icon: 'copy', label: 'MockEngine', note: 'records the calls' },
+  ]}
+  edges={[
+    { from: 'test', to: 'router' },
+    { from: 'router', to: 'store' },
+    { from: 'router', to: 'mock' },
+  ]}
+  steps={[
+    {
+      caption: 'An API test sends a request to the real router.',
+      flow: ['test>router'],
+      tones: { router: 'primary' },
+    },
+    {
+      caption: 'The router reads and writes a store in memory.',
+      flow: ['router>store'],
+      tones: { store: 'primary' },
+    },
+    {
+      caption: 'A MockEngine replaces the engine. It only records each call.',
+      flow: ['router>mock'],
+      tones: { mock: 'primary' },
+    },
+  ]}
+/>
+
+## What runs
+
+| Tests | Where | What they do |
+|---|---|---|
+| Unit tests | Next to the code, in each crate | |
+| API tests | `crates/ferry-api/tests/` | The real <Term id="api-router" /> on a <Term id="store" /> in memory, with a `MockEngine` in the place of the <Term id="engine" />. They cover each route, authentication, errors, blueprints, webhooks, the change feed and concurrency. |
+| Builder tests | `crates/ferry-build/tests/build_pipeline.rs` | Fetch, detect, generate, build and cleanup. A fake `docker` CLI records what it receives. |
+| Proxy and TLS tests | | The proxy against local upstreams. The certificate manager through real <Term id="tls-handshake">TLS handshakes</Term>, with no network. |
+| The OpenAPI check | `crates/ferry-api/tests/openapi.rs` | One list of routes must agree with the router, the <Term id="openapi" /> and `src/lib.rs`. A new route with no documentation fails here. |
+
+A <Term id="mock" /> does no real work. Thus these tests run without Docker.
+
+## Run fewer tests
+
+```bash title="Terminal"
+cargo test -p ferry-api                       # one crate
+cargo test -p ferry-api --test blueprints     # one test file
+cargo test -p ferry-core env::                # tests whose name matches
+```

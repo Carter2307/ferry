@@ -1,0 +1,46 @@
+---
+title: Private services
+description: A private service has a port but no public URL. Only the private network reaches it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.15, 0], icon: 'route', label: 'Proxy' },
+    { id: 'web', at: [2.3, 0], icon: 'globe', label: 'Web service' },
+    { id: 'pserv', at: [3.45, 0], icon: 'lock', label: 'Private service', note: 'search:7700' },
+  ]}
+  groups={[{ label: 'Private network', from: [2.3, 0], to: [3.45, 0] }]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'web' },
+    { from: 'web', to: 'pserv' },
+  ]}
+  steps={[
+    {
+      caption: 'A private service has no public URL. The proxy has no route to it.',
+      flow: ['browser>proxy', 'proxy>web'],
+      tones: { pserv: 'muted' },
+    },
+    {
+      caption: 'Other services and <Term id="job">jobs</Term> call it on the private network, with its name and its port.',
+      flow: ['web>pserv'],
+      tones: { pserv: 'success' },
+    },
+  ]}
+/>
+
+A <Term id="private-service" /> is like a web service, but it has no <Term id="public-url" />. Other services and jobs call it on the <Term id="private-network" /> at `<name>:<port>`. See [Internal hostnames](/docs/concepts/services/internal-hostnames).
+
+## When to use it
+
+- For an internal API.
+- For an app that speaks <Term id="tcp">TCP</Term> and not HTTP.
+
+A private service cannot have a <Term id="custom-domain" />.
+
+## Create a private service
+
+```bash title="Terminal"
+ferry create search --type pserv --image getmeili/meilisearch:v1.10 --port 7700
+```

@@ -1,0 +1,53 @@
+---
+title: Background tasks
+description: Seven tasks run in ferryd with no request from you.
+---
+
+<Diagram
+  nodes={[
+    { id: 'watcher', at: [0, 0], icon: 'eye', label: 'Route watcher', note: 'each second' },
+    { id: 'reconciler', at: [0, 1], icon: 'restart', label: 'Reconciler', note: 'each 10 seconds' },
+    { id: 'cron', at: [0, 2], icon: 'calendar', label: 'Cron scheduler', note: 'about each 15 s' },
+    { id: 'docker', at: [1.75, 1], icon: 'container', label: 'Docker' },
+    { id: 'routes', at: [3.25, 0], icon: 'route', label: 'Route table' },
+    { id: 'run', at: [3.25, 2], icon: 'box', label: 'Cron run', note: 'a new container' },
+  ]}
+  edges={[
+    { from: 'watcher', to: 'docker' },
+    { from: 'reconciler', to: 'docker' },
+    { from: 'cron', to: 'docker' },
+    { from: 'docker', to: 'routes' },
+    { from: 'docker', to: 'run' },
+  ]}
+  steps={[
+    {
+      caption: 'Each second, the route watcher reads the host ports of the instances. It updates the route table.',
+      flow: ['watcher>docker', 'docker>routes'],
+      tones: { watcher: 'primary' },
+      hide: ['run'],
+    },
+    {
+      caption: 'Each 10 seconds, the reconciler compares the store with Docker and repairs the difference.',
+      flow: ['reconciler>docker', 'docker>routes'],
+      tones: { reconciler: 'primary' },
+      hide: ['run'],
+    },
+    {
+      caption: 'About each 15 seconds, the cron scheduler starts the runs of the cron jobs that are due.',
+      flow: ['cron>docker', 'docker>run'],
+      tones: { cron: 'primary', run: 'success' },
+    },
+  ]}
+/>
+
+## All the tasks
+
+| Task | When | What it does |
+|---|---|---|
+| <Term id="deploy-worker">Deploy workers</Term> | One per service that has deploys in the queue | Each worker runs the deploys of its service one at a time, in order. The server builds 2 images at a time (`--build-concurrency`). See [Deploy pipeline](/docs/architecture/deploy-pipeline). |
+| <Term id="reconciler">Reconciler</Term> | At boot, each 10 seconds, and after scale, suspend and resume | It makes the containers and the routes agree with the store. See [Reconciler](/docs/architecture/reconciler). |
+| <Term id="route-watcher">Route watcher</Term> | Each second | It follows the host ports of the instances. Thus the routes follow a container that Docker restarted on a new port. |
+| <Term id="oom-watcher">OOM watcher</Term> | On each Docker `oom` event | It logs each container of this server that the kernel killed because of its memory limit. See [OOM watcher](/docs/architecture/reconciler/oom-watcher). |
+| Cron scheduler | About each 15 seconds | It starts the runs of the <Term id="cron-job">cron jobs</Term> whose schedule is due (UTC). It skips the runs that the server missed while it was down. |
+| <Term id="change-feed">Change-feed</Term> detector | Each second, only while a client listens | It compares the store and sends what changed. |
+| TLS manager | With `--https-addr` and `--acme-email` | It requests <Term id="certificate">certificates</Term> for the public hosts. It renews those that expire in less than 30 days. |

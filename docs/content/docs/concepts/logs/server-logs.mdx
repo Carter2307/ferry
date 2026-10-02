@@ -1,0 +1,38 @@
+---
+title: Server logs
+description: The server log is what ferryd writes about its own work.
+---
+
+```bash title="Terminal"
+journalctl -u ferryd      # read the log, with systemd
+RUST_LOG=debug ferryd     # also log every proxied request
+```
+
+```text title="journalctl -u ferryd" noCopy
+WARN deploy failed: instance 2e58a7 exited with code 0: its command `node ./dist/index.js` ended without an error, but a web service must keep running and listen on port 10000 service=libui deploy=dep-1edd534d254f47bbbde5 status=deploy_failed hint=the service has no start command, so Ferry picked this one from the project (…)
+```
+
+`ferryd` writes its <Term id="server-log" /> to standard output, at the `info` level. The <Term id="env-var" /> `RUST_LOG` changes the level. With <Term id="systemd" />, read the log with `journalctl`.
+
+## What is in the server log
+
+| Lines | Example |
+|---|---|
+| Lifecycle events, proxy warnings, certificate requests | |
+| Each deploy that fails, as a warning | `WARN deploy failed: …` with the service, the error and the hint |
+| Each OOM kill of a container of the server | `instance a1b2c3 of service 'api' ran out of memory (limit 512 MiB) — raise the service's memory limit` |
+| Limits that the Docker host cannot apply, at the start | See [A limit larger than the server](/docs/concepts/resource-limits/host) |
+
+## What is not there
+
+The server log does not have the lines that your app prints. They stay in the deploy log.
+
+```bash title="Terminal"
+ferry logs --deploy ID
+```
+
+<Accordions>
+  <Accordion title="The warning of a failed deploy">
+    The warning tells as much as the end of the deploy log. It has the name of the service, the error, and the hint if Ferry has one.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,37 @@
+---
+title: The public address of the server
+description: The DNS records point to the address that the internet uses to reach the server. Ferry finds it.
+---
+
+<Flow
+  caption="Ferry uses the first address that it finds"
+  steps={[
+    { icon: 'flag', title: '--public-ip', text: 'The address that you give. Ferry asks nobody.' },
+    { icon: 'network', title: 'Network interface', text: 'The IPv4 address of the network interface of the server.' },
+    { icon: 'cloud', title: 'A public service', text: 'Behind NAT, Ferry asks a public service which address it sees.', tone: 'muted' },
+  ]}
+/>
+
+The <Term id="public-address" /> is the value of the <Term id="dns-record">DNS records</Term>. Ferry finds its IPv4 address without your help.
+
+## Give the address
+
+```bash title="Terminal"
+ferryd … --public-ip 203.0.113.10 --public-ip 2001:db8::10
+```
+
+With `--public-ip`, Ferry asks no public service.
+
+## IPv6
+
+`--public-ip` is the only way to get `AAAA` records. Ferry does not guess an <Term id="ipv6" /> address. The IPv6 address that a machine uses to connect to other machines is frequently temporary.
+
+<Accordions>
+  <Accordion title="The public services that Ferry asks">
+    A server behind <Term id="nat" /> has a <Term id="private-address" /> on its <Term id="network-interface" />. Then Ferry asks these services, in this sequence:
+
+    1. `api.ipify.org`
+    2. `ipv4.icanhazip.com`
+    3. `checkip.amazonaws.com`
+  </Accordion>
+</Accordions>

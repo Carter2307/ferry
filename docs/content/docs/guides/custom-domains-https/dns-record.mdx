@@ -1,0 +1,35 @@
+---
+title: Create the DNS record
+description: Point the custom domain to the server with a CNAME record or an A record.
+---
+
+<Diagram
+  nodes={[
+    { id: 'sub', at: [0, 0], label: 'shop.example.com', note: 'a subdomain' },
+    { id: 'apex', at: [0, 1], label: 'example.com', note: 'the apex' },
+    { id: 'cname', at: [1.5, 0], icon: 'link', label: 'CNAME', note: 'to another name' },
+    { id: 'a', at: [1.5, 1], icon: 'globe', label: 'A, AAAA', note: 'to an IP address' },
+    { id: 'server', at: [3, 0.5], icon: 'server', label: 'Your server' },
+  ]}
+  edges={[
+    { from: 'sub', to: 'cname', flow: true },
+    { from: 'apex', to: 'a', flow: true },
+    { from: 'cname', to: 'server' },
+    { from: 'a', to: 'server' },
+  ]}
+/>
+
+At your <Term id="dns-provider" />, point the domain to the server.
+
+| Domain | <Term id="dns-record">Record</Term> |
+|---|---|
+| A <Term id="subdomain" />, like `shop.example.com` | `CNAME` to a name that <Term id="resolve">resolves</Term> to the server (for example `shop.apps.example.com`), or `A`/`AAAA` records |
+| The <Term id="apex">apex</Term>, like `example.com` | `A` (and `AAAA`) records with the <Term id="ip-address">IP addresses</Term> of the server |
+
+## Wait for the DNS
+
+```bash title="Terminal"
+dig +short shop.example.com
+```
+
+Run the command again until it shows an answer. Then the name resolves.

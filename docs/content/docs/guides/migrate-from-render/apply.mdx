@@ -1,0 +1,68 @@
+---
+title: Apply the blueprint
+description: Ferry creates the env groups, then the datastores, then the services, and deploys the new services.
+---
+
+<Flow
+  steps={[
+    { icon: 'variable', title: 'Env groups', text: 'Ferry creates the env groups first.' },
+    { icon: 'database', title: 'Datastores', text: 'Ferry creates the datastores. They start in the background.' },
+    { icon: 'box', title: 'Services', text: 'Ferry creates the services.' },
+    { icon: 'deploy', title: 'First deploy', text: 'Each new service with a repository or an image gets a deploy.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Apply the file
+
+```bash title="Terminal"
+ferry blueprint apply render.yaml
+```
+
+The <Term id="trigger" /> of each first <Term id="deploy" /> is `blueprint`.
+
+</Step>
+<Step>
+
+### Follow the deploys
+
+```bash title="Terminal"
+ferry deploys NAME
+ferry logs --deploy ID -f
+```
+
+</Step>
+<Step>
+
+### Check the datastores
+
+The <Term id="datastore">datastores</Term> start in the background.
+
+```bash title="Terminal"
+ferry db ls
+```
+
+</Step>
+<Step>
+
+### Check the limits
+
+```bash title="Terminal"
+ferry show NAME
+ferry db show NAME
+```
+
+The two commands print the `Memory limit` and the `CPU limit`. Thus you see what the [plan](/docs/guides/migrate-from-render/plans) gave to the service or the datastore.
+
+</Step>
+</Steps>
+
+## If a first deploy fails
+
+A first deploy can fail because its database was not ready. Deploy the service again.
+
+```bash title="Terminal"
+ferry deploy NAME
+```

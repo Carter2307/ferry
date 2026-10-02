@@ -1,0 +1,46 @@
+---
+title: API tokens
+description: An API token is fy_ and 40 hex characters. There are three kinds, all with the same access.
+---
+
+<Diagram
+  caption="Three kinds of token, the same access"
+  nodes={[
+    { id: 'named', at: [0, 0], icon: 'key', label: 'Named token', note: 'from the dashboard' },
+    { id: 'term', at: [0, 1], icon: 'terminal', label: 'Terminal token', note: 'from ferry login' },
+    { id: 'server', at: [0, 2], icon: 'file-key', label: 'Server token', note: 'api_token file' },
+    { id: 'api', at: [1.75, 1], icon: 'plug', label: 'API', note: 'full access' },
+  ]}
+  edges={[
+    { from: 'named', to: 'api', flow: true },
+    { from: 'term', to: 'api', flow: true },
+    { from: 'server', to: 'api', flow: true },
+  ]}
+/>
+
+An <Term id="api-token" /> is `fy_`, then 40 <Term id="hex">hex characters</Term>.
+
+## The three kinds
+
+| Kind | Where it comes from | In the dashboard |
+|---|---|---|
+| Named token | You create it in the dashboard: **Server → Account**. It can have an expiry. | In the list. You can revoke it. |
+| Token of a terminal | [`ferry login`](/docs/reference/cli#ferry-login) gets it after you approve the request in the dashboard. | In the same list. You revoke it the same way. |
+| <Term id="server-token" /> | The file `<data-dir>/api_token` (mode `0600`). `ferryd` makes it at the first start, or you set it with `--api-token` / `FERRY_API_TOKEN`. | Not in the list. You cannot revoke it there. |
+
+The server token is for scripts on the server itself.
+
+## What a token can do
+
+A token can do all in the API, but it cannot use the [account endpoints](/docs/reference/api-overview/account-endpoints). Ferry has one administrator account and no roles. See [The administrator account](/docs/architecture/security/account).
+
+<Accordions>
+  <Accordion title="A named token shows one time">
+    The dashboard shows a named token one time, when you create it. The server keeps only its <Term id="sha-256" /> digest.
+  </Accordion>
+  <Accordion title="The token in the URL">
+    - A `GET` request can give the token as `?access_token=<token>`. The reason: the <Term id="event-source" /> of a browser cannot set headers.
+    - Other methods accept only the header.
+    - Use the header when you can. A URL goes into the history of the browser and into the logs of each proxy before the server.
+  </Accordion>
+</Accordions>

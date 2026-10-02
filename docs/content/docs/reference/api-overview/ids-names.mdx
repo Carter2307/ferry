@@ -1,0 +1,26 @@
+---
+title: Ids and names in paths
+description: Where a path has {id}, a service, a datastore or an env group accepts its id or its name.
+---
+
+```text title="Two paths, the same service" noCopy
+/api/v1/services/api
+/api/v1/services/srv-60f5973b037e4478ae7b
+```
+
+A <Term id="resource-id" /> is a prefix and 20 <Term id="hex">hex characters</Term>. The prefixes are `srv`, `dep`, `job`, `dbs` and `evg`.
+
+## What a path accepts
+
+| Resource | Prefix | Example of an id | In a path |
+|---|---|---|---|
+| Service | `srv` | `srv-60f5973b037e4478ae7b` | The id or the name |
+| Datastore | `dbs` | | The id or the name |
+| Env group | `evg` | `evg-c15c37b6f91044ff920b` | The id or the name |
+| Deploy | `dep` | `dep-3271cdfd1415400d9a5e` | The id only |
+| Job run | `job` | | The id only |
+| Deploy hook | | | The id of the service only |
+
+## A name cannot look like an id
+
+Ferry refuses a name that looks like an id. Thus Ferry always knows if a path has an id or a name.

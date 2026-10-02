@@ -1,0 +1,13 @@
+{
+  "title": "Development setup",
+  "icon": "Wrench",
+  "pages": [
+    "requirements",
+    "build",
+    "run",
+    "deploy",
+    "second-server",
+    "branches",
+    "coding-rules"
+  ]
+}

@@ -1,0 +1,65 @@
+---
+title: Set variables
+description: Set, remove and list the environment variables of a service.
+---
+
+<Terminal
+  lines={[
+    "$ ferry env set api LOG_LEVEL=info 'DATABASE_URL=${{datastore.app-db.connectionString}}'",
+    "Saved. Restarting 'api' with the new environment.",
+  ]}
+/>
+
+Each <Term id="service" /> has its own <Term id="env-var">environment variables</Term>. Ferry has no secret files: each setting is an environment variable.
+
+## Change the variables
+
+<Tabs items={['CLI', 'API', 'Dashboard']} groupId="interface" persist>
+<Tab value="CLI">
+
+```bash title="Terminal"
+ferry env set api LOG_LEVEL=info 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+ferry env unset api LOG_LEVEL
+ferry env api                    # the service's own variables
+ferry env ls api --effective     # merged with its env groups
+```
+
+`ferry env set` and `ferry env unset` <Term id="restart">restart</Term> the service. Thus the change applies.
+
+- Add `--no-restart` to only save.
+- Add `--follow` to see the restart.
+
+</Tab>
+<Tab value="API">
+
+```bash title="Terminal"
+curl -X PATCH 'http://127.0.0.1:7878/api/v1/services/api/env?restart=true' \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"set": [{"key": "LOG_LEVEL", "value": "info"}], "unset": ["DEBUG"]}'
+```
+
+- `PATCH` adds or replaces the variables in `set` and removes the variables in `unset`.
+- `PUT` with `{"vars": […]}` replaces all the own variables of the service.
+- The two calls return the variables of the service.
+- Without `?restart=true`, nothing restarts.
+
+See [Environment variables](/docs/reference/api/env) in the API reference.
+
+</Tab>
+<Tab value="Dashboard">
+
+Open the **Environment** page of the service. It edits the same variables. Click **Save only** or **Save & restart**.
+
+</Tab>
+</Tabs>
+
+<Callout type="warning" title="Use single quotes around ${{…}}">
+Put a value that contains `${{…}}` between single quotes. Then your <Term id="shell" /> does not change it.
+</Callout>
+
+<Accordions>
+  <Accordion title="Variables at creation">
+    You can also give variables when you create or upload a service: `ferry create api -e KEY=VALUE` or `ferry up -e KEY=VALUE`.
+  </Accordion>
+</Accordions>

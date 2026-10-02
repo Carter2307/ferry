@@ -1,0 +1,51 @@
+---
+title: References to a service
+description: A reference to a service gives its name, its port or its URL.
+---
+
+<Diagram
+  nodes={[
+    { id: 'host', at: [0, 0], label: 'api', note: 'host' },
+    { id: 'port', at: [1, 0], label: '3000', note: 'port' },
+    { id: 'hostport', at: [2, 0], label: 'api:3000', note: 'hostport' },
+    { id: 'internal', at: [3, 0], label: 'http://api:3000', note: 'internalUrl' },
+    { id: 'url', at: [1.5, 1], icon: 'globe', label: 'Public URL', note: 'url' },
+  ]}
+  groups={[{ label: 'On the private network', around: ['host', 'port', 'hostport', 'internal'] }]}
+  steps={[
+    { caption: 'host gives the name of the service. It is its hostname on the private network.', tones: { host: 'success' } },
+    { caption: 'port gives the port that the service listens on.', tones: { port: 'success' } },
+    { caption: 'hostport gives the two parts together: api:3000.', tones: { hostport: 'success' } },
+    { caption: 'internalUrl gives http://host:port.', tones: { internal: 'success' } },
+    { caption: 'url gives the public URL. Only web services and static sites have one.', tones: { url: 'success' } },
+  ]}
+/>
+
+The kind is `service`. You can also write `svc`.
+
+```bash title="Terminal"
+ferry env set api 'SEARCH_URL=${{service.search.internalUrl}}/v1'
+```
+
+## The properties
+
+| Property | Aliases | Value |
+|---|---|---|
+| `host` | `hostname` | The service name, its <Term id="hostname" /> on the <Term id="private-network" /> |
+| `port` | | The port the service listens on |
+| `hostport` | | `host:port`, for example `api:3000` |
+| `internalUrl` | | `http://host:port` |
+| `url` | `externalUrl` | The public URL (web services and static sites only) |
+
+## The port must be known
+
+`port`, `hostport` and `internalUrl` need the <Term id="port" /> of the target service. Ferry knows it after that service deployed, or when you set its port with `--port`.
+
+<Accordions>
+  <Accordion title="The first deploy of the target is in progress">
+    An example is a <Term id="blueprint" /> that deploys all the services at the same time. Then the deploy waits for the target. It waits 15 minutes at most, or two times the timeout of the <Term id="health-check" /> if that is longer.
+  </Accordion>
+  <Accordion title="Two services that reference each other">
+    Two services reference the port of each other, and no one deployed yet. Then the deploy fails immediately. First deploy one of them without the reference.
+  </Accordion>
+</Accordions>

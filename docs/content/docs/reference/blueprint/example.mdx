@@ -1,0 +1,95 @@
+---
+title: Example
+description: One file with an env group, a Postgres database, a Redis datastore, a web service and a cron job.
+---
+
+```yaml title="ferry.yaml" lineNumbers
+# A Ferry blueprint (render.yaml-compatible). Apply with:
+#   ferry blueprint apply examples/blueprint/ferry.yaml
+#
+# `plan` sets resource limits like Render's instance types; the Ferry keys
+# `memoryLimit` / `cpuLimit` override it. A new resource without any of them
+# gets the server defaults (ferryd --default-memory-limit / --default-cpu-limit);
+# an existing one keeps its current limits.
+envVarGroups:
+  - name: shared-settings
+    envVars:
+      - key: APP_ENV
+        value: production
+
+databases:
+  - name: app-db
+    postgresMajorVersion: "16"
+    databaseName: app
+    user: app
+    plan: basic-256mb        # 256 MiB of memory
+
+services:
+  - type: redis
+    name: cache
+    plan: starter            # 256 MiB of memory
+
+  - type: web
+    name: hello
+    runtime: image
+    image:
+      url: nginx:alpine
+    port: 80
+    healthCheckPath: /
+    numInstances: 2
+    plan: starter            # 512 MiB / 0.5 CPU per instance
+    envVars:
+      - fromGroup: shared-settings
+      - key: DATABASE_URL
+        fromDatabase:
+          name: app-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: cache
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+
+  - type: cron
+    name: nightly
+    runtime: image
+    image:
+      url: busybox:stable
+    schedule: "0 3 * * *"
+    startCommand: echo "nightly job ran at $(date)"
+    memoryLimit: 64M         # per run
+    cpuLimit: 250m
+```
+
+This file is `examples/blueprint/ferry.yaml` in the repository. It describes:
+
+- one <Term id="env-group" />
+- one <Term id="postgres" /> database
+- one <Term id="redis" /> datastore
+- one <Term id="web-service" /> with two instances, which uses the database and Redis
+- one <Term id="cron-job" />
+
+Each one gets its size from a `plan` or from explicit limits.
+
+## The first apply
+
+The first <Term id="apply" /> creates everything. For each service that has a source, it puts a `blueprint` <Term id="deploy" /> in the queue.
+
+```text title="ferry blueprint apply examples/blueprint/ferry.yaml" noCopy
+Applied blueprint examples/blueprint/ferry.yaml
+
+Created:
+  + env group shared-settings
+  + datastore app-db
+  + datastore cache
+  + service hello
+  + service nightly
+
+Queued deploys:
+  dep-3271cdfd1415400d9a5e  hello (blueprint, queued)
+  dep-0fe672f0b3a4486991a9  nightly (blueprint, queued)
+
+Follow a deploy with: ferry logs --deploy <id> -f
+```

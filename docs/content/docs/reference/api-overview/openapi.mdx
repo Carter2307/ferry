@@ -1,0 +1,49 @@
+---
+title: API reference and OpenAPI
+description: Your server gives the OpenAPI document of its API and a Swagger UI to try requests.
+---
+
+<Diagram
+  nodes={[
+    { id: 'doc', at: [0, 0.5], icon: 'file-code', label: 'OpenAPI 3.1', note: '/api/openapi.json' },
+    { id: 'ref', at: [1.75, 0], icon: 'book', label: 'API reference', note: 'in these docs' },
+    { id: 'ui', at: [1.75, 1], icon: 'browser', label: 'Swagger UI', note: '/api/docs' },
+  ]}
+  edges={[
+    { from: 'doc', to: 'ref', flow: true },
+    { from: 'doc', to: 'ui', flow: true },
+  ]}
+/>
+
+The <Term id="openapi" /> describes each <Term id="endpoint" /> of the API. Two tools read it.
+
+## Where to read and try the API
+
+| Tool | Where | Use |
+|---|---|---|
+| [API reference](/docs/reference/api) | These docs | Each endpoint with its parameters, bodies and responses. It comes from the OpenAPI document. |
+| OpenAPI document | `/api/openapi.json` on your server | For tools that read the OpenAPI 3.1 format. |
+| <Term id="swagger-ui" /> | `/api/docs` on your server | To send requests from a browser. |
+
+## Send requests from a browser
+
+The reference pages have no "try it" button, because `ferryd` sends no <Term id="cors" /> headers.
+
+<Steps>
+<Step>
+
+### Open Swagger UI on your server
+
+```text
+http://127.0.0.1:7878/api/docs
+```
+
+</Step>
+<Step>
+
+### Click **Authorize**
+
+Paste an <Term id="api-token" />.
+
+</Step>
+</Steps>

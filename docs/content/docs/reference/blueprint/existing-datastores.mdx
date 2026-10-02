@@ -1,0 +1,51 @@
+---
+title: Datastores that exist
+description: For a datastore that exists, an apply changes only the resource limits.
+---
+
+<Diagram
+  nodes={[
+    { id: 'file', at: [0, 0.5], icon: 'file-code', label: 'ferry.yaml', note: 'entry app-db' },
+    { id: 'limits', at: [1.75, 0], icon: 'gauge', label: 'Limits', note: 'memory, CPU' },
+    { id: 'other', at: [1.75, 1], icon: 'ban', label: 'Other keys', note: 'version, user' },
+    { id: 'db', at: [3.25, 0.5], icon: 'database', label: 'app-db', note: 'exists' },
+  ]}
+  edges={[
+    { from: 'file', to: 'limits' },
+    { from: 'file', to: 'other' },
+    { from: 'limits', to: 'db' },
+    { from: 'other', to: 'db', dashed: true },
+  ]}
+  steps={[
+    {
+      caption: 'New limits in the file go to the container, with no restart.',
+      flow: ['file>limits', 'limits>db'],
+      cut: ['other>db'],
+      tones: { limits: 'success', db: 'success' },
+      notes: { db: 'new limits' },
+    },
+    {
+      caption: 'A different version, database name or user gives a warning. The datastore does not change.',
+      flow: ['file>other'],
+      cut: ['other>db'],
+      tones: { other: 'warning' },
+      notes: { other: 'warning', db: 'not changed' },
+    },
+  ]}
+/>
+
+When a <Term id="datastore" /> exists, a <Term id="blueprint" /> changes only its <Term id="resource-limit">resource limits</Term>. Ferry changes them in place, with no restart.
+
+## Keys that do not change it
+
+The keys `postgresMajorVersion`, `databaseName` and `user` apply only when Ferry creates the datastore.
+
+If one of them is different from the datastore that exists, the apply gives this warning and continues:
+
+```text noCopy
+datastores are not changed in place (ignored)
+```
+
+## The same name, the other kind
+
+A file can ask for a Postgres datastore with the name of a Redis datastore that exists, or the opposite. This is a conflict: the apply stops with the status 409.

@@ -1,0 +1,41 @@
+---
+title: Build keys
+description: The build keys tell Ferry where to build, with which Dockerfile and with which commands.
+---
+
+```yaml title="render.yaml"
+services:
+  - type: web
+    name: api
+    runtime: node
+    repo: https://github.com/render-examples/express-hello-world
+    buildCommand: npm ci          # runs in the build
+    startCommand: node app.js     # starts the app
+```
+
+These keys control the <Term id="build" /> of a service and the command that starts it.
+
+## The keys
+
+| Key | Type | Default | Ferry setting and notes |
+|---|---|---|---|
+| `rootDir` | string | repository root | `root_dir`: the <Term id="root-directory" />, a relative path in the repository. It is also the <Term id="build-context" />. |
+| `dockerContext` | string | none | Ferry uses it as `root_dir` when the entry has no `rootDir`. |
+| `dockerfilePath` | string | `Dockerfile` | `dockerfile_path`, relative to the root directory. |
+| `buildCommand` | string | none | `build_command`, for native runtimes. |
+| `startCommand` | string | none | `start_command`. |
+| `dockerCommand` | string | none | The same as `startCommand`. |
+| `staticPublishPath` | string | none | `publish_dir`: the directory that a static site serves. |
+
+<Accordions>
+  <Accordion title="dockerContext and dockerfilePath">
+    - When `dockerContext` becomes the root directory, Ferry makes `dockerfilePath` relative to it.
+    - If the entry has `rootDir`, Ferry ignores `dockerContext` with a warning.
+    - `dockerfilePath` can use `..`, but the path must stay in the repository.
+    - If Ferry finds the runtime from your files, a custom `dockerfilePath` makes the service build with Docker.
+  </Accordion>
+  <Accordion title="startCommand and dockerCommand">
+    - For the `docker` and `image` runtimes, the command runs as `/bin/sh -c <command>`.
+    - If the entry has `startCommand` and a different `dockerCommand`, Ferry uses `startCommand` and gives a warning.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,44 @@
+---
+title: The Docker prefix belongs to another server
+description: Each Docker name prefix belongs to one data directory. This ferryd uses a different data directory.
+---
+
+## What you see
+
+```text title="ferryd" noCopy
+Error: Docker resources with prefix 'ferry' belong to another Ferry server (data dir /var/lib/ferry). Run this server with a different --name-prefix, stop the other server, or pass --take-over to adopt the resources (…)
+```
+
+A second form of the message is `found N Docker container(s) with prefix 'ferry' that this (empty) data dir … doesn't know`.
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'owner', at: [0, 0], icon: 'folder', label: '/var/lib/ferry', note: 'owns the prefix', tone: 'success' },
+    { id: 'other', at: [0, 1], icon: 'folder', label: './ferry-data', note: 'this ferryd', tone: 'danger' },
+    { id: 'docker', at: [1.75, 0.5], icon: 'container', label: 'Containers', note: 'prefix: ferry' },
+  ]}
+  edges={[
+    { from: 'owner', to: 'docker' },
+    { from: 'other', to: 'docker', dashed: true, tone: 'danger' },
+  ]}
+/>
+
+Each <Term id="name-prefix" /> belongs to one <Term id="data-directory" />. The data directory of this server does not own `ferry`.
+
+The two usual causes:
+
+- `ferryd` started from another folder with the default `./ferry-data`.
+- Two servers share one <Term id="docker-daemon" />.
+
+## How to repair it
+
+- Start `ferryd` with the data directory that owns the prefix. The message gives its path.
+- Or give this server its own `--name-prefix`. See [Multiple servers](/docs/guides/multiple-servers).
+
+<Callout type="warning" title="Do not use --take-over for this">
+The server that takes over removes the containers of the other server. Do not use `--take-over` while another server uses the prefix.
+
+Use `--take-over` only for a data directory that lost its <Term id="instance-id" />. A data directory that you moved keeps its `instance_id`. It starts with the same `--name-prefix` and needs no other option.
+</Callout>

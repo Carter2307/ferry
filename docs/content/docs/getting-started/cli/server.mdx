@@ -1,0 +1,43 @@
+---
+title: Choose a server
+description: ferry gets the server URL and the token from four places, and uses the first value that it finds.
+---
+
+<Flow
+  caption="ferry uses the first value that it finds"
+  steps={[
+    { icon: 'flag', title: 'Flags', text: '--server and --token on the command line.' },
+    { icon: 'variable', title: 'Variables', text: 'FERRY_SERVER and FERRY_TOKEN in the environment of your shell.' },
+    { icon: 'file', title: 'Config file', text: 'The server and the token that ferry login saved.' },
+    { icon: 'server', title: 'Default', text: 'The server http://127.0.0.1:7878, with no token.', tone: 'muted' },
+  ]}
+/>
+
+## The four places
+
+| Priority | Source | Server | Token |
+|---|---|---|---|
+| 1 | Flags | `--server <URL>` | `--token <TOKEN>` |
+| 2 | Environment variables | `FERRY_SERVER` | `FERRY_TOKEN` |
+| 3 | Config file that `ferry login` saved | `server` | `token` |
+| 4 | Default | `http://127.0.0.1:7878` | none |
+
+A <Term id="flag" /> wins over a <Term id="shell-variable" />. A variable wins over the <Term id="config-file" />.
+
+## Work with many servers
+
+The config file keeps one login. Keep the server that you use most in the config file. Give the other servers with flags or with variables.
+
+<Callout type="info" title="The saved token goes only to its own server">
+If `--server` or `FERRY_SERVER` names a different server, `ferry` does not send the saved token to it. You must give a token for that server too.
+</Callout>
+
+```text title="Error" noCopy
+error: no token for http://10.0.0.5:7878: the saved login is for http://127.0.0.1:7878, and its token is only sent there; pass --token or set FERRY_TOKEN (or run 'ferry login --server http://10.0.0.5:7878')
+```
+
+<Accordions>
+  <Accordion title="Global options">
+    `--server`, `--token` and `--json` are global options. You can write them before or after the name of the command: `ferry --json services` or `ferry services --json`.
+  </Accordion>
+</Accordions>

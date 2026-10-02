@@ -1,0 +1,55 @@
+---
+title: Host these docs on Ferry
+description: Deploy this documentation site as a static site on Ferry. Upload the built files, or let Ferry build from git.
+icon: BookOpen
+---
+
+<Diagram
+  caption="Two paths to the same static site"
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'laptop', label: 'Your machine', note: 'npm run build' },
+    { id: 'git', at: [0, 1], icon: 'repo', label: 'GitHub', note: 'branch dev' },
+    { id: 'ferry', at: [1.5, 0.5], icon: 'ship', label: 'Ferry' },
+    { id: 'site', at: [2.75, 0.5], icon: 'globe', label: 'Docs site', note: 'nginx' },
+  ]}
+  edges={[
+    { from: 'you', to: 'ferry' },
+    { from: 'git', to: 'ferry' },
+    { from: 'ferry', to: 'site' },
+  ]}
+  steps={[
+    {
+      caption: 'Path 1: you build the site on your machine and upload the folder out/.',
+      flow: ['you>ferry'],
+      tones: { you: 'primary', git: 'muted' },
+    },
+    {
+      caption: 'Path 2: Ferry clones the repository and builds the site on the server.',
+      flow: ['git>ferry'],
+      tones: { git: 'primary', you: 'muted' },
+    },
+    {
+      caption: 'On the two paths, nginx serves the files as a static site.',
+      flow: ['ferry>site'],
+      tones: { site: 'success' },
+    },
+  ]}
+/>
+
+This site is a <Term id="static-export" />. `npm run build` in `docs/` writes plain HTML, the search index and the <Term id="open-graph" /> images to `docs/out/`.
+
+Each static host can serve these files. Ferry serves them as a [static site](/docs/guides/language-guides) with <Term id="nginx" />.
+
+## The main command
+
+```bash title="Terminal"
+ferry up ferry-docs --dir out --type static --follow
+```
+
+## Choose a path
+
+<Cards>
+  <Card title="Upload the built site" href="/docs/guides/host-docs-on-ferry/upload" description="Build on your machine, then send the folder." />
+  <Card title="Build from git" href="/docs/guides/host-docs-on-ferry/git" description="Ferry builds the site. A push to GitHub can deploy it again." />
+  <Card title="Build variables" href="/docs/guides/host-docs-on-ferry/variables" description="Set the public URL of the site and of your server." />
+</Cards>

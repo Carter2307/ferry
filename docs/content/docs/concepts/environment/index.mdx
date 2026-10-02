@@ -1,0 +1,75 @@
+---
+title: "Environment & env groups"
+description: A service gets its variables from Ferry, from env groups and from its own settings. Ferry resolves references at start.
+icon: Braces
+---
+
+<Diagram
+  caption="Where the values come from"
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry', note: 'PORT, FERRY_*' },
+    { id: 'groups', at: [0, 1], icon: 'layers', label: 'Env groups', note: 'shared variables' },
+    { id: 'own', at: [0, 2], icon: 'variable', label: 'Service', note: 'its own variables' },
+    { id: 'env', at: [1.5, 1], icon: 'braces', label: 'Environment', note: 'merged' },
+    { id: 'db', at: [1.5, 2], icon: 'database', label: 'app-db', note: 'datastore' },
+    { id: 'box', at: [3, 1], icon: 'box', label: 'Container', note: 'your app' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'env' },
+    { from: 'groups', to: 'env' },
+    { from: 'own', to: 'env' },
+    { from: 'db', to: 'env' },
+    { from: 'env', to: 'box' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry adds its own variables first: PORT and FERRY_*.',
+      hide: ['db'],
+      flow: ['ferry>env'],
+      tones: { ferry: 'primary' },
+    },
+    {
+      caption: 'The env groups of the service add the shared variables.',
+      hide: ['db'],
+      flow: ['groups>env'],
+      tones: { groups: 'primary' },
+    },
+    {
+      caption: 'The own variables of the service come last. They win.',
+      hide: ['db'],
+      flow: ['own>env'],
+      tones: { own: 'primary' },
+    },
+    {
+      caption: 'When a container starts, Ferry replaces each ${{…}} reference with the real value.',
+      flow: ['db>env'],
+      tones: { db: 'primary', env: 'primary' },
+      notes: { env: 'real values' },
+    },
+    {
+      caption: 'The container gets the complete environment.',
+      flow: ['env>box'],
+      tones: { box: 'success' },
+      notes: { env: 'complete' },
+    },
+  ]}
+/>
+
+Each <Term id="service" /> has its own <Term id="env-var">environment variables</Term>. To share variables, put them in an <Term id="env-group" /> and link the group to your services.
+
+A value can be a <Term id="reference" /> to a <Term id="datastore" /> or to a different service: `${{…}}`. Ferry puts the real value there when the service starts.
+
+## Set a variable
+
+```bash title="Terminal"
+ferry env set api LOG_LEVEL=info 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+```
+
+## In this section
+
+<Cards>
+  <Card title="Set variables" href="/docs/concepts/environment/set-variables" description="With the CLI, the API or the dashboard." />
+  <Card title="Env groups" href="/docs/concepts/environment/env-groups" description="One set of variables for many services." />
+  <Card title="References" href="/docs/concepts/environment/references" description="A value that Ferry replaces at start." />
+  <Card title="When changes apply" href="/docs/concepts/environment/when-changes-apply" description="A saved change needs a restart." />
+</Cards>

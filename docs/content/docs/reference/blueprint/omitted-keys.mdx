@@ -1,0 +1,34 @@
+---
+title: Keys that you remove
+description: A build or deploy key that you remove from the file goes back to its default at the next apply.
+---
+
+```diff title="ferry.yaml (edited)"
+ services:
+   - type: worker
+     name: queue
+     repo: https://github.com/acme/queue
+-    buildCommand: npm ci
+-    autoDeploy: false
+-    numInstances: 2
+```
+
+The build and deploy settings in a blueprint are declarative. The file gives the full state of these settings, not only the changes.
+
+## At the next apply
+
+| Key removed from the file | The service that exists |
+|---|---|
+| `buildCommand` | Has no build command. |
+| `autoDeploy` | Has auto-deploy `true`. |
+| Each other build or deploy key | Gets its default. |
+| `numInstances` | Keeps its number of instances. |
+| `domains` | Keeps its domains. |
+| `plan`, `memoryLimit`, `cpuLimit` | Keeps each resource limit that the entry does not set. |
+| `repo` and `image` | Keeps its source: the `repo` with its `branch`, or the `image`. |
+
+<Callout type="warning" title="Four things stay, the others go back to the default">
+Ferry keeps only the number of instances, the domains, the limits and the source. For each other key, write the value in the file if you want to keep it.
+</Callout>
+
+Variables follow a different rule: a variable that is not in the file stays. See [Guarantees](/docs/reference/blueprint/guarantees).

@@ -1,0 +1,41 @@
+---
+title: Node.js
+description: What the generated Dockerfile does for a Node.js project, when you set no build or start command.
+---
+
+<Flow
+  caption="The Node.js Dockerfile"
+  steps={[
+    { icon: 'layers', title: 'Base image', text: 'The image is node:<major>-alpine. A Bun project uses oven/bun:1-alpine.' },
+    { icon: 'package', title: 'Install', text: 'The package manager of the project installs the dependencies.' },
+    { icon: 'hammer', title: 'Build', text: 'The build script of package.json runs, if there is one.' },
+    { icon: 'play', title: 'Start', text: 'npm start runs, if there is a start script. If not, node runs a file.', tone: 'success' },
+  ]}
+/>
+
+## The defaults
+
+| Step | What Ferry does |
+|---|---|
+| Node.js version | It comes from `engines.node` in `package.json`. Ferry uses 22 when the range allows it. If not, Ferry uses the newest major version that the range allows. |
+| Package manager | The <Term id="package-manager" /> comes from the `packageManager` field or the <Term id="lockfile" />: npm, Yarn, pnpm or Bun. Yarn and pnpm run through Corepack. |
+| Install with npm | `npm ci` when there is a `package-lock.json`. If not, `npm install`. |
+| Build | The `build` script of `package.json`, if there is one. |
+| Start | `npm start` when there is a `start` script. With Yarn 2+: `yarn start`. With Bun: `bun run start`. |
+| Start with no `start` script | `node` with the `main` file, `server.js`, `index.js` or `app.js`. |
+
+## See the choice
+
+```text title="Deploy log" noCopy
+==> Start command: npm start (the "start" script of package.json)
+```
+
+<Accordions>
+  <Accordion title="Dev dependencies and NODE_ENV">
+    - The install includes the dev dependencies. Thus your build tools are available.
+    - Ferry sets `NODE_ENV=production` after the install. Thus it applies to the build and when the app runs.
+  </Accordion>
+  <Accordion title="Your own commands">
+    A build command or a start command of the service replaces the default. See [Start command](/docs/concepts/builds/start-command).
+  </Accordion>
+</Accordions>

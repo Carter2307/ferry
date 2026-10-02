@@ -1,0 +1,19 @@
+---
+title: References in a blueprint
+description: In a blueprint, Ferry changes each fromDatabase and fromService entry into a reference.
+---
+
+```yaml title="ferry.yaml"
+envVars:
+  - key: DATABASE_URL
+    fromDatabase: { name: app-db, property: connectionString }   # ${{datastore.app-db.connectionString}}
+  - key: API_HOST
+    fromService: { type: pserv, name: api, property: hostport }  # ${{service.api.hostport}}
+```
+
+In a <Term id="blueprint" />, you do not write `${{…}}`. You write `fromDatabase` or `fromService`. Ferry makes the <Term id="reference" /> from it. The comment on each line shows the result.
+
+## Where to read more
+
+- [envVars entries](/docs/reference/blueprint/env-vars): each form of a variable in a blueprint
+- [Reference properties](/docs/reference/blueprint/reference-properties): the properties that `fromDatabase` and `fromService` accept

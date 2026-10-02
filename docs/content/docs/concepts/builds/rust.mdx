@@ -1,0 +1,55 @@
+---
+title: Rust
+description: What the generated Dockerfile does for a Rust project, when you set no build or start command.
+---
+
+<Diagram
+  nodes={[
+    { id: 'builder', at: [0, 0], label: 'rust:1-slim-bookworm', note: 'the build image' },
+    { id: 'bin', at: [1.5, 0], icon: 'file', label: 'Binary', note: 'in /usr/local/bin' },
+    { id: 'run', at: [3, 0], label: 'debian:bookworm-slim', note: 'the run image' },
+  ]}
+  edges={[
+    { from: 'builder', to: 'bin' },
+    { from: 'bin', to: 'run' },
+  ]}
+  steps={[
+    {
+      caption: 'In the build image, Cargo fetches the dependencies.',
+      cut: ['builder>bin', 'bin>run'],
+      tones: { builder: 'primary', bin: 'muted', run: 'muted' },
+    },
+    {
+      caption: 'cargo build --release compiles the app into a binary.',
+      cut: ['bin>run'],
+      flow: ['builder>bin'],
+      tones: { bin: 'primary', run: 'muted' },
+    },
+    {
+      caption: 'The run image is small. It gets the binary and your source tree.',
+      flow: ['bin>run'],
+      tones: { run: 'success' },
+    },
+  ]}
+/>
+
+A Rust build uses two images. The first image has the Rust tools and compiles the app. The second image only runs the <Term id="binary" />.
+
+## The defaults
+
+| Step | What Ferry does |
+|---|---|
+| Build image | `rust:1-slim-bookworm` |
+| Run image | `debian:bookworm-slim` |
+| Dependencies | Cargo fetches them. Ferry keeps the registry and the target directory in build caches between builds. |
+| Build | `cargo build --release`. Ferry installs the binary in `/usr/local/bin`. |
+| Start | The binary that `default-run` names. If there is none, the binary of the package. If there is none, the first `[[bin]]` target. |
+
+<Accordions>
+  <Accordion title="OpenSSL">
+    When `Cargo.lock` depends on `openssl-sys`, Ferry installs OpenSSL.
+  </Accordion>
+  <Accordion title="Files that the app reads when it runs">
+    The run image also has your source tree in `/app`. This is the directory where the app starts.
+  </Accordion>
+</Accordions>

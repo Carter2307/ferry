@@ -1,0 +1,78 @@
+---
+title: Migrate from Render
+description: Apply your render.yaml to a Ferry server. Then move your data and your domains.
+icon: ArrowRightLeft
+---
+
+<Diagram
+  caption="What Ferry makes from your render.yaml"
+  nodes={[
+    { id: 'file', at: [0, 1], icon: 'file-code', label: 'render.yaml' },
+    { id: 'ferry', at: [1.5, 1], icon: 'ship', label: 'Ferry', note: 'blueprint apply' },
+    { id: 'groups', at: [3, 0], icon: 'variable', label: 'Env groups' },
+    { id: 'stores', at: [3, 1], icon: 'database', label: 'Datastores', note: 'Postgres, Redis' },
+    { id: 'services', at: [3, 2], icon: 'box', label: 'Services' },
+  ]}
+  edges={[
+    { from: 'file', to: 'ferry' },
+    { from: 'ferry', to: 'groups' },
+    { from: 'ferry', to: 'stores' },
+    { from: 'ferry', to: 'services' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry reads your render.yaml. You do not change the file.',
+      hide: ['groups', 'stores', 'services'],
+      flow: ['file>ferry'],
+    },
+    {
+      caption: 'First, Ferry creates the env groups.',
+      hide: ['stores', 'services'],
+      flow: ['ferry>groups'],
+      tones: { groups: 'primary' },
+    },
+    {
+      caption: 'Then Ferry creates the datastores: the databases and the key value stores.',
+      hide: ['services'],
+      flow: ['ferry>stores'],
+      tones: { stores: 'primary' },
+    },
+    {
+      caption: 'Last, Ferry creates the services and deploys them.',
+      flow: ['ferry>services'],
+      tones: { services: 'success' },
+    },
+    {
+      caption: 'A key that Ferry does not support gives a warning, not an error.',
+      tones: { file: 'warning', ferry: 'warning' },
+      notes: { ferry: 'shows warnings' },
+    },
+  ]}
+/>
+
+Ferry reads the <Term id="blueprint" /> format of <Term id="render" />. One command creates the <Term id="env-group">env groups</Term>, the databases, the <Term id="key-value-store">key value stores</Term> and the services of the file. Then it deploys them.
+
+Ferry ignores each key that it does not support, with a warning. Thus you can apply your file as it is, then repair what the warnings list.
+
+## Apply your file
+
+```bash title="Terminal"
+ferry blueprint apply render.yaml
+```
+
+## The steps
+
+1. [Preview the changes](/docs/guides/migrate-from-render/preview)
+2. [Apply the blueprint](/docs/guides/migrate-from-render/apply)
+3. [Set the values that Render did not sync](/docs/guides/migrate-from-render/secrets)
+4. [Move your Postgres data](/docs/guides/migrate-from-render/postgres-data)
+5. [Point your domains to Ferry](/docs/guides/migrate-from-render/domains)
+6. [Turn on auto-deploy](/docs/guides/migrate-from-render/auto-deploy)
+
+## What Ferry supports
+
+<Cards>
+  <Card title="Keys and service types" href="/docs/guides/migrate-from-render/top-level" description="What Ferry reads, changes or ignores." />
+  <Card title="Plans" href="/docs/guides/migrate-from-render/plans" description="A plan becomes memory and CPU limits." />
+  <Card title="Differences" href="/docs/guides/migrate-from-render/differences" description="What works in a different way on Ferry." />
+</Cards>

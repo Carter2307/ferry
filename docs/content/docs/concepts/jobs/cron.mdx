@@ -1,0 +1,64 @@
+---
+title: Create a cron job
+description: A cron job is a service with a schedule. Each time of the schedule starts one run.
+---
+
+<Diagram
+  caption="The runs of one cron job"
+  nodes={[
+    { id: 's', at: [1.25, 0], icon: 'calendar', label: 'Schedule', note: '0 3 * * *' },
+    { id: 'r1', at: [0, 1], icon: 'box', label: 'Run 1', note: 'Mon 03:00 UTC' },
+    { id: 'r2', at: [1.25, 1], icon: 'box', label: 'Run 2', note: 'Tue 03:00 UTC' },
+    { id: 'r3', at: [2.5, 1], icon: 'box', label: 'Run 3', note: 'Wed 03:00 UTC' },
+  ]}
+  edges={[
+    { from: 's', to: 'r1' },
+    { from: 's', to: 'r2' },
+    { from: 's', to: 'r3' },
+  ]}
+  steps={[
+    { caption: 'A cron job has a schedule. Between two runs, it has no container.', hide: ['r1', 'r2', 'r3'], tones: { s: 'primary' } },
+    { caption: 'Monday, 03:00 UTC: Ferry starts a run. It is one new container.', hide: ['r2', 'r3'], flow: ['s>r1'], tones: { r1: 'primary' } },
+    { caption: 'The command ends. Ferry removes the container.', hide: ['r2', 'r3'], cut: ['s>r1'], tones: { r1: 'muted' }, notes: { r1: 'Mon: succeeded' } },
+    { caption: 'Tuesday, 03:00 UTC: the schedule starts a new run.', hide: ['r3'], cut: ['s>r1'], flow: ['s>r2'], tones: { r1: 'muted', r2: 'primary' }, notes: { r1: 'Mon: succeeded' } },
+    { caption: 'Each run is a new container with its own log.', cut: ['s>r1', 's>r2'], flow: ['s>r3'], tones: { r1: 'muted', r2: 'muted', r3: 'primary' }, notes: { r1: 'Mon: succeeded', r2: 'Tue: succeeded' } },
+  ]}
+/>
+
+A <Term id="cron-job" /> is a service that runs its command on a <Term id="cron-schedule" />.
+
+## Create it
+
+```bash title="Terminal"
+ferry create nightly --type cron --image busybox:stable \
+  --schedule "0 3 * * *" --start-cmd 'echo "nightly run at $(date)"' --follow
+```
+
+```text title="Output (excerpt)" noCopy
+==> Pinned busybox:stable as ferry/nightly:dep-4f09d911d31f407fb043
+==> Limits: 512 MiB memory, 1 CPU per run
+==> Your cron job is live 🎉 (schedule: 0 3 * * *, UTC)
+```
+
+A cron job gets its <Term id="image" /> as each other service does: from a repository, from `ferry up`, or from `--image`. But its deploy starts no container. The deploy only saves the image, the variables, the command and the [limits](/docs/concepts/resource-limits) for the runs.
+
+The <Term id="start-command" /> is the command of each <Term id="job-run" />. With no start command, a run uses the default command of the image.
+
+## Run it now
+
+```bash title="Terminal"
+ferry run nightly --follow                       # trigger the cron job now
+```
+
+On a cron job, `ferry run` runs the command of the cron job. You give no command.
+
+<Accordions>
+  <Accordion title="What a cron job does not have">
+    A cron job has no instances, no port, no health check, no custom domain and no disk. You cannot scale it.
+  </Accordion>
+  <Accordion title="Change the command">
+    A run uses the command that the last deploy saved. When you change the start command (`ferry update nightly --start-cmd …`), Ferry restarts the cron job automatically. Then the next run uses the new command.
+
+    A change of variables applies as for each other service. See [Environment](/docs/concepts/environment).
+  </Accordion>
+</Accordions>

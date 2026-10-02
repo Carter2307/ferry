@@ -1,0 +1,35 @@
+---
+title: How the dashboard gets into ferryd
+description: The build script of ferry-api puts each file of web/dist into the ferryd binary.
+---
+
+<Flow
+  steps={[
+    { icon: 'hammer', title: 'npm run build', text: 'It writes web/dist/index.html and web/dist/assets/*.' },
+    { icon: 'package', title: 'Embed', text: 'The build script of ferry-api puts each file of web/dist into the binary.' },
+    { icon: 'server', title: 'Serve', text: 'The server gives the app to the browser at /.', tone: 'success' },
+  ]}
+/>
+
+The <Term id="binary" /> contains the dashboard. Thus `ferryd` needs no other file to serve it.
+
+## The build script
+
+| Case | What the build script embeds |
+|---|---|
+| `web/dist` exists | Each file of `web/dist` |
+| `FERRY_WEB_DIST` has a value | Each file of that directory |
+| No built client | A placeholder page that explains how to build the client |
+
+Because of the placeholder, the Rust workspace always compiles.
+
+## Try a build with no Rust compile
+
+To try a production build in a real server, point `ferryd` at the directory:
+
+```bash title="Terminal"
+cd web && npm run build && cd ..
+FERRY_UI_DIR=web/dist ./target/debug/ferryd
+```
+
+`ferryd` then serves the files of `web/dist` from the disk. [What ferryd answers](/docs/contributing/web-client/serving) gives the rules for each path.

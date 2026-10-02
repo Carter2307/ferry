@@ -1,0 +1,58 @@
+---
+title: One runaway service
+description: Each container has limits. A service with a bug cannot stop the full server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'bad', at: [0, 0.5], icon: 'box', label: 'Runaway service' },
+    { id: 'ferryd', at: [1.5, 0], icon: 'server', label: 'ferryd, dockerd' },
+    { id: 'db', at: [1.5, 1], icon: 'database', label: 'A database' },
+  ]}
+  groups={[{ label: 'Your server', around: ['bad', 'ferryd', 'db'] }]}
+  steps={[
+    {
+      caption: 'A service leaks memory. The kernel kills its container at the memory limit, and no other process.',
+      tones: { bad: 'danger', ferryd: 'success', db: 'success' },
+      notes: { bad: 'OOM killed' },
+    },
+    {
+      caption: 'Docker restarts the container.',
+      tones: { bad: 'primary', ferryd: 'success', db: 'success' },
+      notes: { bad: 'restarts' },
+    },
+    {
+      caption: 'A service uses all the CPU that it can. Docker throttles it at its CPU limit.',
+      tones: { bad: 'warning', ferryd: 'success', db: 'success' },
+      notes: { bad: '1 CPU at most' },
+    },
+    {
+      caption: 'A service makes processes with no end. It stops at 1024 processes and threads.',
+      tones: { bad: 'warning', ferryd: 'success', db: 'success' },
+      notes: { bad: '1024 at most' },
+    },
+    {
+      caption: 'A service writes logs with no end. Docker rotates the log files.',
+      tones: { bad: 'warning', ferryd: 'success', db: 'success' },
+      notes: { bad: 'about 30 MiB' },
+    },
+  ]}
+/>
+
+Each container that Ferry starts has a memory limit, a CPU limit, a process limit and <Term id="log-rotation" />. This applies to service instances, one-off jobs, cron runs and datastores. It does not apply to builds.
+
+<Callout type="danger" title="Ferry cannot stop a hostile app">
+Each person who can deploy can run any code on the server. The limits protect the server from a bug, not from an attack.
+</Callout>
+
+## With the default options
+
+| When a service… | What happens |
+|---|---|
+| Leaks memory | The <Term id="kernel" /> kills its container at its memory limit: 512 MiB by default, with no swap above it. The kernel does not choose another process of the host, such as `ferryd`, `dockerd` or a database. Docker restarts the container. `ferryd` writes the kill in the server log. `ferry status` and the dashboard mark the instance as OOM killed while it restarts. |
+| Spins the CPU | Docker throttles it at its CPU limit: 1 CPU per container by default. The other cores stay free. On a host with 1 CPU, the default is the full host: lower `--default-cpu-limit` there. |
+| Forks without end | It stops at 1024 processes and threads per container. `fork` fails in the container. The process table of the host stays untouched. |
+| Logs without end | The `json-file` log of Docker rotates at 10 MiB × 3 files: about 30 MiB per container at most. A Docker daemon with another log driver keeps that driver, with its own limits. |
+| Deploys onto a nearly full disk | The deploy, or a new datastore, fails before the build or the pull. The message names the path. Restarts and rollbacks continue to work. |
+
+[Resource limits](/docs/concepts/resource-limits) tells how the limits work. [Production setup](/docs/guides/production) tells how to size them.

@@ -1,0 +1,47 @@
+---
+title: Limits behind another proxy
+description: Ferry does not trust a proxy in front of it, thus your apps see the address of that proxy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'client', at: [0, 0], icon: 'browser', label: 'Browser', note: 'HTTPS' },
+    { id: 'front', at: [1.25, 0], icon: 'shield', label: 'Reverse proxy' },
+    { id: 'proxy', at: [2.5, 0], icon: 'route', label: 'Ferry proxy' },
+    { id: 'app', at: [2.5, 1], icon: 'box', label: 'Your app' },
+  ]}
+  edges={[
+    { from: 'client', to: 'front' },
+    { from: 'front', to: 'proxy' },
+    { from: 'proxy', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'The reverse proxy adds X-Forwarded headers and sends the request to Ferry.',
+      flow: ['client>front', 'front>proxy'],
+      notes: { front: 'adds its headers' },
+    },
+    {
+      caption: 'Ferry drops these headers and sets its own.',
+      flow: ['front>proxy'],
+      tones: { proxy: 'warning' },
+      notes: { proxy: 'sets its own' },
+    },
+    {
+      caption: 'Your app sees X-Forwarded-Proto: http, and the address of the reverse proxy as the client IP.',
+      flow: ['proxy>app'],
+      tones: { app: 'warning' },
+      notes: { app: 'sees http' },
+    },
+  ]}
+/>
+
+Ferry expects to be the edge of the server. It has no setting to trust a proxy in front of it.
+
+## The three limits
+
+| Limit | What to do |
+|---|---|
+| Ferry drops the `X-Forwarded-*`, `Forwarded` and `X-Real-IP` <Term id="header">headers</Term> that it receives. Your apps see `X-Forwarded-Proto: http`. They see the address of the reverse proxy as the client IP (`X-Forwarded-For`, `X-Real-IP`). | Some apps make absolute URLs or enforce HTTPS from these headers. Give such an app its public URL in its own configuration, for example in an environment variable. |
+| The URLs that Ferry prints start with `http://`, because its own HTTPS is off. | Make the reverse proxy redirect HTTP to HTTPS. |
+| Automatic HTTPS is not available. <Term id="lets-encrypt" /> must reach Ferry on port 80 of the public address, and the reverse proxy now owns this port. | The reverse proxy must hold the certificates. |

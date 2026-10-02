@@ -1,0 +1,33 @@
+---
+title: How Ferry manages certificates
+description: Ferry asks for one certificate for each hostname, keeps it on the disk and renews it.
+---
+
+<Flow
+  caption="The life of a certificate"
+  steps={[
+    { icon: 'send', title: 'Request', text: 'Ferry asks for a certificate for one hostname.' },
+    { icon: 'save', title: 'Store', text: 'Ferry keeps the certificate in the data directory.' },
+    { icon: 'lock', title: 'Serve', text: 'The proxy serves HTTPS. HTTP requests get a 308 redirect to HTTPS.', tone: 'success' },
+    { icon: 'repeat', title: 'Renew', text: 'Ferry renews the certificate 30 days before its expiry.' },
+  ]}
+/>
+
+You do nothing: Ferry does each step.
+
+| Subject | Rule |
+|---|---|
+| Hostnames | One <Term id="certificate" /> for each hostname. |
+| Storage | `<data-dir>/certs/<host>/` in the <Term id="data-directory" />. Ferry loads the certificates again when `ferryd` starts. |
+| Renewal | It starts 30 days before the expiry. |
+| Default hostnames | Under a public <Term id="server-domain" />, `<name>.<domain>` gets its own certificate, like a custom domain. |
+| <Term id="local-name">Local names</Term> | `localhost`, `*.localhost`, `*.local`, `*.internal`, `*.test` and IP addresses always stay on HTTP. |
+
+## Before the certificate is there
+
+| Request | Answer |
+|---|---|
+| HTTP | Ferry serves the site over HTTP. |
+| HTTPS | Ferry serves the site with a <Term id="self-signed" />. |
+
+When the hostname has its certificate, each HTTP request gets a `308` <Term id="redirect" /> to HTTPS.

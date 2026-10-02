@@ -1,0 +1,50 @@
+---
+title: Background workers
+description: A background worker is a process that runs all the time and has no port.
+---
+
+<Diagram
+  nodes={[
+    { id: 'proxy', at: [0, 0], icon: 'route', label: 'Proxy' },
+    { id: 'worker', at: [1.5, 0], icon: 'repeat', label: 'Worker', note: 'node worker.js' },
+    { id: 'db', at: [3, 0], icon: 'database', label: 'Datastore' },
+  ]}
+  edges={[
+    { from: 'proxy', to: 'worker', label: 'no traffic', dashed: true, tone: 'muted' },
+    { from: 'worker', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'A background worker has no port. The proxy sends no traffic to it.',
+      tones: { proxy: 'muted' },
+    },
+    {
+      caption: 'The worker calls datastores and other services on the private network.',
+      cut: ['proxy>worker'],
+      flow: ['worker>db'],
+      tones: { worker: 'primary' },
+    },
+    {
+      caption: 'A new instance that runs for 5 seconds is healthy.',
+      cut: ['proxy>worker'],
+      tones: { worker: 'success' },
+      notes: { worker: 'healthy' },
+    },
+  ]}
+/>
+
+A <Term id="worker" /> does work that no request waits for. Examples are queue consumers, bots and stream processors.
+
+Ferry does not give a `PORT` variable to a worker.
+
+## When a worker is healthy
+
+A new <Term id="instance" /> is healthy when it runs for 5 seconds after its start. See [Health checks](/docs/concepts/deploys/health-checks).
+
+## Create a worker
+
+```bash title="Terminal"
+ferry create mailer --type worker --repo https://github.com/you/app --start-cmd "node worker.js"
+```
+
+`--start-cmd` is the command that starts the process. See [Start command](/docs/concepts/builds/start-command).

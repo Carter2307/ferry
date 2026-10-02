@@ -1,0 +1,53 @@
+---
+title: Docker, build and run
+description: "Two crates talk to Docker: one builds images and one controls containers."
+---
+
+<Diagram
+  nodes={[
+    { id: 'engine', at: [0, 0.5], icon: 'workflow', label: 'Engine' },
+    { id: 'build', at: [1.15, 0], icon: 'hammer', label: 'ferry-build', note: 'git, docker build' },
+    { id: 'lib', at: [1.15, 1], icon: 'plug', label: 'ferry-docker', note: 'Engine API' },
+    { id: 'daemon', at: [2.3, 0.5], icon: 'container', label: 'Docker daemon' },
+    { id: 'apps', at: [3.45, 0.5], icon: 'box', label: 'Containers', note: 'private network' },
+  ]}
+  edges={[
+    { from: 'engine', to: 'build' },
+    { from: 'engine', to: 'lib' },
+    { from: 'build', to: 'daemon' },
+    { from: 'lib', to: 'daemon' },
+    { from: 'daemon', to: 'apps' },
+  ]}
+  steps={[
+    {
+      caption: 'To make an image, the engine calls ferry-build. This crate runs the git and docker commands.',
+      flow: ['engine>build', 'build>daemon'],
+      tones: { build: 'primary' },
+    },
+    {
+      caption: 'To control containers, the engine calls ferry-docker. This crate calls the Docker Engine API.',
+      flow: ['engine>lib', 'lib>daemon'],
+      tones: { lib: 'primary' },
+    },
+    {
+      caption: 'Docker runs the app containers and the datastore containers on the private network.',
+      flow: ['daemon>apps'],
+      tones: { apps: 'success' },
+    },
+  ]}
+/>
+
+<Term id="ferryd" /> does not run your apps itself. It tells the <Term id="docker-daemon" /> what to do, through the <Term id="docker-engine-api" /> and through the `docker` command.
+
+## The two crates
+
+| Crate | Contents |
+|---|---|
+| `ferry-build` | It changes source into an <Term id="image" />: git fetch or archive extraction, <Term id="runtime" /> detection, and a <Term id="dockerfile" /> for native runtimes. Then it runs `docker build` with <Term id="buildkit" /> and sends the output to the deploy log. |
+| `ferry-docker` | A typed wrapper over the Docker Engine API (through `bollard`): containers, images, volumes, networks, logs, stats and exec. It knows nothing about services or deploys. |
+
+## Read more
+
+- [The build step](/docs/architecture/deploy-pipeline/build) of the deploy pipeline.
+- [Names and labels in Docker](/docs/architecture/overview/docker-names): how Ferry finds its own resources.
+- [Builds and runtimes](/docs/concepts/builds), for the user view.

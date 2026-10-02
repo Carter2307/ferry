@@ -1,0 +1,62 @@
+---
+title: Three rules for every language
+description: The port, the start command and the build command obey the same rules in every language.
+---
+
+<Diagram
+  nodes={[
+    { id: 'build', at: [0, 0], icon: 'hammer', label: 'Build command', note: '--build-cmd' },
+    { id: 'start', at: [1.5, 0], icon: 'play', label: 'Start command', note: '--start-cmd' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'Your app', note: '0.0.0.0:$PORT' },
+  ]}
+  edges={[
+    { from: 'build', to: 'start' },
+    { from: 'start', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'The build command runs after the install of the dependencies.',
+      cut: ['start>app'],
+      tones: { build: 'primary' },
+    },
+    {
+      caption: 'The start command starts your app in the container.',
+      flow: ['build>start'],
+      cut: ['start>app'],
+      tones: { start: 'primary' },
+    },
+    {
+      caption: 'Your app listens on 0.0.0.0 and on the port in PORT.',
+      flow: ['start>app'],
+      tones: { app: 'success' },
+    },
+  ]}
+/>
+
+## Listen on `0.0.0.0` and on `PORT`
+
+Ferry sets `PORT` to the <Term id="port" /> that it routes to. The value is `10000`, unless one of these is true:
+
+- You set `--port`.
+- You set a `PORT` variable.
+- Your <Term id="image" /> exposes one port only.
+
+See [The port of your app](/docs/concepts/deploys/ports).
+
+## The start command
+
+Ferry uses the first <Term id="start-command" /> that exists:
+
+1. The start command of the service (`--start-cmd`).
+2. The entry of the <Term id="procfile" /> for the type of the service.
+3. The default of the language.
+
+| Type of service | Procfile entry |
+|---|---|
+| Web service, private service | `web:` |
+| Background worker | `worker:` |
+| Cron job | `cron:`, then `worker:` |
+
+## The build command
+
+A <Term id="build-command" /> (`--build-cmd`) runs after the install of the <Term id="dependency">dependencies</Term>. It can read your <Term id="env-var">environment variables</Term>.

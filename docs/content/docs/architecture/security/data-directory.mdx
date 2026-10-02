@@ -1,0 +1,63 @@
+---
+title: The data directory
+description: The data directory holds all that Ferry knows, with the secrets. Only its owner can read it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'owner', at: [0, 0], icon: 'user', label: 'Owner', note: 'runs ferryd' },
+    { id: 'others', at: [0, 1], icon: 'users', label: 'Other users' },
+    { id: 'dir', at: [1.5, 0.5], icon: 'folder', label: 'ferry-data', note: 'mode 0700' },
+    { id: 'copy', at: [3, 0.5], icon: 'backup', label: 'Backup', note: 'a copy' },
+  ]}
+  edges={[
+    { from: 'owner', to: 'dir' },
+    { from: 'others', to: 'dir' },
+    { from: 'dir', to: 'copy' },
+  ]}
+  steps={[
+    {
+      caption: 'ferryd makes the data directory with mode 0700. Only the owner can open it.',
+      flow: ['owner>dir'],
+      cut: ['others>dir'],
+      tones: { dir: 'success' },
+    },
+    {
+      caption: 'The other users of the machine cannot read it.',
+      cut: ['others>dir'],
+      tones: { others: 'muted', dir: 'success' },
+      notes: { others: 'no access' },
+    },
+    {
+      caption: 'At each start, ferryd sets the strict permissions again.',
+      cut: ['others>dir'],
+      tones: { dir: 'primary' },
+    },
+    {
+      caption: 'A backup is a copy of all the secrets in plain text. Encrypt it.',
+      flow: ['dir>copy'],
+      cut: ['others>dir'],
+      tones: { copy: 'warning' },
+      notes: { copy: 'encrypt it' },
+    },
+  ]}
+/>
+
+`--data-dir` sets the <Term id="data-directory" />. The default is `./ferry-data`. It holds all that Ferry knows, and that includes secrets:
+
+- variable values and datastore passwords
+- repository URLs with credentials
+- the secrets of connected GitHub and GitLab accounts
+- logs and uploaded source code
+- TLS keys
+
+<Callout type="warning" title="Ferry does not encrypt secrets at rest">
+Variable values, datastore passwords and the secrets of connected git accounts are in plain text in `ferry.db`. Only the permissions of the directory protect them. Each person who can read the data directory, or its backups, can read each secret.
+</Callout>
+
+## What to do
+
+- Encrypt the backups.
+- Restrict the access to the machine.
+
+[The files of the data directory](/docs/architecture/security/data-files) lists each file and its <Term id="file-mode">mode</Term>.

@@ -1,0 +1,67 @@
+---
+title: "Networking, domains & TLS"
+description: One proxy receives the public traffic. Behind it, your services call each other on a private network.
+icon: Network
+---
+
+<Diagram
+  caption="The path of a request"
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'dns', at: [0, 1], icon: 'globe', label: 'DNS', note: 'name → address' },
+    { id: 'proxy', at: [1.25, 0], icon: 'route', label: 'Proxy', note: 'the public side' },
+    { id: 'shop', at: [2.5, 0], icon: 'box', label: 'shop', note: 'web service' },
+    { id: 'api', at: [2.5, 1], icon: 'box', label: 'api', note: 'private service' },
+    { id: 'db', at: [2.5, 2], icon: 'database', label: 'app-db', note: 'datastore' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'dns' },
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'shop' },
+    { from: 'shop', to: 'api', label: 'api:3000' },
+    { from: 'api', to: 'db', label: 'app-db:5432' },
+  ]}
+  groups={[{ label: 'Private network', around: ['shop', 'api', 'db'] }]}
+  steps={[
+    {
+      caption: 'The browser asks DNS for the address of shop.example.com.',
+      flow: ['browser>dns'],
+      tones: { dns: 'primary' },
+    },
+    {
+      caption: 'DNS gives the address of your server. The browser sends the request to the proxy.',
+      flow: ['browser>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'The proxy reads the hostname and sends the request to an instance of shop.',
+      flow: ['browser>proxy', 'proxy>shop'],
+      tones: { shop: 'success' },
+    },
+    {
+      caption: 'Behind the proxy, the services call each other by name. This traffic stays private.',
+      flow: ['shop>api', 'api>db'],
+      tones: { api: 'primary', db: 'primary' },
+    },
+  ]}
+/>
+
+Each Ferry server runs one <Term id="proxy" />. The proxy receives all the public traffic and sends each request to a <Term id="container" /> of the correct <Term id="service" />.
+
+Behind the proxy, all the containers of the server share a <Term id="private-network" />. There, they call each other by name.
+
+## See your domains
+
+```bash title="Terminal"
+ferry domains        # the domains of the server and their status
+ferry certificates   # each hostname and the state of its certificate
+```
+
+## In this section
+
+<Cards>
+  <Card title="Public URLs" href="/docs/concepts/networking/public-urls" description="Which services get a URL, and how Ferry makes it." />
+  <Card title="How the proxy routes" href="/docs/concepts/networking/routing" description="From the Host header to an instance, in six steps." />
+  <Card title="Private network" href="/docs/concepts/networking/private-network" description="Services call each other by name." />
+  <Card title="Automatic HTTPS" href="/docs/concepts/networking/https" description="Ferry gets a certificate for each hostname." />
+</Cards>

@@ -1,0 +1,44 @@
+---
+title: Plans of a datastore
+description: The plan of a datastore sets its memory limit only.
+---
+
+```yaml title="ferry.yaml"
+databases:
+  - name: app-db
+    plan: basic-256mb        # 256 MiB of memory
+
+services:
+  - type: redis
+    name: cache
+    plan: starter            # 256 MiB of memory
+```
+
+For a <Term id="datastore" />, the <Term id="render-plan" /> sets only the memory. The CPU limit comes from `cpuLimit` or from the server default.
+
+## Postgres
+
+For the entries of `databases`:
+
+| `plan` | Memory |
+|---|---|
+| `basic-<size>`, `pro-<size>`, `accelerated-<size>` | The size in the name |
+| `free`, `starter` (old plans) | 256 MiB |
+| `standard` (old plan) | 1 GiB |
+| `pro` (old plan) | 4 GiB |
+| `pro plus` (old plan) | 8 GiB |
+
+Examples of names with a size: `basic-256mb`, `basic-1gb`, `pro-4gb`, `accelerated-16gb`. The size needs a unit: `mb`, `gb` or `tb`. It must be between 16 MiB and 1 TiB.
+
+## Key Value
+
+For the entries with `type: redis` or `type: keyvalue`:
+
+| `plan` | Memory |
+|---|---|
+| `free`, `starter` | 256 MiB |
+| `standard` | 1 GiB |
+| `pro` | 5 GiB |
+| `pro plus` | 10 GiB |
+
+For the names, the same rules apply as for [the plans of a service](/docs/reference/blueprint/plans): Ferry ignores the case and the separator. A plan that Ferry does not know sets nothing and gives a warning.

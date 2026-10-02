@@ -1,0 +1,54 @@
+---
+title: Differences with Render
+description: Some features of Render work in a different way on Ferry, and some are not in Ferry.
+---
+
+<Diagram
+  nodes={[
+    { id: 'r1', at: [0, 0], label: 'Pre-deploy command' },
+    { id: 'r2', at: [0, 1], label: 'Plan: a machine' },
+    { id: 'r3', at: [0, 2], label: 'NODE_VERSION', note: 'a variable' },
+    { id: 'f1', at: [1.75, 0], icon: 'terminal', label: 'One-off job', note: 'ferry run', tone: 'primary' },
+    { id: 'f2', at: [1.75, 1], icon: 'gauge', label: 'Plan: limits', note: 'on your server', tone: 'primary' },
+    { id: 'f3', at: [1.75, 2], icon: 'file-code', label: 'Project files', note: 'package.json', tone: 'primary' },
+  ]}
+  edges={[
+    { from: 'r1', to: 'f1' },
+    { from: 'r2', to: 'f2' },
+    { from: 'r3', to: 'f3' },
+  ]}
+  groups={[
+    { label: 'On Render', around: ['r1', 'r2', 'r3'] },
+    { label: 'On Ferry', around: ['f1', 'f2', 'f3'] },
+  ]}
+/>
+
+| Subject | On Ferry |
+|---|---|
+| Language versions | They come from your project files, not from variables. See [Language guides](/docs/guides/language-guides). |
+| Pre-deploy commands | They do not exist. Run <Term id="migration">migrations</Term> with a <Term id="one-off-job" />: `ferry run NAME -- npm run migrate`. See [Deploy an app with Postgres](/docs/guides/postgres-app). |
+| Plans and regions | A plan is limits, not a machine. Regions do not apply: each service runs on your server. See [Resource limits](/docs/concepts/resource-limits). |
+| Key value stores | Ferry ignores `maxmemoryPolicy`. A full Redis refuses writes. |
+| The port | The same as Render: Ferry sets `PORT` (default `10000`) and routes to it. |
+| Static sites | <Term id="nginx" /> serves them with `try_files $uri $uri/ $uri.html` and your `404.html`. Ferry does not support `routes` (redirects and rewrites) and `headers`. |
+
+## Not in Ferry
+
+<Term id="pr-preview">Pull request previews</Term>, <Term id="autoscaling" />, private <Term id="registry" /> credentials, <Term id="secret-file">secret files</Term> and <Term id="ip-allow-list">IP allow lists</Term>.
+
+<Accordions>
+  <Accordion title="Where the language version comes from">
+    - Node: `engines.node` in `package.json`.
+    - Python: `.python-version` or `runtime.txt`.
+    - Go: the `go` line of `go.mod`.
+    - Ruby: `.ruby-version` or the `Gemfile`.
+
+    Ferry gives the variables `NODE_VERSION` and `PYTHON_VERSION` to your app like all other variables.
+  </Accordion>
+  <Accordion title="The limits of a plan">
+    The limits are a ceiling, not a reservation. Nothing makes sure that they fit the server. Ferry lowers a CPU limit that is above the number of CPUs of the server to that number. Choose a server that is large enough for what you run.
+  </Accordion>
+  <Accordion title="The memory of a key value store">
+    Ferry sets the <Term id="maxmemory" /> of Redis to 3/4 of the memory limit of the store. Give a cache enough memory with its `plan` or `memoryLimit`.
+  </Accordion>
+</Accordions>

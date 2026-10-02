@@ -1,0 +1,55 @@
+---
+title: Runtime logs
+description: The runtime log is what the containers of a service write while they run.
+---
+
+<Diagram
+  nodes={[
+    { id: 'a', at: [0, 0], icon: 'box', label: 'Instance', note: '0b4e81' },
+    { id: 'b', at: [0, 1], icon: 'box', label: 'Instance', note: '3f2a1c' },
+    { id: 'docker', at: [1.5, 0.5], icon: 'container', label: 'Docker', note: 'keeps the lines' },
+    { id: 'cli', at: [3, 0.5], icon: 'terminal', label: 'ferry logs api', note: 'in order of time' },
+  ]}
+  edges={[
+    { from: 'a', to: 'docker', flow: true },
+    { from: 'b', to: 'docker', flow: true },
+    { from: 'docker', to: 'cli', flow: true },
+  ]}
+/>
+
+Ferry reads the <Term id="runtime-log" /> from Docker. It puts the lines of all <Term id="instance">instances</Term> of the live deploy together, in the order of their <Term id="timestamp">timestamps</Term>.
+
+## Read the log
+
+```bash title="Terminal"
+ferry logs api                # everything the current containers have written
+ferry logs api -n 100         # the last 100 lines of each instance
+ferry logs api -f             # follow new lines
+```
+
+```text title="ferry logs echo -n 2" noCopy
+09:41:26 [0b4e81] 172.21.0.4 - - [27/Sep/2026 07:41:26] "GET / HTTP/1.1" 200 -
+09:41:31 [0b4e81] 172.21.0.4 - - [27/Sep/2026 07:41:31] "GET / HTTP/1.1" 200 -
+```
+
+The id in brackets is the instance. It is the end of the name of the container.
+
+[`ferry logs`](/docs/reference/cli#ferry-logs) lists all the options.
+
+<Callout type="warning" title="Ferry does not keep runtime logs">
+When a deploy replaces the containers, their logs go with them. The same occurs when Ferry removes a crashed container. If you must keep logs, make your app send them to an external log service.
+</Callout>
+
+<Accordions>
+  <Accordion title="What -f follows">
+    `-f` continues through new deploys, scale changes and the replacement of a crashed instance. The CLI adds the new containers when they start. If the stream stops, the CLI connects again.
+  </Accordion>
+  <Accordion title="If nothing runs">
+    - Before a deploy is live, the CLI shows the logs of the containers that exist.
+    - If no container runs, the CLI tells you why: no deploy, a suspended service, a deploy in progress or a failed last deploy. It also tells you where to look.
+    - A cron job has no runtime log. Each run has its own [job log](/docs/concepts/logs/job-logs).
+  </Accordion>
+  <Accordion title="The oldest lines">
+    Docker rotates the log of each container: 10 MiB × 3 files by default. Thus an app that writes many lines loses its oldest lines first. See [Log rotation](/docs/concepts/resource-limits/log-rotation).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,82 @@
+---
+title: When a container crashes
+description: Docker starts a crashed container again, and the proxy uses the other instances during that time.
+---
+
+<Diagram
+  caption="One crash and its repair"
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'a', at: [2.5, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [2.5, 1], icon: 'box', label: 'Instance 2' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'a' },
+    { from: 'proxy', to: 'b' },
+  ]}
+  steps={[
+    {
+      caption: 'Two instances answer the requests.',
+      flow: ['browser>proxy', 'proxy>a', 'proxy>b'],
+    },
+    {
+      caption: 'The process of instance 2 crashes.',
+      cut: ['proxy>b'],
+      flow: ['browser>proxy', 'proxy>a'],
+      tones: { b: 'danger' },
+      notes: { b: 'crashed' },
+    },
+    {
+      caption: 'The proxy sends all the traffic to instance 1.',
+      cut: ['proxy>b'],
+      flow: ['browser>proxy', 'proxy>a'],
+      tones: { b: 'danger', a: 'success' },
+      notes: { b: 'crashed', a: 'all the traffic' },
+    },
+    {
+      caption: 'Docker starts the container again immediately. It can get a new port.',
+      cut: ['proxy>b'],
+      flow: ['browser>proxy', 'proxy>a'],
+      tones: { b: 'warning' },
+      notes: { b: 'starts again' },
+    },
+    {
+      caption: 'Instance 2 accepts connections. The route watcher gives it traffic again.',
+      flow: ['browser>proxy', 'proxy>a', 'proxy>b'],
+      tones: { b: 'success' },
+      notes: { b: 'back, new port' },
+    },
+  ]}
+/>
+
+The containers of a service have the <Term id="restart-policy" /> `unless-stopped` of Docker. Thus Docker repairs most crashes, and the <Term id="reconciler" /> repairs the others.
+
+## Three cases
+
+| What occurs | The repair | Time |
+|---|---|---|
+| The process exits or crashes | Docker restarts the container. | Immediately |
+| The container disappears: you removed it, or its restart failed | The next pass of the reconciler starts a new instance. | About 10 seconds |
+| The container has no memory left | The kernel stops it at its memory limit. Docker restarts it as for each crash. | Immediately |
+
+For the last case, see [Out-of-memory kills](/docs/concepts/resource-limits/oom-kills).
+
+## See it
+
+```bash title="Terminal"
+ferry status api
+```
+
+The command shows the number of restarts of each <Term id="instance" />. The service is <Term id="degraded" /> while it has fewer instances than you asked for.
+
+<Callout type="warning" title="A service with one instance">
+During the repair, requests get the answer `503` until the instance is back.
+</Callout>
+
+<Accordions>
+  <Accordion title="After an OOM kill">
+    `ferry status` shows `OOM killed` on the instance while it restarts. `ferryd` writes each kill in its server log.
+  </Accordion>
+</Accordions>

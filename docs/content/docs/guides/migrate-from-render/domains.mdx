@@ -1,0 +1,61 @@
+---
+title: Point your domains to Ferry
+description: Change the DNS records of your custom domains. They must point to the Ferry server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dns', at: [0, 0.5], icon: 'globe', label: 'DNS record', note: 'shop.example.com' },
+    { id: 'render', at: [1.75, 0], icon: 'cloud', label: 'Render' },
+    { id: 'ferry', at: [1.75, 1], icon: 'server', label: 'Ferry server' },
+  ]}
+  edges={[
+    { from: 'dns', to: 'render' },
+    { from: 'dns', to: 'ferry' },
+  ]}
+  steps={[
+    {
+      caption: 'The DNS record of your custom domain points to Render.',
+      flow: ['dns>render'],
+      cut: ['dns>ferry'],
+    },
+    {
+      caption: 'You change the record. It points to the Ferry server.',
+      flow: ['dns>ferry'],
+      cut: ['dns>render'],
+      tones: { dns: 'primary', render: 'muted' },
+    },
+    {
+      caption: 'The name resolves. Ferry asks for a certificate for the domain.',
+      flow: ['dns>ferry'],
+      cut: ['dns>render'],
+      tones: { ferry: 'success', render: 'muted' },
+      notes: { ferry: 'HTTPS' },
+    },
+  ]}
+/>
+
+The blueprint lists your <Term id="custom-domain">custom domains</Term> under `domains:`.
+
+<Steps>
+<Step>
+
+### Add the DNS records
+
+At your <Term id="dns-provider" />, add the <Term id="dns-record">DNS records</Term> of each custom domain. They must point to the Ferry server. See [Create the DNS record](/docs/guides/custom-domains-https/dns-record).
+
+</Step>
+<Step>
+
+### Wait for the certificate
+
+With automatic <Term id="https" /> on, Ferry asks for a <Term id="certificate" /> for each domain when the domain resolves.
+
+```bash title="Terminal"
+ferry certificates
+```
+
+</Step>
+</Steps>
+
+See [Custom domains & HTTPS](/docs/guides/custom-domains-https) and [Networking](/docs/concepts/networking).

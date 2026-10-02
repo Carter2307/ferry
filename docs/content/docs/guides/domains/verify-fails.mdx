@@ -1,0 +1,59 @@
+---
+title: If the verification fails
+description: When a check fails, Ferry tells you what it found. Each message has one repair.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dns', at: [1.5, 0], icon: 'globe', label: 'DNS' },
+    { id: 'other', at: [3, 0], icon: 'server', label: 'Another server' },
+    { id: 'ferryd', at: [0, 1], icon: 'ship', label: 'ferryd' },
+    { id: 'proxy', at: [3, 1], icon: 'route', label: 'Proxy', note: 'port 80' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'dns' },
+    { from: 'dns', to: 'other' },
+    { from: 'ferryd', to: 'proxy' },
+  ]}
+  steps={[
+    {
+      caption: 'No record answers for the name. Create the record.',
+      hide: ['other'],
+      flow: ['ferryd>dns'],
+      cut: ['ferryd>proxy'],
+      tones: { dns: 'danger' },
+      notes: { dns: 'no record' },
+    },
+    {
+      caption: 'The record points to another machine. Correct the address.',
+      flow: ['ferryd>dns', 'dns>other'],
+      cut: ['ferryd>proxy'],
+      tones: { other: 'danger' },
+      notes: { other: 'not this server' },
+    },
+    {
+      caption: 'The record is correct, but the request does not come back. Open port 80.',
+      hide: ['other'],
+      cut: ['ferryd>proxy'],
+      tones: { dns: 'success', proxy: 'warning' },
+      notes: { proxy: 'port 80 closed' },
+    },
+  ]}
+/>
+
+Run `ferry domains` to read the result of the last check.
+
+| What Ferry found | What to do |
+|---|---|
+| No DNS record answers for `*.example.com` | Create the record. A new record can take some minutes to show. |
+| The name <Term id="resolve">resolves</Term> to another address | Point the record to the address that Ferry shows. |
+| The name resolves to many addresses, and only one is this server | Remove the other records. Visitors that go there do not reach your services. |
+| Another server answers | The record points to a machine that is not this Ferry server. Or another program listens on port 80. |
+| This server could not reach itself | This is not a failure. See the note below. |
+| The name resolves to a <Term id="private-address" /> | The name works from the server and its network, not from the internet. |
+
+## If the server cannot reach itself
+
+Some networks do not let a machine connect to its own <Term id="public-address" />. Ferry shows a warning, and the domain can become active.
+
+If visitors cannot reach your services, open port 80 in the <Term id="firewall" />.

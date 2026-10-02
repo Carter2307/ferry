@@ -1,0 +1,43 @@
+---
+title: If a datastore stops
+description: Ferry starts a stopped datastore again by itself. The volume keeps the data.
+---
+
+<Diagram
+  nodes={[
+    { id: 'rec', at: [0, 0], icon: 'restart', label: 'Reconciler', note: 'each 10 seconds' },
+    { id: 'ds', at: [1.5, 0], icon: 'database', label: 'Container', note: 'app-db' },
+    { id: 'vol', at: [3, 0], icon: 'disk', label: 'Volume', note: 'the data' },
+  ]}
+  edges={[
+    { from: 'rec', to: 'ds', label: 'looks' },
+    { from: 'ds', to: 'vol', both: true },
+  ]}
+  steps={[
+    { caption: 'The reconciler looks at each datastore one time each 10 seconds.', flow: ['rec>ds'] },
+    { caption: 'The container of an available datastore stops or disappears.', cut: ['ds>vol'], tones: { ds: 'danger' }, notes: { ds: 'stopped' } },
+    { caption: 'The reconciler starts it, or makes it again with its volume and its current limits.', flow: ['rec>ds'], tones: { ds: 'primary' }, notes: { ds: 'starts' } },
+    { caption: 'The datastore answers again, with the same data.', flow: ['ds>vol'], tones: { ds: 'success', vol: 'success' } },
+  ]}
+/>
+
+The <Term id="reconciler" /> repairs a <Term id="datastore" /> with no action from you.
+
+## What Ferry repairs
+
+| Case | What Ferry does |
+|---|---|
+| The <Term id="container" /> of an `available` datastore stopped or disappeared. | Ferry starts it, or makes it again. |
+| The creation of the datastore failed. | Ferry tries again after 1 minute. Then the delay grows, up to 30 minutes. |
+
+## If the datastore has no more memory
+
+`ferryd` writes this line in its log:
+
+```text title="Log of ferryd" noCopy
+datastore 'app-db' ran out of memory (limit 1 GiB) — raise the datastore's memory limit
+```
+
+If the datastore stops, Docker starts it again. To stop the cause, [raise the memory limit](/docs/concepts/datastores/limits).
+
+[Self-healing](/docs/concepts/self-healing) explains the reconciler.

@@ -1,0 +1,77 @@
+---
+title: Logs & events
+description: Ferry keeps the lines that your builds, deploys, instances and jobs write. Events tell what changed.
+icon: ScrollText
+---
+
+<Diagram
+  caption="Where each log comes from"
+  nodes={[
+    { id: 'build', at: [0, 0], icon: 'hammer', label: 'Build', note: 'output of Docker' },
+    { id: 'deploy', at: [0, 1], icon: 'ship', label: 'Deploy', note: 'steps of Ferry' },
+    { id: 'inst', at: [0, 2], icon: 'box', label: 'Instances', note: 'while they run' },
+    { id: 'job', at: [0, 3], icon: 'terminal', label: 'Job run' },
+    { id: 'change', at: [0, 4.25], icon: 'server', label: 'Server', note: 'each change' },
+    { id: 'dlog', at: [1.75, 0.5], icon: 'logs', label: 'Deploy log' },
+    { id: 'rlog', at: [1.75, 2], icon: 'logs', label: 'Runtime log' },
+    { id: 'jlog', at: [1.75, 3], icon: 'logs', label: 'Job log' },
+    { id: 'feed', at: [1.75, 4.25], icon: 'activity', label: 'Change feed' },
+  ]}
+  edges={[
+    { from: 'build', to: 'dlog' },
+    { from: 'deploy', to: 'dlog' },
+    { from: 'inst', to: 'rlog' },
+    { from: 'job', to: 'jlog' },
+    { from: 'change', to: 'feed' },
+  ]}
+  groups={[
+    { label: 'Logs: lines of text', around: ['dlog', 'rlog', 'jlog'] },
+    { label: 'Events: what changed', around: ['feed'] },
+  ]}
+  steps={[
+    {
+      caption: 'A build writes its output into the deploy log.',
+      flow: ['build>dlog'],
+      tones: { dlog: 'primary' },
+    },
+    {
+      caption: 'Ferry adds each step of the deploy to the same log.',
+      flow: ['deploy>dlog'],
+      tones: { dlog: 'primary' },
+    },
+    {
+      caption: 'Your instances write lines while they run. This is the runtime log.',
+      flow: ['inst>rlog'],
+      tones: { rlog: 'primary' },
+    },
+    {
+      caption: 'Each job run has its own job log.',
+      flow: ['job>jlog'],
+      tones: { jlog: 'primary' },
+    },
+    {
+      caption: 'Events are a different stream. They tell what changed on the server.',
+      flow: ['change>feed'],
+      tones: { feed: 'primary' },
+    },
+  ]}
+/>
+
+A <Term id="log" /> is the text that a program writes while it runs. Ferry keeps three logs: the deploy log, the runtime log and the job log.
+
+You can read each log when it is complete, or follow it live.
+
+## Follow the log of a service
+
+```bash title="Terminal"
+ferry logs api -f
+```
+
+## In this section
+
+<Cards>
+  <Card title="The three logs" href="/docs/concepts/logs/kinds" description="What each log has, and how long Ferry keeps it." />
+  <Card title="Runtime logs" href="/docs/concepts/logs/runtime-logs" description="What your app writes while it runs." />
+  <Card title="Deploy logs" href="/docs/concepts/logs/deploy-logs" description="The build output and the steps of one deploy." />
+  <Card title="The change feed" href="/docs/concepts/logs/events" description="One stream that tells each change on the server." />
+</Cards>

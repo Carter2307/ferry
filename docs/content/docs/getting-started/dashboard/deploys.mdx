@@ -1,0 +1,75 @@
+---
+title: "Service: Deploys"
+description: The Deploys page is the history of each build and each release of one service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'd3', at: [0, 0], icon: 'deploy', label: 'Deploy 3', note: 'in progress' },
+    { id: 'd2', at: [0, 1], icon: 'deploy', label: 'Deploy 2', note: 'live', tone: 'success' },
+    { id: 'd1', at: [0, 2], icon: 'deploy', label: 'Deploy 1', note: 'deactivated' },
+    { id: 'page', at: [1.6, 1], icon: 'file', label: 'Deploy page', note: 'the details' },
+    { id: 'log', at: [3.2, 0.5], label: 'Build & deploy log' },
+    { id: 'why', at: [3.2, 1.5], label: 'Why it failed' },
+  ]}
+  edges={[
+    { from: 'd2', to: 'page' },
+    { from: 'page', to: 'log' },
+    { from: 'page', to: 'why' },
+  ]}
+  groups={[{ label: 'Newest first', around: ['d3', 'd2', 'd1'] }]}
+  steps={[
+    {
+      caption: 'The list shows each deploy of the service. The newest deploy is at the top.',
+      hide: ['log', 'why'],
+    },
+    {
+      caption: 'The row menu of a deploy in progress has Cancel deploy.',
+      hide: ['log', 'why'],
+      tones: { d3: 'warning' },
+      notes: { d3: 'Cancel deploy' },
+    },
+    {
+      caption: 'The row menu of an earlier deploy that went live has Roll back to this deploy.',
+      hide: ['log', 'why'],
+      tones: { d1: 'primary' },
+      notes: { d1: 'Roll back' },
+    },
+    {
+      caption: 'Open a row. The page of the deploy shows its log, live.',
+      hide: ['why'],
+      flow: ['d2>page', 'page>log'],
+      tones: { page: 'primary', log: 'primary' },
+    },
+    {
+      caption: 'The page of a failed deploy also has a box with the error.',
+      flow: ['page>why'],
+      tones: { why: 'danger' },
+    },
+  ]}
+/>
+
+## The list
+
+| Column | Content |
+|---|---|
+| Status | The [status](/docs/concepts/deploys/statuses) of the deploy |
+| Deploy id and <Term id="trigger" /> | Upload, manual deploy, rollback, restart, environment change… |
+| Source | A commit, an uploaded archive, an image, or "Reused image from dep-…" |
+| Image, duration, age | |
+
+## The row menu
+
+| Item | On which deploy |
+|---|---|
+| Open the deploy | Each deploy |
+| **Roll back to this deploy** | An earlier deploy that went live. See [Roll back](/docs/concepts/deploys/rollbacks). |
+| **Cancel deploy** | A deploy in progress. See [Cancel a deploy](/docs/concepts/deploys/cancel). |
+
+## The page of a deploy
+
+The page shows the trigger, the source, the commit, the image, the timestamps, the duration and the port.
+
+If the deploy failed, the **Why it failed** box shows the error.
+
+The **Build & deploy log** is the <Term id="deploy-log" />. It shows new lines until the deploy stops. See [Deploys](/docs/concepts/deploys).

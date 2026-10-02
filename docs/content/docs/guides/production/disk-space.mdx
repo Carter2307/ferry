@@ -1,0 +1,66 @@
+---
+title: The free-disk check
+description: Before a build, Ferry makes sure that the disk has 1 GiB free, or the deploy fails early.
+---
+
+<Diagram
+  nodes={[
+    { id: 'deploy', at: [0, 0.5], icon: 'deploy', label: 'New deploy' },
+    { id: 'check', at: [1.25, 0.5], icon: 'disk', label: 'Free disk?', note: 'at least 1 GiB' },
+    { id: 'build', at: [2.5, 0], icon: 'hammer', label: 'Build' },
+    { id: 'fail', at: [2.5, 1], icon: 'error', label: 'build_failed' },
+  ]}
+  edges={[
+    { from: 'deploy', to: 'check' },
+    { from: 'check', to: 'build' },
+    { from: 'check', to: 'fail' },
+  ]}
+  steps={[
+    {
+      caption: 'Before a build or a pull, Ferry measures the free disk space.',
+      cut: ['check>build', 'check>fail'],
+      flow: ['deploy>check'],
+      tones: { check: 'primary' },
+    },
+    {
+      caption: 'The disk has 1 GiB free or more. The deploy continues.',
+      cut: ['check>fail'],
+      flow: ['check>build'],
+      tones: { build: 'success' },
+    },
+    {
+      caption: 'The disk has less than 1 GiB free. The deploy fails before it fills the disk.',
+      cut: ['check>build'],
+      flow: ['check>fail'],
+      tones: { fail: 'danger' },
+    },
+  ]}
+/>
+
+The limit is `--min-free-disk` (`FERRY_MIN_FREE_DISK`, default `1G`). Below it, a deploy fails with `build_failed`, and a new <Term id="datastore" /> gets the status `failed`.
+
+```text title="Deploy log (excerpt)" noCopy
+10:42:07 ==> Build failed: not enough free disk space on /var/lib/ferry: 812 MiB free, Ferry needs at least 1 GiB (free some space, e.g. remove unused Docker images with `docker image prune`, or change the threshold with `ferryd --min-free-disk`, 0 = off)
+```
+
+## When Ferry checks
+
+| Action | Check |
+|---|---|
+| A deploy builds or pulls an image (git, upload and image deploys) | Yes, before |
+| Ferry creates a new datastore, or pulls the image of a datastore | Yes, before |
+| A restart or a rollback | Never |
+| A new container for a datastore that exists, when its image is still there | Never |
+
+What runs continues to run. The <Term id="reconciler" /> can still repair it on a full disk.
+
+Ferry measures the filesystem of the <Term id="data-directory" />. If Docker is on this machine, Ferry also measures the <Term id="docker-root" />.
+
+<Accordions>
+  <Accordion title="What the check does not do">
+    - The check runs before a build, not during it.
+    - Ferry sets no disk quotas. Volumes (datastores, service disks), the filesystems of the containers, images and the <Term id="build-cache" /> can still fill the disk.
+    - Ferry deletes its own old images above `--keep-images` (default 5). Remove the rest yourself from time to time, with `docker image prune` and `docker builder prune`.
+    - If builds need more room than 1 GiB, raise `--min-free-disk`. `0` turns the check off.
+  </Accordion>
+</Accordions>

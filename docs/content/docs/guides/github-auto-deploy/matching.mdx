@@ -1,0 +1,74 @@
+---
+title: Which services a push deploys
+description: A push deploys each service that tracks the repository and the branch, with auto-deploy on.
+---
+
+<Diagram
+  nodes={[
+    { id: 'push', at: [0, 1], icon: 'branch', label: 'Push to main', note: 'github.com/you/api' },
+    { id: 'api', at: [2, 0], icon: 'box', label: 'api', note: 'branch main' },
+    { id: 'worker', at: [2, 1], icon: 'box', label: 'worker', note: 'branch main' },
+    { id: 'beta', at: [2, 2], icon: 'box', label: 'beta', note: 'branch develop' },
+  ]}
+  edges={[
+    { from: 'push', to: 'api' },
+    { from: 'push', to: 'worker' },
+    { from: 'push', to: 'beta' },
+  ]}
+  steps={[
+    {
+      caption: 'A push to main comes in. Three services use this repository.',
+    },
+    {
+      caption: 'Ferry deploys each service that tracks main and has auto-deploy on.',
+      flow: ['push>api', 'push>worker'],
+      cut: ['push>beta'],
+      tones: { api: 'success', worker: 'success', beta: 'muted' },
+      notes: { api: 'new deploy', worker: 'new deploy' },
+    },
+    {
+      caption: 'Ferry skips a service on a different branch, a service with auto-deploy off and a suspended service.',
+      cut: ['push>api', 'push>worker', 'push>beta'],
+      tones: { beta: 'muted' },
+      notes: { beta: 'no deploy' },
+    },
+  ]}
+/>
+
+## The four conditions
+
+A push deploys each service that obeys all of these:
+
+1. Its git <Term id="repository" /> has a URL that matches the repository of the push.
+2. It tracks the <Term id="branch" /> of the push (`refs/heads/<branch>`).
+3. <Term id="auto-deploy">Auto-deploy</Term> is on.
+4. You did not suspend it.
+
+One push can match more than one service, for example the services of a <Term id="monorepo" /> with different <Term id="root-directory">root directories</Term>. The answer of Ferry lists the deploys in the queue.
+
+## Turn auto-deploy off or on
+
+```bash title="Terminal"
+ferry update api --no-auto-deploy   # off
+ferry update api --auto-deploy      # on again
+```
+
+`--no-auto-deploy` also works on `ferry create`.
+
+## What Ferry ignores
+
+- A push of a tag or of a ref that is not a branch, and a push that deletes a branch.
+- A delivery that Ferry processed before: the same body, or the same `X-GitHub-Delivery` id. Ferry remembers the last 256 of each.
+- Each event that is not `push` or `ping`. Ferry answers `200` with `{"ignored":true}`.
+
+If you send an old event again from GitHub, Ferry does not deploy it again.
+
+<Accordions>
+  <Accordion title="How Ferry compares the URLs">
+    Ferry compares normalized URLs: the host, the owner and the name, in lower case, with no scheme, credentials, port or `.git`. These three URLs match:
+
+    - `https://github.com/you/api`
+    - `git@github.com:you/api.git`
+    - `https://user:token@github.com/You/API`
+  </Accordion>
+</Accordions>

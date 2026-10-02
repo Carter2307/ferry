@@ -1,0 +1,36 @@
+---
+title: How the limits add up
+description: A limit applies to each container, it is a maximum, and some programs have no limit.
+---
+
+<Diagram
+  caption="The example server: seven containers use 3.5 GiB at most"
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'boxes', label: '5 web services', note: '5 × 512 MiB' },
+    { id: 'pg', at: [1.25, 0], icon: 'database', label: 'Postgres', note: '512 MiB' },
+    { id: 'redis', at: [2.5, 0], icon: 'database', label: 'Redis', note: '512 MiB' },
+    { id: 'free', at: [1.25, 1], icon: 'memory', label: 'About 4 GiB', note: 'no limit here', tone: 'warning' },
+  ]}
+  groups={[{ label: 'Server: 4 CPUs, 7.8 GiB', from: [0, 0], to: [2.5, 1] }]}
+/>
+
+## Three rules
+
+- **For each container, not for each service.** A <Term id="service" /> with three <Term id="instance">instances</Term> can use three times its limit. Each <Term id="job" /> in progress adds one more, because a job gets the limits of its service. Each <Term id="datastore" /> has its own limits.
+- **A maximum, not a reservation.** Ferry does not check that the sum of the limits fits the host. This is not necessary, because most apps stay far below their limit.
+- **Some programs have no limit.** These are `ferryd`, `dockerd`, the system and the builds. Leave room for them.
+
+## The example
+
+The server of this guide has 4 CPUs and 7.8 GiB. Five web services with one instance each, a Postgres and a Redis are seven containers.
+
+With the defaults, they use 3.5 GiB of memory at most. Each container has one CPU at most. About 4 GiB stay free for builds, `ferryd`, Docker and the system.
+
+<Accordions>
+  <Accordion title="If all containers use their limit at the same time">
+    The host has no free memory. Then the OOM killer of the <Term id="kernel" /> chooses a process to stop among all the processes of the host. The line `OOMScoreAdjust=-900` of the unit makes it choose containers before `ferryd`. See [Protect ferryd](/docs/guides/production/oom-score).
+  </Accordion>
+  <Accordion title="How much the builds can use">
+    The server runs `--build-concurrency` builds at a time (default 2). They can use all the memory and all the CPU of the host.
+  </Accordion>
+</Accordions>

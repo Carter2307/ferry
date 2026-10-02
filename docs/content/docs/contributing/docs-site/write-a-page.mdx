@@ -1,0 +1,42 @@
+---
+title: Write a page
+description: Each page is short and starts with a picture. The file docs/AUTHORING.md is the contract.
+---
+
+<Flow
+  steps={[
+    { icon: 'book', title: 'Read the contract', text: 'docs/AUTHORING.md has the rules for each page.' },
+    { icon: 'file', title: 'Create the file', text: 'A page is an MDX file in content/docs/.' },
+    { icon: 'eye', title: 'Picture first', text: 'A figure comes before the text.' },
+    { icon: 'pencil', title: 'Few words', text: 'One idea, in short sentences.' },
+    { icon: 'gauge', title: 'Measure', text: 'The checker tells you each fault.', tone: 'success' },
+  ]}
+/>
+
+## The contract
+
+Read `docs/AUTHORING.md` first. It is the contract for each page, and the only place for the rules of the text. This page gives the short version.
+
+The model is `content/docs/concepts/deploys/`.
+
+## The short version
+
+- One idea per page.
+- A figure before the text.
+- 220 words of sentences at most.
+- Short sentences, active voice, one name for one thing.
+
+The sentence rules come from ASD-STE100, <Term id="ste" />.
+
+## Measure the page
+
+```bash title="In docs/"
+npm run check-content -- -v <path>
+```
+
+At least 80% of the sentences of a page must pass.
+
+## Write what the code does
+
+- Use examples that run, with the real defaults: `http://127.0.0.1:7878` for the API and `http://<name>.localhost:8080` for apps.
+- Document only what the code does. Check commands and flags against `--help`. Check behavior against the source.

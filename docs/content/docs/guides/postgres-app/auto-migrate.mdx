@@ -1,0 +1,53 @@
+---
+title: Run migrations at each deploy
+description: Ferry has no pre-deploy command. There are two ways to run a migration at each deploy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'deploy', at: [0, 0.5], icon: 'deploy', label: 'Deploy' },
+    { id: 'job', at: [1.5, 0], icon: 'terminal', label: 'Job', note: 'npm run migrate' },
+    { id: 'instance', at: [1.5, 1], icon: 'box', label: 'Each instance', note: 'migrate then start' },
+    { id: 'db', at: [3, 0.5], icon: 'database', label: 'notes-db' },
+  ]}
+  edges={[
+    { from: 'deploy', to: 'job' },
+    { from: 'job', to: 'db' },
+    { from: 'deploy', to: 'instance' },
+    { from: 'instance', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'Way 1: a job runs the migration after the deploy is live.',
+      hide: ['instance'],
+      flow: ['deploy>job', 'job>db'],
+      tones: { job: 'primary' },
+    },
+    {
+      caption: 'Way 2: each instance runs the migration when it starts.',
+      hide: ['job'],
+      flow: ['deploy>instance', 'instance>db'],
+      tones: { instance: 'primary' },
+    },
+  ]}
+/>
+
+## Way 1: a job after each deploy
+
+```bash title="Terminal"
+ferry up notes --follow && ferry run notes --follow -- npm run migrate
+```
+
+For a service that deploys from git, use `ferry deploy notes --follow` as the first command.
+
+With `--follow`, the first command fails if the deploy fails. Thus the <Term id="job" /> runs only on the <Term id="image" /> that is now live.
+
+## Way 2: a migration when the app starts
+
+```bash title="Terminal"
+ferry update notes --start-cmd 'npm run migrate && npm start'
+```
+
+Each <Term id="instance" /> runs the <Term id="migration" /> when it starts. Thus the migration must be safe to run more than one time, and at the same time.
+
+Use `CREATE TABLE IF NOT EXISTS`, or a migration tool that takes a lock.

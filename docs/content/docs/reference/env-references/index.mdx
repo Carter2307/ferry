@@ -1,0 +1,75 @@
+---
+title: "Env var references"
+description: A reference points a variable at a datastore or a service. Ferry puts the real value there at start.
+icon: Variable
+---
+
+<Diagram
+  nodes={[
+    { id: 'saved', at: [0, 0], icon: 'save', label: 'Saved value', note: '${{…}}' },
+    { id: 'ferry', at: [1.5, 0], icon: 'ship', label: 'Ferry' },
+    { id: 'box', at: [3, 0], icon: 'box', label: 'Container' },
+    { id: 'db', at: [1.5, 1], icon: 'database', label: 'app-db', note: 'datastore' },
+  ]}
+  edges={[
+    { from: 'saved', to: 'ferry' },
+    { from: 'db', to: 'ferry' },
+    { from: 'ferry', to: 'box' },
+  ]}
+  steps={[
+    {
+      caption: 'You save a reference as the value of DATABASE_URL. Ferry keeps it as you wrote it.',
+      hide: ['box'],
+      tones: { saved: 'primary' },
+    },
+    {
+      caption: 'A deploy starts a container. Ferry reads the address and the credentials of app-db.',
+      flow: ['db>ferry'],
+      tones: { db: 'primary', ferry: 'primary' },
+    },
+    {
+      caption: 'Ferry replaces the reference with the real value.',
+      flow: ['saved>ferry', 'ferry>box'],
+      tones: { box: 'success' },
+      notes: { box: 'postgresql://…' },
+    },
+    {
+      caption: 'The datastore changes later. The container keeps the old value.',
+      cut: ['db>ferry', 'ferry>box'],
+      tones: { db: 'warning' },
+      notes: { db: 'changed', box: 'old value' },
+    },
+    {
+      caption: 'A restart resolves the reference again.',
+      flow: ['db>ferry', 'ferry>box'],
+      tones: { box: 'success' },
+      notes: { db: 'changed', box: 'new value' },
+    },
+  ]}
+/>
+
+The value of an <Term id="env-var" /> can be a <Term id="reference" /> to a <Term id="datastore" /> or to a different <Term id="service" />. You do not copy an address or a password.
+
+Ferry saves the reference as you wrote it. When Ferry starts containers, it replaces the reference with the real value. Thus the value always agrees with its target.
+
+## Set a reference
+
+```bash title="Terminal"
+ferry db create app-db --kind postgres
+ferry env set api 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+```
+
+The container of `api` then gets `DATABASE_URL=postgresql://app_db:<password>@app-db:5432/app_db`.
+
+<Callout type="warning" title="Use single quotes">
+Always put a value with a reference between single quotes. If not, your <Term id="shell" /> tries to expand `$`.
+</Callout>
+
+## In this section
+
+<Cards>
+  <Card title="Syntax" href="/docs/reference/env-references/syntax" description="The three parts of a reference." />
+  <Card title="Datastore properties" href="/docs/reference/env-references/datastore" description="The URL, the host, the port, the user and the password." />
+  <Card title="Service properties" href="/docs/reference/env-references/service" description="The host, the port and the URLs of a service." />
+  <Card title="Error messages" href="/docs/reference/env-references/errors" description="Each message and its cause." />
+</Cards>

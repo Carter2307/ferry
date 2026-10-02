@@ -1,0 +1,61 @@
+---
+title: WebSockets, SSE and HTTP/2
+description: The proxy passes WebSockets and streamed answers. It always uses HTTP/1.1 with your app.
+---
+
+<Diagram
+  nodes={[
+    { id: 'client', at: [0, 0], icon: 'browser', label: 'Client' },
+    { id: 'proxy', at: [1.5, 0], icon: 'route', label: 'Proxy' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'Your app' },
+  ]}
+  edges={[
+    { from: 'client', to: 'proxy', label: 'HTTP/2 or 1.1' },
+    { from: 'proxy', to: 'app', label: 'HTTP/1.1' },
+    { id: 'ws1', from: 'client', to: 'proxy', label: 'WebSocket', both: true },
+    { id: 'ws2', from: 'proxy', to: 'app', label: 'tunnel', both: true },
+    { id: 'back1', from: 'app', to: 'proxy', label: 'stream' },
+    { id: 'back2', from: 'proxy', to: 'client', label: 'stream' },
+  ]}
+  steps={[
+    {
+      caption: 'A client can use HTTP/2 with the proxy. The proxy always uses HTTP/1.1 with your app.',
+      cut: ['ws1', 'ws2', 'back1', 'back2'],
+      flow: ['client>proxy', 'proxy>app'],
+    },
+    {
+      caption: 'A WebSocket goes through the proxy as a tunnel to your app.',
+      cut: ['client>proxy', 'proxy>app', 'back1', 'back2'],
+      flow: ['ws1', 'ws2'],
+      tones: { app: 'success' },
+    },
+    {
+      caption: 'The proxy passes Server-Sent Events and streamed answers while your app makes them.',
+      cut: ['client>proxy', 'proxy>app', 'ws1', 'ws2'],
+      flow: ['back1', 'back2'],
+      tones: { client: 'success' },
+    },
+    {
+      caption: 'gRPC needs HTTP/2 from end to end. It does not work through the public proxy.',
+      cut: ['ws1', 'ws2', 'back1', 'back2'],
+      tones: { app: 'danger' },
+      notes: { app: 'no gRPC' },
+    },
+  ]}
+/>
+
+## What goes through the proxy
+
+| Traffic | Through the proxy |
+|---|---|
+| <Term id="websocket">WebSockets</Term> and other HTTP/1.1 upgrades | Yes. The proxy makes a tunnel to your app. |
+| `h2c` upgrades | No. The proxy sends those requests as plain HTTP/1.1. |
+| <Term id="sse" /> and streamed answers | Yes. The timeouts of the proxy never cut an answer in progress. |
+| <Term id="http2" /> from clients | Yes: with <Term id="tls" />, and in cleartext with prior knowledge. |
+| <Term id="grpc" /> and other protocols that need HTTP/2 end to end | No. |
+
+## Use gRPC
+
+The <Term id="proxy" /> always uses HTTP/1.1 with your app. Thus gRPC does not work through the public proxy.
+
+Call a gRPC service on the [private network](/docs/concepts/networking/private-network).

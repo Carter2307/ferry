@@ -1,0 +1,52 @@
+---
+title: Exit codes and errors
+description: Each ferry command stops with an exit code. An error goes to stderr with its cause.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cmd', at: [0, 1.5], icon: 'terminal', label: 'A command', note: 'stops' },
+    { id: 'c0', at: [1.75, 0], icon: 'ok', label: '0', note: 'success', tone: 'success' },
+    { id: 'c1', at: [1.75, 1], icon: 'error', label: '1', note: 'failure', tone: 'danger' },
+    { id: 'c2', at: [1.75, 2], icon: 'alert', label: '2', note: 'usage error', tone: 'warning' },
+    { id: 'c130', at: [1.75, 3], icon: 'stop', label: '130', note: 'Ctrl+C', tone: 'muted' },
+  ]}
+  edges={[
+    { from: 'cmd', to: 'c0', flow: true },
+    { from: 'cmd', to: 'c1', flow: true },
+    { from: 'cmd', to: 'c2', flow: true },
+    { from: 'cmd', to: 'c130', flow: true },
+  ]}
+/>
+
+## The exit codes
+
+| <Term id="exit-code">Code</Term> | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Failure: an API error, a failed or canceled deploy or job (with `--follow`), a refused confirmation |
+| `2` | Usage error: an unknown command, an argument that is not there, a flag that is not valid |
+| `130` | You stopped the command with <kbd>Ctrl</kbd>+<kbd>C</kbd> |
+
+## What an error looks like
+
+`ferry` prints each error on <Term id="stderr" />. The error code of the API is in parentheses.
+
+```text title="Error" noCopy
+error: service 'nope' not found (not_found)
+```
+
+## Two errors that you can see
+
+Before a login, a command tells you how to log in:
+
+```text title="No login" noCopy
+error: not logged in: run 'ferry login --server <URL>' first (or set FERRY_SERVER and FERRY_TOKEN)
+```
+
+If the server refuses the token, the error has a hint:
+
+```text title="Bad token" noCopy
+error: invalid API token (unauthorized)
+hint: the token was refused (revoked or expired?): log in again with 'ferry login --server <URL>'
+```

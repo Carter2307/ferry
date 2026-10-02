@@ -1,0 +1,16 @@
+{
+  "title": "Overview",
+  "icon": "Boxes",
+  "pages": [
+    "proxy",
+    "api",
+    "engine",
+    "store",
+    "docker",
+    "background-tasks",
+    "data-directory",
+    "docker-names",
+    "crates",
+    "startup"
+  ]
+}

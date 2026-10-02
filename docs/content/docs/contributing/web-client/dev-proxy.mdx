@@ -1,0 +1,54 @@
+---
+title: The dev proxy
+description: Vite sends three paths to ferryd. Thus the browser gets the app and the API from one origin.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'vite', at: [1.6, 0], icon: 'zap', label: 'Vite', note: 'localhost:5173' },
+    { id: 'ferryd', at: [3.2, 0], icon: 'server', label: 'ferryd', note: '127.0.0.1:7878' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'vite' },
+    { from: 'vite', to: 'ferryd', label: '/api, /hooks' },
+  ]}
+  steps={[
+    {
+      caption: 'The browser asks Vite for the app. Vite answers from web/src.',
+      cut: ['vite>ferryd'],
+      flow: ['browser>vite'],
+      tones: { vite: 'primary', ferryd: 'muted' },
+    },
+    {
+      caption: 'A request to /api, /hooks or /healthz goes through Vite to ferryd.',
+      flow: ['browser>vite', 'vite>ferryd'],
+      tones: { ferryd: 'primary' },
+    },
+    {
+      caption: 'Vite adds the header X-Forwarded-Host: the host that the browser used.',
+      flow: ['vite>ferryd'],
+      tones: { vite: 'primary' },
+      notes: { vite: 'X-Forwarded-Host' },
+    },
+    {
+      caption: 'Log streams and the change feed pass through with no buffer and no compression.',
+      flow: ['browser>vite', 'vite>ferryd'],
+      tones: { ferryd: 'success' },
+    },
+  ]}
+/>
+
+## Where each request goes
+
+| Path | Goes to |
+|---|---|
+| `/api`, `/hooks`, `/healthz` | `FERRY_API_URL`. The default is `http://127.0.0.1:7878`. |
+| Each other path | The app, from Vite |
+
+## What the proxy keeps
+
+- **The host.** The proxy sends the host that the browser used in the <Term id="header" /> `X-Forwarded-Host`. `ferryd` compares it with the `Origin` of each request that has the <Term id="session-cookie" />.
+- **The streams.** <Term id="sse" /> pass through the proxy with no buffer and no compression. The log streams and the <Term id="change-feed" /> use them.
+
+`npm run preview` uses the same proxy on port 4173.

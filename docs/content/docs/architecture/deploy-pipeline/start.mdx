@@ -1,0 +1,67 @@
+---
+title: Start the instances
+description: After the build, the engine starts the wanted number of instances from the snapshot.
+---
+
+<Diagram
+  nodes={[
+    { id: 'net', at: [0, 0], icon: 'network', label: 'Private network', note: 'alias: its name' },
+    { id: 'policy', at: [0, 2], icon: 'restart', label: 'Restart policy', note: 'unless-stopped' },
+    { id: 'box', at: [1.5, 1], icon: 'box', label: 'New instance', tone: 'primary' },
+    { id: 'port', at: [3, 0], icon: 'plug', label: 'Published port', note: '127.0.0.1:<random>' },
+    { id: 'limits', at: [3, 2], icon: 'gauge', label: 'Limits', note: 'memory, CPU, pids' },
+  ]}
+  edges={[
+    { from: 'box', to: 'net' },
+    { from: 'box', to: 'port' },
+    { from: 'box', to: 'policy' },
+    { from: 'box', to: 'limits' },
+  ]}
+  steps={[
+    {
+      caption: 'Each new instance joins the private network. Its DNS alias is the name of the service.',
+      flow: ['box>net'],
+      tones: { net: 'primary' },
+    },
+    {
+      caption: 'Docker publishes the port of the instance on 127.0.0.1, with a random host port.',
+      flow: ['box>port'],
+      tones: { port: 'primary' },
+    },
+    {
+      caption: 'The restart policy is unless-stopped.',
+      flow: ['box>policy'],
+      tones: { policy: 'primary' },
+    },
+    {
+      caption: 'Each instance gets its memory limit, its CPU limit and the pids limit.',
+      flow: ['box>limits'],
+      tones: { limits: 'primary' },
+    },
+  ]}
+/>
+
+The <Term id="deploy" /> first takes the [service lock](/docs/architecture/deploy-pipeline/lock) and saves the [snapshot](/docs/architecture/deploy-pipeline/snapshot). Then it starts the instances. The state of the deploy is `deploying`.
+
+```text title="Deploy log" noCopy
+==> Limits: 512 MiB memory, 1 CPU per instance
+```
+
+## What each container gets
+
+| Setting | Value |
+|---|---|
+| Network | The <Term id="private-network" />, with the service name as <Term id="alias">DNS alias</Term> |
+| <Term id="restart-policy">Restart policy</Term> | `unless-stopped` |
+| <Term id="published-port">Published port</Term> | `127.0.0.1:<random port>`. See [Why 127.0.0.1](/docs/architecture/networking-model/why-localhost). |
+| Memory | The memory limit, with no swap above it |
+| CPU | The CPU limit |
+| Processes | `--pids-limit` |
+| Logs | Log rotation (`--log-max-size`, `--log-max-files`), when the default log driver of the Docker daemon is `json-file` |
+
+<Accordions>
+  <Accordion title="A CPU limit that the host cannot give">
+    - If the CPU limit is above the CPU count of the Docker host, the engine lowers it to that count. It writes a warning in the deploy log.
+    - On a host whose kernel has no CPU CFS quotas, the engine sets no CPU limit. It writes a warning too.
+  </Accordion>
+</Accordions>

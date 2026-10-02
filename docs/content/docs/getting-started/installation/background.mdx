@@ -1,0 +1,52 @@
+---
+title: Background and foreground
+description: ferryd with no command chooses how to run from the place where you start it.
+---
+
+<Diagram
+  caption="What ferryd does when you give it no command"
+  nodes={[
+    { id: 'term', at: [0, 0], icon: 'terminal', label: 'A terminal' },
+    { id: 'other', at: [0, 1], icon: 'settings', label: 'Other places', note: 'systemd, a script' },
+    { id: 'bg', at: [2, 0], icon: 'moon', label: 'Background', note: 'as ferryd start', tone: 'primary' },
+    { id: 'fg', at: [2, 1], icon: 'monitor', label: 'Foreground', note: 'as ferryd run', tone: 'primary' },
+  ]}
+  edges={[
+    { from: 'term', to: 'bg', label: 'ferryd', flow: true },
+    { from: 'other', to: 'fg', label: 'ferryd', flow: true },
+  ]}
+/>
+
+In the <Term id="background" />, the server gives the terminal back to you. In the <Term id="foreground" />, it keeps the terminal.
+
+The other places are: systemd or launchd, a container, a pipe or a script. A <Term id="service-manager" /> needs the server in the foreground. Write `ferryd run` in its unit file. See [Production setup](/docs/guides/production).
+
+## The commands
+
+| Command | What it does |
+|---|---|
+| `ferryd start` | Starts the server in the background. It comes back when the server listens. It takes the options of `ferryd`. |
+| `ferryd run` | Runs the server in the foreground, with its log in the terminal. It stops at <kbd>Ctrl</kbd>+<kbd>C</kbd> or `SIGTERM`. It takes the options of `ferryd`. |
+| `ferryd status` | Tells you if the server runs and where it listens. It prints the `Create your account` link while there is no account. The <Term id="exit-code" /> is 0 if the server runs, and 3 if it does not. |
+| `ferryd logs` | Prints the last 100 lines of the server log. `-n N` changes the number. `-f` continues with the new lines. |
+| `ferryd stop` | Stops the server and waits for the end of the stop. |
+| `ferryd reset-password` | Replaces the password of the account and signs each browser out. It works while the server runs. |
+
+## Tell the command where the server is
+
+`stop`, `status`, `logs` and `reset-password` find the server through its data directory. Run them in the folder where you started `ferryd`, or give the same `--data-dir` (or `FERRY_DATA_DIR`).
+
+```bash title="Terminal"
+ferryd status --data-dir /var/lib/ferry
+```
+
+<Accordions>
+  <Accordion title="The log file of the server">
+    A server in the background writes its output to `<data-dir>/ferryd.log`. If this file is larger than 10 MiB, the next `ferryd start` moves it to `ferryd.log.1` and starts a new file.
+
+    A server in the foreground has no log file. Its output goes to the terminal, or to the journal with systemd.
+  </Accordion>
+  <Accordion title="If the server runs already">
+    A second start changes nothing. `ferryd` prints where the server listens. To start it with other options, stop it first.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,14 @@
+{
+  "title": "Testing",
+  "icon": "FlaskConical",
+  "pages": [
+    "unit",
+    "e2e",
+    "e2e-suites",
+    "write-e2e",
+    "lints",
+    "web",
+    "docs",
+    "before-you-push"
+  ]
+}

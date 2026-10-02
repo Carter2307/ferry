@@ -1,0 +1,59 @@
+---
+title: What Ferry stores
+description: Ferry keeps the secrets of a connection in its database and asks for read access only.
+---
+
+<Diagram
+  nodes={[
+    { id: 'db', at: [0, 0], icon: 'database', label: 'Ferry database', note: 'id and private key' },
+    { id: 'github', at: [1.5, 0], icon: 'shield-check', label: 'GitHub' },
+    { id: 'token', at: [3, 0], icon: 'key', label: 'Token', note: '1 hour, in memory' },
+    { id: 'repos', at: [3, 1], icon: 'repo', label: 'Repositories', note: 'the chosen ones' },
+  ]}
+  edges={[
+    { from: 'db', to: 'github', label: 'signed request' },
+    { from: 'github', to: 'token' },
+    { from: 'token', to: 'repos', label: 'read' },
+  ]}
+  steps={[
+    {
+      caption: 'For a GitHub App, Ferry stores the id of the app and its private key.',
+      hide: ['token', 'repos'],
+      cut: ['db>github'],
+      tones: { db: 'primary' },
+    },
+    {
+      caption: 'The key signs a request to GitHub for a token.',
+      hide: ['token', 'repos'],
+      flow: ['db>github'],
+    },
+    {
+      caption: 'The token reads the chosen repositories for one hour. Ferry keeps it in memory only.',
+      flow: ['github>token', 'token>repos'],
+      tones: { token: 'success' },
+    },
+  ]}
+/>
+
+## What Ferry keeps
+
+| Method | Ferry stores | How Ferry uses it |
+|---|---|---|
+| <Term id="github-app" /> | The id of the app and its private key | The key signs a request for a token. The token reads the chosen repositories for **one hour**. Ferry keeps it in memory and never stores it. |
+| GitLab application | The id and the secret of the application, the access token and its refresh token | The access token lasts two hours. Ferry renews it a short time before it expires. |
+| <Term id="access-token">Access token</Term> | The token | As it is |
+
+## Where the secrets go
+
+- All of it is in the database of the server, in the data directory (mode `0700`). Datastore passwords and env values are there too. See [Security model](/docs/architecture/security).
+- The <Term id="api" /> never returns a secret. For a personal access token, it shows `token_hint`: the last characters.
+- Ferry sends a token only to its own provider. The API of the provider lists repositories. Its git server clones a repository or lists its branches.
+- Ferry never sends a token to a different host, even if the provider answers with a redirect.
+- A token never shows on a command line, in the git cache, in a deploy log or in an error message.
+
+## Read access only
+
+| Provider | Ferry asks for |
+|---|---|
+| GitHub App | `contents: read` and `metadata: read` |
+| GitLab | `read_api` and `read_repository` |

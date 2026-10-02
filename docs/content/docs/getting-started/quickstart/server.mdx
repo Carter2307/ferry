@@ -1,0 +1,62 @@
+---
+title: 1. Start the server
+description: Run ferryd, then create the account of the server in your browser.
+---
+
+<Steps>
+<Step>
+
+### Run ferryd
+
+Go to the root of the Ferry repository.
+
+<Terminal
+  lines={[
+    '$ ferryd',
+    '  Ferry 0.1.0 is running in the background (pid 48213)',
+    '  Dashboard + API : http://127.0.0.1:7878',
+    '  Dashboard (proxy): http://ferry.localhost:8080',
+    '  Apps            : http://<name>.localhost:8080',
+    '  …',
+    '',
+    '  Create your account: http://127.0.0.1:7878/setup?code=5b0e…',
+    '',
+    '  Logs            : ferryd logs -f',
+    '  Stop            : ferryd stop',
+  ]}
+/>
+
+The server continues to run. Use the same terminal for the next steps.
+
+</Step>
+<Step>
+
+### Open the link
+
+Open the `Create your account` link in your browser.
+
+</Step>
+<Step>
+
+### Enter your email and a password
+
+The password must have 8 characters or more. The <Term id="setup-code" /> from the link is in the form already.
+
+</Step>
+<Step>
+
+### Click **Create account**
+
+Ferry creates the administrator account of the server. You are now in the <Term id="dashboard" />.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="If the link is not in your terminal">
+    `ferryd status` prints the link again.
+  </Accordion>
+  <Accordion title="If the server has an account already">
+    `ferryd` prints `Connect the CLI : ferry login`, not the link. Sign in at http://127.0.0.1:7878 with your email and password. See [Create your account](/docs/getting-started/installation/account).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,74 @@
+---
+title: Run the site on your machine
+description: Three commands start the dev server of the docs. Each change of a page shows in the browser.
+---
+
+<Diagram
+  nodes={[
+    { id: 'file', at: [0, 0], icon: 'pencil', label: 'A page', note: 'an .mdx file' },
+    { id: 'next', at: [1.5, 0], icon: 'zap', label: 'Dev server', note: 'npm run dev' },
+    { id: 'browser', at: [3, 0], icon: 'browser', label: 'Browser', note: 'localhost:3000' },
+  ]}
+  edges={[
+    { from: 'file', to: 'next' },
+    { from: 'next', to: 'browser' },
+  ]}
+  steps={[
+    {
+      caption: 'You change a page and save the file.',
+      tones: { file: 'primary' },
+    },
+    {
+      caption: 'The dev server builds the page again.',
+      flow: ['file>next'],
+      tones: { next: 'primary' },
+    },
+    {
+      caption: 'The browser shows the change. You do not reload the page.',
+      flow: ['next>browser'],
+      tones: { browser: 'success' },
+    },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Install the packages
+
+```bash title="Terminal"
+cd docs
+npm install
+```
+
+</Step>
+<Step>
+
+### Start the dev server
+
+```bash title="Terminal"
+npm run dev                    # → http://localhost:3000
+```
+
+</Step>
+<Step>
+
+### Open the site
+
+Open `http://localhost:3000` in your browser.
+
+</Step>
+</Steps>
+
+## If port 3000 is in use
+
+```bash title="Terminal"
+npm run dev -- --port 3210     # when port 3000 is taken
+```
+
+## What you need
+
+| Tool | Version | Use |
+|---|---|---|
+| <Term id="nodejs" /> | 20.19 or newer | The <Term id="dev-server" /> and the build |
+| <Term id="rust" /> | See [What you need](/docs/contributing/development/requirements) | Only to [regenerate the reference pages](/docs/contributing/docs-site/regenerate) |

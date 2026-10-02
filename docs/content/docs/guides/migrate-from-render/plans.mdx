@@ -1,0 +1,44 @@
+---
+title: Plans
+description: Ferry has no instance types. A plan becomes the memory and CPU limits of the containers.
+---
+
+<Diagram
+  nodes={[
+    { id: 'plan', at: [0, 0.5], icon: 'tag', label: 'plan: starter', note: 'in render.yaml' },
+    { id: 'memory', at: [1.75, 0], icon: 'memory', label: 'Memory limit', note: '512 MiB', tone: 'primary' },
+    { id: 'cpu', at: [1.75, 1], icon: 'cpu', label: 'CPU limit', note: '0.5 CPU', tone: 'primary' },
+    { id: 'box', at: [3.25, 0.5], icon: 'box', label: 'Container' },
+  ]}
+  edges={[
+    { from: 'plan', to: 'memory', flow: true },
+    { from: 'plan', to: 'cpu', flow: true },
+    { from: 'memory', to: 'box' },
+    { from: 'cpu', to: 'box' },
+  ]}
+/>
+
+A <Term id="render-plan" /> sets the <Term id="resource-limit">resource limits</Term> of each <Term id="container" />.
+
+## Examples
+
+| Entry | `plan` | Memory | CPU |
+|---|---|---|---|
+| Service | `starter` | 512 MiB | 0.5 CPU |
+| Service | `standard` | 2 GiB | 1 CPU |
+| Service | `pro` | 4 GiB | 2 CPUs |
+| Service | `free` | The memory of the plan | 0.5 CPU (0.1 on Render) |
+| Postgres | `basic-1gb` | 1 GiB | Not set by the plan |
+| Key Value | `starter` | 256 MiB | Not set by the plan |
+
+The [blueprint reference](/docs/reference/blueprint/plans) lists each plan.
+
+## Without a plan
+
+A resource with no plan and no limit keys gets the defaults of the server: 512 MiB and 1 CPU for each container.
+
+The server can have other defaults: `--default-memory-limit` and `--default-cpu-limit`.
+
+## Set the limits directly
+
+The keys `memoryLimit` and `cpuLimit` replace the limits of the plan. See the [blueprint reference](/docs/reference/blueprint/limit-keys).

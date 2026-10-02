@@ -1,0 +1,54 @@
+---
+title: The stack
+description: The dashboard uses React and TypeScript. Each library has one job.
+---
+
+<Diagram
+  nodes={[
+    { id: 'router', at: [0, 0.5], icon: 'route', label: 'React Router', note: 'URL → page' },
+    { id: 'page', at: [1.15, 0.5], icon: 'browser', label: 'React page', note: 'shadcn/ui' },
+    { id: 'query', at: [2.3, 0], icon: 'database', label: 'TanStack Query', note: 'server state' },
+    { id: 'zustand', at: [2.3, 1], icon: 'save', label: 'Zustand', note: 'client state' },
+    { id: 'api', at: [3.45, 0], icon: 'server', label: 'ferryd', note: 'the API' },
+  ]}
+  edges={[
+    { from: 'router', to: 'page' },
+    { from: 'page', to: 'query' },
+    { from: 'page', to: 'zustand' },
+    { from: 'query', to: 'api' },
+  ]}
+  steps={[
+    {
+      caption: 'React Router reads the URL and chooses the page.',
+      flow: ['router>page'],
+      tones: { router: 'primary' },
+    },
+    {
+      caption: 'A page is React components: shadcn/ui, with Tailwind CSS for the style.',
+      tones: { page: 'primary' },
+    },
+    {
+      caption: 'TanStack Query gets the data of the server and keeps it in a cache.',
+      flow: ['page>query', 'query>api'],
+      tones: { query: 'primary' },
+    },
+    {
+      caption: 'Zustand keeps the state of the browser: the session and the options of the UI.',
+      flow: ['page>zustand'],
+      tones: { zustand: 'primary' },
+    },
+  ]}
+/>
+
+## The parts
+
+| Part | Tools |
+|---|---|
+| UI | <Term id="react" /> 19, <Term id="typescript" /> (strict), <Term id="shadcn" /> (Radix primitives, customized in `src/components/ui`), <Term id="lucide" /> icons |
+| Style | <Term id="tailwind" /> v4, the Ferry <Term id="design-token">design tokens</Term> in `src/styles/tokens.css`, light and dark themes |
+| Server state | <Term id="tanstack-query" /> v5 (`src/lib/api/queries/*`) |
+| Client state | <Term id="zustand" /> (`src/stores/auth.ts`, `src/stores/ui.ts`) |
+| Routing | <Term id="react-router" /> v7 with <Term id="history-url">history URLs</Term> and code-split pages |
+| Build and tests | <Term id="vite" />, <Term id="vitest" /> |
+
+A code-split page is a result of <Term id="code-splitting" />: the browser loads its file only when you open the page.

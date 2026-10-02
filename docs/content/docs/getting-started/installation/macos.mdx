@@ -1,0 +1,51 @@
+---
+title: Docker on macOS
+description: Docker Desktop, Colima and OrbStack work with Ferry on macOS.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferryd', at: [0, 0], icon: 'server', label: 'ferryd', note: 'on your Mac' },
+    { id: 'port', at: [1.5, 0], icon: 'plug', label: '127.0.0.1:62694', note: 'published port' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'Container' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'port' },
+    { from: 'port', to: 'app' },
+  ]}
+  groups={[{ label: 'Virtual machine', around: ['app'] }]}
+  steps={[
+    {
+      caption: 'On macOS, Docker runs each container in a virtual machine.',
+      cut: ['ferryd>port', 'port>app'],
+      tones: { app: 'primary' },
+    },
+    {
+      caption: 'Docker publishes a port of the container on 127.0.0.1 of your Mac.',
+      cut: ['ferryd>port'],
+      flow: ['port>app'],
+      tones: { port: 'primary' },
+    },
+    {
+      caption: 'ferryd connects only to this port, not to the address of a container.',
+      flow: ['ferryd>port', 'port>app'],
+      tones: { port: 'success' },
+    },
+  ]}
+/>
+
+Thus <Term id="docker-desktop" /> works with no change. `ferryd` finds its <Term id="docker-socket">socket</Term>, `~/.docker/run/docker.sock`.
+
+## Colima or OrbStack
+
+These tools use another <Term id="docker-context" />. Give its socket to `ferryd` before you start it.
+
+```bash title="Terminal"
+export DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
+```
+
+<Accordions>
+  <Accordion title="The CPUs and the memory in the banner">
+    When `ferryd` starts, its `Docker` line shows the CPUs and the memory of the Docker host. With Docker Desktop, these are the values of its <Term id="virtual-machine" />.
+  </Accordion>
+</Accordions>

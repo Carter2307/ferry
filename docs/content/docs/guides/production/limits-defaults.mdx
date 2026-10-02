@@ -1,0 +1,59 @@
+---
+title: Choose the default limits
+description: Change the default limits when your server has one CPU, little memory or special needs.
+---
+
+```bash title="/etc/ferry/ferryd.env"
+FERRY_DEFAULT_MEMORY_LIMIT=256M
+FERRY_DEFAULT_CPU_LIMIT=0.5
+```
+
+The defaults are good for a small server with some apps. Change them when your server is different.
+
+## Which values to choose
+
+| Your server | Change |
+|---|---|
+| One CPU | The default CPU limit is the full host. Lower `--default-cpu-limit`, for example to `0.5`. Then one busy app cannot take the CPU from the others. |
+| Little memory, many small apps | Lower `--default-memory-limit`, for example to `256M`. [Give more](/docs/guides/production/limits-app) to the services that need it. |
+| No default limits | Set `--default-memory-limit 0` and `--default-cpu-limit 0`. Then a <Term id="container" /> has no limit unless its service or datastore sets one. A `0` turns the guard off, and the protection with it. |
+
+## Set the values
+
+<Steps>
+<Step>
+
+### Add the values
+
+Add the flags to `ExecStart` in the <Term id="systemd-unit" /> file. As an alternative, add their variables to `/etc/ferry/ferryd.env`.
+
+</Step>
+<Step>
+
+### Restart ferryd
+
+```bash title="Terminal"
+sudo systemctl restart ferryd
+```
+
+The new defaults apply to the containers that Ferry creates from then on.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="Which containers get the new defaults">
+    - New containers get them: deploys, restarts, instances that the <Term id="reconciler" /> replaces, job runs and new datastores.
+    - The containers that run keep their limits until Ferry replaces them.
+    - `ferry restart NAME` replaces the instances of a service without a build.
+    - `ferry db update NAME --memory default` applies the new defaults to a datastore that sets no limits of its own.
+  </Accordion>
+  <Accordion title="If a value is bad or too high">
+    `ferryd` refuses to start on a value that it cannot use. The error gives the name of the flag.
+
+    If a default is more than the host has, `ferryd` writes a warning: `--default-cpu-limit 4 is more than the Docker host's 2 CPUs; containers get at most 2`.
+  </Accordion>
+  <Accordion title="After you resize the machine">
+    `ferryd` reads the CPUs and the memory of the host one time, at its start. Restart `ferryd` after a resize.
+  </Accordion>
+</Accordions>

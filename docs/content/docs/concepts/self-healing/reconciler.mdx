@@ -1,0 +1,45 @@
+---
+title: What the reconciler does
+description: In each pass, the reconciler makes the containers of a service equal to its live deploy.
+---
+
+<Flow
+  caption="One pass, for one service"
+  steps={[
+    { icon: 'check', title: 'Keep', text: 'It keeps the containers of the live deploy that run, up to your number of instances.' },
+    { icon: 'trash', title: 'Remove', text: 'It removes the stopped containers, the extra instances and the containers of other deploys.' },
+    { icon: 'play', title: 'Start', text: 'It starts each instance that is not there, from the snapshot of the live deploy.' },
+    { icon: 'route', title: 'Routes', text: 'It gives the proxy the instances that accept TCP connections.', tone: 'success' },
+  ]}
+/>
+
+The <Term id="reconciler" /> is a loop. One turn of the loop is a <Term id="reconciler-pass" />. The pass uses the <Term id="snapshot" /> of the live deploy and the [number of instances](/docs/concepts/scaling) that you set.
+
+## When a pass runs
+
+| Moment | Detail |
+|---|---|
+| At boot | One time, when `ferryd` starts |
+| 2 seconds later | One more time |
+| Then each 10 seconds | The normal loop |
+| After a change of instances | Immediately after you scale, suspend or resume a service |
+
+## See the result
+
+```bash title="Terminal"
+ferry status api
+```
+
+<Accordions>
+  <Accordion title="Details of each step">
+    - **Remove.** Ferry removes immediately the containers of a deploy that did not go live: failed, canceled or interrupted. The other containers get 10 seconds to stop.
+    - **Start.** The new instance gets the same image, environment, command, port, disk and [resource limits](/docs/concepts/resource-limits) as the deploy. A setting that you changed later applies only at the next deploy or restart.
+    - **Routes.** A suspended service gets the `503` page. A service with no instance that accepts connections gets it too.
+  </Accordion>
+  <Accordion title="During a deploy">
+    The reconciler does not touch a service while one of its deploys starts instances and tests their health. That deploy controls the service.
+  </Accordion>
+  <Accordion title="For engineers">
+    See [Reconciler internals](/docs/architecture/reconciler).
+  </Accordion>
+</Accordions>

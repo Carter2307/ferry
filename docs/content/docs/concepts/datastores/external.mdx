@@ -1,0 +1,67 @@
+---
+title: Connect from your machine
+description: The external URL works on the server only. An SSH tunnel brings its port to your machine.
+---
+
+<Diagram
+  nodes={[
+    { id: 'laptop', at: [0, 0], icon: 'laptop', label: 'Your machine', note: 'psql' },
+    { id: 'port', at: [1.5, 0], icon: 'plug', label: 'Host port', note: '127.0.0.1:62975' },
+    { id: 'ds', at: [3, 0], icon: 'database', label: 'Datastore', note: 'app-db' },
+  ]}
+  edges={[
+    { from: 'laptop', to: 'port', label: 'SSH tunnel' },
+    { from: 'port', to: 'ds' },
+  ]}
+  groups={[{ label: 'Your server', around: ['port', 'ds'] }]}
+  steps={[
+    { caption: 'Ferry publishes one port of the datastore, on 127.0.0.1 of the server only.', hide: ['laptop'], flow: ['port>ds'], tones: { port: 'primary' } },
+    { caption: 'Your machine cannot connect to 127.0.0.1 of the server.', cut: ['laptop>port'], tones: { laptop: 'warning' }, notes: { laptop: 'no access' } },
+    { caption: 'An SSH tunnel connects the same port of your machine to that port.', flow: ['laptop>port', 'port>ds'], tones: { laptop: 'success', ds: 'success' } },
+  ]}
+/>
+
+On the server itself, use the <Term id="external-url" /> directly. From your machine, open an <Term id="ssh-tunnel" /> first.
+
+<Steps>
+<Step>
+
+### Get the external URL
+
+```bash title="Terminal"
+ferry db show app-db
+```
+
+Read the line `External URL`. The number after `127.0.0.1:` is the <Term id="host-port" />.
+
+</Step>
+<Step>
+
+### Open the tunnel
+
+```bash title="Terminal"
+ssh -L 62975:127.0.0.1:62975 you@your-server
+```
+
+</Step>
+<Step>
+
+### Connect
+
+```bash title="Terminal"
+psql 'postgresql://app_db:…@127.0.0.1:62975/app_db'
+```
+
+<Term id="psql" /> is the client of Postgres.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="When the port changes">
+    Ferry chooses the external port one time, when it creates the datastore. The port changes only if a different process takes it while the container does not run. `ferry db show` always shows the current port.
+  </Accordion>
+  <Accordion title="The host in the external URL">
+    `--advertise-host` changes the host that Ferry writes in the external URLs. It does not change where the port listens.
+  </Accordion>
+</Accordions>

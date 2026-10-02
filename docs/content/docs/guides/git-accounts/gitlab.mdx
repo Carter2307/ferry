@@ -1,0 +1,86 @@
+---
+title: Connect GitLab
+description: You create one OAuth application on GitLab for your server. Then you authorize it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry dialog' },
+    { id: 'gitlab', at: [2, 0], icon: 'plug', label: 'Application', note: 'on GitLab' },
+  ]}
+  edges={[
+    { id: 'uri', from: 'ferry', to: 'gitlab', label: 'Redirect URI' },
+    { id: 'keys', from: 'gitlab', to: 'ferry', label: 'ID and Secret' },
+    { id: 'ok', from: 'gitlab', to: 'ferry', label: 'authorized' },
+  ]}
+  steps={[
+    {
+      caption: 'You add an application on GitLab. Its redirect URI comes from the dialog of Ferry.',
+      flow: ['uri'],
+      cut: ['keys', 'ok'],
+    },
+    {
+      caption: 'GitLab gives an Application ID and a Secret. You paste them in the dialog.',
+      flow: ['keys'],
+      cut: ['uri', 'ok'],
+      tones: { gitlab: 'primary' },
+    },
+    {
+      caption: 'You authorize the application on GitLab. GitLab sends you back to Ferry.',
+      flow: ['ok'],
+      cut: ['uri', 'keys'],
+      tones: { gitlab: 'success', ferry: 'success' },
+      notes: { ferry: 'connected' },
+    },
+  ]}
+/>
+
+GitLab cannot create an application for Ferry. Thus you create an <Term id="oauth-app" /> for your server, one time. Each later authorization on the same GitLab uses it again.
+
+## Connect the account
+
+<Steps>
+<Step>
+
+### Open the GitLab page
+
+Click **Connect GitLab**. Then click **Open GitLab applications** in the dialog. GitLab opens **User settings → Applications**.
+
+</Step>
+<Step>
+
+### Add an application
+
+Add an application with these values:
+
+| Field | Value |
+|---|---|
+| Name | Your choice, for example `Ferry` |
+| <Term id="redirect-uri">Redirect URI</Term> | Copy it from the dialog: `https://<your dashboard>/git/callback` |
+| Confidential | checked |
+| <Term id="scope">Scopes</Term> | `read_api` and `read_repository` |
+
+Save the application. GitLab shows its **Application ID** and its **Secret**.
+
+</Step>
+<Step>
+
+### Paste the ID and the Secret
+
+Paste the two values in the dialog of Ferry. Click **Continue to GitLab**.
+
+</Step>
+<Step>
+
+### Authorize the application
+
+GitLab asks if the application can use your account. Click **Authorize**.
+
+GitLab sends you back to Ferry. Ferry shows the account as connected.
+
+</Step>
+</Steps>
+
+## A self-managed GitLab
+
+Before you click **Continue to GitLab**, open **Self-hosted GitLab**. Enter the address of your GitLab, for example `https://gitlab.example.com`.

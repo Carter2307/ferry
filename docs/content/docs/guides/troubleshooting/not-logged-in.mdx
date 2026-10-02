@@ -1,0 +1,48 @@
+---
+title: Not logged in, or the token is wrong
+description: The CLI has no API token, or the server refuses the token.
+---
+
+## What you see
+
+```text title="ferry" noCopy
+error: not logged in: run 'ferry login --server <URL>' first (or set FERRY_SERVER and FERRY_TOKEN)
+```
+
+```text title="ferry" noCopy
+error: invalid API token (unauthorized)
+hint: the token was refused (revoked or expired?): log in again with 'ferry login --server <URL>'
+```
+
+## Why it occurs
+
+| Message | Cause |
+|---|---|
+| `not logged in` | The <Term id="cli" /> has no saved login, and no `--token` or `FERRY_TOKEN`. |
+| `invalid API token` | The server refuses the <Term id="api-token" />. |
+
+The server refuses a token for three reasons:
+
+- You revoked it in the dashboard.
+- It expired.
+- It belongs to another server. For example, the server now runs with another data directory.
+
+## How to repair it
+
+Log in again. Then approve the request in the <Term id="dashboard" />.
+
+```bash title="Terminal"
+ferry login --server <URL>
+```
+
+For <Term id="ci" /> and scripts, create a new API token in **Server → Account**. Put it in `FERRY_TOKEN`. See [Set up the CLI](/docs/getting-started/cli).
+
+<Accordions>
+  <Accordion title="A direct API call">
+    An API call without credentials gets the status `401` with this message:
+
+    `not signed in: send an API token as 'Authorization: Bearer <token>', or sign in to the dashboard`
+
+    Send the token: `-H "Authorization: Bearer $FERRY_TOKEN"`.
+  </Accordion>
+</Accordions>

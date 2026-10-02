@@ -1,0 +1,65 @@
+---
+title: The CPU limit
+description: A CPU limit is the most CPU time that one container can use.
+---
+
+<Diagram
+  nodes={[
+    { id: 'app', at: [0, 0], icon: 'box', label: 'Container', note: 'limit: 1 CPU' },
+    { id: 'other', at: [0, 1], icon: 'box', label: 'Other container' },
+    { id: 'host', at: [1.75, 0.5], icon: 'cpu', label: 'Server', note: '8 CPUs' },
+  ]}
+  edges={[
+    { from: 'app', to: 'host' },
+    { from: 'other', to: 'host' },
+  ]}
+  steps={[
+    {
+      caption: 'Each container uses a part of the CPUs of the server.',
+      flow: ['app>host', 'other>host'],
+    },
+    {
+      caption: 'A bug makes one app use all the CPU that it can get.',
+      flow: ['app>host', 'other>host'],
+      tones: { app: 'warning' },
+      notes: { app: 'wants 8 CPUs' },
+    },
+    {
+      caption: 'At 1 CPU, the kernel makes the container wait. The app is slower, but it runs.',
+      flow: ['other>host'],
+      tones: { app: 'warning' },
+      notes: { app: 'slowed at 1 CPU' },
+    },
+    {
+      caption: 'The other cores stay free for the other containers.',
+      flow: ['app>host', 'other>host'],
+      tones: { app: 'warning', other: 'success' },
+      notes: { app: 'slowed at 1 CPU', other: 'not slowed' },
+    },
+  ]}
+/>
+
+A <Term id="cpu-limit" /> is the most <Term id="cpu-core" /> time that one <Term id="container" /> can use. The default limit is 1 CPU.
+
+At the limit, the kernel does not stop the container. It <Term id="throttle">throttles</Term> it.
+
+## Write an amount
+
+| You write | Ferry reads |
+|---|---|
+| `0.5` | Half a core |
+| `2` | Two cores |
+| `500m` | 500 <Term id="millicore">millicores</Term> (0.5) |
+
+Ferry rounds an amount to 0.01 CPU. A limit can be from 0.01 to 512 CPUs.
+
+## Set the limit
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --memory 1G --cpu 0.5
+ferry update api --cpu default         # back to the server default
+```
+
+<Callout type="warning" title="Small servers">
+On a server with one CPU, the default limit of 1 CPU is the full server. Use a lower `--default-cpu-limit` there, for example `0.5`.
+</Callout>

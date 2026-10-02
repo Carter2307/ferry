@@ -1,0 +1,41 @@
+---
+title: Look at the app
+description: Three commands show your services, their instances and their logs.
+---
+
+<Terminal
+  lines={[
+    '$ ferry services',
+    'NAME         TYPE   STATE   INSTANCES   URL                                LAST DEPLOY',
+    'node-hello   web    live    1           http://node-hello.localhost:8080   live · 8s ago',
+    '',
+    '$ ferry status node-hello',
+    'node-hello: live — 1/1 instance(s) running',
+    'INSTANCE   DEPLOY     STATE     PORT    CPU            MEMORY                 RESTARTS   STARTED',
+    '82e2be     4415b359   running   62694   4.7% / 1 CPU   24.2 MiB / 512.0 MiB   0          8s ago',
+    '',
+    '$ ferry logs node-hello',
+    '09:36:21 [82e2be] > node-hello@1.0.0 start',
+    '09:36:21 [82e2be] > node server.js',
+    '09:36:22 [82e2be] node-hello listening on :10000',
+  ]}
+/>
+
+| Command | Shows |
+|---|---|
+| `ferry services` | The list of your services |
+| `ferry status node-hello` | Each <Term id="instance" />, with its CPU and memory use next to its limits (`4.7% / 1 CPU`) |
+| `ferry logs node-hello` | The log. Each line shows the time and the instance. |
+| `ferry open node-hello` | Prints the URL and tries to open it in your browser |
+
+## Follow the log
+
+```bash title="Terminal"
+ferry logs node-hello -f
+```
+
+`-f` continues with the new lines. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop.
+
+## In the dashboard
+
+Open http://127.0.0.1:7878. You do not need to sign in again. Open **node-hello**. See the [Dashboard tour](/docs/getting-started/dashboard).

@@ -1,0 +1,72 @@
+---
+title: Proxy headers
+description: The proxy removes the X-Forwarded headers that a client sends and sets its own. Your app can trust them.
+---
+
+<Diagram
+  nodes={[
+    { id: 'client', at: [0, 0], icon: 'globe', label: 'Client' },
+    { id: 'proxy', at: [1.6, 0], icon: 'route', label: 'Proxy' },
+    { id: 'app', at: [3.2, 0], icon: 'box', label: 'Your app' },
+  ]}
+  edges={[
+    { from: 'client', to: 'proxy', label: 'X-Forwarded-For' },
+    { from: 'proxy', to: 'app', label: 'X-Forwarded-For' },
+  ]}
+  steps={[
+    {
+      caption: 'A client sends its own X-Forwarded-For header, with a false address.',
+      flow: ['client>proxy'],
+      cut: ['proxy>app'],
+      tones: { client: 'warning' },
+      notes: { client: 'false address' },
+    },
+    {
+      caption: 'The proxy is the edge. It drops each header of this type that the client sent.',
+      cut: ['proxy>app'],
+      tones: { proxy: 'primary' },
+      notes: { proxy: 'drops the header' },
+    },
+    {
+      caption: 'The proxy sets the header again, with the address of the peer of the connection.',
+      flow: ['proxy>app'],
+      tones: { proxy: 'primary' },
+      notes: { proxy: 'sets the header' },
+    },
+    {
+      caption: 'Your app reads headers that only the proxy wrote.',
+      flow: ['proxy>app'],
+      tones: { app: 'success' },
+    },
+  ]}
+/>
+
+## The headers that the proxy sets
+
+| <Term id="header">Header</Term> | Value |
+|---|---|
+| `X-Forwarded-For`, `X-Real-IP` | The address of the peer of the connection, and nothing else |
+| `X-Forwarded-Proto` | `http` or `https` |
+| `X-Forwarded-Host` | The `Host` that the client used |
+| `X-Forwarded-Port` | The port of that `Host` (else 80 or 443), not the port of the listener. Thus apps build correct URLs behind port forwarding. |
+| `Forwarded` | The same facts in RFC 7239 form |
+| `X-Request-Id` | Kept if the client sent one. If not, a random id. |
+
+## When your app can trust them
+
+Trust these headers for requests that come through the <Term id="proxy" />. The proxy is the only way in from outside the server, because the containers listen on `127.0.0.1`.
+
+<Callout type="warning" title="Calls from the private network">
+Other containers on the <Term id="private-network" /> can call your app directly. These calls do not go through the proxy.
+</Callout>
+
+<Accordions>
+  <Accordion title="The headers that the proxy drops">
+    Before the proxy sends a request to an app, it drops each of these headers of the client:
+
+    `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Forwarded-For`, `Front-End-Https`, `X-Url-Scheme`, `X-Client-IP` and `X-Cluster-Client-IP`.
+  </Accordion>
+  <Accordion title="Another proxy or a CDN in front of Ferry">
+    `X-Forwarded-For` is then the address of that proxy. Ferry does not touch the headers of a <Term id="cdn" />, such as `CF-Connecting-IP`. An app can choose to use them.
+  </Accordion>
+</Accordions>

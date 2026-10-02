@@ -1,0 +1,33 @@
+---
+title: Limits of keys and values
+description: A key, a value and the full set of variables each have a largest size.
+---
+
+<Diagram
+  caption="The largest size of each part"
+  nodes={[
+    { id: 'key', at: [0, 0], icon: 'key', label: 'Key', note: '256 characters' },
+    { id: 'value', at: [1.25, 0], icon: 'file', label: 'Value', note: '32 KiB' },
+    { id: 'total', at: [2.5, 0], icon: 'layers', label: 'All variables', note: '256 KiB' },
+  ]}
+  edges={[
+    { from: 'key', to: 'value', label: '=' },
+    { from: 'value', to: 'total' },
+  ]}
+/>
+
+## The rules
+
+| Part | Rule |
+|---|---|
+| Key | Not empty. 256 characters at most. No `=`, no whitespace, no NUL byte. One time for each service or group. |
+| Value | 32 <Term id="kib" /> at most. No NUL byte. |
+| Total | The keys and values of one service or one <Term id="env-group" />: 256 KiB at most. |
+| Merged total | The <Term id="merged-env" /> of a service (its groups and its own variables): 256 KiB at most. |
+
+## See the variables of a service
+
+```bash title="Terminal"
+ferry env api                    # the service's own variables
+ferry env ls api --effective     # merged with its env groups
+```

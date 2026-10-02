@@ -1,0 +1,48 @@
+---
+title: The command palette
+description: The command palette goes to a page or starts an action from the keyboard.
+---
+
+<Diagram
+  nodes={[
+    { id: 'key', at: [0, 0.5], icon: 'search', label: 'Search', note: '⌘K or Ctrl+K' },
+    { id: 'go', at: [1.75, 0], icon: 'route', label: 'Go to a page' },
+    { id: 'do', at: [1.75, 1], icon: 'zap', label: 'Start an action' },
+  ]}
+  edges={[
+    { from: 'key', to: 'go' },
+    { from: 'key', to: 'do' },
+  ]}
+  steps={[
+    {
+      caption: 'Press ⌘K, or click the search field in the top bar.',
+      tones: { key: 'primary' },
+    },
+    {
+      caption: 'Type a name. The palette goes to that service, datastore, env group or page.',
+      flow: ['key>go'],
+      tones: { go: 'primary' },
+    },
+    {
+      caption: 'Type an action. The palette starts it.',
+      flow: ['key>do'],
+      tones: { do: 'primary' },
+    },
+  ]}
+/>
+
+The <Term id="command-palette" /> is a search box that opens on top of the page.
+
+## Open it
+
+Press <kbd>⌘</kbd>+<kbd>K</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd>. The search field in the top bar opens it too.
+
+## What it does
+
+| Group | Actions |
+|---|---|
+| Go to | A service, a datastore, an env group or a page |
+| A service | Open one of its sections |
+| The current service | **Manual deploy** or **Restart service** |
+| Create | A service |
+| The dashboard | Change the theme, or sign out |

@@ -1,0 +1,31 @@
+---
+title: Disk
+description: The disk key gives a service a folder that stays between deploys.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: api
+    disk:
+      mountPath: /data     # required: where the disk shows in the container
+      name: data           # accepted, not used
+      sizeGB: 10           # accepted, not used
+```
+
+A <Term id="disk" /> keeps the files of a service when a deploy replaces its container. See [Persistent disks](/docs/concepts/scaling/disks).
+
+## The key
+
+| Key | Type | Default | Ferry setting and notes |
+|---|---|---|---|
+| `disk` | mapping | none | `{ mountPath, name, sizeGB }` |
+| `disk.mountPath` | string | required | `disk_mount_path`: the <Term id="mount-path" />. It is an absolute path, and not `/`. |
+| `disk.name`, `disk.sizeGB` | | | Ferry accepts them and ignores them. |
+
+## Which services can have a disk
+
+- Only web services, private services and background workers.
+- The service must have 1 <Term id="instance" />.
+
+A change of `disk` starts a `blueprint` deploy. See [What an apply deploys](/docs/reference/blueprint/apply-deploys).

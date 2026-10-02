@@ -1,0 +1,47 @@
+---
+title: Delete a datastore
+description: A delete removes the container and its volume. You lose the data, and there is no undo.
+---
+
+```bash title="Terminal"
+ferry db rm app-db
+```
+
+<Diagram
+  nodes={[
+    { id: 'cmd', at: [0, 0.5], icon: 'trash', label: 'ferry db rm' },
+    { id: 'c', at: [1.5, 0], icon: 'database', label: 'Container', note: 'app-db' },
+    { id: 'vol', at: [1.5, 1], icon: 'disk', label: 'Volume', note: 'the data' },
+    { id: 'svc', at: [3, 0], icon: 'box', label: 'Service api', note: 'DATABASE_URL' },
+  ]}
+  edges={[
+    { from: 'cmd', to: 'c' },
+    { from: 'cmd', to: 'vol' },
+    { from: 'svc', to: 'c', label: 'reference', dashed: true },
+  ]}
+  steps={[
+    { caption: 'A datastore is one container and one volume.', hide: ['svc'] },
+    { caption: 'The command removes the two. You lose the data.', hide: ['svc'], flow: ['cmd>c', 'cmd>vol'], tones: { c: 'danger', vol: 'danger' }, notes: { c: 'removed', vol: 'removed' } },
+    { caption: 'If a service has a reference to the datastore, Ferry refuses.', cut: ['cmd>c', 'cmd>vol'], flow: ['svc>c'], tones: { cmd: 'warning', svc: 'warning' }, notes: { cmd: 'refused' } },
+  ]}
+/>
+
+<Callout type="warning" title="There is no undo">
+The command removes the <Term id="container" /> **and its <Term id="volume" />**. [Back up the data](/docs/concepts/datastores/backup) first.
+</Callout>
+
+## If a service uses the datastore
+
+Ferry refuses, and lists each service that has a <Term id="reference" /> to the <Term id="datastore" />.
+
+```text title="Terminal" noCopy
+error: still in use — re-run with --force to delete it anyway: datastore 'app-db' is referenced by service 'api' (DATABASE_URL); they would fail to deploy or restart without it. Remove the references first, or delete with force=true (conflict)
+```
+
+Remove the references first. Or delete the datastore anyway:
+
+```bash title="Terminal"
+ferry db rm app-db --force
+```
+
+Then those services fail at their next deploy or restart.

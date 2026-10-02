@@ -1,0 +1,41 @@
+---
+title: Deploys with a disk
+description: A service with a disk has one instance. A deploy stops the old instance before it starts the new one.
+---
+
+<Diagram
+  nodes={[
+    { id: 'proxy', at: [0, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'old', at: [1.5, 0], icon: 'box', label: 'Old instance' },
+    { id: 'new', at: [1.5, 1], icon: 'box', label: 'New instance' },
+    { id: 'disk', at: [3, 0.5], icon: 'disk', label: 'Disk', note: '/data' },
+  ]}
+  edges={[
+    { from: 'proxy', to: 'old' },
+    { from: 'proxy', to: 'new' },
+    { from: 'old', to: 'disk', both: true },
+    { from: 'new', to: 'disk', both: true },
+  ]}
+  steps={[
+    { caption: 'The one instance of the service uses the disk.', hide: ['new'], flow: ['proxy>old', 'old>disk'] },
+    { caption: 'A deploy starts. Ferry stops the old instance first. It has 10 seconds to stop.', hide: ['new'], cut: ['proxy>old'], tones: { old: 'warning' }, notes: { old: 'stops' } },
+    { caption: 'No instance runs. The service is offline for a short time.', hide: ['old', 'new'], tones: { proxy: 'danger' }, notes: { proxy: 'no instance' } },
+    { caption: 'Then Ferry starts the new instance. It gets the same disk.', hide: ['old'], cut: ['proxy>new'], flow: ['new>disk'], tones: { new: 'primary' }, notes: { new: 'starts' } },
+    { caption: 'The new instance gets the traffic. The service is online again.', hide: ['old'], flow: ['proxy>new', 'new>disk'], tones: { new: 'success' } },
+  ]}
+/>
+
+Two containers must not write to one <Term id="disk" /> at the same time. Thus a service with a disk has exactly 1 <Term id="instance" />. Ferry refuses to scale it higher.
+
+Each <Term id="deploy" /> and each <Term id="restart" /> stops the old instance, then starts the new instance. There is no <Term id="zero-downtime" /> for this service.
+
+## In the deploy log
+
+```text title="Deploy log" noCopy
+==> Mounting disk at /data
+==> Limits: 512 MiB memory, 1 CPU per instance
+==> Stopping 1 old instance(s) first (services with a disk are redeployed in place)
+==> Starting 1 instance(s)
+```
+
+A service with no disk does the opposite: the new instance starts first. See [The steps of a deploy](/docs/concepts/deploys/steps).

@@ -1,0 +1,29 @@
+---
+title: Connect again
+description: A stream has no event ids. After a new connection, get your data again or read the log again.
+---
+
+<Flow
+  steps={[
+    { icon: 'unplug', title: 'Connection lost', text: 'The stream stops. It has no event ids, so you cannot continue from the last event.', tone: 'warning' },
+    { icon: 'restart', title: 'Connect again', text: 'Open the stream one more time.' },
+    { icon: 'hourglass', title: 'Wait for ready', text: 'On the change feed, the event ready tells that the feed watches the store.' },
+    { icon: 'download', title: 'Get the data', text: 'Get your data again. For a log, read the log from its first line.', tone: 'success' },
+  ]}
+/>
+
+The streams send no event ids. Thus there is no point to continue from.
+
+## What to do after a new connection
+
+| Stream | Do this |
+|---|---|
+| [Change feed](/docs/reference/api-overview/change-feed) | Wait for `ready`. Then get your data again. |
+| [Log stream](/docs/reference/api-overview/log-streams) | Read the log again. |
+
+## What the dashboard does
+
+- It connects again with a <Term id="backoff" /> that grows from 1 to 15 seconds.
+- While the feed is down, it uses <Term id="polling" />.
+
+In a browser, <Term id="event-source" /> connects again by itself. See [Call the API from a browser](/docs/reference/api-overview/browser).

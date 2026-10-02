@@ -1,0 +1,25 @@
+---
+title: Lists
+description: A list is a plain JSON array. The API has no pagination.
+---
+
+```bash title="Terminal"
+curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/services
+```
+
+The answer is one <Term id="json" /> array with all the items. The API has no <Term id="pagination" />.
+
+## Lists of deploys and of job runs
+
+These two lists have the newest item first. They accept `?limit=`.
+
+| Parameter | Default | Range |
+|---|---|---|
+| `limit` | 20 | 1 to 500 |
+
+| List | Endpoint |
+|---|---|
+| The deploys of a service | `GET /api/v1/services/{id}/deploys` |
+| The job runs of a service | `GET /api/v1/services/{id}/jobs` |
+
+See [Deploys](/docs/reference/api/deploys) and [Jobs](/docs/reference/api/jobs) in the API reference.

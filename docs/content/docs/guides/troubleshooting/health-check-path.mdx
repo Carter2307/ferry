@@ -1,0 +1,33 @@
+---
+title: The health check path answers with an error
+description: The health check path does not exist in the app, or it answers with a status of 400 or more.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+==> Deploy failed: health check timed out after 120s: GET /healthz returned HTTP 404
+```
+
+The deploy gets the status `deploy_failed`. The previous deploy continues to answer.
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry' },
+    { id: 'app', at: [1.75, 0], icon: 'box', label: 'New instance', note: 'answers 404', tone: 'danger' },
+  ]}
+  edges={[{ from: 'ferry', to: 'app', label: 'GET /healthz', flow: true }]}
+/>
+
+The path of the <Term id="health-check" /> (`--health`) does not exist in the app. Or the app answers with a <Term id="status-code" /> of 400 or more.
+
+## How to repair it
+
+```bash title="Terminal"
+ferry update NAME --health /path   # correct the path
+ferry update NAME --health ""      # or remove the path
+```
+
+See [Health checks](/docs/concepts/deploys/health-checks).

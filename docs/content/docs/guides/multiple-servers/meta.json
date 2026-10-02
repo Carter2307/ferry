@@ -1,0 +1,12 @@
+{
+  "title": "Multiple servers",
+  "icon": "Server",
+  "pages": [
+    "second-server",
+    "choose-server",
+    "name-prefix",
+    "safety-checks",
+    "move",
+    "remove"
+  ]
+}

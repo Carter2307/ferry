@@ -1,0 +1,45 @@
+---
+title: envVars entries
+description: Each entry of envVars has one form only. The form tells where the value comes from.
+---
+
+```yaml title="ferry.yaml"
+envVars:
+  - fromGroup: shared-settings      # a link to an env group
+  - key: APP_ENV
+    value: production               # a literal value
+  - key: DATABASE_URL
+    fromDatabase:                   # a reference to a database
+      name: app-db
+      property: connectionString
+  - key: SESSION_SECRET
+    generateValue: true             # a random secret
+```
+
+The key `envVars` is a list. Its default is none. It holds the own variables of a service and its links to env groups.
+
+## The forms
+
+| Form | Result |
+|---|---|
+| `{ key, value }` | A literal value. A null value becomes an empty string. |
+| `{ key, generateValue: true }` | A <Term id="generated-secret" />: 64 random hex characters (256 bits). |
+| `{ key, sync: false }` | Ferry sets nothing. You set the variable yourself. |
+| `{ key, fromDatabase: { name, property } }` | A <Term id="reference" /> to a Postgres database: `${{datastore.NAME.PROPERTY}}`. |
+| `{ key, fromService: { type, name, property } }` | A reference to a service: `${{service.NAME.PROPERTY}}`. With `type: redis` or `keyvalue`, a reference to a Redis datastore. |
+| `{ key, fromService: { type, name, envVarKey } }` | A [copy](/docs/reference/blueprint/env-var-copies) of the variable of a different service. Ferry makes it during the apply. |
+| `{ fromGroup: NAME }` | A link from the service to the env group `NAME`. Services only. |
+
+See [Env var references](/docs/reference/env-references) and [Reference properties](/docs/reference/blueprint/reference-properties).
+
+<Accordions>
+  <Accordion title="generateValue and sync: false">
+    - `generateValue`: Ferry makes the secret only when the variable does not exist yet. A new apply never changes it.
+    - `sync: false`: until you set the variable, each apply gives the warning ``env var 'KEY' is marked sync: false; set it with `ferry env set NAME KEY=...` ``.
+  </Accordion>
+  <Accordion title="Entries that are not correct">
+    - An entry with two sources, for example `value` and `generateValue`, is an error.
+    - If a key is two times in the list, the last entry wins. Ferry gives a warning.
+    - Ferry ignores the keys that only Render uses, such as `previewValue`, with a warning.
+  </Accordion>
+</Accordions>

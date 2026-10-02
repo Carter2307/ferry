@@ -1,0 +1,23 @@
+{
+  "title": "Deploy pipeline",
+  "icon": "Workflow",
+  "pages": [
+    "states",
+    "source",
+    "queue",
+    "build",
+    "references",
+    "lock",
+    "snapshot",
+    "start",
+    "strategies",
+    "health-check",
+    "switch",
+    "cleanup",
+    "log",
+    "failures",
+    "cancel",
+    "restarts-rollbacks",
+    "shutdown"
+  ]
+}

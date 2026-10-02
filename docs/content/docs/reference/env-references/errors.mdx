@@ -1,0 +1,34 @@
+---
+title: Error messages
+description: A deploy that cannot resolve a reference fails. The message gives the name of the variable.
+---
+
+<Terminal
+  lines={[
+    '$ ferry restart hello --follow',
+    '==> Starting deploy dep-63eabb61650243ab8bed (trigger: restart)',
+    '==> Reusing image docsc3/hello:dep-3271cdfd1415400d9a5e of deploy dep-f5fb57d117d54ec4ab49',
+    "==> Deploy failed: cannot resolve environment variables: env var X: reference to unknown datastore 'missing'",
+  ]}
+/>
+
+## Errors in the syntax
+
+| Message | Cause |
+|---|---|
+| `invalid reference '${{…}}': expected ${{kind.name.property}}` | The reference has fewer or more than three parts. |
+| `unknown reference kind 'bucket' (use datastore or service)` | The kind is not `datastore`, `db`, `database`, `service` or `svc`. |
+| `unknown datastore property 'nope'` / `unknown service property 'nope'` | The property does not exist for that kind. Note: `hostport` is a property of a service only. |
+| `unterminated reference in '…'` | A `${{` has no `}}` after it. |
+
+## Errors in the target
+
+| Message | Cause |
+|---|---|
+| `reference to unknown datastore 'x'` / `reference to unknown service 'x'` | No datastore or service has that name. |
+| `service 'x' has no known port (deploy it first)` | The service has no live deploy and no port in its settings. |
+| `service 'x' has no public URL` | You used `url` on a service that is not a web service or a static site. |
+| `datastore 'x' has no external port yet` | You used `externalConnectionString` before the datastore has a host port. |
+| `datastore 'x' has no database name` | You used `database` on a Redis datastore. |
+
+See [Where Ferry checks a reference](/docs/reference/env-references/checks).

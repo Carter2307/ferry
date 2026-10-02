@@ -1,0 +1,48 @@
+---
+title: Log streams
+description: A log stream sends one event for each line. A stream with an end stops with event end.
+---
+
+```bash title="Terminal"
+curl -N -H "Authorization: Bearer $FERRY_TOKEN" 'http://127.0.0.1:7878/api/v1/deploys/dep-3271cdfd1415400d9a5e/logs?follow=true'
+```
+
+```text title="Output" noCopy
+event: log
+data: {"ts":"2026-09-27T07:38:59.562702Z","stream":"system","line":"==> Health check passed"}
+
+event: log
+data: {"ts":"2026-09-27T07:38:59.563675Z","stream":"system","line":"==> Your service is live 🎉"}
+
+event: end
+data: 
+```
+
+Each line is an `event: log`. Its `data` is a `LogLine` object.
+
+## The fields of a LogLine
+
+| Field | Type | Description |
+|---|---|---|
+| `ts` | string, required | When the program wrote the line (RFC 3339, UTC). |
+| `stream` | `"stdout"`, `"stderr"` or `"system"`, required | Ferry writes the `system` lines. They start with `==>`. |
+| `instance` | string | The last 6 characters of the container name, on lines from an app container. Other lines do not have it. |
+| `line` | string, required | The text of the line. |
+
+## The end of a stream
+
+A stream that has an end stops with `event: end` and an empty `data:` line. With the empty line, <Term id="event-source" /> sends the event to your code.
+
+<Callout type="warning" title="No event: end means an incomplete log">
+If a stream stops with no `event: end`, something cut it, for example a shutdown of the server. Your log is not complete.
+</Callout>
+
+<Accordions>
+  <Accordion title="After you connect again">
+    - A deploy log or a job log starts again from its first line.
+    - For runtime logs, use `tail` to limit the lines that you get again.
+  </Accordion>
+  <Accordion title="Cron jobs">
+    Cron jobs have no runtime logs. Their runtime stream is some `system` lines that point at the [job logs](/docs/reference/api/jobs#job-logs-sse).
+  </Accordion>
+</Accordions>

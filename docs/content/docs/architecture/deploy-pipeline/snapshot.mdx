@@ -1,0 +1,83 @@
+---
+title: The snapshot
+description: Before it starts instances, a deploy fixes all that they run with and saves it as a snapshot.
+---
+
+<Diagram
+  nodes={[
+    { id: 'settings', at: [0, 1], icon: 'sliders', label: 'Settings', note: 'of the service' },
+    { id: 'snapshot', at: [1.5, 1], icon: 'save', label: 'Snapshot', note: 'saved with deploy' },
+    { id: 'new', at: [3, 0], icon: 'box', label: 'New instances', note: 'this deploy' },
+    { id: 'repair', at: [3, 1], icon: 'box', label: 'Later instance', note: 'repair, scale' },
+    { id: 'run', at: [3, 2], icon: 'box', label: 'Job container', note: 'cron run, job' },
+  ]}
+  edges={[
+    { from: 'settings', to: 'snapshot' },
+    { from: 'snapshot', to: 'new' },
+    { from: 'snapshot', to: 'repair' },
+    { from: 'snapshot', to: 'run' },
+  ]}
+  steps={[
+    {
+      caption: 'The deploy fixes the environment, the port, the command, the disk, the image and the limits.',
+      hide: ['new', 'repair', 'run'],
+      flow: ['settings>snapshot'],
+    },
+    {
+      caption: 'The engine saves them with the deploy. This is the snapshot. Its name in the code is the launch spec.',
+      hide: ['new', 'repair', 'run'],
+      tones: { snapshot: 'primary' },
+    },
+    {
+      caption: 'The deploy starts its instances from the snapshot.',
+      hide: ['repair', 'run'],
+      flow: ['snapshot>new'],
+      tones: { snapshot: 'primary' },
+    },
+    {
+      caption: 'Later, the reconciler, a scale up and a resume start instances from the same snapshot.',
+      hide: ['run'],
+      flow: ['snapshot>repair'],
+      tones: { snapshot: 'primary' },
+    },
+    {
+      caption: 'Each cron run and each one-off job uses it too.',
+      flow: ['snapshot>run'],
+      tones: { snapshot: 'primary' },
+    },
+  ]}
+/>
+
+Instances start only from the <Term id="snapshot" /> of a live deploy. Thus a change of settings, limits or variables applies only through a new deploy or a restart, as on Render.
+
+A deploy that failed because of a bad change cannot break the self-healing of the live version. For the user view, see [Settings and the live deploy](/docs/concepts/deploys/snapshot).
+
+## What is in the snapshot
+
+| Part | Value |
+|---|---|
+| Environment | The variables of the service and of its <Term id="env-group">env groups</Term>, merged. Each [reference](/docs/reference/env-references) has its real value. Ferry adds `PORT` and `FERRY_*`. |
+| Port | For services that listen. See [The port of your app](/docs/concepts/deploys/ports) for the order of the choice. |
+| Command, disk, image | As the deploy found them. |
+| <Term id="resource-limit">Resource limits</Term> | The memory and CPU limits of the service, if it sets them. If not, the snapshot has none. |
+
+```text title="Deploy log" noCopy
+==> Using port 80 (service setting)
+```
+
+<Accordions>
+  <Accordion title="The order of the port choice">
+    The engine uses the first value that it finds:
+
+    1. The `port` setting of the service.
+    2. A `PORT` variable.
+    3. The port from the build: 80 for static sites.
+    4. The one port that the image exposes.
+    5. `--default-port` (10000).
+  </Accordion>
+  <Accordion title="The default limits of the server">
+    A snapshot with no limits gets the defaults of `ferryd` (`--default-memory-limit`, `--default-cpu-limit`). The engine applies them when it creates each container.
+
+    This is the one exception to the rule. After a change of these options, the replaced instances and the job runs of such a service get the new defaults.
+  </Accordion>
+</Accordions>

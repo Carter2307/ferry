@@ -1,0 +1,16 @@
+{
+  "title": "Quickstart",
+  "icon": "Rocket",
+  "pages": [
+    "server",
+    "login",
+    "deploy",
+    "deploy-log",
+    "look",
+    "redeploy",
+    "rollback",
+    "failed-deploy",
+    "clean-up",
+    "other-sources"
+  ]
+}

@@ -1,0 +1,37 @@
+---
+title: Clean up
+description: Delete the example service, then stop the server.
+---
+
+<Steps>
+<Step>
+
+### Delete the service
+
+<Terminal
+  lines={[
+    '$ ferry delete node-hello',
+    "Delete service 'node-hello' with all its deploys? [y/N] y",
+    "Deleted service 'node-hello'",
+  ]}
+/>
+
+Ferry deletes the <Term id="service" /> with its containers, its images and its deploy history.
+
+</Step>
+<Step>
+
+### Stop the server
+
+```bash title="Terminal"
+ferryd stop
+```
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="Delete without the question">
+    Add `--yes`, for example in a script.
+  </Accordion>
+</Accordions>

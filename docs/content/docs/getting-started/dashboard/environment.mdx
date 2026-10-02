@@ -1,0 +1,74 @@
+---
+title: "Service: Environment"
+description: The Environment page edits the variables of one service and shows what its containers get.
+---
+
+<Diagram
+  nodes={[
+    { id: 'vars', at: [0, 0], label: 'Service variables', note: 'you edit them' },
+    { id: 'groups', at: [0, 1], icon: 'layers', label: 'Linked groups', note: 'env groups' },
+    { id: 'all', at: [1.6, 0.5], icon: 'variable', label: 'All variables', note: 'the effective list' },
+    { id: 'cont', at: [3.2, 0.5], icon: 'box', label: 'Containers' },
+  ]}
+  edges={[
+    { from: 'vars', to: 'all' },
+    { from: 'groups', to: 'all' },
+    { from: 'all', to: 'cont' },
+  ]}
+  steps={[
+    {
+      caption: 'You edit the variables of the service.',
+      cut: ['all>cont'],
+      tones: { vars: 'primary' },
+    },
+    {
+      caption: 'You link env groups. Ferry merges the groups in the order of the links.',
+      cut: ['all>cont'],
+      tones: { groups: 'primary' },
+    },
+    {
+      caption: 'Effective environment shows the result, with the source of each variable.',
+      cut: ['all>cont'],
+      flow: ['vars>all', 'groups>all'],
+      tones: { all: 'primary' },
+    },
+    {
+      caption: 'Save only: the containers get the variables at the next deploy or restart.',
+      tones: { cont: 'muted' },
+      notes: { cont: 'no change now' },
+    },
+    {
+      caption: 'Save & restart: the containers get the variables immediately.',
+      flow: ['all>cont'],
+      tones: { cont: 'success' },
+      notes: { cont: 'restart' },
+    },
+  ]}
+/>
+
+## The four cards
+
+| Card | Use |
+|---|---|
+| **Service variables** | Edit each <Term id="env-var" /> of the service: a key and a value. |
+| **Linked environment groups** | Link or unlink an <Term id="env-group" />. |
+| **Effective environment** | The <Term id="merged-env" /> of the next deploy or restart. Each variable shows its source: the service or a group. |
+| **Reference syntax** | How to write `${{datastore.NAME.connectionString}}` and `${{service.NAME.hostport}}`. It lists the references that you can insert for your datastores and services. |
+
+**Show Ferry variables** adds each <Term id="injected-variable" /> to the list, for example `PORT`.
+
+## Edit the variables
+
+- The values stay hidden. Click **Reveal** to show them.
+- **Copy .env** copies all the variables.
+- Add the variables one at a time, or import a `.env` file.
+- You can also paste `KEY=value` lines into a key field.
+
+## Save
+
+| Button | Effect |
+|---|---|
+| **Save only** | Ferry keeps the variables for the next deploy or restart. |
+| **Save & restart** | Ferry applies the variables immediately. |
+
+See [Environment & env groups](/docs/concepts/environment).

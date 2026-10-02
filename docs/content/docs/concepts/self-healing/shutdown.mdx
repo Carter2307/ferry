@@ -1,0 +1,40 @@
+---
+title: Shut down ferryd
+description: A graceful shutdown stops the API, then the proxy, then the work in progress.
+---
+
+```bash title="Terminal"
+ferryd stop
+```
+
+<Flow
+  caption="What ferryd does after the first signal"
+  steps={[
+    { icon: 'terminal', title: 'API', text: 'The API accepts no new request. It waits 10 seconds at most for the requests in progress.' },
+    { icon: 'route', title: 'Proxy', text: 'The proxy accepts no new connection. It lets the open connections complete.' },
+    { icon: 'ship', title: 'Engine', text: 'Ferry stops the deploys and the jobs in progress. It has 25 seconds at most.', tone: 'warning' },
+    { icon: 'power', title: 'Exit', text: 'ferryd exits. Your containers continue to run.', tone: 'success' },
+  ]}
+/>
+
+A <Term id="graceful-shutdown" /> starts with the first <Term id="signal" />: `SIGINT` (Ctrl-C) or `SIGTERM`. `ferryd stop` sends `SIGTERM`.
+
+## Stop immediately
+
+A second signal, or a second `ferryd stop`, makes `ferryd` exit immediately. The exit code is 130.
+
+## With systemd
+
+`ferryd stop` waits 60 seconds at most for the server to release its data directory. Give the unit sufficient time to stop.
+
+```ini title="/etc/systemd/system/ferryd.service"
+TimeoutStopSec=60
+```
+
+<Accordions>
+  <Accordion title="Details of each step">
+    - **API.** Log streams and the change feed end.
+    - **Engine.** Deploys in the queue fail. Ferry stops each deploy in progress and removes its new instances. The live deploy keeps its containers.
+    - **Engine.** Each job that runs gets 10 seconds to stop. Ferry records it as `failed`, with the error "interrupted by server shutdown".
+  </Accordion>
+</Accordions>

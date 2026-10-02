@@ -1,0 +1,72 @@
+---
+title: The memory limit
+description: A memory limit is the most memory that one container can use.
+---
+
+<Diagram
+  nodes={[
+    { id: 'kernel', at: [0, 0], icon: 'shield', label: 'Kernel', note: 'measures memory' },
+    { id: 'app', at: [1.75, 0], icon: 'box', label: 'Container', note: '120 of 512 MiB' },
+    { id: 'docker', at: [1.75, 1.25], icon: 'container', label: 'Docker' },
+  ]}
+  edges={[
+    { from: 'kernel', to: 'app', label: 'stops' },
+    { from: 'docker', to: 'app' },
+  ]}
+  groups={[{ label: 'Memory limit: 512 MiB', around: ['app'] }]}
+  steps={[
+    {
+      caption: 'The limit is a box around the container. The app uses a small part of it.',
+      cut: ['kernel>app', 'docker>app'],
+    },
+    {
+      caption: 'The app uses more and more memory. The box does not grow.',
+      cut: ['kernel>app', 'docker>app'],
+      tones: { app: 'warning' },
+      notes: { app: '500 of 512 MiB' },
+    },
+    {
+      caption: 'The app needs more than the limit. The kernel stops its process.',
+      cut: ['docker>app'],
+      flow: ['kernel>app'],
+      tones: { app: 'danger', kernel: 'danger' },
+      notes: { app: 'OOM kill' },
+    },
+    {
+      caption: 'Docker starts the container again. The app starts with little memory.',
+      cut: ['kernel>app'],
+      flow: ['docker>app'],
+      tones: { app: 'success' },
+      notes: { app: '90 of 512 MiB' },
+    },
+  ]}
+/>
+
+A <Term id="memory-limit" /> is a box around a <Term id="container" />. The container cannot grow out of it. The default limit is 512 <Term id="mib" />.
+
+When the app needs more, the <Term id="kernel" /> stops its process. This is an <Term id="oom" />. The container gets no <Term id="swap" /> above the limit.
+
+Docker starts an instance or a datastore again. A job run fails.
+
+## Write a size
+
+| You write | Ferry reads |
+|---|---|
+| `512` | 512 MiB. A number with no unit is MiB. |
+| `512M` | 512 MiB |
+| `1G` | 1 GiB |
+| `1.5G` | 1.5 GiB |
+| `2GiB` | 2 GiB |
+
+`M`, `MB` and `MiB` all mean MiB. `G`, `GB` and `GiB` all mean GiB. Docker reads sizes the same way.
+
+A limit can be from 16 MiB to 1 TiB.
+
+## Set the limit
+
+```bash title="Terminal"
+ferry update api --memory 2G
+ferry restart api
+```
+
+See [Set the limits of a service](/docs/concepts/resource-limits/service) and [Out-of-memory kills](/docs/concepts/resource-limits/oom-kills).

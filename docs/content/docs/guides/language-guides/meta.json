@@ -1,0 +1,16 @@
+{
+  "title": "Language guides",
+  "icon": "Code",
+  "pages": [
+    "detection",
+    "rules",
+    "node",
+    "python",
+    "go",
+    "rust",
+    "ruby",
+    "static",
+    "static-build",
+    "dockerfile"
+  ]
+}

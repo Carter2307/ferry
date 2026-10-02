@@ -1,0 +1,77 @@
+---
+title: The proxy
+description: The proxy sends each request to an instance, and it reads only the route table to do it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'table', at: [1.25, 0], icon: 'route', label: 'Route table', note: 'in memory' },
+    { id: 'engine', at: [2.75, 0], icon: 'workflow', label: 'Engine' },
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 1], icon: 'switch', label: 'Proxy', note: ':8080' },
+    { id: 'a', at: [2.75, 1], icon: 'box', label: 'Instance', note: '127.0.0.1:49321' },
+    { id: 'b', at: [2.75, 2], icon: 'box', label: 'Instance', note: '127.0.0.1:49322' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy', both: true },
+    { from: 'proxy', to: 'table', both: true },
+    { from: 'proxy', to: 'a', both: true },
+    { from: 'proxy', to: 'b' },
+    { from: 'engine', to: 'table' },
+  ]}
+  steps={[
+    {
+      caption: 'The browser sends GET / with the header Host: web.localhost:8080.',
+      flow: ['browser>proxy'],
+    },
+    {
+      caption: 'The proxy asks the route table for web.localhost.',
+      flow: ['proxy>table'],
+      tones: { table: 'primary' },
+    },
+    {
+      caption: 'The route table gives two upstreams: 127.0.0.1:49321 and 127.0.0.1:49322.',
+      tones: { table: 'primary', a: 'primary', b: 'primary' },
+    },
+    {
+      caption: 'The proxy sends the request to one instance. It adds headers such as X-Forwarded-For, X-Forwarded-Proto and X-Request-Id.',
+      flow: ['proxy>a'],
+    },
+    {
+      caption: 'The instance answers 200 OK. The proxy gives the answer to the browser.',
+      tones: { a: 'success' },
+    },
+    {
+      caption: 'After each deploy and each reconcile pass, the engine updates the route table.',
+      flow: ['engine>table'],
+      tones: { engine: 'primary' },
+    },
+  ]}
+/>
+
+The <Term id="proxy" /> routes by the `Host` <Term id="header" />. On the request path, it never calls the <Term id="engine" /> or the database. It reads the <Term id="route-table" />, which gives the <Term id="upstream">upstreams</Term> of each hostname.
+
+An upstream is always a port on `127.0.0.1`. The [networking model](/docs/architecture/networking-model/why-localhost) tells you why.
+
+## If no instance can answer
+
+| Case | Answer of the proxy |
+|---|---|
+| Unknown host | A 404 page |
+| Suspended service | A 503 page |
+| No healthy instance | A 503 page with `Retry-After` |
+
+See [Errors of the proxy](/docs/architecture/networking-model/proxy-errors).
+
+## The crates
+
+| <Term id="crate">Crate</Term> | Contents |
+|---|---|
+| `ferry-proxy` | The `RouteTable`, the HTTP/1.1 and HTTP/2 reverse proxy with <Term id="round-robin" /> load balancing, websockets, error pages, <Term id="tls" /> termination and connection limits. |
+| `ferry-tls` | Automatic HTTPS: <Term id="acme" /> HTTP-01 certificates (Let's Encrypt by default), their storage and renewal, and <Term id="sni" /> resolution for the proxy. |
+
+<Accordions>
+  <Accordion title="How the proxy uses ferry-tls">
+    The proxy does not depend on `ferry-tls`. It calls the `TlsHooks` <Term id="trait" /> for two things: the answers to ACME challenges, and to know if a host has a certificate. It does the TLS work with the certificate resolver that `ferryd` gives it. See [HTTPS](/docs/architecture/networking-model/https).
+  </Accordion>
+</Accordions>

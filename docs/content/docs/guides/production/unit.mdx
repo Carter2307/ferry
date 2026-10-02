@@ -1,0 +1,57 @@
+---
+title: Write the systemd unit
+description: The unit file tells systemd how to start ferryd, as which user, and what to do when it stops.
+---
+
+```ini title="/etc/systemd/system/ferryd.service"
+[Unit]
+Description=Ferry server
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=ferry
+Group=ferry
+SupplementaryGroups=docker
+# Bind ports 80 and 443 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+EnvironmentFile=/etc/ferry/ferryd.env
+ExecStart=/usr/local/bin/ferryd run \
+  --data-dir /var/lib/ferry \
+  --base-domain apps.example.com \
+  --proxy-addr 0.0.0.0:80 \
+  --https-addr 0.0.0.0:443 \
+  --acme-email you@example.com
+Restart=always
+# Let ferryd drain requests and stop jobs on shutdown.
+TimeoutStopSec=60
+LimitNOFILE=65536
+# When the host runs out of memory, let the kernel kill containers before ferryd.
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=multi-user.target
+```
+
+A <Term id="systemd-unit" /> is the file that <Term id="systemd" /> reads to run one program. Create this file on the server. Replace the domain and the email with your values.
+
+## What each line does
+
+| Line | Effect |
+|---|---|
+| `Requires=`, `After=`, `Wants=` | systemd starts `ferryd` after Docker and after the network is ready. |
+| `User=`, `Group=` | `ferryd` runs as the user `ferry`, not as root. |
+| `SupplementaryGroups=docker` | `ferryd` can use Docker. |
+| `AmbientCapabilities=` | This <Term id="capability" /> lets `ferryd` listen on ports 80 and 443 without root. |
+| `EnvironmentFile=` | systemd reads [the secrets](/docs/guides/production/secrets) from this file. |
+| `ExecStart=` | The command that starts the server. See [The flags of ferryd](/docs/guides/production/flags). |
+| `Restart=always` | systemd starts `ferryd` again each time it stops. |
+| `TimeoutStopSec=60` | At shutdown, `ferryd` gets 60 seconds to complete the requests in progress and stop the jobs. |
+| `LimitNOFILE=65536` | The <Term id="open-file-limit" />. The proxy sets its limit of connections from this number. |
+| `OOMScoreAdjust=-900` | If the server has no free memory, the <Term id="kernel" /> stops containers before `ferryd`. See [Protect ferryd](/docs/guides/production/oom-score). |
+| `WantedBy=` | systemd can start `ferryd` at each boot. |
+
+<Callout type="warning" title="Use ferryd run, not ferryd start">
+`ferryd run` keeps the server in the <Term id="foreground" />. There, systemd supervises it, starts it again and collects its output. `ferryd start` detaches from systemd. Then systemd thinks that the service stopped.
+</Callout>

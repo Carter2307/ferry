@@ -1,0 +1,63 @@
+---
+title: The build step
+description: The build is the first step of a deploy. It goes from the source to an image in five steps.
+---
+
+<Flow
+  steps={[
+    { icon: 'download', title: 'Get the source', text: 'Ferry fetches the repository, or extracts the archive of ferry up.' },
+    { icon: 'folder', title: 'Root directory', text: 'Ferry goes into the root directory, if the service has one.' },
+    { icon: 'search', title: 'Runtime', text: 'Ferry uses the runtime of the service, or finds it from the files.' },
+    { icon: 'file-code', title: 'Dockerfile', text: 'Ferry finds your Dockerfile, or writes Dockerfile.ferry.' },
+    { icon: 'hammer', title: 'docker build', text: 'Docker builds the image with BuildKit. Ferry gives a tag to the image.', tone: 'success' },
+  ]}
+/>
+
+During these steps, the status of the deploy is `building`.
+
+## The same steps in the log
+
+<Terminal
+  title="Deploy log"
+  lines={[
+    '$ ferry up node-hello --follow',
+    '==> Starting deploy dep-3493c505ea9b4415b359 (trigger: upload)',
+    '==> Extracting uploaded source archive',
+    '==> Extracted 2 files (791 B)',
+    '==> Detected Node.js runtime',
+    '==> Generated Dockerfile.ferry for the Node.js runtime',
+    '==> Building image ferry/node-hello:dep-3493c505ea9b4415b359',
+    '#1 [internal] load build definition from Dockerfile.ferry',
+    '…',
+    '==> Build successful 🎉',
+  ]}
+/>
+
+The full build output goes to the deploy log.
+
+## A build from git
+
+The log shows the checkout:
+
+```text title="Deploy log" noCopy
+==> Cloning from https://github.com/you/api (branch main)
+==> Checked out c5f8f76: Initial commit
+==> Using Dockerfile at ./Dockerfile
+==> Building image ferry/api:dep-350f412fb3c741d0a2ab
+```
+
+<Accordions>
+  <Accordion title="Details of each step">
+    - **Get the source.** For a git service, Ferry fetches the repository into the <Term id="git-cache" /> of the service. Then it checks out the branch, or the commit that you gave with `--commit`.
+    - **Root directory.** A <Term id="monorepo" /> needs one. See [Root directory](/docs/concepts/builds/root-directory).
+    - **docker build.** <Term id="buildkit" /> is the build engine of Docker. The <Term id="image-tag" /> of the image is `<prefix>/<service>:<deploy-id>`, for example `ferry/api:dep-3493c505ea9b4415b359`.
+  </Accordion>
+  <Accordion title="Git files in the build">
+    - The build gets the files of the commit, with no `.git` directory.
+    - The app finds the commit in `FERRY_GIT_COMMIT` when it runs.
+    - Ferry does not fetch git submodules.
+  </Accordion>
+  <Accordion title="Builds at the same time">
+    Builds run on the server. The server runs 2 builds at a time by default (`--build-concurrency`).
+  </Accordion>
+</Accordions>

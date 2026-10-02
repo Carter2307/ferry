@@ -1,0 +1,38 @@
+---
+title: Build and deploy
+description: npm run build writes the static site to out/ and fails on a broken link.
+---
+
+<Flow
+  steps={[
+    { icon: 'hammer', title: 'Export', text: 'The build writes out/: static HTML, the search index and the Open Graph images.' },
+    { icon: 'link', title: 'Link check', text: 'The build fails on each internal link or anchor that goes nowhere.', tone: 'warning' },
+    { icon: 'eye', title: 'Preview', text: 'npm start serves out/ on your machine.' },
+    { icon: 'globe', title: 'Deploy', text: 'Copy out/ to a static host.', tone: 'success' },
+  ]}
+/>
+
+## Build and preview
+
+```bash title="Terminal"
+npm run build     # → out/: static HTML, the search index, Open Graph images, then the link check
+npm start         # preview out/
+```
+
+## The link check
+
+`npm run build` fails on each internal link or `#anchor` that does not resolve in the exported site. The check includes the links of the sidebar and of the table of contents.
+
+## Build variables
+
+Three variables change the output. Set them before `npm run build`.
+
+| Variable | Default | Use |
+|---|---|---|
+| `DOCS_SITE_URL` | `http://localhost:3000` | The public URL of the site: the <Term id="canonical-url" /> and the <Term id="open-graph" /> URLs |
+| `FERRY_DOCS_SERVER_URL` | `http://127.0.0.1:7878` | The "Dashboard" link and the server URL in the API request examples. Set it for a public site: the default only works on the machine of the reader. |
+| `DOCS_GIT_BRANCH` | `dev` | The branch of the "Edit on GitHub" links. It must contain `docs/`. |
+
+## Deploy
+
+`out/` is a plain static site. Copy it to a static host, or [host the docs on Ferry itself](/docs/guides/host-docs-on-ferry).

@@ -1,0 +1,66 @@
+---
+title: Root directory
+description: The root directory is the folder of the repository where Ferry builds the service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'repo', at: [0, 0.5], icon: 'repo', label: 'Repository', note: 'you/monorepo' },
+    { id: 'api', at: [1.5, 0], icon: 'folder', label: 'services/api', note: 'the root directory' },
+    { id: 'other', at: [1.5, 1], icon: 'folder', label: 'Other folders' },
+    { id: 'build', at: [3, 0], icon: 'hammer', label: 'docker build' },
+  ]}
+  edges={[
+    { from: 'repo', to: 'api' },
+    { from: 'repo', to: 'other', dashed: true },
+    { from: 'api', to: 'build' },
+  ]}
+  steps={[
+    {
+      caption: 'A monorepo has many apps. --root-dir chooses the folder of one app.',
+      flow: ['repo>api'],
+      tones: { api: 'primary' },
+    },
+    {
+      caption: 'This folder is the build context. Docker gets only these files.',
+      flow: ['api>build'],
+      tones: { api: 'primary', build: 'primary' },
+    },
+    {
+      caption: 'The files outside the root directory are not in the build.',
+      tones: { other: 'muted' },
+      notes: { other: 'not in the build' },
+    },
+  ]}
+/>
+
+A <Term id="monorepo" /> needs a root directory. The root directory becomes the <Term id="build-context" /> of Docker.
+
+## Set the root directory
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/monorepo --root-dir services/api
+```
+
+In a <Term id="blueprint" />, the field is `rootDir`. The path must be relative and in the repository.
+
+```text title="Deploy log" noCopy
+==> Using root directory ./services/api
+```
+
+## What starts from the root directory
+
+All other paths are relative to the <Term id="root-directory" />:
+
+- the files of the runtime detection
+- the Dockerfile path
+- the `Procfile`
+- the publish directory
+
+## If the build needs files outside
+
+Examples are a shared library or design tokens. Build from the repository root, and use `cd` in your build command.
+
+```bash title="Terminal"
+ferry update docs --build-cmd "cd docs && npm ci --include=dev && npm run build" --publish-dir docs/out
+```

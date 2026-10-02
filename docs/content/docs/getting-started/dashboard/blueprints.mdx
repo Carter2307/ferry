@@ -1,0 +1,53 @@
+---
+title: Blueprints
+description: The Blueprints page tests a blueprint file, then applies it to the server.
+---
+
+<Flow
+  steps={[
+    { icon: 'file-code', title: 'File', text: 'Paste or open a ferry.yaml or a render.yaml. Example gives you a file to start from.' },
+    { icon: 'eye', title: 'Dry run', text: 'Ferry shows what it will create, update or not change. Nothing changes.', tone: 'warning' },
+    { icon: 'check', title: 'Apply', text: 'Ferry creates and updates the services and the datastores.' },
+    { icon: 'rocket', title: 'Deploy', text: 'New and changed services deploy. Ferry deletes nothing.', tone: 'success' },
+  ]}
+/>
+
+A <Term id="blueprint" /> is a file that describes your services and datastores.
+
+## Do it
+
+<Steps>
+<Step>
+
+### Put the file in the editor
+
+Paste or open a `ferry.yaml` or a `render.yaml`. To start from a model, click **Example**.
+
+</Step>
+<Step>
+
+### Click **Dry run**
+
+The shortcut is <kbd>⌘</kbd>+<kbd>Enter</kbd> or <kbd>Ctrl</kbd>+<kbd>Enter</kbd>.
+
+The <Term id="dry-run" /> shows what Ferry will create, update or not change. It gives a warning for each key that Ferry does not support.
+
+</Step>
+<Step>
+
+### Click **Apply**
+
+Ferry deploys the new services and the changed services.
+
+</Step>
+</Steps>
+
+## What Apply does to a service
+
+| The service | Ferry |
+|---|---|
+| Is new | Deploys it |
+| Has changed settings | Deploys it |
+| Has only changed variables | Restarts it |
+
+**Apply** deletes nothing. See [Blueprint spec](/docs/reference/blueprint).

@@ -1,0 +1,53 @@
+---
+title: Service keys
+description: Most keys of a service have the same meaning on Ferry. Ferry changes some keys and ignores others.
+---
+
+<Diagram
+  nodes={[
+    { id: 'key', at: [0, 1], icon: 'file-code', label: 'A service key' },
+    { id: 'same', at: [1.75, 0], icon: 'ok', label: 'Same meaning', note: 'name, repo, branch', tone: 'success' },
+    { id: 'changed', at: [1.75, 1], icon: 'switch', label: 'Changed', note: 'image, plan, disk', tone: 'primary' },
+    { id: 'ignored', at: [1.75, 2], icon: 'ban', label: 'Ignored', note: 'region, scaling', tone: 'muted' },
+  ]}
+  edges={[
+    { from: 'key', to: 'same' },
+    { from: 'key', to: 'changed' },
+    { from: 'key', to: 'ignored', dashed: true },
+  ]}
+/>
+
+## Same meaning
+
+`name`, `repo`, `branch`, `rootDir`, `dockerfilePath`, `buildCommand`, `startCommand`, `staticPublishPath`, `healthCheckPath`, `numInstances`, `autoDeploy`, `schedule`, `domains`, `envVars`.
+
+## Changed
+
+| Key | On Ferry |
+|---|---|
+| `runtime` (old name: `env`) | `docker`, `image`, `node`, `python`, `go`, `rust`, `ruby`, `static`. |
+| `image` | `{url: …}` or a plain string. |
+| `dockerCommand` | It becomes the <Term id="start-command" />. |
+| `dockerContext` | It becomes the <Term id="root-directory" />. `dockerfilePath` becomes relative to it. |
+| `autoDeployTrigger` | `commit`: <Term id="auto-deploy" /> on. `off`: auto-deploy off. |
+| `disk` | Ferry uses `mountPath`. |
+| `plan` | The memory and CPU limits of each <Term id="instance" /> and <Term id="job" /> run. See [Plans](/docs/guides/migrate-from-render/plans). |
+| `port` | A Ferry key: the <Term id="port" /> that your app listens on. |
+| `memoryLimit`, `cpuLimit` | Ferry keys: they set the limits directly and replace the limits of the plan. |
+
+## Ignored
+
+Ferry ignores all other keys with a warning: `region`, `scaling`, `preDeployCommand`, `buildFilter`, `headers`, `routes`, and more.
+
+<Accordions>
+  <Accordion title="Special cases">
+    - `runtime`: another value, such as `elixir`, gives a warning. Ferry then finds the <Term id="runtime" /> from your files. Add a <Term id="dockerfile" />.
+    - `image`: Ferry ignores `creds` with a warning. Docker must be able to pull the image without credentials.
+    - `dockerCommand`: if the file also sets `startCommand`, Ferry uses `startCommand` and shows a warning.
+    - `dockerContext`: if the file sets `rootDir`, Ferry ignores `dockerContext` with a warning.
+    - `autoDeployTrigger`: with `checksPass`, Ferry deploys on each commit and shows a warning.
+    - `disk`: Ferry accepts `name` and `sizeGB` and ignores them. A <Term id="disk" /> has no size limit.
+    - `numInstances` on a cron job: Ferry ignores it with a warning.
+    - `plan` on a static site: Ferry ignores it. Static sites have no plans on Render.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,34 @@
+---
+title: Warnings
+description: A warning never stops an apply. It tells you what Ferry ignored or what you must do.
+---
+
+```text title="ferry blueprint apply render.yaml --dry-run" noCopy
+Warnings:
+  ! database 'app-db': ignoring unsupported key 'ipAllowList'
+  ! service 'api': ignoring unsupported key 'region'
+  ! service 'api': env var 'STRIPE_KEY' is marked sync: false; set it with `ferry env set api STRIPE_KEY=...`
+```
+
+A warning never stops the <Term id="apply" />. In the API, the warnings are in the field `warnings` of the [result](/docs/reference/blueprint/result).
+
+## Ferry ignored something
+
+| Warning | Meaning |
+|---|---|
+| `…: ignoring unsupported key 'region'` | Ferry does not support this key. |
+| `…: ignoring unknown plan 'enterprise' (known plans: …); set memoryLimit / cpuLimit instead` | Ferry does not know this `plan`. It sets no limit. |
+| `projects/environments are not supported: …` | Ferry put the resources of `projects` directly on this server. |
+| `…: runtime 'elixir' is not supported natively; using auto-detection (add a Dockerfile)` | Ferry cannot build this runtime natively. |
+| `…: registry credentials are not supported; …` | Ferry ignores `image.creds`. |
+| `…: datastores are not changed in place (ignored)` | A datastore that exists is different from the file. |
+
+## You must do something
+
+| Warning | Meaning |
+|---|---|
+| ``env var 'KEY' is marked sync: false; set it with `ferry env set …` `` | You must set this variable. |
+| ``service 'NAME' has no repo or image: deploy it with `ferry up NAME` `` | Ferry created a service with no source and did not deploy it. |
+| `service 'NAME' is suspended: resume it and deploy to apply the changes` | Build or deploy settings changed on a suspended service. |
+| `service 'NAME' is suspended: resume and restart it to apply the new resource limits` | Limits changed on a suspended service. |
+| `datastore 'NAME': limits saved, but applying them to its container failed: …` | Ferry saved the new limits, but the container did not take them. |

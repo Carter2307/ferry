@@ -1,0 +1,46 @@
+---
+title: Create the account
+description: A new server has no account. Only a person who has the setup code can create it.
+---
+
+<Terminal
+  title="On the server"
+  lines={[
+    '$ ferryd',
+    '  Ferry 0.1.0 is running in the background (pid 48213)',
+    '  Dashboard + API : http://127.0.0.1:7878',
+    '  Create your account: http://127.0.0.1:7878/setup?code=5b0e…',
+  ]}
+/>
+
+While the server has no account, the banner of `ferryd` and `ferryd status` end with this link. The <Term id="setup-code" /> in the link is 24 random <Term id="hex">hex characters</Term>.
+
+## Why a code
+
+To create the account, you must give the code. Thus only a person who can read the terminal of the server, or its <Term id="data-directory" />, can create the account.
+
+| Where the code is | Who can read it |
+|---|---|
+| The banner of `ferryd`, and `ferryd status` | A person at the terminal of the server |
+| The file `<data-dir>/setup_code` | The owner of the file: its <Term id="file-mode">mode</Term> is `0600` |
+
+## Do it
+
+<Steps>
+<Step>
+
+### Open the link
+
+Open the link in a browser.
+
+</Step>
+<Step>
+
+### Create the account
+
+Enter an email and a password of 8 characters or more.
+
+</Step>
+</Steps>
+
+Ferry signs this browser in. Ferry also deletes the file `setup_code`, because the account exists.

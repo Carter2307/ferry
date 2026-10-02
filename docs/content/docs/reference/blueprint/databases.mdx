@@ -1,0 +1,32 @@
+---
+title: Postgres databases
+description: Each entry of databases creates one Postgres datastore.
+---
+
+```yaml title="ferry.yaml"
+databases:
+  - name: app-db                 # required
+    postgresMajorVersion: "16"   # the image postgres:16-alpine
+    databaseName: app
+    user: app
+    plan: basic-256mb            # 256 MiB of memory
+```
+
+Each <Term id="blueprint-entry" /> of `databases` creates one <Term id="postgres" /> <Term id="datastore" />. See [Datastores](/docs/concepts/datastores) for how Ferry runs them.
+
+## The keys
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `name` | string | required | The name of the datastore. It has the same rules as the name of a service. It is the hostname on the private network. |
+| `databaseName` | string | `name` with `-` replaced by `_` | The database to create. 1 to 63 letters, digits or `_`. The first character is not a digit. |
+| `user` | string | `databaseName` | The Postgres user. It has the same character rules as `databaseName`. |
+| `postgresMajorVersion` | string | `16` | The image tag: `postgres:<version>-alpine`. Digits and dots only. |
+| `plan` | string | none | The Postgres plan of Render. It becomes a memory limit. See [Plans of a datastore](/docs/reference/blueprint/datastore-plans). |
+| `memoryLimit`, `cpuLimit` | string or number | none | <Term id="ferry-extension">Ferry keys</Term>: the limits of the container. They replace the limits of the plan. See [memoryLimit and cpuLimit](/docs/reference/blueprint/limit-keys). |
+
+Services and datastores share their names: a name can exist one time only.
+
+Ferry ignores other keys (`region`, `ipAllowList`, `diskSizeGB`…) with a warning.
+
+After the first apply, an apply changes only the limits. See [Datastores that exist](/docs/reference/blueprint/existing-datastores).

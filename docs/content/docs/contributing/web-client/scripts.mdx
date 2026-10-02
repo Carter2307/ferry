@@ -1,0 +1,31 @@
+---
+title: The npm scripts
+description: Six npm scripts in web/ run the dev server, the tests, the checks and the build.
+---
+
+<Flow
+  caption="From the first change to the production build"
+  steps={[
+    { icon: 'zap', title: 'npm run dev', text: 'Work on the app with hot reload.' },
+    { icon: 'check', title: 'npm test', text: 'Run the unit tests.' },
+    { icon: 'braces', title: 'npm run typecheck', text: 'Check the types.' },
+    { icon: 'search', title: 'npm run lint', text: 'Look for common errors.' },
+    { icon: 'hammer', title: 'npm run build', text: 'Write dist/ for production.', tone: 'success' },
+    { icon: 'eye', title: 'npm run preview', text: 'Serve dist/ to try the build.' },
+  ]}
+/>
+
+## What each script does
+
+Run each script in `web/`.
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | <Term id="vite" /> dev server with <Term id="hmr">HMR</Term> and the API proxy (port 5173) |
+| `npm run build` | `tsc -b && vite build` → `dist/`, with hashed files under `dist/assets/` |
+| `npm run preview` | Serves `dist/` with the same proxy (port 4173) |
+| `npm test` | <Term id="vitest" /> unit tests (`src/**/*.test.ts` and `src/**/*.test.tsx`) |
+| `npm run typecheck` | `tsc -b --noEmit` |
+| `npm run lint` | <Term id="eslint" /> (typescript-eslint, react-hooks, react-refresh) |
+
+A hashed file has a code in its name. The code changes when the content changes.

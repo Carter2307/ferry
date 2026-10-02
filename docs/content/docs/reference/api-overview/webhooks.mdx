@@ -1,0 +1,31 @@
+---
+title: Webhooks
+description: The two webhooks are not below /api. They take no API token. Each one checks its own secret.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ci', at: [0, 0], icon: 'workflow', label: 'Your CI', note: 'key in the URL' },
+    { id: 'github', at: [0, 1], icon: 'branch', label: 'GitHub', note: 'signed push event' },
+    { id: 'hook', at: [1.5, 0], icon: 'link', label: '/hooks/deploy' },
+    { id: 'gh', at: [1.5, 1], icon: 'webhook', label: '/hooks/github' },
+    { id: 'deploy', at: [3, 0.5], icon: 'deploy', label: 'New deploy' },
+  ]}
+  edges={[
+    { from: 'ci', to: 'hook', flow: true },
+    { from: 'github', to: 'gh', flow: true },
+    { from: 'hook', to: 'deploy', flow: true },
+    { from: 'gh', to: 'deploy', flow: true },
+  ]}
+/>
+
+A <Term id="webhook" /> is a request that a different system sends to Ferry to start a deploy. The webhooks are outside `/api`. They never take an <Term id="api-token" />.
+
+## The two webhooks
+
+| Webhook | Path | Its secret | Trigger of the deploy |
+|---|---|---|---|
+| [Deploy hook](/docs/reference/api-overview/deploy-hooks) | `/hooks/deploy/{service_id}` | The key in the URL | `deploy_hook` |
+| [GitHub webhook](/docs/reference/api-overview/github-webhook) | `/hooks/github` | The signature of the delivery | `webhook` |
+
+See also [Deploy hooks](/docs/concepts/deploys/deploy-hooks) and [GitHub auto-deploy](/docs/guides/github-auto-deploy).

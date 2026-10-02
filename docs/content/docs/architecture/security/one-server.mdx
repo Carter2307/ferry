@@ -1,0 +1,78 @@
+---
+title: One server per data directory and prefix
+description: Two safety rules prevent that one Ferry server removes the containers of another server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'a', at: [0, 0], icon: 'server', label: 'Server A', note: 'data directory A' },
+    { id: 'b', at: [0, 1], icon: 'server', label: 'Second ferryd', note: 'data directory B' },
+    { id: 'vol', at: [1.5, 1], icon: 'disk', label: 'ferry-owner', note: 'marker volume' },
+    { id: 'ctr', at: [3, 0], icon: 'boxes', label: 'Containers', note: 'prefix ferry' },
+  ]}
+  edges={[
+    { from: 'a', to: 'ctr' },
+    { from: 'a', to: 'vol' },
+    { from: 'b', to: 'vol' },
+  ]}
+  steps={[
+    {
+      caption: 'Server A starts with the prefix ferry. It records its data directory on the marker volume.',
+      flow: ['a>vol'],
+      hide: ['b'],
+      tones: { vol: 'primary' },
+      notes: { vol: 'owner: A' },
+    },
+    {
+      caption: 'Server A lists and touches only the containers with the label ferry.instance=ferry.',
+      flow: ['a>ctr'],
+      hide: ['b'],
+      notes: { vol: 'owner: A' },
+    },
+    {
+      caption: 'A second ferryd starts with another data directory and the same prefix.',
+      flow: ['b>vol'],
+      tones: { b: 'warning' },
+      notes: { vol: 'owner: A' },
+    },
+    {
+      caption: 'The prefix belongs to data directory A. The second ferryd refuses to start.',
+      tones: { b: 'danger', ctr: 'success' },
+      notes: { b: 'does not start', vol: 'owner: A', ctr: 'safe' },
+    },
+  ]}
+/>
+
+Without these rules, a second `ferryd` would see the containers of the first server as <Term id="orphan">orphans</Term> and remove them.
+
+In a server, the engine lists and touches only the containers with the label `ferry.instance=<prefix>`.
+
+## The two rules
+
+| Rule | How `ferryd` applies it |
+|---|---|
+| One process per data directory | It holds an exclusive lock on `<data-dir>/ferryd.lock` while it runs. |
+| One data directory per <Term id="name-prefix" /> | It records the owner of its prefix (`--name-prefix`, default `ferry`) on the <Term id="marker-volume" /> `<prefix>-owner`. The labels of the volume are the `instance_id` and the path of the data directory. |
+
+## What a refusal looks like
+
+```text title="ferryd" noCopy
+another ferryd is already running with data directory …
+```
+
+```text title="ferryd" noCopy
+Error: Docker resources with prefix 'ferry' belong to another Ferry server (data dir /var/lib/ferry). Run this server with a different --name-prefix, stop the other server, or pass --take-over to adopt the resources (the other server's containers will then be managed — and possibly removed — by this one).
+```
+
+## Run more than one server
+
+Give each server its own `--name-prefix` and its own `--data-dir`. See [Multiple servers](/docs/guides/multiple-servers).
+
+<Accordions>
+  <Accordion title="When ferryd refuses to start">
+    - The prefix belongs to another data directory.
+    - A new data directory finds containers with its prefix that it does not know.
+
+    [`--take-over`](/docs/architecture/security/take-over) is for one special case only.
+  </Accordion>
+</Accordions>

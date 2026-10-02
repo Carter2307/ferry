@@ -1,0 +1,44 @@
+---
+title: Run a second server
+description: Give the second server its own data directory, name prefix, addresses and base domain.
+---
+
+```bash title="Terminal"
+# production (defaults: prefix ferry, API :7878, proxy :8080)
+ferryd --data-dir /var/lib/ferry
+
+# staging, on the same Docker daemon
+ferryd --data-dir /var/lib/ferry-staging \
+  --name-prefix staging \
+  --api-addr 127.0.0.1:7879 \
+  --proxy-addr 0.0.0.0:8081 \
+  --base-domain staging.localhost
+```
+
+## Each server must have its own
+
+| What | Option | Why |
+|---|---|---|
+| <Term id="data-directory" /> | `--data-dir` | Its database, logs and certificates. The server that uses a data directory locks it. |
+| <Term id="name-prefix" /> | `--name-prefix` | Each Docker resource of the server has it. It must be unique for each daemon. |
+| API address | `--api-addr` | Two servers cannot listen on the same port. |
+| Proxy addresses | `--proxy-addr`, `--https-addr` | The same cause. Only one server can own ports 80 and 443. |
+| <Term id="base-domain" /> | `--base-domain` | Then their apps do not answer to the same hostnames. |
+
+## After the start
+
+- **Account.** Each server has its own account, sessions and API tokens, in its own data directory. At its first start, the staging server prints its own `Create your account` link, at its own API address: `http://127.0.0.1:7879/setup?code=…`.
+- **Apps.** The apps of the staging server are at `http://<name>.staging.localhost:8081`.
+- **Stop, status, logs.** `ferryd stop`, `ferryd status` and `ferryd logs` act on the server of the data directory that you name.
+
+```bash title="Terminal"
+ferryd stop --data-dir /var/lib/ferry-staging
+```
+
+This command stops staging and does not touch production.
+
+<Accordions>
+  <Accordion title="On a public server">
+    Give the second server its own base domain (`--base-domain staging.example.com`). Put it behind a different port or another IP address.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,57 @@
+---
+title: Server defaults
+description: A service or a datastore with no limit of its own gets the defaults of the server.
+---
+
+<Flow
+  caption="Ferry uses the first value that it finds"
+  steps={[
+    { icon: 'sliders', title: 'Own limit', text: 'The limit that you set on the service or the datastore.' },
+    { icon: 'server', title: 'Server default', text: 'The default of the server: 512 MiB of memory and 1 CPU.', tone: 'muted' },
+  ]}
+/>
+
+## Change the defaults
+
+Start `ferryd` with the <Term id="flag">flags</Term>, or with their <Term id="env-var">environment variables</Term>.
+
+```bash title="Terminal"
+ferryd --default-memory-limit 1G --default-cpu-limit 2
+FERRY_DEFAULT_MEMORY_LIMIT=1G FERRY_DEFAULT_CPU_LIMIT=2 ferryd   # the same
+```
+
+| Flag of `ferryd` | Default | With `0` |
+|---|---|---|
+| `--default-memory-limit` | 512 MiB | No memory limit for a container with no limit of its own |
+| `--default-cpu-limit` | 1 CPU | No CPU limit for a container with no limit of its own |
+| `--pids-limit` | 1024 | The guard is off |
+| `--log-max-size` | 10 MiB | The guard is off |
+| `--log-max-files` | 3 | |
+| `--min-free-disk` | 1 GiB | The guard is off |
+
+The flags accept the sizes of the [memory limit](/docs/concepts/resource-limits/memory) and the amounts of the [CPU limit](/docs/concepts/resource-limits/cpu). [Server options](/docs/reference/server-options) lists each flag.
+
+## See the defaults
+
+`ferryd` prints them when it starts.
+
+```text title="ferryd output (excerpt)" noCopy
+  Docker          : 28.3.3 (8 CPUs, 7.7 GiB)
+  Data            : ./ferry-data
+  Limits          : 512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3
+  Free disk check : deploys need 1 GiB free
+```
+
+[`ferry info`](/docs/reference/cli#ferry-info) and the **Server** page of the dashboard show the defaults and the size of the <Term id="docker-host" />.
+
+```text title="ferry info (excerpt)" noCopy
+Default limits:  512 MiB memory, 1 CPU per container
+Docker host:     8 CPUs, 7.7 GiB memory
+```
+
+<Accordions>
+  <Accordion title="A bad value">
+    - If a value is not valid, `ferryd` refuses to start. The error gives the name of the flag.
+    - If a default is larger than the Docker host, `ferryd` gives a warning.
+  </Accordion>
+</Accordions>

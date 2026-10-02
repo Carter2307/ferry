@@ -1,0 +1,71 @@
+---
+title: If a deploy fails
+description: A deploy that fails does not replace the live version.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'old', at: [2.5, 0], icon: 'box', label: 'Live instance', tone: 'success' },
+    { id: 'new', at: [2.5, 1], icon: 'box', label: 'New instance' },
+  ]}
+  edges={[
+    { from: 'web', to: 'proxy' },
+    { from: 'proxy', to: 'old' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry starts a new instance. The live instance answers the requests.',
+      flow: ['web>proxy', 'proxy>old'],
+      tones: { new: 'primary' },
+      notes: { new: 'starts' },
+    },
+    {
+      caption: 'The new instance crashes. The deploy fails.',
+      flow: ['web>proxy', 'proxy>old'],
+      tones: { new: 'danger' },
+      notes: { new: 'crashed' },
+    },
+    {
+      caption: 'Ferry removes the new instance. The live instance continues to answer.',
+      hide: ['new'],
+      flow: ['web>proxy', 'proxy>old'],
+    },
+  ]}
+/>
+
+## Try it
+
+Deploy with a start command that crashes.
+
+<Terminal
+  lines={[
+    '$ ferry up --start-cmd "node crash.js" --follow',
+    "Updated 'node-hello': start command",
+    '…',
+    "09:37:33 [d1c6b8] Error: Cannot find module '/app/crash.js'",
+    '…',
+    '09:37:34 ==> Removing 1 new instance(s)',
+    '09:37:34 ==> Deploy failed: instance d1c6b8 crashed (exit code 1)',
+    'Deploy dep-ca4bc7b5862742959b70 failed (deploy_failed): instance d1c6b8 crashed (exit code 1)',
+  ]}
+/>
+
+The command stops with <Term id="exit-code" /> 1. The previous deploy continues to answer.
+
+If an instance crashes during the <Term id="health-check" />, the log also shows the last 50 lines of its output.
+
+## Repair it
+
+Remove the setting and deploy again.
+
+```bash title="Terminal"
+ferry up --start-cmd "" --follow
+```
+
+<Accordions>
+  <Accordion title="Other errors">
+    Examples: a health check that gets no answer in time, or a port that another program uses. See [Troubleshooting](/docs/guides/troubleshooting).
+  </Accordion>
+</Accordions>

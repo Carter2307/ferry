@@ -1,0 +1,56 @@
+---
+title: The data directory
+description: The data directory has the full state of the server. Make a backup of it.
+---
+
+<Diagram
+  caption="Where Ferry keeps its data"
+  nodes={[
+    { id: 'ferryd', at: [0, 0], icon: 'server', label: 'ferryd' },
+    { id: 'data', at: [1.75, 0], icon: 'folder', label: 'ferry-data', note: 'make a backup', tone: 'primary' },
+    { id: 'ds', at: [0, 1], icon: 'database', label: 'Datastore', note: 'a container' },
+    { id: 'vol', at: [1.75, 1], icon: 'disk', label: 'Docker volume', note: 'not in ferry-data' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'data', flow: true },
+    { from: 'ds', to: 'vol', flow: true },
+  ]}
+/>
+
+The default <Term id="data-directory" /> is `./ferry-data`, in the folder where you start `ferryd`. On a server, give it a stable path.
+
+```bash title="Terminal"
+ferryd --data-dir /var/lib/ferry
+```
+
+`FERRY_DATA_DIR` does the same. The data of a [datastore](/docs/concepts/datastores) is in a Docker <Term id="volume" />, not in this folder.
+
+## What is in it
+
+| Path | Contents |
+|---|---|
+| `ferry.db` | The <Term id="sqlite" /> database: services, deploys, variables, env groups, datastores, job runs, the account, its sessions and API tokens |
+| `api_token` | The server token, for scripts on the server (mode `0600`) |
+| `setup_code` | The code that creates the account (mode `0600`). It exists only while the server has no account. |
+| `instance_id` | Identifies this data directory to Docker (mode `0600`) |
+| `ferryd.lock` | `ferryd` holds it while it runs |
+| `ferryd.json` | The process id and the addresses of the server. `ferryd status` and `ferryd stop` read it. `ferryd` removes it when it stops. |
+| `ferryd.log` | The output of a server in the background (`ferryd logs`) |
+| `logs/` | Deploy logs and job logs, one JSON object for each line |
+| `builds/` | Temporary build contexts. Ferry removes them after each build. |
+| `repos/` | Git caches, one for each service, for fast fetches |
+| `uploads/` | Source archives that `ferry up` sent |
+| `certs/` | The ACME account and the TLS certificates |
+
+<Accordions>
+  <Accordion title="Why the mode is 0700">
+    `ferryd` creates the folder with <Term id="file-mode">mode</Term> `0700`. The folder holds environment values, datastore passwords and repository credentials.
+  </Accordion>
+  <Accordion title="One server for each data directory">
+    Only one `ferryd` can use a data directory at a time: it holds `ferryd.lock`.
+
+    Each server also owns a Docker <Term id="name-prefix" /> (`--name-prefix`, default `ferry`). A marker volume, `<prefix>-owner`, records the owner. A server does not start on a prefix that another data directory owns. Thus it cannot remove the containers of another server.
+
+    To run more than one server on one Docker daemon, give each server its own prefix. See [Multiple servers](/docs/guides/multiple-servers).
+  </Accordion>
+</Accordions>

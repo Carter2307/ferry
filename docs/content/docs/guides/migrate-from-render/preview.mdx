@@ -1,0 +1,49 @@
+---
+title: Preview the changes
+description: A dry run shows what Ferry creates and which keys it ignores. It changes nothing.
+---
+
+<Terminal
+  lines={[
+    '$ ferry blueprint apply render.yaml --dry-run',
+    'Blueprint render.yaml — dry run, nothing was changed',
+    '',
+    'Would create:',
+    '  + datastore shop-db',
+    '  + datastore shop-cache',
+    '  + service shop-web',
+    '  + service shop-worker',
+    '# the warnings come next: see below',
+  ]}
+/>
+
+Run the <Term id="dry-run" /> in the directory of `render.yaml`. With no file argument, `ferry blueprint apply` reads `./ferry.yaml`, then `./render.yaml`.
+
+## Read each warning
+
+```text title="Output" noCopy
+Warnings:
+  ! blueprint: ignoring unsupported key 'previews'
+  ! database 'shop-db': ignoring unsupported key 'region'
+  ! database 'shop-db': ignoring unsupported key 'ipAllowList'
+  ! service 'shop-web': autoDeployTrigger 'checksPass' is not supported; deploying on every commit
+  ! service 'shop-web': ignoring unsupported key 'region'
+  ! service 'shop-web': ignoring unsupported key 'preDeployCommand'
+  ! service 'shop-web': ignoring unsupported key 'scaling'
+  ! key value 'shop-cache': ignoring unsupported key 'ipAllowList'
+  ! key value 'shop-cache': ignoring unsupported key 'maxmemoryPolicy'
+  ! service 'shop-worker': registry credentials are not supported; the image must be pullable anonymously
+  ! service 'shop-web': env var 'STRIPE_KEY' is marked sync: false; set it with `ferry env set shop-web STRIPE_KEY=...`
+
+Run without --dry-run to apply.
+```
+
+Each warning is a feature of Render that your app does not get on Ferry. The pages from [Top-level keys](/docs/guides/migrate-from-render/top-level) to [Plans](/docs/guides/migrate-from-render/plans) explain them.
+
+<Accordions>
+  <Accordion title="Plans do not show in the list">
+    Each `plan` becomes the <Term id="resource-limit">resource limits</Term> of its service or <Term id="datastore" />. See [Plans](/docs/guides/migrate-from-render/plans).
+
+    Only a plan that Ferry does not know gives a warning: `ignoring unknown plan …`. That plan sets nothing.
+  </Accordion>
+</Accordions>

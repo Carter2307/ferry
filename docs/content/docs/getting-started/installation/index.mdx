@@ -1,0 +1,72 @@
+---
+title: Installation
+description: You build two programs from the source, ferryd and ferry, then you start the server.
+icon: Download
+---
+
+<Diagram
+  nodes={[
+    { id: 'repo', at: [0, 0.5], icon: 'repo', label: 'Ferry source', note: 'one repository' },
+    { id: 'web', at: [1.25, 0], icon: 'monitor', label: 'Dashboard', note: 'web/dist' },
+    { id: 'ferryd', at: [2.5, 0], icon: 'server', label: 'ferryd', note: 'the server' },
+    { id: 'ferry', at: [2.5, 1], icon: 'terminal', label: 'ferry', note: 'the CLI' },
+  ]}
+  edges={[
+    { from: 'repo', to: 'web' },
+    { from: 'web', to: 'ferryd' },
+    { from: 'repo', to: 'ferry' },
+    { from: 'ferry', to: 'ferryd', label: 'REST API' },
+  ]}
+  steps={[
+    {
+      caption: 'One repository has the code of the server, the CLI and the dashboard.',
+      hide: ['web', 'ferryd', 'ferry'],
+      tones: { repo: 'primary' },
+    },
+    {
+      caption: 'First, npm builds the dashboard.',
+      hide: ['ferryd', 'ferry'],
+      flow: ['repo>web'],
+      tones: { web: 'primary' },
+    },
+    {
+      caption: 'Then cargo builds ferryd and ferry. The dashboard is inside ferryd.',
+      cut: ['ferry>ferryd'],
+      flow: ['web>ferryd', 'repo>ferry'],
+      tones: { ferryd: 'primary', ferry: 'primary' },
+    },
+    {
+      caption: 'You start ferryd. The ferry command talks to it through the REST API.',
+      flow: ['ferry>ferryd'],
+      tones: { ferryd: 'success' },
+      notes: { ferryd: 'runs' },
+    },
+  ]}
+/>
+
+Ferry is one <Term id="rust" /> workspace that builds two <Term id="binary">binaries</Term>.
+
+| Program | Work |
+|---|---|
+| `ferryd` | The server. One process runs the REST API, the dashboard, the public <Term id="proxy" /> and the engine that builds and runs your apps. |
+| `ferry` | The command-line client. It talks to `ferryd` through the REST API. |
+
+The dashboard is a separate React app in `web/`. The build puts it into `ferryd`. Thus you have nothing more to deploy.
+
+## Build Ferry
+
+```bash title="Terminal"
+git clone https://github.com/Carter2307/ferry
+cd ferry
+(cd web && npm ci && npm run build)
+cargo build --release
+```
+
+## In this section
+
+<Cards>
+  <Card title="What you need" href="/docs/getting-started/installation/requirements" description="Docker, git, Rust and Node.js." />
+  <Card title="Build from source" href="/docs/getting-started/installation/build" description="Four steps, from the code to the two programs." />
+  <Card title="Start the server" href="/docs/getting-started/installation/start" description="Run ferryd and read what it prints." />
+  <Card title="Create your account" href="/docs/getting-started/installation/account" description="The one administrator of your server." />
+</Cards>

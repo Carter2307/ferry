@@ -1,0 +1,67 @@
+---
+title: Networking model
+description: Containers talk to each other on a private network, and the outside reaches them only through the proxy.
+icon: Network
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.15, 0], icon: 'route', label: 'Proxy', note: 'on the host' },
+    { id: 'web1', at: [2.3, 0], icon: 'box', label: 'web', note: '127.0.0.1:49321' },
+    { id: 'web2', at: [2.3, 1], icon: 'box', label: 'web', note: '127.0.0.1:49322' },
+    { id: 'api', at: [3.45, 0.5], icon: 'box', label: 'api', note: 'private, port 8000' },
+    { id: 'db', at: [3.45, 2], icon: 'database', label: 'app-db', note: 'Postgres, 5432' },
+    { id: 'psql', at: [0, 2], icon: 'terminal', label: 'psql', note: 'on the host' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'web1' },
+    { from: 'proxy', to: 'web2' },
+    { from: 'web1', to: 'api' },
+    { from: 'web2', to: 'api' },
+    { from: 'api', to: 'db' },
+    { from: 'psql', to: 'db', label: '127.0.0.1:63114' },
+  ]}
+  groups={[{ label: 'Docker bridge network: ferry', around: ['web1', 'web2', 'api', 'db'] }]}
+  steps={[
+    {
+      caption: 'A browser reaches a public service only through the proxy, on port 80 or 443.',
+      flow: ['browser>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'The proxy connects to each instance through a port that Docker publishes on 127.0.0.1.',
+      flow: ['proxy>web1', 'proxy>web2'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'On the private network, containers call each other by name: http://api:8000 and app-db:5432.',
+      flow: ['web1>api', 'web2>api', 'api>db'],
+      tones: { api: 'primary', db: 'primary' },
+    },
+    {
+      caption: 'A tool on the host, such as psql, reaches a datastore on its own port on 127.0.0.1.',
+      flow: ['psql>db'],
+      tones: { psql: 'primary' },
+    },
+  ]}
+/>
+
+Ferry uses two kinds of connections:
+
+- Containers talk to each other on a private Docker network.
+- The outside reaches the public services only through the <Term id="proxy" /> in <Term id="ferryd" />.
+
+The two ends of the proxy stay on the host. It listens on the public addresses that you choose. It connects to the containers through ports on `127.0.0.1`.
+
+For the user view, see [Networking and domains](/docs/concepts/networking).
+
+## In this section
+
+<Cards>
+  <Card title="The private network" href="/docs/architecture/networking-model/private-network" description="One bridge network, with a name for each container." />
+  <Card title="Published ports" href="/docs/architecture/networking-model/published-ports" description="How the proxy reaches a container." />
+  <Card title="Hostnames and routing" href="/docs/architecture/networking-model/routing" description="Which hostname goes to which service." />
+  <Card title="HTTPS" href="/docs/architecture/networking-model/https" description="How certificates come and go." />
+</Cards>

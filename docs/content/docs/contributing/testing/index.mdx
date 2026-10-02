@@ -1,0 +1,56 @@
+---
+title: Testing
+description: "Ferry has three layers of tests: fast tests, Docker end-to-end tests, and the checks of the dashboard and the docs."
+icon: FlaskConical
+---
+
+<Diagram
+  caption="Three layers of tests"
+  nodes={[
+    { id: 'unit', at: [0, 0], icon: 'zap', label: 'Unit, API tests', note: 'cargo test' },
+    { id: 'e2e', at: [0, 1], icon: 'flag', label: 'End-to-end', note: 'FERRY_E2E=1' },
+    { id: 'front', at: [0, 2], icon: 'monitor', label: 'web/, docs/', note: 'npm scripts' },
+    { id: 'mock', at: [1.75, 0], icon: 'copy', label: 'Stand-ins', note: 'no Docker' },
+    { id: 'docker', at: [1.75, 1], icon: 'container', label: 'Docker daemon', note: 'real containers' },
+    { id: 'checks', at: [1.75, 2], icon: 'check', label: 'Their checks', note: 'test, lint, build' },
+  ]}
+  edges={[
+    { from: 'unit', to: 'mock' },
+    { from: 'e2e', to: 'docker' },
+    { from: 'front', to: 'checks' },
+  ]}
+  steps={[
+    {
+      caption: 'The unit tests and the API tests use stand-ins. They need no Docker and run in seconds.',
+      flow: ['unit>mock'],
+      tones: { unit: 'primary', mock: 'primary' },
+    },
+    {
+      caption: 'The end-to-end tests drive a real Docker daemon. They run only when you ask for them.',
+      flow: ['e2e>docker'],
+      tones: { e2e: 'primary', docker: 'primary' },
+    },
+    {
+      caption: 'The dashboard and the docs site have their own checks.',
+      flow: ['front>checks'],
+      tones: { front: 'primary', checks: 'primary' },
+    },
+  ]}
+/>
+
+<Term id="unit-test">Unit tests</Term> and API tests run on each machine in seconds. <Term id="e2e-test">End-to-end tests</Term> need the <Term id="docker-daemon" />.
+
+## Run the fast tests
+
+```bash title="Terminal"
+cargo test --workspace
+```
+
+## In this section
+
+<Cards>
+  <Card title="Unit and API tests" href="/docs/contributing/testing/unit" description="What cargo test runs with no Docker." />
+  <Card title="Docker end-to-end tests" href="/docs/contributing/testing/e2e" description="The tests behind FERRY_E2E=1." />
+  <Card title="Write an end-to-end test" href="/docs/contributing/testing/write-e2e" description="Five rules for a test that shares the daemon." />
+  <Card title="Before you push" href="/docs/contributing/testing/before-you-push" description="The checks for each part that you changed." />
+</Cards>

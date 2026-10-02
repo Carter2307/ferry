@@ -1,0 +1,23 @@
+---
+title: ferryd cannot find the docker CLI
+description: ferryd runs docker build, but it finds no docker command.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+the docker CLI ('docker') was not found: install Docker on the Ferry server
+```
+
+The deploy gets the status `build_failed`. The live deploy continues to answer.
+
+## Why it occurs
+
+`ferryd` runs `docker build`. There is no `docker` command on its <Term id="path-variable" />.
+
+A <Term id="service-manager" /> sometimes starts `ferryd` with a small `PATH`.
+
+## How to repair it
+
+- Install the Docker CLI on the server.
+- Or give the full path of the command to `ferryd` with `--docker-bin`.

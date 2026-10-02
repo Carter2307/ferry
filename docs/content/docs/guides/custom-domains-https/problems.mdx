@@ -1,0 +1,43 @@
+---
+title: Problems with a custom domain
+description: "Most problems have one of two causes: the DNS, or port 80."
+---
+
+<Flow
+  caption="Four things that must be true"
+  steps={[
+    { icon: 'globe', title: 'DNS', text: 'The domain resolves to this server.' },
+    { icon: 'plug', title: 'Port 80', text: 'The internet can reach port 80 of the server.' },
+    { icon: 'lock', title: 'HTTPS on', text: 'ferryd has the options --https-addr and --acme-email.' },
+    { icon: 'certificate', title: 'Certificate', text: 'ferry certificates shows the state issued.', tone: 'success' },
+  ]}
+/>
+
+| What you see | What to check |
+|---|---|
+| `ferry certificates` shows `failed` | The cause is next to the state, with the time of the next attempt. |
+| No `requesting a TLS certificate` line in the log | HTTPS is off. `ferry info` shows `TLS: disabled` until `ferryd` has `--https-addr` and `--acme-email`. |
+| The request fails in the log, and Ferry tries again later | The DNS, or port 80. See the list below. |
+| <Term id="rate-limit">Rate limits</Term> of <Term id="lets-encrypt" /> | Test with `--acme-staging`. |
+| `404` with `x-ferry-error: not_found` | No service on this server has the domain. Run `ferry domains shop`. |
+| The app builds `http://` links | Read the scheme from `X-Forwarded-Proto`. See [Networking](/docs/concepts/networking). |
+
+## The two frequent causes
+
+- The domain does not <Term id="resolve">resolve</Term> to this server.
+- The internet cannot reach port 80: a <Term id="firewall" />, a cloud security group, or another program on port 80.
+
+<Accordions>
+  <Accordion title="When Ferry tries again">
+    After a failure, Ferry waits 5 minutes before the next attempt for that hostname. Then it waits 10 minutes, then 20, and so on, up to 6 hours. A restart of `ferryd` starts a new attempt immediately.
+  </Accordion>
+  <Accordion title="The option --acme-staging">
+    The certificates of the test system of Let's Encrypt have large limits, but browsers do not trust them. When you remove the option, Ferry replaces them with production certificates.
+  </Accordion>
+  <Accordion title="Why the app sees HTTP">
+    The proxy stops the <Term id="tls" /> encryption and talks plain HTTP to your app. Thus the app must read the scheme from the <Term id="header" /> `X-Forwarded-Proto`.
+  </Accordion>
+  <Accordion title="Local names">
+    A <Term id="local-name" /> gets no certificate. Thus the log has no `requesting a TLS certificate` line for it.
+  </Accordion>
+</Accordions>

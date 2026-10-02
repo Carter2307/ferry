@@ -1,0 +1,20 @@
+---
+title: References in a build
+description: A build also gets the resolved values. Ferry leaves out a reference that it cannot resolve yet.
+---
+
+```text title="Deploy log" noCopy
+==> Warning: not available at build time (unresolved references): API_URL (…)
+```
+
+The variables of a service also go to the <Term id="build" />, as <Term id="buildkit" /> secrets. The build gets the resolved values.
+
+## If a reference cannot resolve at the build
+
+For example, the reference points at a service that has no deploy yet.
+
+- Ferry leaves the variable out of the build.
+- The <Term id="deploy-log" /> tells you, as in the example above.
+- The container gets the variable later, when the reference resolves.
+
+See [Secrets in a build](/docs/concepts/builds/build-secrets).

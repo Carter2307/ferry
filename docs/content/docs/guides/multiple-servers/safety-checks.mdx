@@ -1,0 +1,42 @@
+---
+title: The safety checks
+description: At each start, ferryd makes sure that no other server uses its data directory or its prefix.
+---
+
+<Flow
+  caption="What ferryd checks when it starts"
+  steps={[
+    { icon: 'lock', title: 'Lock', text: 'Does another ferryd use this data directory?' , tone: 'warning' },
+    { icon: 'fingerprint', title: 'Owner', text: 'Does another data directory own this prefix?', tone: 'warning' },
+    { icon: 'search', title: 'Unknown', text: 'Is the data directory empty, with unknown containers under the prefix?', tone: 'warning' },
+    { icon: 'play', title: 'Start', text: 'All checks are good. The server starts.', tone: 'success' },
+  ]}
+/>
+
+## One server for each data directory
+
+`ferryd` holds a <Term id="data-dir-lock" /> on `<data-dir>/ferryd.lock`.
+
+```text noCopy
+Error: another ferryd is already running with data directory /var/lib/ferry
+```
+
+## One data directory for each prefix
+
+At its first start, a server writes two things on the <Term id="marker-volume" /> `<prefix>-owner`: its identity (`<data-dir>/instance_id`) and its data directory. After that, a server with another data directory refuses the <Term id="name-prefix" />.
+
+```text noCopy
+Error: Docker resources with prefix 'ferry' belong to another Ferry server (data dir /var/lib/ferry). Run this server with a different --name-prefix, stop the other server, or pass --take-over to adopt the resources (the other server's containers will then be managed — and possibly removed — by this one).
+```
+
+## An empty data directory
+
+The server also refuses to start if its <Term id="data-directory" /> is empty and no marker explains the containers under its prefix.
+
+```text noCopy
+Error: found 3 Docker container(s) with prefix 'ferry' that this (empty) data dir /home/you/projects/ferry-data doesn't know. They probably belong to another Ferry server. Run this server with a different --name-prefix, …
+```
+
+This check catches a common mistake: you start `ferryd` from another directory, with the default `./ferry-data`.
+
+[Server options](/docs/reference/server-options) describes `--name-prefix`, `--take-over` and the other options.

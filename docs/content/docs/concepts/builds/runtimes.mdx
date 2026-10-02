@@ -1,0 +1,71 @@
+---
+title: Runtimes
+description: The runtime tells Ferry how to make the image of a service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'rt', at: [0, 1], icon: 'sliders', label: 'Runtime', note: '--runtime' },
+    { id: 'own', at: [1.5, 0], icon: 'file-code', label: 'docker', note: 'your Dockerfile' },
+    { id: 'gen', at: [1.5, 1], icon: 'pencil', label: 'node, python, …', note: 'Ferry writes one' },
+    { id: 'pull', at: [1.5, 2], icon: 'pull', label: 'image', note: 'no build' },
+    { id: 'img', at: [3, 1], icon: 'package', label: 'Image' },
+  ]}
+  edges={[
+    { from: 'rt', to: 'own' },
+    { from: 'rt', to: 'gen' },
+    { from: 'rt', to: 'pull' },
+    { from: 'own', to: 'img' },
+    { from: 'gen', to: 'img' },
+    { from: 'pull', to: 'img' },
+  ]}
+  steps={[
+    {
+      caption: 'docker: Docker builds your Dockerfile.',
+      flow: ['rt>own', 'own>img'],
+      tones: { own: 'primary' },
+    },
+    {
+      caption: 'node, python, go, rust, ruby or static: Ferry writes the Dockerfile.',
+      flow: ['rt>gen', 'gen>img'],
+      tones: { gen: 'primary' },
+    },
+    {
+      caption: 'image: Ferry pulls the image of the service. It builds nothing.',
+      flow: ['rt>pull', 'pull>img'],
+      tones: { pull: 'primary' },
+    },
+  ]}
+/>
+
+## The runtimes
+
+| <Term id="runtime">Runtime</Term> | Ferry makes the image with |
+|---|---|
+| `auto` (default) | The runtime that it [detects](/docs/concepts/builds/detection) from the files |
+| `docker` | [Your Dockerfile](/docs/concepts/builds/dockerfile) |
+| `image` | No build: Ferry pulls the image of the service. Ferry sets this runtime when the service has an image. |
+| `node` | A generated [Node.js](/docs/concepts/builds/node) Dockerfile (npm, Yarn, pnpm or Bun) |
+| `python` | A generated [Python](/docs/concepts/builds/python) Dockerfile |
+| `go` | A generated [Go](/docs/concepts/builds/go) Dockerfile |
+| `rust` | A generated [Rust](/docs/concepts/builds/rust) Dockerfile |
+| `ruby` | A generated [Ruby](/docs/concepts/builds/ruby) Dockerfile |
+| `static` | A generated nginx image, after an optional [build step](/docs/concepts/builds/static-build) |
+
+## Set the runtime
+
+```bash title="Terminal"
+ferry update api --runtime node
+```
+
+In the dashboard, use the **Settings** page.
+
+<Callout type="warning" title="The runtime must agree with the files">
+`--runtime node` with no `package.json` fails. The message names the file that is not there, and the runtime that the project seems to use.
+</Callout>
+
+<Accordions>
+  <Accordion title="Other names for a runtime">
+    Ferry accepts some other names, such as `nodejs` and `bun` for `node`, `python3` for `python` and `golang` for `go`.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,85 @@
+---
+title: The proxy answers with an error
+description: When the proxy cannot send a request to your app, it answers with its own page and an x-ferry-error header.
+---
+
+## What you see
+
+Your app does not answer. The browser shows an error page with the status `404`, `502` or `503`. Read the headers of the answer:
+
+```bash title="Terminal"
+curl -sI http://shop.localhost:8080/ | grep -i x-ferry-error
+```
+
+The <Term id="proxy" /> adds the <Term id="ferry-error-header" /> <Term id="header" /> to its own error pages. Thus you can tell them apart from the errors of your app.
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.5, 0], icon: 'route', label: 'Proxy' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'Instance' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: '404 not_found: no service has this hostname.',
+      hide: ['app'],
+      flow: ['browser>proxy'],
+      tones: { proxy: 'danger' },
+      notes: { proxy: '404 not_found' },
+    },
+    {
+      caption: '503 no_upstreams: the service has no instance that runs.',
+      hide: ['app'],
+      flow: ['browser>proxy'],
+      tones: { proxy: 'danger' },
+      notes: { proxy: '503 no_upstreams' },
+    },
+    {
+      caption: '503 suspended: you suspended the service.',
+      cut: ['proxy>app'],
+      flow: ['browser>proxy'],
+      tones: { proxy: 'danger', app: 'muted' },
+      notes: { proxy: '503 suspended', app: 'suspended' },
+    },
+    {
+      caption: '502 bad_gateway: the instance refused the connection, or failed during the request.',
+      flow: ['browser>proxy', 'proxy>app'],
+      tones: { proxy: 'danger', app: 'danger' },
+      notes: { proxy: '502 bad_gateway', app: 'fails' },
+    },
+  ]}
+/>
+
+## How to repair it
+
+| Status and `x-ferry-error` | Repair |
+|---|---|
+| `404` `not_found` | Get the URL with `ferry open NAME`. For custom domains, run `ferry domains NAME`. |
+| `503` `no_upstreams` | Run `ferry deploys NAME` and `ferry status NAME`. Then read the log of the failed deploy. |
+| `503` `suspended` | `ferry resume NAME` |
+| `502` `bad_gateway` | Read the <Term id="runtime-log">runtime logs</Term>: `ferry logs NAME`. |
+
+<Accordions>
+  <Accordion title="The causes of 404 not_found">
+    No service has this hostname. The possible causes:
+
+    - An error in the name.
+    - A domain that is not a domain of the server, or that waits for its DNS (`ferry domains`).
+    - A request to an IP address.
+    - A worker or a private service: they have no public URL.
+    - A <Term id="reverse-proxy" /> in front of Ferry that does not pass the <Term id="host-header" />.
+  </Accordion>
+  <Accordion title="The causes of 503 no_upstreams">
+    The service has no instance that runs: you did not deploy it, its last deploy failed, or its first deploy is in progress.
+  </Accordion>
+  <Accordion title="Domains and certificates">
+    - For a domain that stays on **Waiting for DNS**, see [If the verification fails](/docs/guides/domains/verify-fails).
+    - For certificates and custom domains, see [Problems with a custom domain](/docs/guides/custom-domains-https/problems).
+  </Accordion>
+</Accordions>

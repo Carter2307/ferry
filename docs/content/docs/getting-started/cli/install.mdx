@@ -1,0 +1,76 @@
+---
+title: Install the CLI
+description: The ferry binary comes from the same build as ferryd. You copy it to the machines that control Ferry.
+---
+
+<Diagram
+  nodes={[
+    { id: 'src', at: [0, 0.5], icon: 'code', label: 'Ferry source', note: 'cargo build' },
+    { id: 'ferryd', at: [1.6, 0], icon: 'server', label: 'ferryd', note: 'the server' },
+    { id: 'ferry', at: [1.6, 1], icon: 'ship', label: 'ferry', note: 'the CLI' },
+    { id: 'bin', at: [3.2, 1], icon: 'folder', label: '/usr/local/bin', note: 'on your machine' },
+  ]}
+  edges={[
+    { from: 'src', to: 'ferryd' },
+    { from: 'src', to: 'ferry' },
+    { from: 'ferry', to: 'bin', label: 'install' },
+  ]}
+  steps={[
+    {
+      caption: 'One build makes two binaries: ferryd and ferry.',
+      hide: ['bin'],
+      flow: ['src>ferryd', 'src>ferry'],
+    },
+    {
+      caption: 'You install ferry in /usr/local/bin.',
+      flow: ['ferry>bin'],
+      tones: { ferry: 'primary', ferryd: 'muted' },
+    },
+    {
+      caption: 'Now each terminal on this machine has the ferry command.',
+      tones: { bin: 'success', ferryd: 'muted' },
+    },
+  ]}
+/>
+
+## Do it
+
+<Steps>
+<Step>
+
+### Build the binaries
+
+Run <Term id="cargo" /> in the Ferry repository. [Installation](/docs/getting-started/installation) tells you what the build needs.
+
+```bash title="Terminal"
+cargo build --release
+```
+
+</Step>
+<Step>
+
+### Install `ferry`
+
+```bash title="Terminal"
+sudo install -m 0755 target/release/ferry /usr/local/bin/
+```
+
+</Step>
+<Step>
+
+### Make sure that it works
+
+```bash title="Terminal"
+ferry --version
+```
+
+The command prints the version of the CLI.
+
+</Step>
+</Steps>
+
+## On another machine
+
+`ferry` is one <Term id="binary" />. It has no runtime dependencies.
+
+Copy the file to each machine that must control Ferry. Then [log in](/docs/getting-started/cli/login).

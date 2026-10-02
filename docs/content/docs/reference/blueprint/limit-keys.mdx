@@ -1,0 +1,41 @@
+---
+title: memoryLimit and cpuLimit
+description: These two Ferry keys set a limit directly. Each one replaces one value of the plan.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: api
+    plan: standard   # 2 GiB / 1 CPU
+    cpuLimit: 500m   # but only half a core
+  - type: worker
+    name: queue
+    memoryLimit: 1G  # and the server's default CPU limit
+```
+
+The keys replace the plan key by key. For example, `plan: pro` with `memoryLimit: 1G` gives 1 GiB and the 2 CPUs of the plan.
+
+## The values
+
+| Key | Accepted values | Range |
+|---|---|---|
+| `memoryLimit` | A size: `512M`, `1G`, `1.5G`, `2GiB`. A plain number is <Term id="mib" />: `768`. | 16 MiB to 1 TiB |
+| `cpuLimit` | A number of CPUs: `0.5`, `2`. Or <Term id="millicore">millicores</Term>: `250m` is 0.25 CPU. Ferry rounds to 0.01 CPU. | 0.01 to 512 CPUs |
+| One of the two, with the value `0` | The server default, as `--memory default` on the CLI. | |
+
+As in Docker, `M`, `MB` and `MiB` all mean MiB. `G`, `GB` and `GiB` all mean GiB.
+
+## A bad value
+
+A bad value stops the apply. The error gives the name of the entry:
+
+```text noCopy
+service 'api': 'memoryLimit': invalid memory size 'lots' (examples: 512M, 1G, 1.5G)
+```
+
+These values are bad:
+
+- a value that Ferry cannot read
+- a value out of the range
+- a `cpuLimit` that rounds to 0, for example `4m`. Ferry refuses it. It does not read it as the server default.

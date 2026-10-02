@@ -1,0 +1,72 @@
+---
+title: "Service: Settings"
+description: The Settings page changes how Ferry builds and runs one service. Each section applies at a different time.
+---
+
+<Diagram
+  caption="When a change applies"
+  nodes={[
+    { id: 'build', at: [0, 0], icon: 'hammer', label: 'Build & deploy' },
+    { id: 'scaling', at: [0, 1], icon: 'scale', label: 'Scaling', note: 'instances' },
+    { id: 'res', at: [0, 2], icon: 'cpu', label: 'Resources', note: 'memory, CPU' },
+    { id: 'next', at: [1.75, 0], icon: 'deploy', label: 'Next deploy' },
+    { id: 'now', at: [1.75, 1], icon: 'zap', label: 'Immediately', note: 'no deploy' },
+    { id: 'later', at: [1.75, 2], label: 'Deploy or restart', note: 'the next one' },
+  ]}
+  edges={[
+    { from: 'build', to: 'next' },
+    { from: 'scaling', to: 'now' },
+    { from: 'res', to: 'later' },
+  ]}
+  steps={[
+    {
+      caption: 'A change in Build & deploy applies at the next deploy.',
+      flow: ['build>next'],
+      tones: { build: 'primary', next: 'primary' },
+    },
+    {
+      caption: 'A change of the number of instances applies immediately, with no deploy.',
+      flow: ['scaling>now'],
+      tones: { scaling: 'primary', now: 'success' },
+    },
+    {
+      caption: 'A change in Resources applies at the next deploy or restart.',
+      flow: ['res>later'],
+      tones: { res: 'primary', later: 'primary' },
+    },
+    {
+      caption: 'On a live service, Restart now in the confirmation applies the limits immediately.',
+      flow: ['res>later'],
+      tones: { res: 'primary', later: 'success' },
+      notes: { later: 'Restart now' },
+    },
+  ]}
+/>
+
+## The sections
+
+| Section | What you change |
+|---|---|
+| **General** | Nothing. It shows the name, the id, the type, the private address and the creation date, with copy buttons. |
+| **Build & deploy** | The source (git, image or upload), branch, runtime, root directory, Dockerfile path, build command, start command, publish directory, port, health check path, auto-deploy. |
+| **Cron schedule** | The schedule of a cron job. It has common presets. |
+| **Scaling** | The instances and the disk mount path. |
+| **Resources** | The memory limit and the CPU limit: **Server default**, a preset or **Custom…**. |
+| **Custom domains** | Add or remove domains. It lists each host that the proxy sends to the service. |
+| **Deploy hook** | Copy the secret deploy URL, or make a new one. Then the old URL stops. |
+| **Danger zone** | Suspend or resume the service. Delete the service. |
+
+## If the settings change in another place
+
+It is possible that a setting changes in another place while you edit the form. Then the page shows **These settings changed elsewhere**.
+
+You choose: keep your edits, or load the latest values. Thus you do not replace the change of another person by accident.
+
+<Accordions>
+  <Accordion title="Build & deploy: the branch">
+    The branch is a list that Ferry reads from the repository. The section also tells you which [connected account](/docs/guides/git-accounts) clones the repository.
+  </Accordion>
+  <Accordion title="Resources: what the limits apply to">
+    The limits apply to each instance, and to the jobs of the service. For a cron job, the limits apply to each run. See [Resource limits](/docs/concepts/resource-limits).
+  </Accordion>
+</Accordions>

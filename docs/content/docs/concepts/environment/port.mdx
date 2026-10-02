@@ -1,0 +1,68 @@
+---
+title: The PORT variable
+description: Ferry chooses the container port at each deploy and gives it to your app in PORT.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0.5], icon: 'ship', label: 'Ferry', note: 'chooses the port' },
+    { id: 'app', at: [1.5, 0.5], icon: 'box', label: 'Your app', note: 'PORT=10000' },
+    { id: 'health', at: [3, 0], icon: 'health', label: 'Health check' },
+    { id: 'proxy', at: [3, 1], icon: 'route', label: 'Proxy' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'app', label: 'PORT' },
+    { from: 'health', to: 'app' },
+    { from: 'proxy', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry chooses the container port one time for each deploy.',
+      cut: ['health>app', 'proxy>app'],
+      tones: { ferry: 'primary' },
+    },
+    {
+      caption: 'Ferry injects the port as PORT. Your app listens on it.',
+      cut: ['health>app', 'proxy>app'],
+      flow: ['ferry>app'],
+      tones: { app: 'primary' },
+    },
+    {
+      caption: 'Ferry does the health check on that port.',
+      cut: ['proxy>app'],
+      flow: ['health>app'],
+      tones: { health: 'warning' },
+      notes: { health: 'port 10000' },
+    },
+    {
+      caption: 'The proxy routes the requests to that port.',
+      flow: ['proxy>app'],
+      tones: { app: 'success' },
+      notes: { proxy: 'port 10000' },
+    },
+  ]}
+/>
+
+This page is for the services that listen: <Term id="web-service">web services</Term>, <Term id="private-service">private services</Term> and <Term id="static-site">static sites</Term>. An app that reads `PORT` works with no configuration.
+
+## How Ferry chooses the port
+
+Ferry uses the first value that it finds:
+
+1. the port setting of the service (`--port`, `port:` in a <Term id="blueprint" />)
+2. a `PORT` variable that you set
+3. the hint of the build: `80` for static sites that nginx serves
+4. the port that the <Term id="image" /> `EXPOSE`s, if it exposes exactly one
+5. the server default, `--default-port` (`10000`)
+
+## An app with a fixed port
+
+If your app listens on a fixed <Term id="port" />, set it with `--port`.
+
+```bash title="Terminal"
+ferry update api --port 3000
+```
+
+<Callout type="warning" title="Do not set PORT to a different value">
+If you set `PORT` to a value different from the port setting, the deploy log gives a warning. The app then listens on the wrong port.
+</Callout>

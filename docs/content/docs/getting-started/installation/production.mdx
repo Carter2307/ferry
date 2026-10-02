@@ -1,0 +1,57 @@
+---
+title: Configure for production
+description: The defaults are good for a laptop. A server needs a base domain, HTTPS and a service manager.
+---
+
+<Diagram
+  nodes={[
+    { id: 'laptop', at: [0, 0], icon: 'laptop', label: 'Laptop', note: 'the defaults' },
+    { id: 'server', at: [0, 1], icon: 'server', label: 'Server', note: 'your options' },
+    { id: 'local', at: [2, 0], icon: 'globe', label: 'localhost', note: 'HTTP, port 8080' },
+    { id: 'public', at: [2, 1], icon: 'lock', label: 'Your domain', note: 'HTTPS, port 443' },
+  ]}
+  edges={[
+    { from: 'laptop', to: 'local' },
+    { from: 'server', to: 'public' },
+  ]}
+  steps={[
+    {
+      caption: 'With the defaults, your apps are at <name>.localhost:8080.',
+      flow: ['laptop>local'],
+      tones: { laptop: 'primary', server: 'muted', public: 'muted' },
+    },
+    {
+      caption: 'On a server, your apps are at <name>.<base-domain>, with HTTPS.',
+      flow: ['server>public'],
+      tones: { server: 'primary', public: 'success', laptop: 'muted', local: 'muted' },
+    },
+  ]}
+/>
+
+## The options that you use most
+
+Most <Term id="flag">flags</Term> also have an environment variable.
+
+| Flag | Environment variable | Default | Purpose |
+|---|---|---|---|
+| `--data-dir` | `FERRY_DATA_DIR` | `./ferry-data` | The state of the server |
+| `--base-domain` | `FERRY_BASE_DOMAIN` | `localhost` | The <Term id="base-domain" />: your apps are at `<name>.<base-domain>`. You can [connect more domains](/docs/guides/domains) while the server runs. |
+| `--proxy-addr` | `FERRY_PROXY_ADDR` | `0.0.0.0:8080` | The public HTTP address, for example `0.0.0.0:80` |
+| `--https-addr` | `FERRY_HTTPS_ADDR` | none | The public HTTPS address, for example `0.0.0.0:443` |
+| `--acme-email` | `FERRY_ACME_EMAIL` | none | Turns on <Term id="lets-encrypt" /> certificates |
+| `--github-webhook-secret` | `FERRY_GITHUB_WEBHOOK_SECRET` | none | Turns on GitHub auto-deploys |
+
+## Example
+
+```bash title="Terminal"
+ferryd run \
+  --data-dir /var/lib/ferry \
+  --base-domain apps.example.com \
+  --proxy-addr 0.0.0.0:80 \
+  --https-addr 0.0.0.0:443 \
+  --acme-email you@example.com
+```
+
+A <Term id="service-manager" /> such as <Term id="systemd" /> runs this command for you. The [Production setup](/docs/guides/production) guide shows the full setup.
+
+[Server options](/docs/reference/server-options) lists each flag. If the server does not start, see [Troubleshooting](/docs/guides/troubleshooting).

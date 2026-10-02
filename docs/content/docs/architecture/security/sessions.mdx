@@ -1,0 +1,67 @@
+---
+title: The session cookie
+description: After you sign in, a cookie proves who you are. The JavaScript of the page cannot read it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'server', at: [1.5, 0], icon: 'server', label: 'Server' },
+    { id: 'db', at: [3, 0], icon: 'database', label: 'ferry.db', note: 'SHA-256 only' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'server' },
+    { from: 'server', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'You sign in at /login with your email and your password.',
+      flow: ['browser>server'],
+      notes: { browser: 'email + password' },
+    },
+    {
+      caption: 'The server makes a session. It sets the session cookie in the browser.',
+      tones: { browser: 'primary' },
+      notes: { browser: 'has the cookie' },
+    },
+    {
+      caption: 'The server stores only the SHA-256 hash of the secret of the session.',
+      flow: ['server>db'],
+      notes: { browser: 'has the cookie' },
+    },
+    {
+      caption: 'The browser sends the cookie with each request. The page cannot read it.',
+      flow: ['browser>server'],
+      tones: { server: 'success' },
+      notes: { browser: 'has the cookie' },
+    },
+  ]}
+/>
+
+A <Term id="browser-session" /> is the proof that one browser signed in. The browser keeps it in the <Term id="session-cookie" />.
+
+## The cookie
+
+| Property | Effect |
+|---|---|
+| `HttpOnly` | The JavaScript of the dashboard cannot read the cookie. |
+| `SameSite=Strict` | The browser sends the cookie only with requests from the same site. |
+| `Secure` | Set when you reach the dashboard over <Term id="https" /> through a proxy. |
+| The name `ferry_session_7878` | The name ends with the port of the address that you use. |
+
+## When a session ends
+
+- 30 days after its last use.
+- When you sign out.
+- When you change the password: the session of each other browser ends.
+
+In the dashboard, **Server → Account** lists the sessions. There, you can sign each browser out.
+
+<Accordions>
+  <Accordion title="Two servers on one host name">
+    The servers `127.0.0.1:7878` and `127.0.0.1:7879` have the same host name. Because the name of the cookie ends with the port, each server keeps its own session.
+  </Accordion>
+  <Accordion title="What the dashboard keeps in the browser">
+    The dashboard keeps only UI preferences in `localStorage`. The secret of the session is only in the cookie.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,67 @@
+---
+title: Dashboard tour
+description: The dashboard is the web pages of your Ferry server. It does all that the CLI does.
+icon: LayoutDashboard
+---
+
+<Diagram
+  caption="One server, two ways to control it"
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Dashboard', note: 'in your browser' },
+    { id: 'cli', at: [0, 1], icon: 'terminal', label: 'CLI', note: 'ferry' },
+    { id: 'ferryd', at: [1.5, 0.5], icon: 'server', label: 'ferryd', note: 'the server' },
+    { id: 'docker', at: [3, 0.5], icon: 'container', label: 'Docker' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'ferryd' },
+    { id: 'update', from: 'ferryd', to: 'browser' },
+    { from: 'cli', to: 'ferryd' },
+    { from: 'ferryd', to: 'docker' },
+  ]}
+  steps={[
+    {
+      caption: 'The dashboard is part of ferryd. You open it in a browser.',
+      flow: ['browser>ferryd'],
+      tones: { browser: 'primary', cli: 'muted' },
+    },
+    {
+      caption: 'You click a button. ferryd tells Docker what to do.',
+      flow: ['browser>ferryd', 'ferryd>docker'],
+      tones: { browser: 'primary', cli: 'muted' },
+    },
+    {
+      caption: 'A command of the CLI changes a service.',
+      flow: ['cli>ferryd', 'ferryd>docker'],
+      tones: { cli: 'primary' },
+    },
+    {
+      caption: 'The dashboard shows the change in about one second.',
+      flow: ['update'],
+      tones: { browser: 'success' },
+      notes: { browser: 'up to date' },
+    },
+  ]}
+/>
+
+The <Term id="dashboard" /> is part of <Term id="ferryd" />. All that the <Term id="cli" /> does, the dashboard does too.
+
+You create and deploy services, read build logs, roll back and edit variables. You control datastores and env groups, and you apply blueprints.
+
+A change from the CLI, the API, a webhook or another browser tab shows on the screen in about one second.
+
+## Open it
+
+```text title="Browser"
+http://127.0.0.1:7878
+```
+
+The [CLI](/docs/getting-started/cli) does the same actions from a terminal. The two use the same [API](/docs/reference/api).
+
+## In this section
+
+<Cards>
+  <Card title="Open the dashboard" href="/docs/getting-started/dashboard/open" description="The two addresses, and a remote server." />
+  <Card title="The frame of each screen" href="/docs/getting-started/dashboard/layout" description="The top bar, the icon rail and the page." />
+  <Card title="Create a service" href="/docs/getting-started/dashboard/new-service" description="One form, from the type to the first deploy." />
+  <Card title="The pages of a service" href="/docs/getting-started/dashboard/service" description="Overview, deploys, logs, jobs, environment, settings." />
+</Cards>
