@@ -30,10 +30,13 @@ npm run dev          # → http://localhost:3000
 | `npm run generate` | regenerates the reference pages from the Rust code (needs `cargo`) |
 | `npm run generate:check` | fails when a generated file is stale (for CI) |
 | `npm run check-links` | checks `out/` for broken internal links and anchors |
+| `npm run check-content` | measures every page against the writing rules (`AUTHORING.md`): simple English, words per page, figures |
 
 ## Write content
 
-Pages are MDX files in `content/docs/`. The URL follows the path: `content/docs/concepts/deploys.mdx` → `/docs/concepts/deploys/`.
+**Read [`AUTHORING.md`](AUTHORING.md) first.** The pages are short and picture-first, in Simplified Technical English (ASD-STE100): one idea per page, a figure before the text, 220 words at most, every technical name explained by the glossary. `npm run check-content -- -v <path>` measures a page; `content/docs/concepts/deploys/` is the model.
+
+Pages are MDX files in `content/docs/`. The URL follows the path: `content/docs/concepts/deploys/steps.mdx` → `/docs/concepts/deploys/steps/`. A subject with more than one idea is a folder: its `index.mdx` keeps the URL of the subject.
 
 ```mdx
 ---
@@ -61,11 +64,17 @@ Body in Markdown, with the components below.
 | `<Files>` / `<Folder>` / `<File>` | `name`, `defaultOpen` | file trees |
 | `<TypeTable>` | `type`: `{ field: { type, description, default, required } }` | option tables |
 | `<Badge>` | `variant`: `neutral`, `primary`, `success`, `warning`, `danger` | inline pills |
-| `<Mermaid>` | `chart` | diagrams (or a ` ```mermaid ` fence) |
+| `<Mermaid>` | `chart` | state machines and sequences (or a ` ```mermaid ` fence) |
+| `<Diagram>` | `nodes`, `edges`, `groups`, `steps`, `caption` | boxes and arrows on a grid; dots move along the arrows, and `steps` play in a loop with one caption each |
+| `<Flow>` | `steps`: `{ title, text, icon, tone }[]` | what happens, in order: one step is lit at a time |
+| `<Terminal>` | `lines`, `title` | a terminal session that plays: `$ ` lines are typed, the others are output |
+| `<Term>` | `id` (from `lib/glossary/`) | a technical name with its definition in a tooltip |
+| `<Glossary>` | — | the list of every term (the `/docs/glossary` page) |
 
   Icons for cards: `import { Rocket } from 'lucide-react';` at the top of the MDX file, then `icon={<Rocket />}`.
 
-- **Diagrams:** write a ` ```mermaid ` code fence (flowchart, sequence, state…). It renders in the browser with the Ferry colors in light and dark mode. Prefer `flowchart TB` for anything with more than four nodes so it fits the 760px column. Hand-made SVGs go in `public/` and are referenced as `/file.svg`.
+- **Figures:** `<Diagram>`, `<Flow>` and `<Terminal>` take plain data (no JSX in a prop) and are drawn with the Ferry colors in light and dark mode; they stop moving for readers who ask for reduced motion. `AUTHORING.md` has their props and limits, and `npm run check-content` checks their data (unknown icons, edges to missing nodes, labels too long). For state machines and sequences, write a ` ```mermaid ` code fence; prefer `flowchart TB` for anything with more than four nodes so it fits the 760px column. Hand-made SVGs go in `public/` and are referenced as `/file.svg`.
+- **Glossary:** the terms are in `lib/glossary/` (`core.ts`, then one file per section). `<Term id="container" />` shows the definition; an id exists in one file only.
 
 ## Generated references
 
@@ -144,13 +153,14 @@ app/
   icon.svg                favicon (the Ferry logo in a square)
 components/
   layout/                 site header (theme menu), docs header slot, sidebar, site nav (drawer links)
-  mdx/                    Callout, Card(s), Badge, Mermaid
+  mdx/                    Callout, Card(s), Badge, Mermaid, and the figures: Diagram, Flow, Terminal, Term (figure.tsx: frame + playback, icons.ts: icon names)
   mdx.tsx                 the MDX component map
   api-page.tsx            OpenAPI page renderer (playground off, YAML/gzip bodies, bearer token in samples)
   search.tsx              search dialog (static index, pages ranked by title/heading match)
 content/docs/             the pages
-lib/                      source loader, OpenAPI loader, shared settings
+lib/                      source loader, OpenAPI loader, shared settings, glossary/ (the terms)
 openapi/ferry.json        GENERATED
 public/logo.svg           the Ferry logo (header, footer, Open Graph images)
-scripts/                  generate.mjs, check-links.mjs
+scripts/                  generate.mjs, check-links.mjs, check-ste.mjs + check-figures.mjs (npm run check-content)
+AUTHORING.md              how to write a page
 ```
