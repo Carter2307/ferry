@@ -1,0 +1,65 @@
+---
+title: The steps of a deploy
+description: A deploy goes through six steps, from the queue to live.
+---
+
+<Flow
+  steps={[
+    { icon: 'queue', title: 'Queue', text: 'The deploy waits for its turn. A service runs one deploy at a time.' },
+    { icon: 'hammer', title: 'Build', text: 'Ferry gets your code and makes an image.' },
+    { icon: 'play', title: 'Start', text: 'Ferry starts new instances. The old instances continue to answer.' },
+    { icon: 'health', title: 'Health check', text: 'Each new instance must pass a test.', tone: 'warning' },
+    { icon: 'switch', title: 'Switch', text: 'The proxy sends the traffic to the new instances. The deploy is live.', tone: 'success' },
+    { icon: 'stop', title: 'Drain', text: 'Ferry stops the old instances and removes them.' },
+  ]}
+/>
+
+## The same steps in the log
+
+<Terminal
+  title="Deploy log"
+  lines={[
+    '$ ferry up node-hello --follow',
+    '==> Starting deploy dep-ba5a7fce730d4061aaa7 (trigger: upload)',
+    '==> Build successful 🎉',
+    '==> Starting 1 instance(s)',
+    '==> Waiting for 1 instance(s) to become healthy: the port must accept TCP connections (timeout 120s)',
+    '==> Health check passed',
+    '==> Routing traffic to the new instance(s)',
+    '==> Stopping 1 old instance(s)',
+    '==> Your service is live 🎉',
+    '==> Available at http://node-hello.localhost:8080',
+  ]}
+/>
+
+The lines that start with `==>` come from Ferry.
+
+## If a step fails
+
+Ferry removes the new instances. The deploy gets the status `build_failed` or `deploy_failed`.
+
+Ferry does not touch the old instances. Your service stays online.
+
+<Callout type="warning" title="A service with a disk stops during a deploy">
+A service with a <Term id="disk" /> has one instance. Ferry stops the old instance before it starts the new instance. Thus the service is offline for a short time. See [Disks, scaling & suspend](/docs/concepts/scaling).
+</Callout>
+
+<Accordions>
+  <Accordion title="Details of each step">
+    - **Queue.** Different services deploy at the same time. A new deploy cancels the older deploys of the same service that are in the queue. The server builds 2 images at a time (`--build-concurrency`). The log tells you when a deploy waits for a build slot.
+    - **Build.** The name of the image is `<prefix>/<service>:<deploy-id>`. A restart or a rollback uses an image that exists. Before a build, the server must have 1 GiB of free disk space (`--min-free-disk`). The deploy of a cron job stops after this step: it is live, and the schedule uses the new image.
+    - **Start.** Ferry chooses the [port](/docs/concepts/deploys/ports), replaces the `${{…}}` references and applies the [memory and CPU limits](/docs/concepts/resource-limits).
+    - **Health check.** Ferry copies the output of the new instances into the deploy log.
+    - **Switch.** The previous live deploy becomes `deactivated`.
+    - **Drain.** For web services and static sites, Ferry first waits 2 seconds for the requests in progress. Then each old instance has 10 seconds to stop.
+  </Accordion>
+  <Accordion title="Causes of a failure">
+    - The build fails.
+    - An instance crashes.
+    - An instance uses too much memory. The error is `instance ab12cd ran out of memory (limit 512 MiB) — raise the service's memory limit`.
+    - The health check gets no good answer before the timeout.
+  </Accordion>
+  <Accordion title="For engineers">
+    The [deploy pipeline](/docs/architecture/deploy-pipeline) page describes the workers, the locks and the snapshots.
+  </Accordion>
+</Accordions>

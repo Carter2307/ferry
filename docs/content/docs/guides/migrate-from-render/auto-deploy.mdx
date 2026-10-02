@@ -1,0 +1,54 @@
+---
+title: Turn on auto-deploy
+description: Let GitHub tell Ferry about each push, and stop the deploys on Render.
+---
+
+<Diagram
+  nodes={[
+    { id: 'github', at: [0, 0.5], icon: 'branch', label: 'GitHub', note: 'git push' },
+    { id: 'render', at: [1.75, 0], icon: 'cloud', label: 'Render' },
+    { id: 'ferry', at: [1.75, 1], icon: 'server', label: 'Ferry' },
+  ]}
+  edges={[
+    { from: 'github', to: 'render' },
+    { from: 'github', to: 'ferry' },
+  ]}
+  steps={[
+    {
+      caption: 'A push to the branch deploys the service on Render.',
+      flow: ['github>render'],
+      cut: ['github>ferry'],
+    },
+    {
+      caption: 'GitHub sends webhooks to Ferry. A push now starts two deploys.',
+      flow: ['github>render', 'github>ferry'],
+      tones: { render: 'warning' },
+      notes: { render: 'second deploy' },
+    },
+    {
+      caption: 'You remove the webhook of the Render service. Only Ferry deploys.',
+      flow: ['github>ferry'],
+      cut: ['github>render'],
+      tones: { ferry: 'success', render: 'muted' },
+    },
+  ]}
+/>
+
+With <Term id="auto-deploy" />, a service deploys again after each push. The key `autoDeploy` is on by default. It works when GitHub sends <Term id="webhook">webhooks</Term> to Ferry.
+
+<Steps>
+<Step>
+
+### Connect GitHub to Ferry
+
+Follow [Auto-deploy from GitHub](/docs/guides/github-auto-deploy).
+
+</Step>
+<Step>
+
+### Stop the deploys on Render
+
+Remove the webhook of the Render service, or disconnect the service. Then a push does not deploy two times.
+
+</Step>
+</Steps>

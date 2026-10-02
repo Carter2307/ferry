@@ -1,0 +1,78 @@
+---
+title: Deploy with a deploy hook
+description: With a deploy hook, your CI deploys one service after the tests pass.
+---
+
+<Diagram
+  nodes={[
+    { id: 'push', at: [0, 0], icon: 'branch', label: 'git push' },
+    { id: 'ci', at: [1.1, 0], icon: 'workflow', label: 'CI', note: 'runs the tests' },
+    { id: 'hook', at: [2.2, 0], icon: 'link', label: 'Deploy hook', note: 'a secret URL' },
+    { id: 'deploy', at: [3.3, 0], icon: 'deploy', label: 'New deploy', note: 'answer: 202' },
+  ]}
+  edges={[
+    { from: 'push', to: 'ci' },
+    { from: 'ci', to: 'hook' },
+    { from: 'hook', to: 'deploy' },
+  ]}
+  steps={[
+    {
+      caption: 'You push a commit. Your CI runs the tests.',
+      hide: ['deploy'],
+      cut: ['ci>hook'],
+      flow: ['push>ci'],
+    },
+    {
+      caption: 'If the tests fail, the CI does not call the hook. Ferry deploys nothing.',
+      hide: ['deploy'],
+      cut: ['ci>hook'],
+      tones: { ci: 'danger' },
+      notes: { ci: 'tests fail' },
+    },
+    {
+      caption: 'If the tests pass, the CI sends a request to the deploy hook.',
+      hide: ['deploy'],
+      flow: ['ci>hook'],
+      tones: { ci: 'success' },
+      notes: { ci: 'tests pass' },
+    },
+    {
+      caption: 'Ferry puts a deploy in the queue and answers 202.',
+      flow: ['hook>deploy'],
+      tones: { ci: 'success', deploy: 'success' },
+      notes: { ci: 'tests pass' },
+    },
+  ]}
+/>
+
+A <Term id="deploy-hook" /> is a secret URL that deploys one service when you call it. Use it from your <Term id="ci" />, or from each tool that can send an HTTP request. The server needs no webhook secret for it.
+
+## Call the hook
+
+<Terminal
+  lines={[
+    '$ ferry deploy-hook show api',
+    'https://ferry.apps.example.com/hooks/deploy/srv-5c57d756f6ad47f59800?key=652f4935c8534c02aad20d953d8a7ff1',
+    "$ curl -X POST 'https://ferry.apps.example.com/hooks/deploy/srv-5c57d756f6ad47f59800?key=652f4935c8534c02aad20d953d8a7ff1'",
+  ]}
+/>
+
+## The rules
+
+- `POST` and `GET` work. The answer is `202`, with a summary of the deploy in the queue (<Term id="trigger" /> `deploy_hook`).
+- The hook deploys the source in the settings of the service: the head of its <Term id="branch" />, its <Term id="image" />, or its last upload. It cannot choose a <Term id="commit" />.
+- The URL is the secret. Store it as a secret of your CI.
+- `ferry deploy-hook rotate api` replaces the key. The old URL stops immediately.
+- The printed URL starts with the server URL of your CLI. From outside, call it on your public dashboard host.
+
+<Accordions>
+  <Accordion title="Errors">
+    An unknown service id and a wrong key get the same answer: `401`. Thus nobody can use the hook to find services. A suspended service answers `409`.
+  </Accordion>
+  <Accordion title="Images">
+    If the image has the tag `latest` or no tag, Ferry pulls it again.
+  </Accordion>
+  <Accordion title="More about deploy hooks">
+    See [Deploy hooks](/docs/concepts/deploys/deploy-hooks) and the [Webhooks API](/docs/reference/api/hooks).
+  </Accordion>
+</Accordions>

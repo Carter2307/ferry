@@ -1,0 +1,38 @@
+---
+title: "Server: Domains"
+description: The Domains section connects a domain that you own to the server and shows each certificate.
+---
+
+<Flow
+  caption="Connect a domain"
+  steps={[
+    { icon: 'globe', title: 'Connect a domain', text: 'Click the button. Enter a domain that you own.' },
+    { icon: 'copy', title: 'DNS record', text: 'The window shows the DNS record to create. Each value has a copy button.' },
+    { icon: 'search', title: 'Test', text: 'The window shows what Ferry found at its last test of the domain.', tone: 'warning' },
+    { icon: 'ok', title: 'Active', text: 'The domain reaches the server. The window tells you, with no action from you.', tone: 'success' },
+  ]}
+/>
+
+Ferry serves your services under the domains of the server. See [Domains](/docs/guides/domains).
+
+## The list of domains
+
+Each <Term id="domain" /> shows its state: Active, Waiting for DNS, Misconfigured or Local. One domain is the <Term id="default-domain" />.
+
+A domain is Active when it reaches the server. To connect one, you create a <Term id="dns-record" /> at your DNS provider.
+
+| Button | Effect |
+|---|---|
+| **Verify now** | Ferry tests the domain again. |
+| **Make default** | The domain becomes the default domain. |
+| **Disconnect** | Ferry removes the domain from the server. |
+
+## Certificates
+
+**Certificates** lists each hostname that the proxy serves, with the state of its <Term id="certificate" />.
+
+| State | What you see |
+|---|---|
+| Issued | The date when the certificate expires |
+| Pending or Issuing | Ferry asks for the certificate |
+| Failed | The cause, and the time of the next try |

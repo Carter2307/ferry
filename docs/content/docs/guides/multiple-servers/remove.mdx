@@ -1,0 +1,55 @@
+---
+title: Remove a server
+description: Delete the services and datastores of the server, stop it, then clean what stays in Docker.
+---
+
+<Flow
+  steps={[
+    { icon: 'trash', title: 'Delete', text: 'Delete the services and the datastores of the server.' },
+    { icon: 'stop', title: 'Stop', text: 'Stop the server.' },
+    { icon: 'container', title: 'Clean Docker', text: 'Remove the containers, volumes, images and network that have its prefix.', tone: 'danger' },
+  ]}
+/>
+
+<Callout type="danger" title="This deletes data">
+The <Term id="volume">volumes</Term> hold the datastores and the disks of the server. If you need them, back them up first.
+</Callout>
+
+<Steps>
+<Step>
+
+### Delete its services and datastores
+
+Use `ferry delete` for each <Term id="service" /> and `ferry db rm` for each <Term id="datastore" />.
+
+</Step>
+<Step>
+
+### Stop the server
+
+```bash title="Terminal"
+ferryd stop --data-dir /var/lib/ferry-staging
+```
+
+</Step>
+<Step>
+
+### Remove what is left under its prefix
+
+These commands are for the <Term id="name-prefix" /> `staging`.
+
+```bash title="Terminal"
+docker ps -aq --filter label=ferry.instance=staging | xargs docker rm -f
+docker volume ls -q --filter label=ferry.instance=staging | xargs docker volume rm
+docker image ls --filter reference='staging/*' --format '{{.Repository}}:{{.Tag}}' | xargs docker rmi
+docker network rm staging
+```
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="Why you remove the images by name">
+    Remove the images by name, as above, not by image id. A server tags each image that it pulls under its own prefix: `staging/web:dep-…` for `nginx:alpine`, for example. A delete by id also deletes the original image and each other tag that shares it.
+  </Accordion>
+</Accordions>

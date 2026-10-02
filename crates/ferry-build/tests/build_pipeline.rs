@@ -79,7 +79,7 @@ async fn git_node_build_end_to_end() {
         "dep-node1",
         "web",
         ServiceType::WebService,
-        BuildSource::Git { repo_url: repo.to_string_lossy().into_owned(), branch: "main".into(), commit: None },
+        git_source(&repo, "main", None),
         "ferrytest/web:dep-node1",
     );
     req.build_args = vec![
@@ -150,11 +150,7 @@ async fn git_node_build_end_to_end() {
     let newer = commit_all(&repo, "second");
     assert_ne!(newer, head);
     req.deploy_id = "dep-node2".into();
-    req.source = BuildSource::Git {
-        repo_url: repo.to_string_lossy().into_owned(),
-        branch: "main".into(),
-        commit: Some(head.clone()),
-    };
+    req.source = git_source(&repo, "main", Some(head.clone()));
     let out = fake.builder.build(&req, &LogSink::noop(), &CancellationToken::new()).await.unwrap();
     assert_eq!(out.commit_sha.as_deref(), Some(head.as_str()));
     assert!(!fake.read("context").contains("extra.txt"));
@@ -258,7 +254,7 @@ async fn failed_docker_build_reports_concise_reason() {
         "dep-py1",
         "py",
         ServiceType::WebService,
-        BuildSource::Git { repo_url: repo.to_string_lossy().into_owned(), branch: "main".into(), commit: None },
+        git_source(&repo, "main", None),
         "ferrytest/py:dep-py1",
     );
     let (logs, mut rx) = LogSink::channel();
@@ -276,7 +272,7 @@ async fn failed_docker_build_reports_concise_reason() {
     // A missing branch fails before docker runs.
     let mut req = req.clone();
     req.deploy_id = "dep-py2".into();
-    req.source = BuildSource::Git { repo_url: repo.to_string_lossy().into_owned(), branch: "dev".into(), commit: None };
+    req.source = git_source(&repo, "dev", None);
     let err = fake.builder.build(&req, &LogSink::noop(), &CancellationToken::new()).await.unwrap_err();
     let expected = format!("branch 'dev' not found in {} (the default branch is 'main')", repo.display());
     assert!(matches!(&err, Error::Build(m) if m == &expected), "{err}");
@@ -291,7 +287,7 @@ async fn cancel_kills_docker_and_cleans_up() {
         "dep-slow1",
         "slow",
         ServiceType::StaticSite,
-        BuildSource::Git { repo_url: repo.to_string_lossy().into_owned(), branch: "main".into(), commit: None },
+        git_source(&repo, "main", None),
         "ferrytest/slow:dep-slow1",
     );
     let (logs, mut rx) = LogSink::channel();

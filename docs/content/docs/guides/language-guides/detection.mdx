@@ -1,0 +1,50 @@
+---
+title: The files Ferry looks for
+description: Ferry chooses the runtime from the first known file at the root of your source.
+---
+
+<Flow
+  caption="Ferry uses the first file that it finds"
+  steps={[
+    { title: 'Dockerfile', text: 'Runtime docker. Ferry uses your Dockerfile as it is.' },
+    { title: 'package.json', text: 'Runtime node. Also for bun.lock and bun.lockb.' },
+    { title: 'requirements.txt', text: 'Runtime python. Also for pyproject.toml and Pipfile.' },
+    { title: 'go.mod', text: 'Runtime go.' },
+    { title: 'Cargo.toml', text: 'Runtime rust.' },
+    { title: 'Gemfile', text: 'Runtime ruby.' },
+    { title: 'index.html', text: 'Runtime static.' },
+  ]}
+/>
+
+When the <Term id="runtime" /> of a service is `auto` (the default), Ferry looks at the root of the source. If the service has a <Term id="root-directory" />, Ferry looks there.
+
+## The table
+
+| File found | Runtime |
+|---|---|
+| `Dockerfile` | `docker`: Ferry uses your Dockerfile as it is |
+| `package.json`, `bun.lock` or `bun.lockb` | `node` |
+| `requirements.txt`, `pyproject.toml` or `Pipfile` | `python` |
+| `go.mod` | `go` |
+| `Cargo.toml` | `rust` |
+| `Gemfile` | `ruby` |
+| `index.html` | `static` |
+
+## Force a runtime
+
+```bash title="Terminal"
+ferry up hello-node --runtime node --follow
+```
+
+The values of `--runtime` are `auto`, `docker`, `image`, `node`, `python`, `go`, `rust`, `ruby` and `static`.
+
+## See the result
+
+The deploy <Term id="log" /> tells you what Ferry found:
+
+```text title="Deploy log" noCopy
+==> Detected Node.js runtime
+==> Generated Dockerfile.ferry for the Node.js runtime
+```
+
+[Builds & runtimes](/docs/concepts/builds) explains the build itself: the cache, the variables at build time and how long Ferry keeps images.

@@ -1,0 +1,40 @@
+---
+title: Responses
+description: An answer is JSON with snake_case fields. The status tells what the server did.
+---
+
+<Diagram
+  caption="The status of a good answer"
+  nodes={[
+    { id: 'create', at: [0, 0], icon: 'pencil', label: 'Create' },
+    { id: 'queue', at: [0, 1], icon: 'queue', label: 'Queue work', note: 'deploy, job' },
+    { id: 'delete', at: [0, 2], icon: 'trash', label: 'Delete' },
+    { id: 's201', at: [1.75, 0], label: '201', tone: 'success' },
+    { id: 's202', at: [1.75, 1], label: '202', note: 'the deploy or job', tone: 'success' },
+    { id: 's204', at: [1.75, 2], label: '204', note: 'no body', tone: 'success' },
+  ]}
+  edges={[
+    { from: 'create', to: 's201', flow: true },
+    { from: 'queue', to: 's202', flow: true },
+    { from: 'delete', to: 's204', flow: true },
+  ]}
+/>
+
+## The status
+
+| Endpoint | Status | Body |
+|---|---|---|
+| Creates a resource | `201` | |
+| Puts work in the queue: a deploy, a restart, a rollback or a job | `202` | The deploy or the job in the queue |
+| Deletes a resource | `204` | No body |
+
+## The body
+
+- The <Term id="request-body" /> of an answer is <Term id="json" />. Its fields are in <Term id="snake-case" />.
+- A <Term id="timestamp" /> is in the <Term id="rfc-3339" /> format, in <Term id="utc" />: `2026-09-27T07:38:34.231568Z`.
+
+## Writes to one service
+
+The server does the writes to one service one after the other. Thus two requests on the same service at the same time never mix.
+
+See also [Lists](/docs/reference/api-overview/lists) and [Errors](/docs/reference/api-overview/errors).

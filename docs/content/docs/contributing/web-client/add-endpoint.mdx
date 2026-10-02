@@ -1,0 +1,56 @@
+---
+title: Add an endpoint
+description: The TypeScript types copy the Rust types by hand. When the API changes, update four files in order.
+---
+
+<Flow
+  steps={[
+    { icon: 'braces', title: 'types.ts', text: 'The copy of the Rust types.' },
+    { icon: 'plug', title: 'endpoints.ts', text: 'The call to the API. A key in keys.ts for new data in the cache.' },
+    { icon: 'repeat', title: 'queries/', text: 'The query hooks and the mutation hooks.' },
+    { icon: 'bell', title: 'events.ts', text: 'The keys that a change event makes stale.' },
+    { icon: 'book', title: 'The docs', text: 'The API reference of this site.', tone: 'success' },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Update the types
+
+Update `src/lib/api/types.ts`. This file is the mirror of `dto.rs`, `models.rs` and `logs.rs` in `ferry-core`.
+
+</Step>
+<Step>
+
+### Add the call
+
+Add the call to `src/lib/api/endpoints.ts`. For new data in the cache, add a key to `src/lib/api/keys.ts`.
+
+</Step>
+<Step>
+
+### Add the hooks
+
+Add or extend the <Term id="data-query" /> hooks and the <Term id="mutation" /> hooks in `src/lib/api/queries/`.
+
+</Step>
+<Step>
+
+### Refresh the data on a change
+
+Some data must refresh by itself. Add its query keys to the <Term id="invalidation">invalidations</Term> of the correct change `kind` in `src/lib/api/events.ts`.
+
+</Step>
+<Step>
+
+### Regenerate the API reference
+
+```bash title="In docs/"
+npm run generate
+```
+
+See [Generated references](/docs/contributing/docs-site/generated).
+
+</Step>
+</Steps>

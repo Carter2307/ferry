@@ -1,0 +1,67 @@
+---
+title: ferryd cannot connect to Docker
+description: ferryd stops when it starts, because it cannot open the Docker socket.
+---
+
+## What you see
+
+```text title="ferryd" noCopy
+Error: cannot connect to Docker — is the Docker daemon running?
+
+Caused by:
+    docker error: cannot connect to the Docker daemon (unix:///var/run/docker.sock: …)
+```
+
+The cause lists each socket that `ferryd` tried.
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'ferryd', at: [0, 0], icon: 'ship', label: 'ferryd' },
+    { id: 'socket', at: [1.5, 0], icon: 'plug', label: 'Docker socket' },
+    { id: 'daemon', at: [3, 0], icon: 'container', label: 'Docker' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'socket' },
+    { from: 'socket', to: 'daemon' },
+  ]}
+  steps={[
+    {
+      caption: 'Docker does not run.',
+      cut: ['socket>daemon'],
+      tones: { daemon: 'danger' },
+      notes: { daemon: 'not started' },
+    },
+    {
+      caption: 'The socket is in a different place: Colima, OrbStack, rootless Docker.',
+      cut: ['ferryd>socket'],
+      tones: { socket: 'warning' },
+      notes: { socket: 'a different path' },
+    },
+    {
+      caption: 'Your user does not have the right to open the socket.',
+      cut: ['ferryd>socket'],
+      tones: { socket: 'danger' },
+      notes: { socket: 'no permission' },
+    },
+  ]}
+/>
+
+<Term id="ferryd" /> talks to <Term id="docker" /> through the <Term id="docker-socket" />.
+
+## How to repair it
+
+| Cause | Repair |
+|---|---|
+| Docker does not run | Start Docker. |
+| The socket is in a different place | Set `DOCKER_HOST` to the correct socket. See [Installation](/docs/getting-started/installation). |
+| No permission (Linux) | Run `ferryd` as a user in the `docker` group. |
+
+<Accordions>
+  <Accordion title="The cause is: unsupported DOCKER_HOST">
+    The full cause is `unsupported DOCKER_HOST '…' (use unix://, tcp:// or http://)`. Your `DOCKER_HOST` uses `ssh://` or another scheme that Ferry does not support. Ferry does not support <Term id="tls" /> for this connection.
+
+    Use the Unix socket of the <Term id="docker-daemon" /> (`unix://…`), or a plain `tcp://` address on the same machine.
+  </Accordion>
+</Accordions>

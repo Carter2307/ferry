@@ -1,0 +1,44 @@
+---
+title: The files of the data directory
+description: Each file of the data directory, its mode and what it contains.
+---
+
+```text title="<data-dir>" noCopy
+ferry-data/                 0700
+├── api_token               0600
+├── setup_code              0600
+├── instance_id             0600
+├── ferry.db
+├── certs/
+│   ├── <host>/key.pem      0600
+│   └── accounts/*.json     0600
+├── logs/
+├── repos/
+├── uploads/
+└── builds/
+```
+
+A file with no <Term id="file-mode">mode</Term> in this picture has the protection of the `0700` directory.
+
+## What each file contains
+
+| File | Contains |
+|---|---|
+| `api_token` | The [server token](/docs/architecture/security/server-token) |
+| `setup_code` | The [setup code](/docs/architecture/security/setup-code), only while the server has no account |
+| `instance_id` | The claim of this data directory on its [Docker name prefix](/docs/architecture/security/one-server) |
+| `ferry.db` | The database of Ferry. See the next table. |
+| `certs/<host>/key.pem`, `certs/accounts/*.json` | TLS <Term id="private-key">private keys</Term> and the ACME account |
+| `logs/`, `repos/`, `uploads/`, `builds/` | Deploy and job logs, git mirrors, uploaded archives, build scratch space |
+
+## What ferry.db contains
+
+| Data | Secret part |
+|---|---|
+| Services, deploys, variables, env groups, settings | Variable values, in plain text |
+| Datastores | Their passwords, in plain text |
+| Git connections | Their secrets: the private key of a GitHub App, tokens, the secret of an OAuth application |
+| The account | The hash of its password |
+| Sessions and API tokens | SHA-256 hashes only |
+
+Ferry does not encrypt this file. Read [The data directory](/docs/architecture/security/data-directory).

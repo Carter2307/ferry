@@ -1,0 +1,42 @@
+---
+title: Names
+description: The name of a service is part of its URL and of its address on the private network.
+---
+
+<Diagram
+  caption="One name, two addresses"
+  nodes={[
+    { id: 'name', at: [0, 0.5], icon: 'tag', label: 'Name', note: 'api' },
+    { id: 'url', at: [1.75, 0], icon: 'globe', label: 'Public URL', note: 'api.localhost:8080' },
+    { id: 'host', at: [1.75, 1], icon: 'network', label: 'Private network', note: 'api:3000' },
+  ]}
+  edges={[
+    { from: 'name', to: 'url', flow: true },
+    { from: 'name', to: 'host', flow: true },
+  ]}
+/>
+
+The name is in the URL of the service. It is also the <Term id="hostname" /> of the service on the <Term id="private-network" />. Thus you cannot change the name after you create the service.
+
+## The rules of a name
+
+| Rule | Value |
+|---|---|
+| Length | 1 to 40 characters |
+| Characters | Lowercase letters, digits and `-` |
+| First character | A letter |
+| Last character | Not `-` |
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api
+```
+
+## Names that Ferry refuses
+
+- The name of a <Term id="datastore" />. Services and datastores share their names.
+- `ferry` and `localhost`.
+- A name that looks like a Ferry id, such as `srv-` and 20 hex digits.
+
+## Name or id
+
+Each command and each API route for a service accepts its name or its <Term id="service-id">id</Term> (`srv-…`).

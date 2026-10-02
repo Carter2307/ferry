@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import { Info } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { BranchSelect } from '@/components/git/BranchSelect'
 import { CodeBlock } from '@/components/patterns/Copy'
 import { Callout } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
@@ -11,9 +12,10 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { errorMessage } from '@/lib/api/client'
-import { useServerInfo, useTriggerDeploy, useUpdateService } from '@/lib/api/queries'
+import { useGitConnections, useServerInfo, useTriggerDeploy, useUpdateService } from '@/lib/api/queries'
 import type { ServiceView, SourceKind } from '@/lib/api/types'
 import { RUNTIME_LABELS } from '@/lib/format'
+import { connectionLabel, GIT_PROVIDER_LABELS } from '@/lib/git'
 
 import { servicePath } from '../../context'
 import { useReportDirty, useSyncedForm } from '../hooks'
@@ -22,6 +24,7 @@ import {
   buildFields,
   buildFormFrom,
   buildPatch,
+  repoUrlError,
   sameForm,
   validateBuildForm,
   type BuildForm,
@@ -43,6 +46,7 @@ export function BuildDeploySection({
   const update = useUpdateService(name)
   const deploy = useTriggerDeploy(name)
   const info = useServerInfo()
+  const accounts = useGitConnections()
   const server = React.useMemo(() => buildFormFrom(service), [service])
   const form = useSyncedForm<BuildForm>(server, sameForm)
   const [submitted, setSubmitted] = React.useState(false)
@@ -59,6 +63,12 @@ export function BuildDeploySection({
   const err = (k: keyof BuildForm) => (submitted || f[k] !== form.base[k] ? errors[k] : undefined)
   const isCron = service.type === 'cron_job'
   const switching = f.source !== form.base.source
+  // The account of this server that clones the repository as it is saved
+  // (accounts belong to the server: nothing to choose here).
+  const cloner =
+    f.repo_url.trim() === form.base.repo_url.trim()
+      ? accounts.data?.find((c) => c.status === 'connected' && c.services.includes(name))
+      : undefined
 
   const set = <K extends keyof BuildForm>(k: K) => (v: BuildForm[K]) => form.patch({ [k]: v } as Partial<BuildForm>)
   const text = (k: keyof BuildForm) => ({
@@ -157,13 +167,35 @@ export function BuildDeploySection({
             <FormRow
               label="Repository URL"
               htmlFor={id('repo_url')}
-              description="An https://, ssh:// or git@host:path URL, or an absolute path on the server."
+              description={
+                <>
+                  An https://, ssh:// or git@host:path URL, or an absolute path on the server.
+                  {cloner && (
+                    <>
+                      {' '}
+                      Cloned with the {GIT_PROVIDER_LABELS[cloner.provider]} account{' '}
+                      <span className="text-foreground-light">{connectionLabel(cloner)}</span> connected to this server.
+                    </>
+                  )}
+                </>
+              }
               error={err('repo_url')}
             >
               <Input mono placeholder="https://github.com/acme/app.git" autoComplete="off" spellCheck={false} {...text('repo_url')} />
             </FormRow>
-            <FormRow label="Branch" htmlFor={id('branch')} description="Deploys build the tip of this branch." error={err('branch')}>
-              <Input mono placeholder="main" autoComplete="off" spellCheck={false} {...text('branch')} />
+            <FormRow
+              label="Branch"
+              htmlFor={id('branch')}
+              description="Deploys build the tip of this branch. The list is read from the repository."
+              error={err('branch')}
+            >
+              <BranchSelect
+                id={id('branch')}
+                repoUrl={repoUrlError(f.repo_url) === null ? f.repo_url : ''}
+                value={f.branch}
+                onChange={set('branch')}
+                invalid={Boolean(err('branch'))}
+              />
             </FormRow>
           </>
         )}

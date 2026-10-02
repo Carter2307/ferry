@@ -1,0 +1,99 @@
+---
+title: Start ferryd
+description: Three commands load the unit, start ferryd now and at each boot, and show its log.
+---
+
+<Diagram
+  nodes={[
+    { id: 'unit', at: [0, 0], icon: 'file-code', label: 'Unit file', note: 'ferryd.service' },
+    { id: 'systemd', at: [1.25, 0], icon: 'settings', label: 'systemd' },
+    { id: 'ferryd', at: [2.5, 0], icon: 'ship', label: 'ferryd' },
+    { id: 'journal', at: [2.5, 1], icon: 'logs', label: 'Journal', note: 'journalctl' },
+  ]}
+  edges={[
+    { from: 'unit', to: 'systemd' },
+    { from: 'systemd', to: 'ferryd' },
+    { from: 'ferryd', to: 'journal' },
+  ]}
+  steps={[
+    {
+      caption: 'daemon-reload: systemd reads the new unit file.',
+      hide: ['journal'],
+      flow: ['unit>systemd'],
+      tones: { systemd: 'primary' },
+    },
+    {
+      caption: 'enable --now: systemd starts ferryd now, and at each boot.',
+      hide: ['journal'],
+      flow: ['systemd>ferryd'],
+      tones: { ferryd: 'success' },
+      notes: { ferryd: 'active' },
+    },
+    {
+      caption: 'ferryd writes its log to the journal of systemd. journalctl shows it.',
+      flow: ['ferryd>journal'],
+      tones: { ferryd: 'success', journal: 'primary' },
+      notes: { ferryd: 'active' },
+    },
+  ]}
+/>
+
+<Steps>
+<Step>
+
+### Load the unit
+
+systemd reads the new <Term id="systemd-unit" /> file.
+
+```bash title="Terminal"
+sudo systemctl daemon-reload
+```
+
+</Step>
+<Step>
+
+### Start ferryd
+
+```bash title="Terminal"
+sudo systemctl enable --now ferryd
+```
+
+<Term id="systemd" /> starts `ferryd` now, and at each boot.
+
+</Step>
+<Step>
+
+### Read the log
+
+```bash title="Terminal"
+sudo journalctl -u ferryd -n 30
+```
+
+The command shows the last 30 lines that `ferryd` wrote to the <Term id="journal" />.
+
+```text title="Output (excerpt)" noCopy
+  Ferry 0.1.0 is running
+  Dashboard + API : http://127.0.0.1:7878
+  Dashboard (proxy): disabled (enable with --dashboard-host ferry.apps.example.com)
+  Apps            : https://<name>.apps.example.com
+  Docker          : 27.3.1 (4 CPUs, 7.8 GiB)
+  Data            : /var/lib/ferry
+  Limits          : 512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3
+  Free disk check : deploys need 1 GiB free
+
+  Create your account: http://127.0.0.1:7878/setup?code=5b0e…
+```
+
+</Step>
+</Steps>
+
+## What the output tells you
+
+| Line | Meaning |
+|---|---|
+| `Create your account` | The link that creates the account of the server. You open it on the next page. |
+| `Docker` | The CPUs and the memory of the <Term id="docker-host" />. |
+| `Limits` | The [container limits](/docs/guides/production/limits) that Ferry applies. |
+| `Free disk check` | The [free-disk check](/docs/guides/production/disk-space) that Ferry applies. |
+
+If a default limit is more than the host has, `ferryd` writes a warning at startup. It does the same if the kernel of the host cannot enforce CPU limits.

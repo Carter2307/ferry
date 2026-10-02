@@ -1,8 +1,18 @@
 //! Assembling API views (stored rows + computed fields).
 
-use ferry_core::dto::{DatastoreView, EnvGroupView, ServiceView};
+use std::collections::HashMap;
+
+use std::net::IpAddr;
+
+use ferry_core::config::is_local_host;
+use ferry_core::dto::{
+    CertificateState, CertificateView, DatastoreView, DomainView, EnvGroupView, GitConnectionStatus, GitConnectionView,
+    ServiceView,
+};
+use ferry_core::tls::{CertificateStatus, Certificates};
 use ferry_core::{
-    Config, Datastore, Deploy, DeploySource, EnvGroup, Result, Service, Store, compute_service_state, git,
+    Config, Datastore, Deploy, DeploySource, Domain, EnvGroup, GitAuth, GitConnection, Result, Service, Store,
+    compute_service_state, git, git_connection_for,
 };
 
 use crate::runtime;
@@ -66,6 +76,121 @@ pub fn datastore_view(config: &Config, datastore: Datastore) -> DatastoreView {
         external_url: datastore.external_url(&config.advertise_host),
         datastore,
     }
+}
+
+/// The names of the services each git connection clones for, by connection
+/// id: services don't name a connection, their repository's URL decides
+/// ([`git_connection_for`]).
+pub async fn git_connection_users(
+    store: &Store,
+    connections: &[GitConnection],
+) -> Result<HashMap<String, Vec<String>>> {
+    let mut users: HashMap<String, Vec<String>> = HashMap::new();
+    for service in store.list_services().await? {
+        if let Some(repo) = service.repo_url.as_deref()
+            && let Some(connection) = git_connection_for(connections, repo)
+        {
+            users.entry(connection.id.clone()).or_default().push(service.name);
+        }
+    }
+    for names in users.values_mut() {
+        names.sort();
+    }
+    Ok(users)
+}
+
+/// Build the [`GitConnectionView`] of a git connection: everything but its
+/// secrets (of a personal access token, only a hint is shown).
+pub fn git_connection_view(connection: GitConnection, services: Vec<String>) -> GitConnectionView {
+    let status = if connection.is_connected() { GitConnectionStatus::Connected } else { GitConnectionStatus::Pending };
+    // The tokens of the other kinds are renewed: when one expires says nothing.
+    let personal = connection.auth == GitAuth::Token;
+    let (app_slug, app_url) = match connection.app {
+        Some(ref app) => (Some(app.slug.clone()), Some(app.url.clone())),
+        None => (None, None),
+    };
+    let (manage_url, repository_selection) = match connection.installation {
+        Some(ref installation) => (installation.url.clone(), installation.repository_selection.clone()),
+        None => (None, None),
+    };
+    GitConnectionView {
+        token_hint: connection.token_hint(),
+        status,
+        token_expires_at: connection.token_expires_at.filter(|_| personal),
+        id: connection.id,
+        provider: connection.provider,
+        base_url: connection.base_url,
+        auth: connection.auth,
+        account: connection.account,
+        account_name: connection.account_name,
+        scopes: connection.scopes,
+        client_id: connection.client_id,
+        app_slug,
+        app_url,
+        manage_url,
+        repository_selection,
+        services,
+        created_at: connection.created_at,
+        updated_at: connection.updated_at,
+    }
+}
+
+/// The view of one connection (with the services it clones for).
+pub async fn git_connection_view_of(store: &Store, connection: GitConnection) -> Result<GitConnectionView> {
+    let all = store.list_git_connections().await?;
+    let services = git_connection_users(store, &all).await?.remove(&connection.id).unwrap_or_default();
+    Ok(git_connection_view(connection, services))
+}
+
+/// Build the [`DomainView`] of a domain. `addresses` are the server's public
+/// addresses, for the DNS records to create (none are needed for a local
+/// domain).
+pub fn domain_view(config: &Config, domain: Domain, addresses: &[IpAddr]) -> DomainView {
+    let local = domain.is_local();
+    DomainView {
+        local,
+        served: domain.is_served(),
+        records: if local { Vec::new() } else { ferry_core::domains::dns_records(addresses) },
+        url_pattern: config.url_for_host(&format!("<service>.{}", domain.name)),
+        domain,
+    }
+}
+
+/// Build the [`CertificateView`] of a hostname the proxy routes (`service`:
+/// the name of its service, `None` for the dashboard). `certificates` is the
+/// certificate manager, `None` when the server runs without HTTPS.
+pub fn certificate_view(
+    certificates: Option<&dyn Certificates>,
+    host: String,
+    service: Option<String>,
+) -> CertificateView {
+    let mut view = CertificateView {
+        state: CertificateState::Disabled,
+        expires_at: None,
+        error: None,
+        retry_at: None,
+        host,
+        service,
+    };
+    if is_local_host(&view.host) {
+        view.state = CertificateState::Local;
+        return view;
+    }
+    let Some(certificates) = certificates else { return view };
+    match certificates.certificate(&view.host) {
+        CertificateStatus::Issued { not_after } => {
+            view.state = CertificateState::Issued;
+            view.expires_at = Some(not_after);
+        }
+        CertificateStatus::Issuing => view.state = CertificateState::Issuing,
+        CertificateStatus::Pending => view.state = CertificateState::Pending,
+        CertificateStatus::Failed { error, retry_at } => {
+            view.state = CertificateState::Failed;
+            view.error = Some(error);
+            view.retry_at = retry_at;
+        }
+    }
+    view
 }
 
 /// Build the [`EnvGroupView`] of an env group.

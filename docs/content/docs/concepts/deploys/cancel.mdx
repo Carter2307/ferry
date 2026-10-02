@@ -1,0 +1,37 @@
+---
+title: Cancel a deploy
+description: You can cancel a deploy until the proxy sends traffic to the new version.
+---
+
+```bash title="Terminal"
+ferry cancel dep-7d2d938ff3614c238ecb
+```
+
+<Flow
+  caption="What a cancel does at each step"
+  steps={[
+    { icon: 'queue', title: 'Queued', text: 'Ferry cancels the deploy immediately.' },
+    { icon: 'hammer', title: 'Building', text: 'Ferry stops the build.' },
+    { icon: 'health', title: 'Before the switch', text: 'Ferry removes the new instances. The old instances continue to answer.' },
+    { icon: 'ban', title: 'After the switch', text: 'Too late: the deploy goes live. Roll back to undo it.', tone: 'danger' },
+  ]}
+/>
+
+## What you see
+
+```text title="Deploy log" noCopy
+==> Build canceled
+==> Deploy canceled: canceled by user
+```
+
+```text title="Too late" noCopy
+error: too late to cancel: traffic was already switched to deploy dep-817fc76633764f7181c0 (roll back to undo it) (conflict)
+```
+
+<Accordions>
+  <Accordion title="Other rules">
+    - Ferry refuses to cancel a deploy that is `deactivated`, failed or canceled. That deploy is complete.
+    - If you suspend or delete a service, Ferry cancels its deploys in the queue and in progress.
+    - You cannot deploy a suspended service. Resume it first.
+  </Accordion>
+</Accordions>

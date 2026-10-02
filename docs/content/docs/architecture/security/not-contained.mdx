@@ -1,0 +1,65 @@
+---
+title: What Ferry does not contain
+description: Builds, disks, I/O and the private network have no limit. Know these gaps before you deploy code.
+---
+
+<Diagram
+  nodes={[
+    { id: 'build', at: [0, 0], icon: 'hammer', label: 'A build' },
+    { id: 'svc', at: [0, 1.5], icon: 'box', label: 'A service' },
+    { id: 'host', at: [1.75, 0], icon: 'cpu', label: 'Memory and CPU', note: 'of the host' },
+    { id: 'disk', at: [1.75, 1], icon: 'disk', label: 'Disk', note: 'of the host' },
+    { id: 'net', at: [1.75, 2], icon: 'network', label: 'Private network', note: 'all containers' },
+  ]}
+  edges={[
+    { from: 'build', to: 'host' },
+    { from: 'svc', to: 'disk' },
+    { from: 'svc', to: 'net' },
+  ]}
+  steps={[
+    {
+      caption: 'A build has no memory limit and no CPU limit. It can use all the memory and CPU of the host.',
+      flow: ['build>host'],
+      tones: { host: 'danger' },
+    },
+    {
+      caption: 'Volumes, container filesystems, images and the build cache have no quota. A service can fill the disk.',
+      flow: ['svc>disk'],
+      tones: { disk: 'danger' },
+    },
+    {
+      caption: 'Each container can reach each service and each datastore on the private network.',
+      flow: ['svc>net'],
+      tones: { net: 'warning' },
+    },
+    {
+      caption: 'Disk I/O and network traffic have no limit.',
+      flow: ['svc>disk', 'svc>net'],
+      tones: { disk: 'warning', net: 'warning' },
+    },
+  ]}
+/>
+
+## The gaps
+
+| Not contained | Detail |
+|---|---|
+| Builds | `docker build` runs in BuildKit, which has no memory limit and no CPU limit per build. Only `--build-concurrency` (default 2) limits builds. The free-disk check runs before a build, not during it. |
+| Disks | Volumes (datastores, service disks), the filesystems of containers, images and the build cache have no <Term id="quota">quotas</Term>. A service that writes to its disk or to its filesystem can fill the disk of the host. |
+| Disk and network I/O | No I/O limit and no bandwidth limit exist. |
+| The <Term id="private-network" /> | All services and datastores share one private network. Each container can reach each service and datastore by name. Only their passwords protect the datastores. |
+
+<Callout type="warning" title="A limit of 0 turns a guard off">
+`--default-memory-limit 0`, `--default-cpu-limit 0`, `--pids-limit 0`, `--log-max-size 0` and `--min-free-disk 0` each turn one guard off.
+</Callout>
+
+## Keep the disk free
+
+The free-disk check stops only new deploys and new datastores. `--keep-images` limits the images of Ferry. You must prune the rest:
+
+```bash title="On the server"
+docker image prune
+docker builder prune
+```
+
+See [Production setup](/docs/guides/production) and the [networking model](/docs/architecture/networking-model).

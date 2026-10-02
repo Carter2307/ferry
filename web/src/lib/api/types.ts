@@ -59,6 +59,24 @@ export type DatastoreStatus = (typeof DATASTORE_STATUSES)[number]
 export const SERVICE_STATES = ['not_deployed', 'deploying', 'live', 'failed', 'suspended', 'degraded'] as const
 export type ServiceState = (typeof SERVICE_STATES)[number]
 
+export const GIT_PROVIDERS = ['github', 'gitlab'] as const
+export type GitProvider = (typeof GIT_PROVIDERS)[number]
+
+/** Where the tokens of a git connection come from. */
+export type GitAuth = 'github_app' | 'oauth' | 'token'
+
+/** Where a domain of the server comes from: its `--base-domain`, or connected through the API. */
+export type DomainSource = 'config' | 'connected'
+
+/** `pending`: its names don't reach the server yet; `misconfigured`: they no longer do. */
+export type DomainStatus = 'pending' | 'active' | 'misconfigured'
+
+export type DomainCheckKind = 'dns' | 'http'
+export type CheckOutcome = 'passed' | 'warning' | 'failed' | 'skipped'
+
+/** Where the certificate of a routed hostname is. */
+export type CertificateState = 'disabled' | 'local' | 'pending' | 'issuing' | 'issued' | 'failed'
+
 /** Where a service's code comes from (derived client-side, see `sourceKind`). */
 export type SourceKind = 'git' | 'image' | 'upload'
 
@@ -188,7 +206,10 @@ export interface LogLine {
 /** `GET /api/v1/info` */
 export interface ServerInfo {
   version: string
+  /** The domain the server was started with (`--base-domain`). */
   base_domain: string
+  /** The domain service URLs are shown with. Absent on servers that predate domains. */
+  default_domain?: string
   proxy_url: string
   tls_enabled: boolean
   dashboard_url: string | null
@@ -383,6 +404,126 @@ export interface EnvGroupView extends EnvGroup {
   services: string[]
 }
 
+/**
+ * `POST /api/v1/git/authorize` — start (or resume, with `connection_id`) the
+ * authorization of an account on the provider's own pages.
+ */
+export interface AuthorizeGit {
+  provider?: GitProvider | null
+  /** Web URL of a self-hosted instance; default github.com / gitlab.com. */
+  base_url?: string | null
+  /** Resume a pending connection, or authorize a connection again. */
+  connection_id?: string | null
+  /** Where the provider sends the browser back: the dashboard's `/git/callback` page. */
+  redirect_uri: string
+  /** GitHub: register the app in this organization instead of the user's account. */
+  organization?: string | null
+  /** GitLab: the OAuth application created for this server (needed the first time). */
+  client_id?: string | null
+  client_secret?: string | null
+}
+
+/** `POST /api/v1/git/callback` — the query parameters the provider sent the browser back with. */
+export interface GitCallback {
+  state: string
+  code?: string | null
+  installation_id?: number | null
+  setup_action?: string | null
+  error?: string | null
+  error_description?: string | null
+}
+
+/** The next step of a browser authorization. */
+export interface GitAuthorization {
+  /** `redirect`: send the browser to `url`; `connected`: done. */
+  status: 'redirect' | 'connected'
+  url: string | null
+  /** `get`: navigate; `post`: submit a form with `fields`. */
+  method: 'get' | 'post' | null
+  fields: Record<string, string>
+  connection: GitConnectionView | null
+}
+
+/** `POST /api/v1/git/connections` — connect the account an access token belongs to. */
+export interface ConnectGit {
+  provider: GitProvider
+  token: string
+  /** Web URL of a self-hosted instance; default github.com / gitlab.com. */
+  base_url?: string | null
+}
+
+/**
+ * A GitHub / GitLab account this server is authorized to read the
+ * repositories of. Its secrets are never returned.
+ */
+export interface GitConnectionView {
+  id: string
+  provider: GitProvider
+  /** Web URL of the provider instance, e.g. `https://github.com`. */
+  base_url: string
+  auth: GitAuth
+  /** `pending`: its authorization was started in the browser and not finished. */
+  status: 'connected' | 'pending'
+  /** Login of the account ('' while an OAuth application waits for its first authorization). */
+  account: string
+  account_name: string | null
+  /** The end of a personal access token (`…a1b2`); `null` for the other kinds. */
+  token_hint: string | null
+  /** Scopes of the token, when the provider reports them. */
+  scopes: string[]
+  /** When a personal access token expires; `null` for the other kinds (renewed). */
+  token_expires_at: Timestamp | null
+  /** Id of the OAuth application or GitHub App (not a secret). */
+  client_id: string | null
+  /** GitHub App: its URL name and page. */
+  app_slug: string | null
+  app_url: string | null
+  /** GitHub App: where the account chooses the repositories it may read. */
+  manage_url: string | null
+  /** GitHub App: `all` or `selected` repositories. */
+  repository_selection: string | null
+  /** Names of the services whose repository is cloned with this connection. */
+  services: string[]
+  created_at: Timestamp
+  updated_at: Timestamp
+}
+
+/** A repository a git connection can access. */
+export interface GitRepository {
+  id: string
+  /** `owner/name` (GitLab: the full path, subgroups included). */
+  full_name: string
+  name: string
+  owner: string
+  private: boolean
+  archived: boolean
+  /** `null` for a repository without commits. */
+  default_branch: string | null
+  /** The https clone URL: a service's `repo_url`. */
+  clone_url: string
+  web_url: string
+  description: string | null
+  updated_at: Timestamp | null
+}
+
+/** `GET /api/v1/git/connections/{id}/repositories` */
+export interface GitRepositoryList {
+  /** Most recently updated first. */
+  repositories: GitRepository[]
+  /** The account can access more repositories than listed. */
+  truncated: boolean
+}
+
+/** `GET /api/v1/git/branches?repo_url=` — asked from the repository's remote itself. */
+export interface GitBranches {
+  /** The branch the repository's HEAD points to, when it says. */
+  default_branch: string | null
+  /** The default branch first, then by name. */
+  branches: string[]
+  /** The git connection the repository was read with; `null` when read without one. */
+  connection_id: string | null
+}
+
 /** `POST /api/v1/blueprints/apply` */
 export interface ApplyBlueprint {
   yaml: string
@@ -406,7 +547,167 @@ export interface BlueprintResult {
   warnings: string[]
 }
 
+// ---------------------------------------------------------------------------
+// Domains (DESIGN.md §21)
+
+/** One thing a verification looked at, and what it found. */
+export interface DomainCheck {
+  kind: DomainCheckKind
+  outcome: CheckOutcome
+  message: string
+}
+
+/** A DNS record to create where the zone of a domain is managed. */
+export interface DnsRecord {
+  /** `A` (an IPv4 address) or `AAAA` (IPv6). */
+  type: string
+  /** `*`: every name under the domain, so every service. `@`: the domain itself. */
+  name: string
+  /** The public address of the server; `null` when it could not find it out. */
+  value: string | null
+  /** `false` for what only serving the domain itself needs. */
+  required: boolean
+}
+
+/** A domain services are served under, as returned by the API. */
+export interface DomainView {
+  id: string
+  name: string
+  source: DomainSource
+  status: DomainStatus
+  /** The domain service URLs are shown with. Exactly one per server. */
+  is_default: boolean
+  /** What the last verification found (empty before the first one). */
+  checks: DomainCheck[]
+  created_at: Timestamp
+  /** When its names last reached the server. */
+  verified_at: Timestamp | null
+  /** When it was last verified. */
+  checked_at: Timestamp | null
+  /** A name that never leaves this machine or its network: nothing to verify, no certificate. */
+  local: boolean
+  /** Whether services are served at `<service>.<name>` now. */
+  served: boolean
+  /** The DNS records that point the domain at this server (none for a local domain). */
+  records: DnsRecord[]
+  /** `https://<service>.example.com` */
+  url_pattern: string
+}
+
+/** `POST /api/v1/domains` */
+export interface ConnectDomain {
+  name: string
+}
+
+/** `PATCH /api/v1/domains/{id}` */
+export interface UpdateDomain {
+  is_default?: boolean
+}
+
+/** `GET /api/v1/certificates` — the certificate of one hostname the proxy routes. */
+export interface CertificateView {
+  host: string
+  /** Name of the service the host is routed to; `null` for the dashboard. */
+  service: string | null
+  state: CertificateState
+  /** `issued`: when the certificate expires. */
+  expires_at: Timestamp | null
+  /** `failed`: what the certificate authority (or reaching it) answered. */
+  error: string | null
+  /** `failed`: when the server asks again. */
+  retry_at: Timestamp | null
+}
+
 /** Error body: `{"error": {"code": "not_found", "message": "…"}}`. */
+// ---------------------------------------------------------------------------
+// Accounts (DESIGN.md §20)
+
+/** How a request is authenticated: the dashboard's session, or an API token. */
+export type AuthKind = 'session' | 'token'
+
+/** The account the dashboard is signed in to. */
+export interface UserView {
+  id: string
+  email: string
+  created_at: Timestamp
+}
+
+/** `GET /api/v1/auth/status` */
+export interface AuthStatus {
+  /** The server has no account yet: it is created first. */
+  setup_required: boolean
+  auth: AuthKind | null
+  user: UserView | null
+}
+
+/** `POST /api/v1/auth/setup` */
+export interface SetupAccount {
+  email: string
+  password: string
+  /** The setup code of the link ferryd prints while the server has no account. */
+  code: string
+}
+
+/** `POST /api/v1/auth/login` */
+export interface Login {
+  email: string
+  password: string
+}
+
+/** `POST /api/v1/auth/password` */
+export interface ChangePassword {
+  current_password: string
+  new_password: string
+}
+
+/** A browser signed in to the dashboard. */
+export interface SessionView {
+  id: string
+  user_agent: string | null
+  created_at: Timestamp
+  last_used_at: Timestamp
+  expires_at: Timestamp
+  /** The session of this browser. */
+  current: boolean
+}
+
+/** A named API token. The token itself is only in the answer that creates it. */
+export interface ApiTokenView {
+  id: string
+  name: string
+  /** The last characters of the token. */
+  hint: string
+  created_at: Timestamp
+  last_used_at: Timestamp | null
+  expires_at: Timestamp | null
+}
+
+/** `POST /api/v1/auth/tokens` */
+export interface CreateApiToken {
+  name: string
+  expires_in_days?: number | null
+}
+
+/** Answer of `POST /api/v1/auth/tokens`: the only time the token is shown. */
+export interface CreatedApiToken {
+  token: string
+  api_token: ApiTokenView
+}
+
+export type CliLoginStatus = 'pending' | 'approved' | 'denied'
+
+/** `GET /api/v1/auth/cli/{id}` — a `ferry login` waiting for its approval. */
+export interface CliLoginView {
+  id: string
+  /** Who asks, e.g. `ada@laptop`. */
+  name: string
+  /** What the terminal shows too. */
+  code: string
+  status: CliLoginStatus
+  created_at: Timestamp
+  expires_at: Timestamp
+}
+
 export interface ApiErrorBody {
   error: ApiErrorDetail
 }
@@ -420,7 +721,7 @@ export interface ApiErrorDetail {
 // Change feed (`GET /api/v1/events`, event `change`)
 // ---------------------------------------------------------------------------
 
-export type ChangeKind = 'service' | 'deploy' | 'datastore' | 'env_group' | 'job'
+export type ChangeKind = 'service' | 'deploy' | 'datastore' | 'env_group' | 'job' | 'git_connection' | 'domain'
 export type ChangeAction = 'created' | 'updated' | 'deleted'
 
 export interface ChangeEvent {

@@ -1,0 +1,30 @@
+---
+title: The one request to a third party
+description: A server behind NAT asks a public service for its IPv4 address. --public-ip replaces this request.
+---
+
+<Flow
+  caption="How a server behind NAT finds its public address"
+  steps={[
+    { icon: 'globe', title: 'A domain exists', text: 'You connected a domain that is not local. Ferry must show its DNS records.' },
+    { icon: 'search', title: 'Service 1', text: 'Ferry asks api.ipify.org which IPv4 address the server has.' },
+    { icon: 'search', title: 'Service 2', text: 'If the first service gives no address, Ferry asks ipv4.icanhazip.com.' },
+    { icon: 'search', title: 'Service 3', text: 'If the second service gives no address, Ferry asks checkip.amazonaws.com.' },
+  ]}
+/>
+
+A server behind <Term id="nat" /> does not know its <Term id="public-address" />. Ferry needs this address to show the <Term id="dns-record">DNS records</Term> of a domain.
+
+## The rules
+
+- This is the only request that Ferry makes to a third party on its own.
+- Ferry makes it only after a domain that is not local exists.
+- `--public-ip` replaces it.
+
+## Prevent the request
+
+```bash title="On the server"
+ferryd --public-ip <IP>
+```
+
+With `--public-ip`, Ferry asks no service.

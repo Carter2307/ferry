@@ -2,11 +2,13 @@
   "title": "Guides",
   "icon": "BookOpen",
   "pages": [
+    "git-accounts",
     "github-auto-deploy",
     "language-guides",
     "postgres-app",
     "migrate-from-render",
     "production",
+    "domains",
     "custom-domains-https",
     "multiple-servers",
     "host-docs-on-ferry",

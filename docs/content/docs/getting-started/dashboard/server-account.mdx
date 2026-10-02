@@ -1,0 +1,63 @@
+---
+title: "Server: Account"
+description: The Account section has your password, the API tokens of programs and the sessions of browsers.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0], icon: 'browser', label: 'Browser' },
+    { id: 'cli', at: [0, 1], icon: 'terminal', label: 'CLI or script' },
+    { id: 'session', at: [1.5, 0], icon: 'clock', label: 'Session' },
+    { id: 'token', at: [1.5, 1], icon: 'key', label: 'API token' },
+    { id: 'account', at: [3, 0.5], icon: 'user', label: 'Account', note: 'of the server' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'session' },
+    { from: 'cli', to: 'token' },
+    { from: 'session', to: 'account' },
+    { from: 'token', to: 'account' },
+  ]}
+  steps={[
+    {
+      caption: 'A browser that signs in gets a session.',
+      flow: ['browser>session', 'session>account'],
+      tones: { session: 'primary' },
+    },
+    {
+      caption: 'The CLI and your scripts use an API token.',
+      flow: ['cli>token', 'token>account'],
+      tones: { token: 'primary' },
+    },
+    {
+      caption: 'Sign out stops one session. Revoke stops one token.',
+      cut: ['session>account', 'token>account'],
+      tones: { session: 'danger', token: 'danger' },
+      notes: { session: 'Sign out', token: 'Revoke' },
+    },
+    {
+      caption: 'Change password signs out each other browser.',
+      cut: ['session>account'],
+      tones: { account: 'primary', session: 'danger' },
+      notes: { account: 'new password' },
+    },
+  ]}
+/>
+
+## Password
+
+The section shows the email of your account. **Change password** asks for the current password. Then it signs out each other browser.
+
+## API tokens
+
+**API tokens** lists the tokens of the CLI and of scripts. An <Term id="api-token" /> shows its name, its last 4 characters, its last use and its expiry.
+
+| Button | Effect |
+|---|---|
+| **New token** | You give a name and an expiry: never, 30 days, 90 days or 1 year. The dashboard shows the token one time. |
+| **Revoke** | The token stops immediately. |
+
+A token from `ferry login` has the name of its terminal, for example `ada@laptop`.
+
+## Sessions
+
+**Sessions** lists the browsers that have a <Term id="browser-session" /> on the account. Each line has a **Sign out** button.

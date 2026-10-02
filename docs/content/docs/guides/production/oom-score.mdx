@@ -1,0 +1,58 @@
+---
+title: Protect ferryd when the server runs out of memory
+description: A low OOM score in the unit makes the kernel stop containers before ferryd.
+---
+
+<Diagram
+  nodes={[
+    { id: 'kernel', at: [0, 0.5], icon: 'cpu', label: 'Kernel', note: 'OOM killer' },
+    { id: 'box', at: [1.5, 0], icon: 'box', label: 'Container', note: 'score 0' },
+    { id: 'ferryd', at: [1.5, 1], icon: 'ship', label: 'ferryd', note: 'score -900' },
+  ]}
+  edges={[
+    { from: 'kernel', to: 'box' },
+    { from: 'kernel', to: 'ferryd' },
+  ]}
+  steps={[
+    {
+      caption: 'The server has no free memory. The kernel must stop one process.',
+      cut: ['kernel>box', 'kernel>ferryd'],
+      tones: { kernel: 'warning' },
+    },
+    {
+      caption: 'The kernel first stops the process with the highest score: a container.',
+      cut: ['kernel>ferryd'],
+      flow: ['kernel>box'],
+      tones: { box: 'danger' },
+      notes: { box: 'stopped' },
+    },
+    {
+      caption: 'ferryd has the score -900. It continues to run.',
+      cut: ['kernel>box', 'kernel>ferryd'],
+      tones: { ferryd: 'success' },
+    },
+  ]}
+/>
+
+```ini title="/etc/systemd/system/ferryd.service (excerpt)"
+# When the host runs out of memory, let the kernel kill containers before ferryd.
+OOMScoreAdjust=-900
+```
+
+## Why systemd sets the score
+
+At startup, `ferryd` tries to lower its own <Term id="oom-score" /> to `-500` (`--oom-score-adj`, `FERRY_OOM_SCORE_ADJ`). This needs root or the <Term id="capability" /> `CAP_SYS_RESOURCE`, and the user `ferry` has neither. Thus systemd sets the score.
+
+Without this line, `ferryd` writes a warning: it could not set its OOM score adjustment.
+
+## Memory settings of the unit
+
+| Setting | Effect |
+|---|---|
+| `OOMScoreAdjust=-900` | Only `ferryd` keeps the low score. The processes that it starts (`git`, the `docker` CLI) go back to 0. Thus a `git` that uses too much memory gets no protection at the cost of your apps and databases. |
+| `MemoryMin=` | It does nothing unless the parent slice (`system.slice`) reserves memory too. |
+| `MemoryMax=` | Do not use it on this unit. When `ferryd` gets to this limit, the <Term id="kernel" /> stops `ferryd` itself. |
+
+Containers and builds run inside Docker, in the <Term id="cgroup">cgroups</Term> of Docker. They are not in this unit. Thus the memory settings here cover only `ferryd` and the processes that it starts.
+
+To limit the apps, use `--default-memory-limit` or a limit for each service.

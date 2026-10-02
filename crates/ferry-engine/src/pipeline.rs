@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use ferry_build::{BuildEvent, BuildRequest, BuildSource};
+use ferry_build::{BuildEvent, BuildRequest, BuildSource, GitCredentials};
 use ferry_core::{
-    Deploy, DeploySource, DeployStatus, DeployTrigger, EnvVar, Error, LogLine, LogSink, Runtime, Service, ServiceType,
-    env,
+    Deploy, DeploySource, DeployStatus, DeployTrigger, EnvVar, Error, GitConnection, LogLine, LogSink, Runtime,
+    Service, ServiceType, env,
 };
 use ferry_docker::{ContainerInfo, Docker};
+use ferry_scm::RepoAccess;
 use futures::StreamExt;
 use futures::future::try_join_all;
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
@@ -22,7 +23,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::health::{HealthCheck, Probe, wait_healthy};
+use crate::health::{self, CommandSource, HealthCheck, Probe, wait_healthy};
 use crate::images;
 use crate::instances::{self, BuildInfo, STOP_GRACE_SECS};
 use crate::limits::{self, Resources};
@@ -58,15 +59,27 @@ struct Failure {
     /// The failure line is already in the deploy log (the builder writes
     /// `==> Build failed: …` itself).
     logged: bool,
+    /// What to do about it, when the engine can tell: a `==> Hint: …` line
+    /// after the failure line, and part of the server log's line.
+    hint: Option<String>,
 }
 
 impl Failure {
+    fn new(stage: Stage, error: Error) -> Self {
+        Failure { stage, error, logged: false, hint: None }
+    }
+
     fn build(error: Error) -> Self {
-        Failure { stage: Stage::Build, error, logged: false }
+        Failure::new(Stage::Build, error)
     }
 
     fn deploy(error: Error) -> Self {
-        Failure { stage: Stage::Deploy, error, logged: false }
+        Failure::new(Stage::Deploy, error)
+    }
+
+    fn with_hint(mut self, hint: Option<String>) -> Self {
+        self.hint = hint.or(self.hint);
+        self
     }
 }
 
@@ -93,16 +106,12 @@ impl Ctx {
     }
 
     fn check_cancel(&self, stage: Stage) -> Result<(), Failure> {
-        if self.cancel().is_cancelled() {
-            Err(Failure { stage, error: Error::Canceled, logged: false })
-        } else {
-            Ok(())
-        }
+        if self.cancel().is_cancelled() { Err(Failure::new(stage, Error::Canceled)) } else { Ok(()) }
     }
 
     fn canceled(&self, stage: Stage, reason: &str) -> Failure {
         self.active.request_cancel(reason);
-        Failure { stage, error: Error::Canceled, logged: false }
+        Failure::new(stage, Error::Canceled)
     }
 }
 
@@ -194,7 +203,7 @@ async fn current_service(ctx: &Ctx, stage: Stage) -> Result<Service, Failure> {
         Ok(Some(s)) if s.suspended => Err(ctx.canceled(stage, "service suspended")),
         Ok(Some(s)) => Ok(s),
         Ok(None) => Err(ctx.canceled(stage, "service deleted")),
-        Err(e) => Err(Failure { stage, error: e, logged: false }),
+        Err(e) => Err(Failure::new(stage, e)),
     }
 }
 
@@ -210,9 +219,21 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
     }
     match &deploy.source {
         DeploySource::Git { repo_url, branch, commit } => {
-            let source =
-                BuildSource::Git { repo_url: repo_url.clone(), branch: branch.clone(), commit: commit.clone() };
-            build_image(ctx, svc, deploy, source, opts).await
+            let access = git_access(ctx, repo_url).await.map_err(Failure::build)?;
+            let credentials = access.as_ref().and_then(|a| {
+                let token = a.token.as_ref().ok()?;
+                Some(GitCredentials { username: a.username().to_string(), password: token.clone() })
+            });
+            let source = BuildSource::Git {
+                repo_url: repo_url.clone(),
+                branch: branch.clone(),
+                commit: commit.clone(),
+                credentials,
+            };
+            build_image(ctx, svc, deploy, source, opts).await.map_err(|failure| {
+                let hint = git_access_hint(&failure.error, access.as_ref().map(|a| &a.connection), repo_url);
+                failure.with_hint(hint)
+            })
         }
         DeploySource::Archive { path } => {
             build_image(ctx, svc, deploy, BuildSource::Archive { path: PathBuf::from(path) }, opts).await
@@ -265,6 +286,34 @@ async fn build_stage(ctx: &Ctx, svc: &Service, deploy: &Deploy, opts: DeployOpti
             Ok(Built { image: image.clone(), info: info.unwrap_or_default() })
         }
     }
+}
+
+/// How `repo_url` is read: with a token of the git connection that serves
+/// it, when the server has one (connections belong to the server, see
+/// [`ferry_core::git_connection_for`]). A token is only ever used for a
+/// repository on its own provider instance.
+async fn git_access(ctx: &Ctx, repo_url: &str) -> ferry_core::Result<Option<RepoAccess>> {
+    let access = ferry_scm::repo_access(&ctx.inner.store, repo_url).await?;
+    match &access {
+        Some(RepoAccess { connection, token: Ok(_) }) => {
+            ctx.log.system(format!("==> Cloning with the {}", connection.describe()));
+        }
+        // A public repository still clones; a private one fails below, with
+        // this line above the failure.
+        Some(RepoAccess { connection, token: Err(e) }) => {
+            ctx.log
+                .system(format!("==> Warning: the {} can't be used ({e}): cloning without it", connection.describe()));
+        }
+        None => {}
+    }
+    Ok(access)
+}
+
+/// What to do about a clone the remote refused (the failure's hint), or
+/// `None` when the failure doesn't look like an access problem.
+fn git_access_hint(error: &Error, connection: Option<&GitConnection>, repo_url: &str) -> Option<String> {
+    let Error::Build(message) = error else { return None };
+    ferry_scm::access_hint(message, connection, repo_url)
 }
 
 /// Restarts reuse what is live when they run, not when they were queued
@@ -363,7 +412,7 @@ async fn build_image(
         }
         Err(Error::Canceled) => Err(Failure::build(Error::Canceled)),
         // The builder already wrote "==> Build failed: <reason>".
-        Err(e) => Err(Failure { stage: Stage::Build, error: e, logged: true }),
+        Err(e) => Err(Failure { logged: true, ..Failure::build(e) }),
     }
 }
 
@@ -677,6 +726,13 @@ async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerIn
         started.len(),
         check.probe.describe()
     ));
+    info!(
+        service = %svc.name,
+        deploy = %ctx.deploy_id,
+        instances = started.len(),
+        check = %check.probe.describe(),
+        "instances started, waiting for the health check"
+    );
     let containers: Vec<ContainerInfo> = started.iter().map(|(c, _)| c.clone()).collect();
     let mut capture = OutputCapture::start(&inner.docker, &containers, ctx.log.sink());
     let checks = try_join_all(started.iter().map(|(c, at)| wait_healthy(inner, &check, c, *at)));
@@ -690,6 +746,16 @@ async fn start_and_swap(ctx: &Ctx, built: &Built, started: &mut Vec<(ContainerIn
         Some(Err(failure)) => {
             if failure.crashed {
                 capture.dump_tail(&inner.docker, &failure.container, ctx.log.sink(), CRASH_TAIL_LINES).await;
+            }
+            if failure.clean_exit {
+                // Nothing crashed and nothing may have been printed: say what
+                // ran (while the instance is still there to ask) and what to
+                // change.
+                let command = health::container_command(inner, &failure.container.id).await;
+                let source = CommandSource::of(&svc, built.info.runtime);
+                let instance = instance_id(&failure.container.name);
+                let explained = health::clean_exit(&instance, command.as_deref(), &svc, port, source);
+                return Err(Failure::deploy(Error::Invalid(explained.message)).with_hint(Some(explained.hint)));
             }
             return Err(Failure::deploy(Error::Invalid(failure.message)));
         }
@@ -831,7 +897,27 @@ async fn record_failure(ctx: &Ctx, failure: Failure) {
     if !failure.logged {
         ctx.log.system(line);
     }
-    info!(deploy = %ctx.deploy_id, status = %status, "deploy ended: {message}");
+    // A hint is about a failure: a canceled deploy has nothing to fix.
+    let hint = failure.hint.filter(|_| status != DeployStatus::Canceled);
+    if let Some(hint) = &hint {
+        ctx.log.system(format!("==> Hint: {hint}"));
+    }
+    // The server log names the service and says as much as the deploy log's
+    // last lines: whoever runs the server sees why without opening it. (The
+    // app's own output stays in the deploy log.)
+    let service = match inner.store.get_service(&ctx.service_id).await {
+        Ok(Some(s)) => s.name,
+        _ => ctx.service_id.clone(),
+    };
+    let hint = hint.as_deref().unwrap_or("-");
+    match status {
+        DeployStatus::Canceled => {
+            info!(service = %service, deploy = %ctx.deploy_id, status = %status, "deploy canceled: {message}");
+        }
+        _ => {
+            warn!(service = %service, deploy = %ctx.deploy_id, status = %status, hint = %hint, "deploy failed: {message}");
+        }
+    }
     if let Err(e) = inner.store.set_deploy_status(&ctx.deploy_id, status, Some(&message)).await {
         warn!(deploy = %ctx.deploy_id, "cannot record the deploy's failure: {e}");
     }
@@ -1069,6 +1155,47 @@ mod tests {
         let mut l = LogLine::system(text);
         l.ts = DateTime::from_timestamp(ts, 0).unwrap();
         l
+    }
+
+    #[test]
+    fn refused_clones_get_a_hint() {
+        use ferry_core::{GitAuth, GitProvider};
+        let url = "https://github.com/acme/app.git";
+        let account = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "ghp_token");
+        let build = |m: &str| Error::Build(format!("git fetch from {url} failed: {m}"));
+        for refused in [
+            "Authentication failed for 'https://github.com/acme/app.git/'",
+            "could not read Username for 'https://github.com': terminal prompts disabled",
+            "unable to get password from user",
+            "repository 'https://github.com/acme/app.git/' not found",
+            "unable to access 'https://github.com/acme/app.git/': The requested URL returned error: 403",
+            "HTTP Basic: Access denied",
+        ] {
+            let with = git_access_hint(&build(refused), Some(&account), url).unwrap_or_default();
+            assert!(with.starts_with("the token of the GitHub account 'octocat' may have expired"), "{with}");
+            assert!(!with.contains("ghp_"), "{with}");
+            let without = git_access_hint(&build(refused), None, url).unwrap_or_default();
+            assert!(without.starts_with("if the repository is private, connect its"), "{without}");
+            // The hint says what to fix for the way the account is connected.
+            let mut oauth = account.clone();
+            oauth.auth = GitAuth::Oauth;
+            let hint = git_access_hint(&build(refused), Some(&oauth), url).unwrap_or_default();
+            assert!(hint.contains("its authorization was revoked") && hint.contains("'octocat'"), "{hint}");
+            let mut app = account.clone();
+            app.auth = GitAuth::GithubApp;
+            let hint = git_access_hint(&build(refused), Some(&app), url).unwrap_or_default();
+            assert!(hint.contains("add the repository to the app's installation"), "{hint}");
+            // ssh and local repositories don't use connections.
+            assert_eq!(git_access_hint(&build(refused), None, "git@github.com:acme/app.git"), None);
+            assert_eq!(git_access_hint(&build(refused), None, "/srv/repos/app"), None);
+        }
+        // Other failures aren't about access.
+        for other in
+            ["Could not resolve host: github.com", "branch 'main' not found in https://github.com/acme/app.git"]
+        {
+            assert_eq!(git_access_hint(&build(other), Some(&account), url), None, "{other}");
+        }
+        assert_eq!(git_access_hint(&Error::Canceled, Some(&account), url), None);
     }
 
     #[test]

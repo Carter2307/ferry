@@ -1,0 +1,36 @@
+---
+title: If the server stops during a deploy
+description: A deploy in progress fails when ferryd stops. The live version continues to run.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferryd', at: [0, 0.5], icon: 'server', label: 'ferryd' },
+    { id: 'live', at: [1.5, 0], icon: 'box', label: 'Live instance', tone: 'success' },
+    { id: 'new', at: [1.5, 1], icon: 'box', label: 'New instance', note: 'deploy in progress', tone: 'primary' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'live' },
+    { from: 'ferryd', to: 'new' },
+  ]}
+  steps={[
+    { caption: 'A deploy is in progress.', flow: ['ferryd>new'] },
+    { caption: 'ferryd stops. The deploy fails.', tones: { ferryd: 'danger', new: 'danger' }, notes: { ferryd: 'stopped', new: 'removed' } },
+    { caption: 'The live instance continues to run. Deploy again when the server is back.', hide: ['new'], tones: { live: 'success' } },
+  ]}
+/>
+
+A deploy does not continue after a restart of `ferryd`. Deploys in the queue fail too.
+
+| How `ferryd` stopped | Error of the deploy |
+|---|---|
+| A normal shutdown | `interrupted by server shutdown` |
+| A kill or a crash | `interrupted by server restart` (written when `ferryd` starts again) |
+
+The status is `build_failed` or `deploy_failed`.
+
+## What to do
+
+```bash title="Terminal"
+ferry deploy api --follow
+```

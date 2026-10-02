@@ -1,0 +1,100 @@
+---
+title: Write the app
+description: The app has three files. Two scripts read the database URL from DATABASE_URL.
+---
+
+<Diagram
+  nodes={[
+    { id: 'server', at: [0, 0], icon: 'file-code', label: 'server.js', note: 'the notes API' },
+    { id: 'migrate', at: [0, 1], icon: 'file-code', label: 'migrate.js', note: 'creates the table' },
+    { id: 'env', at: [1.5, 0.5], icon: 'variable', label: 'DATABASE_URL' },
+    { id: 'db', at: [3, 0.5], icon: 'database', label: 'Postgres' },
+  ]}
+  edges={[
+    { from: 'server', to: 'env', flow: true },
+    { from: 'migrate', to: 'env', flow: true },
+    { from: 'env', to: 'db', flow: true },
+  ]}
+/>
+
+The app reads the database URL from the <Term id="env-var" /> `DATABASE_URL`. It listens on the `PORT` that Ferry gives it.
+
+## The files
+
+<Files>
+  <Folder name="notes" defaultOpen>
+    <File name="package.json" />
+    <File name="migrate.js" />
+    <File name="server.js" />
+  </Folder>
+</Files>
+
+```json title="package.json"
+{
+  "name": "notes",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}
+```
+
+## The migration
+
+This script creates the table. It is a <Term id="migration" />.
+
+```js title="migrate.js"
+const { Client } = require("pg");
+
+const client = new Client({ connectionString: process.env.DATABASE_URL });
+
+(async () => {
+  await client.connect();
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id serial PRIMARY KEY,
+      body text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`);
+  console.log("migrations applied");
+  await client.end();
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+## The server
+
+`POST /notes` saves a note. Each other request lists the notes.
+
+```js title="server.js"
+const http = require("http");
+const { Pool } = require("pg");
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === "POST" && req.url === "/notes") {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      await pool.query("INSERT INTO notes (body) VALUES ($1)", [body]);
+      res.writeHead(201).end("saved\n");
+      return;
+    }
+    const { rows } = await pool.query("SELECT id, body FROM notes ORDER BY id");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(rows) + "\n");
+  } catch (err) {
+    console.error(err);
+    res.writeHead(500).end("error\n");
+  }
+});
+
+server.listen(process.env.PORT || 3000, "0.0.0.0");
+```

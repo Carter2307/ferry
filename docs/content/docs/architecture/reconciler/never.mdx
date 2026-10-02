@@ -1,0 +1,37 @@
+---
+title: What it never does
+description: The reconciler changes only the containers of this server, never settings, volumes or other servers.
+---
+
+<Diagram
+  caption="The reconciler changes only the containers of this server"
+  nodes={[
+    { id: 'reconciler', at: [0, 0.5], icon: 'restart', label: 'Reconciler', tone: 'primary' },
+    { id: 'own', at: [1.25, 0.5], icon: 'boxes', label: 'Containers', note: 'of this server', tone: 'success' },
+    { id: 'settings', at: [2.5, 0], icon: 'sliders', label: 'Settings', tone: 'muted' },
+    { id: 'volumes', at: [3.5, 0], icon: 'disk', label: 'Volumes', tone: 'muted' },
+    { id: 'limits', at: [2.5, 1], icon: 'gauge', label: 'Limits', note: 'of a container', tone: 'muted' },
+    { id: 'others', at: [3.5, 1], icon: 'server', label: 'Other prefix', tone: 'muted' },
+  ]}
+  edges={[{ from: 'reconciler', to: 'own', flow: true }]}
+  groups={[{ label: 'Never changed', around: ['settings', 'volumes', 'limits', 'others'] }]}
+/>
+
+## The five rules
+
+- It never changes settings, variables or instance counts. It only makes Docker agree with them.
+- It never starts an instance from something other than the <Term id="snapshot" /> of a live deploy.
+- It never changes the limits of a container that runs.
+- It never deletes a <Term id="volume" />.
+- It never touches the containers of another prefix. See [the security model](/docs/architecture/security).
+
+<Accordions>
+  <Accordion title="How limits change">
+    - The limits of a service change at its next deploy or restart.
+    - The limits of a datastore change in place, through `PATCH /api/v1/datastores/{id}` (`ferry db update`).
+    - One exception: a datastore that the reconciler provisions again gets its current limits. See [Datastores](/docs/architecture/reconciler/datastores).
+  </Accordion>
+  <Accordion title="How volumes go away">
+    Ferry removes the volume of a datastore only when you delete the datastore. It removes the disk of a service only when you delete the service.
+  </Accordion>
+</Accordions>

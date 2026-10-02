@@ -1,0 +1,40 @@
+---
+title: Suspend a service
+description: A suspend stops all the instances of a service. It deletes nothing.
+---
+
+<Terminal
+  lines={[
+    '$ ferry suspend api',
+    "Suspended 'api' (state: suspended)",
+  ]}
+/>
+
+<Flow
+  caption="What a suspend does, in order"
+  steps={[
+    { icon: 'route', title: 'Proxy', text: 'The proxy answers 503 with x-ferry-error: suspended immediately.', tone: 'warning' },
+    { icon: 'ban', title: 'Deploys and jobs', text: 'Ferry cancels the deploys in the queue and in progress. It stops the jobs in progress.' },
+    { icon: 'stop', title: 'Instances', text: 'Ferry stops each instance and removes it.', tone: 'muted' },
+  ]}
+/>
+
+To <Term id="suspend" /> a service is to stop it and keep all that it has. The settings, the variables, the deploys and the data on the <Term id="disk" /> stay.
+
+## While the service is suspended
+
+| What | Result |
+|---|---|
+| A request to the service | The <Term id="proxy" /> answers `503`. |
+| The schedule of a <Term id="cron-job" /> | No run starts. |
+| A push to GitHub, or a <Term id="blueprint" /> | No deploy starts. |
+| The [deploy hook](/docs/concepts/deploys/deploy-hooks) | It answers `409`. |
+| `ferry deploy` | Ferry refuses. Resume the service first. |
+
+## Start it again
+
+```bash title="Terminal"
+ferry resume api
+```
+
+See [Resume a service](/docs/concepts/scaling/resume).

@@ -1,0 +1,64 @@
+---
+title: Ports and URLs
+description: ferryd listens on two addresses. One is for you, and one is for the users of your apps.
+---
+
+<Diagram
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'terminal', label: 'CLI, dashboard' },
+    { id: 'users', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'api', at: [1.5, 0], icon: 'braces', label: 'API, dashboard', note: '127.0.0.1:7878' },
+    { id: 'proxy', at: [1.5, 1], icon: 'route', label: 'Proxy', note: '0.0.0.0:8080' },
+    { id: 'apps', at: [3, 1], icon: 'box', label: 'Your apps', note: '<name>.localhost' },
+  ]}
+  edges={[
+    { from: 'you', to: 'api' },
+    { from: 'users', to: 'proxy' },
+    { from: 'proxy', to: 'apps' },
+  ]}
+  groups={[{ label: 'ferryd', around: ['api', 'proxy'] }]}
+  steps={[
+    {
+      caption: 'You control Ferry on port 7878. Only your machine can connect to it.',
+      flow: ['you>api'],
+      tones: { api: 'primary' },
+    },
+    {
+      caption: 'Your apps answer on port 8080. This port is open to all machines.',
+      flow: ['users>proxy', 'proxy>apps'],
+      tones: { proxy: 'primary', apps: 'success' },
+    },
+  ]}
+/>
+
+| What | Default address | Flag |
+|---|---|---|
+| API and dashboard | `http://127.0.0.1:7878` | `--api-addr` |
+| Public HTTP <Term id="proxy" />, where your apps are | `0.0.0.0:8080` | `--proxy-addr` |
+| Public HTTPS proxy | off | `--https-addr` with `--acme-email` |
+
+## The URLs with the defaults
+
+| What | URL |
+|---|---|
+| Dashboard | http://127.0.0.1:7878, or http://ferry.localhost:8080 through the proxy |
+| Your apps | `http://<name>.localhost:8080` |
+| <Term id="swagger-ui" /> of your server | http://127.0.0.1:7878/api/docs |
+| <Term id="openapi" /> (3.1) | `/api/openapi.json` |
+| <Term id="liveness-probe">Liveness probe</Term> | `/healthz` answers `ok` |
+
+Browsers send each `*.localhost` name to `127.0.0.1`. Thus you set up no <Term id="dns" /> on your machine.
+
+## Reach the API from another machine
+
+```bash title="Terminal"
+ssh -L 7878:127.0.0.1:7878 your-server
+```
+
+Use this <Term id="ssh-tunnel" />. Do not open the API to the public. See [Production setup](/docs/guides/production).
+
+<Accordions>
+  <Accordion title="Pages that need no token">
+    Swagger UI, the OpenAPI document and `/healthz` answer without a token. In Swagger UI, the **Authorize** button takes an API token.
+  </Accordion>
+</Accordions>

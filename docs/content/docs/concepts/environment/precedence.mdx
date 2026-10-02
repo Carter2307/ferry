@@ -1,0 +1,72 @@
+---
+title: Which value wins
+description: Ferry merges the variables in three layers. A later layer wins.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry', note: 'PORT, FERRY_*' },
+    { id: 'shared', at: [0, 1], icon: 'layers', label: 'shared', note: 'LOG_LEVEL=info' },
+    { id: 'extra', at: [0, 2], icon: 'layers', label: 'extra', note: 'LOG_LEVEL=debug' },
+    { id: 'own', at: [0, 3], icon: 'variable', label: 'echo', note: 'LOG_LEVEL=warn' },
+    { id: 'box', at: [1.75, 1.5], icon: 'box', label: 'Container' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'box' },
+    { from: 'shared', to: 'box' },
+    { from: 'extra', to: 'box' },
+    { from: 'own', to: 'box' },
+  ]}
+  steps={[
+    {
+      caption: 'Layer 1: the variables that Ferry injects.',
+      flow: ['ferry>box'],
+      tones: { ferry: 'primary' },
+      notes: { box: 'PORT, FERRY_*' },
+    },
+    {
+      caption: 'Layer 2: the env groups, in the order of the links. The group shared sets LOG_LEVEL=info.',
+      flow: ['shared>box'],
+      tones: { shared: 'primary' },
+      notes: { box: 'LOG_LEVEL=info' },
+    },
+    {
+      caption: 'The group extra has a later link. Its value replaces the first one.',
+      flow: ['extra>box'],
+      tones: { extra: 'primary' },
+      notes: { box: 'LOG_LEVEL=debug' },
+    },
+    {
+      caption: 'Layer 3: the own variables of the service echo. They win.',
+      flow: ['own>box'],
+      tones: { own: 'primary', box: 'success' },
+      notes: { box: 'LOG_LEVEL=warn' },
+    },
+  ]}
+/>
+
+Ferry merges the environment of a service in this order. This is the <Term id="precedence" />:
+
+1. the variables that Ferry [injects](/docs/concepts/environment/injected-variables) (`PORT`, `FERRY_*`)
+2. its <Term id="env-group">env groups</Term>, in the order of the links
+3. its own variables
+
+## See the result
+
+<Terminal
+  lines={[
+    '$ ferry env ls echo --effective',
+    'LOG_LEVEL=warn',
+    'REGION=eu',
+    'DATABASE_URL=${{datastore.app-db.connectionString}}',
+    "Merged from env group(s) shared, extra, then 'echo''s own variables (which win). ${{…}} references are resolved, and PORT/FERRY_* added, at start.",
+  ]}
+/>
+
+The command shows the <Term id="merged-env" />.
+
+- `shared` sets `LOG_LEVEL=info`.
+- `extra` sets `LOG_LEVEL=debug`. You linked it later.
+- The own `LOG_LEVEL=warn` of the service wins.
+
+Without the own value, the service gets `debug`.

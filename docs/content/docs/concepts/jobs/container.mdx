@@ -1,0 +1,46 @@
+---
+title: What a run uses
+description: Each run is a new container that starts from the snapshot of the live deploy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'snap', at: [0, 0.5], icon: 'save', label: 'Snapshot', note: 'of the live deploy' },
+    { id: 'run', at: [1.5, 0.5], icon: 'box', label: 'Run container', note: 'one command' },
+    { id: 'svc', at: [3, 0], icon: 'box', label: 'Service', note: 'api:3000' },
+    { id: 'ds', at: [3, 1], icon: 'database', label: 'Datastore', note: 'app-db:5432' },
+  ]}
+  edges={[
+    { from: 'snap', to: 'run' },
+    { from: 'run', to: 'svc' },
+    { from: 'run', to: 'ds' },
+  ]}
+  steps={[
+    { caption: 'A run starts. Ferry makes a new container from the snapshot of the live deploy.', flow: ['snap>run'], tones: { run: 'primary' } },
+    { caption: 'The container is on the private network. It can call your services and datastores by name.', flow: ['run>svc', 'run>ds'], tones: { run: 'primary' } },
+    { caption: 'The run ends. Ferry removes the container.', hide: ['run'] },
+  ]}
+/>
+
+A <Term id="job-run" /> uses the <Term id="snapshot" /> of the <Term id="live-deploy" />. This is true for a <Term id="one-off-job" /> and for a <Term id="cron-job" />.
+
+## What the container gets
+
+| Part | Value |
+|---|---|
+| Image | The image of the live deploy |
+| Variables | The variables of the live deploy, without `PORT`: a job listens on no port |
+| Limits | The memory and CPU limits of the live deploy |
+| Network | The [private network](/docs/concepts/networking), with no published port |
+| Restart | None |
+| Disk | A one-off job gets the [disk of the service](/docs/concepts/jobs/disk) |
+
+## After a change of settings
+
+A change of settings, limits or variables after the live deploy does not apply to a run.
+
+If the job needs the new values, restart the service first.
+
+```bash title="Terminal"
+ferry restart api --follow
+```

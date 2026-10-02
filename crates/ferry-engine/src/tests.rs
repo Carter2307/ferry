@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use ferry_build::Builder;
 use ferry_core::{
-    Config, Datastore, DatastoreKind, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Engine, Error,
-    JobRun, JobStatus, JobTrigger, LogLine, Service, ServiceType, Store,
+    CheckOutcome, Config, Datastore, DatastoreKind, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger,
+    Domain, DomainSource, DomainStatus, Engine, Error, GitConnection, GitProvider, JobRun, JobStatus, JobTrigger,
+    LogLine, Service, ServiceType, Store,
 };
 use ferry_docker::Docker;
 use ferry_proxy::{Resolution, RouteTable};
@@ -188,6 +189,164 @@ async fn failed_builds_record_the_checked_out_commit() {
     assert_eq!(d.commit_sha.as_deref(), Some(sha.as_str()), "{lines:?}");
     assert_eq!(d.commit_message.as_deref(), Some("broken build"));
     assert!(lines.iter().any(|l| l.starts_with("==> Build failed")), "{lines:?}");
+}
+
+/// A dumb-HTTP git server for the bare repository `repo` (at `/repo.git`)
+/// that demands the Basic credentials `user:password`. Returns its port and
+/// whether an authorized request was served.
+async fn private_git_server(
+    repo: std::path::PathBuf,
+    user: &str,
+    password: &str,
+) -> (u16, Arc<std::sync::atomic::AtomicBool>) {
+    use base64::Engine as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let expected = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}")));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let authorized = Arc::new(AtomicBool::new(false));
+    let seen = authorized.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let (repo, expected, seen) = (repo.clone(), expected.clone(), seen.clone());
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let req = String::from_utf8_lossy(&buf).into_owned();
+                let path = req.split_whitespace().nth(1).unwrap_or("/").split('?').next().unwrap_or("/");
+                let auth_ok = req.lines().any(|l| {
+                    l.split_once(':')
+                        .is_some_and(|(k, v)| k.eq_ignore_ascii_case("authorization") && v.trim() == expected)
+                });
+                let file = path.strip_prefix("/repo.git/").and_then(|rel| std::fs::read(repo.join(rel)).ok());
+                let head = |status: &str, extra: &str, len: usize| {
+                    format!("HTTP/1.1 {status}\r\n{extra}Content-Length: {len}\r\nConnection: close\r\n\r\n")
+                        .into_bytes()
+                };
+                let response = match (auth_ok, file) {
+                    (false, _) => head("401 Unauthorized", "WWW-Authenticate: Basic realm=\"git\"\r\n", 0),
+                    (true, Some(body)) => {
+                        seen.store(true, Ordering::SeqCst);
+                        let mut r = head("200 OK", "Content-Type: application/octet-stream\r\n", body.len());
+                        r.extend_from_slice(&body);
+                        r
+                    }
+                    (true, None) => head("404 Not Found", "", 0),
+                };
+                let _ = sock.write_all(&response).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    (port, authorized)
+}
+
+#[tokio::test]
+async fn git_connections_authenticate_clones_on_their_own_host() {
+    use std::sync::atomic::Ordering;
+    if std::process::Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipped: git is not installed");
+        return;
+    }
+    const TOKEN: &str = "ghp_s3cr3tT0kenOfTheConnection";
+    // The checkout is real; `docker build` can't even start, so every deploy
+    // ends `build_failed` — with its commit recorded when the clone worked.
+    let f = fixture_with(2, "/nonexistent/ferry-test-docker").await;
+    let src = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("Dockerfile"), "FROM busybox:stable\n").unwrap();
+    git(src.path(), &["init", "-q", "-b", "main"]);
+    git(src.path(), &["add", "-A"]);
+    git(src.path(), &["commit", "-q", "-m", "private app"]);
+    let sha = git(src.path(), &["rev-parse", "HEAD"]);
+    let served = tempfile::tempdir().unwrap();
+    git(served.path(), &["clone", "-q", "--bare", &src.path().display().to_string(), "repo.git"]);
+    git(&served.path().join("repo.git"), &["update-server-info"]);
+    let (port, authorized) = private_git_server(served.path().join("repo.git"), "x-access-token", TOKEN).await;
+    let repo_url = format!("http://127.0.0.1:{port}/repo.git");
+
+    // Services don't name a connection: the server's connections decide.
+    let deploy = async |name: &str| {
+        let svc = service(&f.store, name, ServiceType::WebService, |s| s.repo_url = Some(repo_url.clone())).await;
+        let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+        let lines = log_lines(&f.engine, &d.id).await;
+        let d = wait_status(&f.store, &d.id, |s| s.is_terminal()).await;
+        assert_eq!(d.status, DeployStatus::BuildFailed, "{d:?}\n{lines:?}");
+        // No token ever reaches the deploy log, the deploy's error or its source.
+        let stored = format!("{lines:?} {:?} {:?}", d.error, d.source);
+        assert!(!stored.contains("ghp_") && !stored.contains("glpat-"), "{stored}");
+        (d, lines)
+    };
+    let has = |lines: &[String], prefix: &str| lines.iter().any(|l| l.starts_with(prefix));
+    let instance = format!("http://127.0.0.1:{port}");
+
+    // Without a connection the private repository can't be cloned.
+    let (d, lines) = deploy("anonymous").await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    assert!(has(&lines, "==> Hint: if the repository is private, connect its GitHub or GitLab account"), "{lines:?}");
+    assert!(!authorized.load(Ordering::SeqCst));
+
+    // A connection for another host is never used for this one.
+    let elsewhere = GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "me", "glpat-0therS3cret");
+    f.store.create_git_connection(&elsewhere).await.unwrap();
+    let (d, lines) = deploy("elsewhere").await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    assert!(!has(&lines, "==> Cloning with") && !authorized.load(Ordering::SeqCst), "{lines:?}");
+
+    // A connection whose token the remote refuses says what to do about it.
+    let stale = GitConnection::new(GitProvider::Github, instance.clone(), "ghost", "ghp_expired0");
+    f.store.create_git_connection(&stale).await.unwrap();
+    let (d, lines) = deploy("stale").await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "==> Cloning with the GitHub account 'ghost'"), "{lines:?}");
+    assert!(has(&lines, "==> Hint: the token of the GitHub account 'ghost' may have expired"), "{lines:?}");
+    assert!(!authorized.load(Ordering::SeqCst));
+    f.store.delete_git_connection(&stale.id).await.unwrap();
+
+    // A connection that can't produce a token (here: an app whose key is
+    // unreadable) is said, and the clone goes on without it.
+    let app = ferry_core::GithubApp {
+        id: 1,
+        slug: "ferry-test".into(),
+        url: format!("{instance}/apps/ferry-test"),
+        private_key: "not a key".into(),
+        webhook_secret: None,
+    };
+    let mut broken = GitConnection::github_app(instance.clone(), "repo.git", app, "Iv1", "s");
+    broken.installation = Some(ferry_core::GithubInstallation { id: 1, url: None, repository_selection: None });
+    f.store.create_git_connection(&broken).await.unwrap();
+    let (d, lines) = deploy("broken").await;
+    assert_eq!(d.commit_sha, None, "{lines:?}");
+    let warning = "==> Warning: the GitHub account 'repo.git' can't be used (the GitHub App's private key can't be \
+                   read): cloning without it";
+    assert!(lines.iter().any(|l| l == warning), "{lines:?}");
+    assert!(has(&lines, "==> Hint: the GitHub App of the GitHub account 'repo.git' may not be allowed"), "{lines:?}");
+    f.store.delete_git_connection(&broken.id).await.unwrap();
+
+    // The connection of the repository's own host: its token clones it.
+    let connection = GitConnection::new(GitProvider::Github, instance.clone(), "octocat", TOKEN);
+    f.store.create_git_connection(&connection).await.unwrap();
+    let (d, lines) = deploy("private").await;
+    assert!(authorized.load(Ordering::SeqCst), "{lines:?}");
+    assert_eq!(d.commit_sha.as_deref(), Some(sha.as_str()), "{lines:?}");
+    assert_eq!(d.commit_message.as_deref(), Some("private app"));
+    assert!(lines.iter().any(|l| l == "==> Cloning with the GitHub account 'octocat'"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == &format!("==> Cloning from {repo_url} (branch main)")), "{lines:?}");
+    assert!(!has(&lines, "==> Hint"), "{lines:?}");
+    assert_eq!(d.source, DeploySource::Git { repo_url: repo_url.clone(), branch: "main".into(), commit: None });
+
+    // Once the connection is deleted, the same service clones without it again.
+    f.store.delete_git_connection(&connection.id).await.unwrap();
+    let svc = f.store.require_service("private").await.unwrap();
+    let d = f.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let lines = log_lines(&f.engine, &d.id).await;
+    assert!(!has(&lines, "==> Cloning with"), "{lines:?}");
 }
 
 #[tokio::test]
@@ -673,4 +832,108 @@ async fn cancel_job_conflicts_once_finished_and_recovers_orphaned_rows() {
     f.store.set_suspended(&svc.id, true).await.unwrap();
     assert!(matches!(f.engine.run_job(&svc.id, None, JobTrigger::Manual).await, Err(Error::Conflict(_))));
     assert!(f.engine.inner.with_rt(|rt| rt.jobs.is_empty()));
+}
+
+// ---------------------------------------------------------------------------
+// domains (DESIGN.md §21)
+
+use crate::domains::tests::{FakeNet, ip};
+
+const HERE: &str = "203.0.113.10";
+
+/// An engine whose network is `FakeNet`, with the base domain in the store.
+async fn domains_fixture() -> (Fixture, Arc<FakeNet>) {
+    let f = fixture(2).await;
+    let net = Arc::new(FakeNet::default());
+    *net.public.lock().unwrap() = vec![ip(HERE)];
+    f.engine.inner.domains.set_network(net.clone());
+    ferry_core::domains::init(&f.store, &f.engine.inner.config).await.unwrap();
+    (f, net)
+}
+
+#[tokio::test]
+async fn services_are_served_under_a_domain_once_it_reaches_the_server() {
+    let (f, net) = domains_fixture().await;
+    let config = f.engine.inner.config.clone();
+    let svc = service(&f.store, "web", ServiceType::WebService, |s| s.image = Some("nginx:alpine".into())).await;
+    let upstream: std::net::SocketAddr = "127.0.0.1:4242".parse().unwrap();
+    f.routes.set_service_routes(&svc.id, &["web.localhost".into()], vec![upstream]);
+
+    // Connected, and its DNS isn't there yet: pending, nothing served.
+    let d = Domain::new("example.com", DomainSource::Connected);
+    f.store.create_domain(&d).await.unwrap();
+    f.engine.refresh_domains().await.unwrap();
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::NotFound);
+    let checked = f.engine.verify_domain(&d.id).await.unwrap();
+    assert_eq!((checked.status, checked.checks[0].outcome), (DomainStatus::Pending, CheckOutcome::Failed));
+    assert!(checked.checked_at.is_some() && checked.verified_at.is_none());
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::NotFound);
+
+    // The record exists and this server answers: served at once, with the
+    // upstreams the service had, and the domain of its URL from now on (the
+    // default one was a local name).
+    net.point("example.com", &[HERE]);
+    net.answer(HERE, Ok(config.domains.probe_id()));
+    let verified = f.engine.verify_domain("example.com").await.unwrap();
+    assert_eq!(verified.status, DomainStatus::Active);
+    assert!(verified.is_default && verified.verified_at.is_some());
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::Upstream(upstream));
+    assert_eq!(f.routes.resolve("web.localhost"), Resolution::Upstream(upstream));
+    assert_eq!(config.default_host("web"), "web.example.com");
+    assert!(!f.store.require_domain("localhost").await.unwrap().is_default);
+
+    // Its DNS breaks: flagged after three verifications, and still served.
+    net.point("example.com", &["198.51.100.7"]);
+    for expected in [DomainStatus::Active, DomainStatus::Active, DomainStatus::Misconfigured] {
+        assert_eq!(f.engine.verify_domain(&d.id).await.unwrap().status, expected);
+    }
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::Upstream(upstream));
+    net.point("example.com", &[HERE]);
+    assert_eq!(f.engine.verify_domain(&d.id).await.unwrap().status, DomainStatus::Active);
+
+    // Removed: its hostnames go, the base domain is the default again.
+    f.store.delete_domain(&d.id).await.unwrap();
+    f.engine.refresh_domains().await.unwrap();
+    assert_eq!(f.routes.resolve("web.example.com"), Resolution::NotFound);
+    assert_eq!(f.routes.resolve("web.localhost"), Resolution::Upstream(upstream));
+    assert_eq!(config.default_host("web"), "web.localhost");
+    assert!(matches!(f.engine.verify_domain(&d.id).await, Err(Error::NotFound(_))));
+}
+
+#[tokio::test]
+async fn a_second_domain_does_not_take_the_default_and_local_ones_need_no_dns() {
+    let (f, net) = domains_fixture().await;
+    let config = f.engine.inner.config.clone();
+    net.answer(HERE, Ok(config.domains.probe_id()));
+    for name in ["example.com", "example.org"] {
+        net.point(name, &[HERE]);
+        f.store.create_domain(&Domain::new(name, DomainSource::Connected)).await.unwrap();
+        assert_eq!(f.engine.verify_domain(name).await.unwrap().status, DomainStatus::Active);
+    }
+    // The first one that worked replaced the local default; the second didn't.
+    assert_eq!(config.primary_domain(), "example.com");
+    assert_eq!(config.served_domains(), vec!["example.com", "localhost", "example.org"]);
+
+    // A local name is served as soon as it is connected, and never verified.
+    let local = Domain::new("dev.localhost", DomainSource::Connected);
+    f.store.create_domain(&local).await.unwrap();
+    f.engine.refresh_domains().await.unwrap();
+    assert!(config.served_domains().contains(&"dev.localhost".to_string()));
+    let asked = net.requests.lock().unwrap().len();
+    let same = f.engine.verify_domain("dev.localhost").await.unwrap();
+    assert_eq!((same.status, same.checked_at), (DomainStatus::Active, None));
+    assert_eq!(net.requests.lock().unwrap().len(), asked);
+}
+
+#[tokio::test]
+async fn the_public_address_is_the_configured_one_else_the_one_found() {
+    let (f, net) = domains_fixture().await;
+    assert_eq!(f.engine.public_addresses().await, vec![ip(HERE)]);
+    // Found once, then remembered.
+    *net.public.lock().unwrap() = vec![ip("198.51.100.7")];
+    assert_eq!(f.engine.public_addresses().await, vec![ip(HERE)]);
+
+    let configured = fixture_config("docker", |c| c.public_ips = vec![ip("192.0.2.44")]).await;
+    configured.engine.inner.domains.set_network(net);
+    assert_eq!(configured.engine.public_addresses().await, vec![ip("192.0.2.44")]);
 }

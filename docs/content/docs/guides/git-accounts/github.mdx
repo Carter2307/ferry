@@ -1,0 +1,84 @@
+---
+title: Connect GitHub
+description: Ferry creates a GitHub App for your server. The app reads only the repositories that you choose.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0.5], icon: 'ship', label: 'Ferry' },
+    { id: 'app', at: [1.5, 0.5], icon: 'plug', label: 'GitHub App', note: 'private to you' },
+    { id: 'a', at: [3, 0], icon: 'repo', label: 'you/api', note: 'chosen' },
+    { id: 'b', at: [3, 1], icon: 'repo', label: 'you/notes', note: 'not chosen', tone: 'muted' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'app' },
+    { from: 'app', to: 'a' },
+  ]}
+  groups={[{ label: 'Your GitHub account', from: [1.5, 0], to: [3, 1] }]}
+  steps={[
+    {
+      caption: 'Ferry creates a GitHub App in your account. The app is private to your account.',
+      hide: ['a', 'b'],
+      flow: ['ferry>app'],
+      tones: { app: 'primary' },
+    },
+    {
+      caption: 'You choose the repositories that the app can read.',
+      cut: ['app>a'],
+      tones: { a: 'success' },
+    },
+    {
+      caption: 'Ferry reads the chosen repositories through the app. It cannot read the others.',
+      flow: ['ferry>app', 'app>a'],
+      tones: { a: 'success' },
+    },
+  ]}
+/>
+
+A <Term id="github-app" /> is an application of your own on GitHub. Ferry creates it for your server. You prepare nothing on GitHub.
+
+## Connect the account
+
+<Steps>
+<Step>
+
+### Open the dialog
+
+Click **Connect GitHub** in the <Term id="dashboard" />.
+
+</Step>
+<Step>
+
+### Go to GitHub
+
+Click **Continue to GitHub**.
+
+</Step>
+<Step>
+
+### Create the app
+
+GitHub shows the name of the app: `ferry-<your server>-<random>`. Keep the name or change it. Click **Create GitHub App**.
+
+</Step>
+<Step>
+
+### Choose the repositories
+
+GitHub asks where to install the app. Select **All repositories** or **Only select repositories**. Click **Install**.
+
+GitHub sends you back to Ferry. Ferry shows the account as connected.
+
+</Step>
+</Steps>
+
+## The repositories of an organization
+
+Before you click **Continue to GitHub**, open **Organization, self-hosted GitHub**. Enter the login of the organization. Then Ferry creates the app in the organization. You must be an owner of the organization.
+
+## Change the repositories later
+
+Use one of these buttons:
+
+- **Repositories**, next to the account in **Server → Connections**.
+- **Change them on GitHub**, below the repository list of a new service.

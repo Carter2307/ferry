@@ -1,0 +1,31 @@
+---
+title: Service properties
+description: A reference of the kind service gives the host, the port or a URL of a different service.
+---
+
+```bash title="Terminal"
+ferry env set web 'API_URL=${{service.api.internalUrl}}/v1'
+# → API_URL=http://api:3000/v1 in the containers of web
+```
+
+The kind is `service`. You can also write `svc`. The name is the name of the <Term id="service" />.
+
+## The properties
+
+| Property | Other names | Value | Available for |
+|---|---|---|---|
+| `host` | `hostname` | `NAME`: the hostname of the service on the <Term id="private-network" /> | Each service type |
+| `port` | | The port that the service listens on | Web services, private services, static sites |
+| `hostport` | | `NAME:PORT` | Web services, private services, static sites |
+| `internalUrl` | | `http://NAME:PORT` | Web services, private services, static sites |
+| `url` | `externalUrl` | The <Term id="public-url" />, such as `http://web.localhost:8080` | Web services and static sites |
+
+## Which port
+
+| The target service | Port |
+|---|---|
+| Has a live deploy | The port that the live deploy listens on |
+| Has no live deploy yet | The `port` in its settings |
+| Has no deploy and no `port` setting | Not known |
+
+If Ferry does not know the port, see [Port references wait for the first deploy](/docs/reference/env-references/port-wait).

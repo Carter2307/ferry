@@ -9,7 +9,7 @@ icon: "Braces"
 These pages are generated from Ferry's OpenAPI 3.1 document: `ferryd --dump-openapi` prints it, and every server serves it at `GET /api/openapi.json`. The `ferry` CLI and the dashboard use exactly this API. Read the [API overview](/docs/reference/api-overview) for authentication, errors and streaming.
 
 <Callout title="Authentication">
-Every `/api/v1` route needs the server's API token as `Authorization: Bearer <token>`. `ferryd` prints the token on first start and stores it in `<data-dir>/api_token`. Webhooks (`/hooks/…`) use their own secrets, and `/healthz` and the OpenAPI document need no token.
+Every `/api/v1` route needs an API token as `Authorization: Bearer <token>`: one created in the dashboard (Server → Account) or by `ferry login`, or the server token in `<data-dir>/api_token`. The operations of the `auth` tag are the exception: those of the account itself only accept the dashboard's session, and the ones called before signing in need nothing. Webhooks (`/hooks/…`) use their own secrets, and `/healthz` and the OpenAPI document need no token.
 </Callout>
 
 The request examples target `http://127.0.0.1:7878`, the default `--api-addr` (docs builds can change it with `FERRY_DOCS_SERVER_URL`), and read the token from the `FERRY_TOKEN` environment variable, like the `ferry` CLI: `export FERRY_TOKEN=$(cat <data-dir>/api_token)`. To send requests from a browser, open the Swagger UI that your own server serves at `/api/docs` and paste the token under **Authorize**.
@@ -17,6 +17,9 @@ The request examples target `http://127.0.0.1:7878`, the default `--api-addr` (d
 <Cards>
   <Card title="Server info" href="/docs/reference/api/info">
     Server info, liveness and the OpenAPI document.
+  </Card>
+  <Card title="auth" href="/docs/reference/api/auth">
+    The account of the server (its administrator), signing in and out of the dashboard, the sessions and the API tokens, and `ferry login` (a terminal asks, the dashboard approves). The status, the first-run setup, signing in and out, and the two calls of a terminal need no authentication; the others only accept the dashboard's session, never an API token.
   </Card>
   <Card title="Services" href="/docs/reference/api/services">
     Web services, private services, background workers, static sites and cron jobs: CRUD, lifecycle actions (restart, suspend, resume, scale, rollback), status and runtime logs.
@@ -30,14 +33,17 @@ The request examples target `http://127.0.0.1:7878`, the default `--api-addr` (d
   <Card title="Env groups" href="/docs/reference/api/env-groups">
     Shared variable sets linked to services (a service's own variables win over its groups'), and linking / unlinking them.
   </Card>
-  <Card title="Custom domains" href="/docs/reference/api/domains">
-    Custom domains of web services and static sites (unique across services).
+  <Card title="Domains" href="/docs/reference/api/domains">
+    The domains services are served under — `<service>.<domain>` for every web service and static site: the server's base domain and the domains connected to it, each pointed at the server with one wildcard DNS record and verified by the server — the certificates of the routed hostnames, and the custom domains of one service (unique across services).
   </Card>
   <Card title="Jobs" href="/docs/reference/api/jobs">
     Job runs: cron runs and one-off commands, with their logs.
   </Card>
   <Card title="Datastores" href="/docs/reference/api/datastores">
     Managed Postgres and Redis instances with their connection strings and resource limits.
+  </Card>
+  <Card title="Git connections" href="/docs/reference/api/git">
+    Git connections: the GitHub / GitLab accounts this server is authorized to read the repositories of, to pick a repository and a branch from a list and to clone private repositories. An account is authorized in the browser (a GitHub App on GitHub, an OAuth application on GitLab) or with an access token. Connections belong to the server, not to a service: a repository is cloned with the connection that serves its URL.
   </Card>
   <Card title="Blueprints" href="/docs/reference/api/blueprints">
     Infrastructure as code: apply a `ferry.yaml` / `render.yaml` (idempotent, with a dry run).

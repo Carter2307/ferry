@@ -1,0 +1,87 @@
+---
+title: Use the CLI in CI
+description: In a CI job, two environment variables give the server and the token to ferry.
+---
+
+<Diagram
+  nodes={[
+    { id: 'token', at: [0, 0], icon: 'key', label: 'New token', note: 'in the dashboard' },
+    { id: 'secrets', at: [1.6, 0], icon: 'lock', label: 'CI secrets' },
+    { id: 'job', at: [1.6, 1], icon: 'workflow', label: 'CI job', note: 'ferry deploy' },
+    { id: 'server', at: [3.2, 1], icon: 'server', label: 'ferryd' },
+  ]}
+  edges={[
+    { from: 'token', to: 'secrets' },
+    { from: 'secrets', to: 'job' },
+    { from: 'job', to: 'server' },
+  ]}
+  steps={[
+    {
+      caption: 'In CI, no person is there to approve a login. You create an API token.',
+      hide: ['job', 'server'],
+      tones: { token: 'primary' },
+    },
+    {
+      caption: 'You keep the token in the secrets of your CI.',
+      hide: ['job', 'server'],
+      flow: ['token>secrets'],
+      tones: { secrets: 'primary' },
+    },
+    {
+      caption: 'The job puts the server and the token in two variables.',
+      flow: ['secrets>job'],
+      tones: { job: 'primary' },
+      notes: { job: 'FERRY_TOKEN' },
+    },
+    {
+      caption: 'ferry reads the two variables and calls the server.',
+      flow: ['job>server'],
+      tones: { server: 'success' },
+    },
+  ]}
+/>
+
+## Do it
+
+<Steps>
+<Step>
+
+### Create an API token
+
+In the dashboard, open **Server → Account → API tokens**. Click **New token**. Give a name such as `CI`, and an expiry.
+
+The dashboard shows the token one time.
+
+</Step>
+<Step>
+
+### Keep the token in your CI secrets
+
+The script gets the token from the secrets. Do not write the token in the script.
+
+</Step>
+<Step>
+
+### Set the two variables in the script
+
+```bash title="deploy.sh"
+export FERRY_SERVER=https://ferry.apps.example.com
+export FERRY_TOKEN="$FERRY_API_TOKEN"   # from your CI secrets
+
+ferry deploy api --follow   # exits with 1 if the deploy fails
+```
+
+The two variables win over the config file.
+
+</Step>
+</Steps>
+
+<Callout type="warning" title="The token has full access">
+The token can do all that the <Term id="cli" /> does. You can revoke it at each time under **Server → Account**.
+</Callout>
+
+<Accordions>
+  <Accordion title="A job that only starts a deploy">
+    A [deploy hook](/docs/concepts/deploys/deploy-hooks) of a service needs no token. Use it when the CI job only starts a deploy.
+  </Accordion>
+</Accordions>

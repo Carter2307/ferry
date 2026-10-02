@@ -152,7 +152,9 @@ impl Client {
     }
 
     async fn send(&self, rb: RequestBuilder, url: &Url) -> Result<Response> {
-        let resp = rb.bearer_auth(&self.token).send().await.map_err(|e| self.transport_error(e, url))?;
+        // (No token: what `ferry login` calls before it has one.)
+        let rb = if self.token.is_empty() { rb } else { rb.bearer_auth(&self.token) };
+        let resp = rb.send().await.map_err(|e| self.transport_error(e, url))?;
         if resp.status().is_success() {
             return Ok(resp);
         }

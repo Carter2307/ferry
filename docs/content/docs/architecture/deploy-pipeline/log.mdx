@@ -1,0 +1,40 @@
+---
+title: A deploy log
+description: The deploy log shows each step of the pipeline, with the output of the build and of the containers.
+---
+
+<Terminal
+  title="Deploy log"
+  lines={[
+    '$ ferry logs --deploy dep-3271cdfd1415400d9a5e',
+    '09:38:58 ==> Starting deploy dep-3271cdfd1415400d9a5e (trigger: blueprint)',
+    '09:38:58 ==> Using image nginx:alpine (already present)',
+    '09:38:58 ==> Pinned nginx:alpine as docsc3/hello:dep-3271cdfd1415400d9a5e',
+    '09:38:58 ==> Using port 80 (service setting)',
+    '09:38:58 ==> Limits: 512 MiB memory, 1 CPU per instance',
+    '09:38:58 ==> Starting 2 instance(s)',
+    '09:38:58 ==> Started instance 9c5087 (port 80, published on 127.0.0.1:63120)',
+    '09:38:58 ==> Started instance 77122e (port 80, published on 127.0.0.1:63121)',
+    '09:38:58 ==> Waiting for 2 instance(s) to become healthy: GET / must answer with a status below 400 (timeout 120s)',
+    '09:38:59 ==> Health check passed',
+    '09:38:59 ==> Routing traffic to the new instance(s)',
+    '09:38:59 ==> Your service is live 🎉',
+    '09:38:59 ==> Available at http://hello.localhost:18091',
+  ]}
+/>
+
+This <Term id="deploy-log" /> is from an image deploy of a web service with two instances.
+
+The lines that start with `==> ` come from Ferry. The other lines are the output of the build or of the containers.
+
+## Which step writes which line
+
+| Lines | Step |
+|---|---|
+| `Using image`, `Pinned` | [Build](/docs/architecture/deploy-pipeline/build) |
+| `Using port`, `Limits` | [Snapshot](/docs/architecture/deploy-pipeline/snapshot) |
+| `Starting`, `Started instance` | [Start](/docs/architecture/deploy-pipeline/start) |
+| `Waiting for`, `Health check passed` | [Health check](/docs/architecture/deploy-pipeline/health-check) |
+| `Routing traffic`, `Your service is live` | [Switch](/docs/architecture/deploy-pipeline/switch) |
+
+For the commands that read a log, see [History and logs](/docs/concepts/deploys/history).

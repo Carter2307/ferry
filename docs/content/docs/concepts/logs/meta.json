@@ -1,0 +1,14 @@
+{
+  "title": "Logs & events",
+  "icon": "ScrollText",
+  "pages": [
+    "kinds",
+    "runtime-logs",
+    "deploy-logs",
+    "job-logs",
+    "status",
+    "server-logs",
+    "api-streams",
+    "events"
+  ]
+}

@@ -7,7 +7,6 @@ import {
   ChevronsUpDown,
   CircleHelp,
   FileCode2,
-  KeyRound,
   LogOut,
   Menu,
   Monitor,
@@ -16,6 +15,7 @@ import {
   Search,
   Server,
   Sun,
+  UserRound,
 } from 'lucide-react'
 
 import { Kbd } from '@/components/patterns/Kbd'
@@ -38,7 +38,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
 import { ApiError } from '@/lib/api/client'
 import { useLive } from '@/lib/api/events'
+import { signOut } from '@/lib/api/session'
 import { useDatastores, useEnvGroups, useOpenApiSpec, useServerInfo, useService, useServices } from '@/lib/api/queries'
+import { defaultDomain } from '@/lib/domains'
 import { DATASTORE_KIND_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
 import { isMac } from '@/lib/platform'
 import { cn } from '@/lib/utils'
@@ -72,14 +74,14 @@ function ServerSegment() {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Server ${info?.base_domain || 'Ferry'}${info ? ` v${info.version}` : ''}, open server menu`}
+          aria-label={`Server ${info ? defaultDomain(info) : 'Ferry'}${info ? ` v${info.version}` : ''}, open server menu`}
           className="group inline-flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 text-sm text-foreground outline-none transition-colors hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-surface-200"
         >
           <Server className="size-4 shrink-0 text-foreground-lighter" aria-hidden="true" />
           {isLoading ? (
             <Skeleton className="h-4 w-20" />
           ) : (
-            <span className="max-w-[160px] truncate">{info?.base_domain || 'Ferry'}</span>
+            <span className="max-w-[160px] truncate">{info ? defaultDomain(info) : 'Ferry'}</span>
           )}
           {info && (
             <Badge font="mono" case="normal" className="hidden xl:inline-flex">
@@ -263,8 +265,7 @@ export function ThemeMenu({ className }: { className?: string }) {
 }
 
 function AccountMenu() {
-  const token = useAuth((s) => s.token) ?? ''
-  const signOut = useAuth((s) => s.signOut)
+  const email = useAuth((s) => s.user?.email) ?? ''
   const navigate = useNavigate()
   const [open, setOpen] = React.useState(false)
   // Checked once, the first time the menu opens (cached for the session).
@@ -277,18 +278,22 @@ function AccountMenu() {
           aria-label="Account"
           className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-primary/30 bg-primary-soft text-primary outline-none transition-colors hover:border-primary/60 focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <KeyRound className="size-3.5" aria-hidden="true" />
+          <span className="text-[13px] font-medium uppercase" aria-hidden="true">
+            {email.charAt(0) || '?'}
+          </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-60">
         <div className="flex flex-col gap-0.5 px-2 py-2">
-          <span className="text-[13px] font-medium text-foreground">Signed in with an API token</span>
-          <span className="font-mono text-[12px] text-foreground-lighter">
-            {'•'.repeat(10)}
-            {token.slice(-4)}
+          <span className="text-[12px] text-foreground-lighter">Signed in as</span>
+          <span className="truncate text-[13px] font-medium text-foreground" title={email}>
+            {email}
           </span>
         </div>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => void navigate('/server?section=account')}>
+          <UserRound /> Account
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void navigate('/server')}>
           <Server /> Server details
         </DropdownMenuItem>
@@ -310,7 +315,7 @@ function AccountMenu() {
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={signOut}>
+        <DropdownMenuItem onSelect={() => void signOut()}>
           <LogOut /> Sign out
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -325,7 +330,6 @@ function AccountMenu() {
 export function TopBar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const resource = useRouteResource()
   const openCommand = useUi((s) => s.setCommandOpen)
-  const signOut = useAuth((s) => s.signOut)
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background pr-3 pl-2 md:pr-4 md:pl-3">
@@ -397,7 +401,7 @@ export function TopBar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
             className={cn(iconButton, 'hidden sm:inline-flex')}
             icon={<LogOut />}
             aria-label="Sign out"
-            onClick={signOut}
+            onClick={() => void signOut()}
           />
         </Hint>
         <AccountMenu />

@@ -1,0 +1,62 @@
+---
+title: Internal hostnames
+description: On the private network, each service and each datastore has its name as its hostname.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'globe', label: 'web' },
+    { id: 'api', at: [1.75, 0], icon: 'box', label: 'api', note: 'port 3000' },
+    { id: 'worker', at: [0, 1], icon: 'repeat', label: 'Worker', note: 'or a cron job run' },
+    { id: 'db', at: [1.75, 1], icon: 'database', label: 'Datastore' },
+  ]}
+  groups={[{ label: 'Private network "ferry"', from: [0, 0], to: [1.75, 1] }]}
+  edges={[
+    { from: 'web', to: 'api', label: 'api:3000' },
+    { from: 'worker', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'All containers of a server share one private Docker network.',
+    },
+    {
+      caption: 'The service web calls the service api at its name and its port.',
+      flow: ['web>api'],
+      tones: { api: 'success' },
+    },
+    {
+      caption: 'Workers and cron job runs are on the network too. They call others, but nothing calls them.',
+      flow: ['worker>db'],
+      tones: { worker: 'primary' },
+    },
+  ]}
+/>
+
+Each service is on the <Term id="private-network" /> with its own name. Each <Term id="datastore" /> is there with the name of the datastore.
+
+## Call another service
+
+From each service or <Term id="job" />, another service is at `<name>:<port>`.
+
+```bash title="From inside a container"
+curl http://api:3000/health
+```
+
+## Find the port
+
+The port is the container port of the service that you call. `ferry show api` prints it as **Internal address**.
+
+The <Term id="reference" /> `${{service.api.hostport}}` gives the <Term id="internal-address" />. Thus you do not write the port in your code.
+
+```bash title="Terminal"
+ferry env set web 'API_URL=http://${{service.api.hostport}}'
+```
+
+<Accordions>
+  <Accordion title="The name of the network">
+    The network has the name prefix of the server as its name: `ferry` by default.
+  </Accordion>
+  <Accordion title="The names that Ferry gives to each container">
+    Ferry tells each container its own names in `FERRY_INTERNAL_HOSTNAME`. Public services also get `FERRY_EXTERNAL_HOSTNAME` and `FERRY_EXTERNAL_URL`. See [Environment & env groups](/docs/concepts/environment).
+  </Accordion>
+</Accordions>

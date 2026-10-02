@@ -17,12 +17,12 @@ pub const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 /// Keeps process environments and `docker build` well under OS `ARG_MAX`.
 pub const MAX_ENV_TOTAL_BYTES: usize = 256 * 1024;
 
-/// True if `s` has the shape of a Ferry id (`srv-`, `dep-`, `job-`, `dbs-` or
-/// `evg-` followed by 20 hex chars). Such names are rejected so id-or-name
-/// lookups can never be ambiguous.
+/// True if `s` has the shape of a Ferry id (`srv-`, `dep-`, `job-`, `dbs-`,
+/// `evg-` or `git-` followed by 20 hex chars). Such names are rejected so
+/// id-or-name lookups can never be ambiguous.
 pub fn looks_like_id(s: &str) -> bool {
     use crate::ids;
-    [ids::SERVICE, ids::DEPLOY, ids::JOB, ids::DATASTORE, ids::ENV_GROUP].iter().any(|p| {
+    [ids::SERVICE, ids::DEPLOY, ids::JOB, ids::DATASTORE, ids::ENV_GROUP, ids::GIT_CONNECTION].iter().any(|p| {
         ids::has_prefix(s, p) && s[p.len() + 1..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     })
 }
@@ -178,6 +178,90 @@ pub fn repo_url(url: &str) -> Result<()> {
         }
     }
     invalid("local repositories must be given as an absolute path (or file:// URL)")
+}
+
+/// Validate and normalize the web URL of a git provider instance, e.g.
+/// `https://gitlab.example.com` (a path below the host is kept): lowercase
+/// host, default port dropped, no trailing slash. Credentials, query strings
+/// and fragments are refused.
+pub fn git_base_url(url: &str) -> Result<String> {
+    let u = url.trim();
+    let invalid = |why: &str| Err(Error::invalid(format!("invalid base_url '{}': {why}", crate::git::redact_url(u))));
+    if u.contains(['?', '#']) {
+        return invalid("it must not have a query string or a fragment");
+    }
+    let Some(parsed) = crate::git::parse_http_url(u) else {
+        return invalid("expected an http(s) URL without credentials, such as https://gitlab.example.com");
+    };
+    let path = parsed.path.trim_end_matches('/');
+    let plain = path.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b'~'));
+    if !plain || path.split('/').skip(1).any(|seg| seg.is_empty() || seg == "." || seg == "..") {
+        return invalid("its path may only use letters, digits, '.', '_', '-' and '~'");
+    }
+    Ok(format!("{}{path}", parsed.origin()))
+}
+
+/// An access token of a git provider: printable ASCII without spaces, at
+/// most 1024 characters. Returns it trimmed.
+pub fn git_token(token: &str) -> Result<&str> {
+    let t = token.trim();
+    if t.is_empty() {
+        return Err(Error::invalid("the access token is empty"));
+    }
+    if t.len() > 1024 || !t.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(Error::invalid(
+            "invalid access token: expected at most 1024 printable characters without spaces (check that it was copied completely)",
+        ));
+    }
+    Ok(t)
+}
+
+/// Where a git provider sends the browser back after an authorization: an
+/// http(s) URL without credentials, query string or fragment (the provider
+/// appends its own parameters). Returns it trimmed.
+pub fn git_redirect_uri(url: &str) -> Result<&str> {
+    let u = url.trim();
+    let plain = u.len() <= 2048
+        && !u.contains(['?', '#'])
+        && crate::git::parse_http_url(u).is_some_and(|p| p.path.bytes().all(|b| b.is_ascii_graphic()));
+    if plain {
+        Ok(u)
+    } else {
+        Err(Error::invalid(
+            "invalid redirect_uri: expected the http(s) URL of the dashboard's /git/callback page, without credentials, query string or fragment",
+        ))
+    }
+}
+
+/// The login of a GitHub organization: 1 to 39 letters, digits or `-`, not
+/// at its ends. Returns it trimmed.
+pub fn git_organization(name: &str) -> Result<&str> {
+    let n = name.trim();
+    let ok = (1..=39).contains(&n.len())
+        && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !n.starts_with('-')
+        && !n.ends_with('-');
+    if ok {
+        Ok(n)
+    } else {
+        Err(Error::invalid(format!("invalid organization '{n}': expected its GitHub login (letters, digits and '-')")))
+    }
+}
+
+/// The id or the secret of an OAuth application (`what` names it in the
+/// error): printable ASCII without spaces, at most 256 characters. Returns
+/// it trimmed.
+pub fn git_client_credential<'a>(what: &str, value: &'a str) -> Result<&'a str> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(Error::invalid(format!("the {what} is empty")));
+    }
+    if v.len() > 256 || !v.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(Error::invalid(format!(
+            "invalid {what}: expected at most 256 printable characters without spaces (check that it was copied completely)"
+        )));
+    }
+    Ok(v)
 }
 
 /// Validate and normalize (lowercase, no trailing dot) a custom domain.
@@ -395,6 +479,62 @@ mod tests {
         assert!(env_vars(&dup).is_err());
         assert!(domain("127.0.0.1").is_err());
         assert!(domain("app.example.com").is_ok());
+    }
+
+    #[test]
+    fn git_connection_inputs() {
+        assert_eq!(git_base_url(" https://GitLab.Example.com/ ").unwrap(), "https://gitlab.example.com");
+        assert_eq!(git_base_url("https://example.com:443/gitlab/").unwrap(), "https://example.com/gitlab");
+        assert_eq!(git_base_url("http://127.0.0.1:8929").unwrap(), "http://127.0.0.1:8929");
+        for bad in [
+            "",
+            "gitlab.example.com",
+            "ssh://git@gitlab.example.com",
+            "https://user:glpat-secret@gitlab.example.com",
+            "https://gitlab.example.com/?next=x",
+            "https://gitlab.example.com/#x",
+            "https://gitlab.example.com/a/../b",
+            "https://gitlab.example.com/a//b",
+            "https://gitlab.example.com/a b",
+        ] {
+            let err = git_base_url(bad).unwrap_err().to_string();
+            assert!(err.starts_with("invalid base_url") && !err.contains("glpat-secret"), "{bad}: {err}");
+        }
+
+        assert_eq!(git_token("  ghp_abcDEF123  ").unwrap(), "ghp_abcDEF123");
+        assert!(git_token("   ").is_err());
+        assert!(git_token("ghp_abc def").is_err());
+        assert!(git_token("ghp_abc\ndef").is_err());
+        assert!(git_token(&"a".repeat(1025)).is_err());
+        // The message never repeats the token.
+        assert!(!git_token("tok\u{e9}n-s3cret").unwrap_err().to_string().contains("s3cret"));
+
+        // What a browser authorization is given.
+        assert_eq!(
+            git_redirect_uri(" http://localhost:7878/git/callback ").unwrap(),
+            "http://localhost:7878/git/callback"
+        );
+        assert!(git_redirect_uri("https://ferry.example.com/git/callback").is_ok());
+        for bad in [
+            "",
+            "/git/callback",
+            "ferry.example.com/git/callback",
+            "javascript:alert(1)",
+            "https://user:pw@ferry.example.com/git/callback",
+            "https://ferry.example.com/git/callback?next=x",
+            "https://ferry.example.com/git/callback#x",
+            "https://ferry.example.com/git call",
+        ] {
+            assert!(git_redirect_uri(bad).is_err(), "{bad}");
+        }
+        assert_eq!(git_organization(" acme-corp ").unwrap(), "acme-corp");
+        for bad in ["", "-acme", "acme-", "acme corp", "acme/corp", "a?b", &"a".repeat(40)] {
+            assert!(git_organization(bad).is_err(), "{bad}");
+        }
+        assert_eq!(git_client_credential("application id", " 0a1b2c ").unwrap(), "0a1b2c");
+        let err = git_client_credential("application secret", "gloas-ab cd").unwrap_err().to_string();
+        assert!(err.starts_with("invalid application secret") && !err.contains("gloas"), "{err}");
+        assert!(git_client_credential("application id", "  ").unwrap_err().to_string().contains("is empty"));
     }
 
     #[test]

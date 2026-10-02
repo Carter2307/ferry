@@ -1,0 +1,26 @@
+---
+title: Ferry cannot detect the runtime
+description: The build finds no file that tells Ferry how to build the app.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+could not detect the runtime: add a Dockerfile, or a package.json, requirements.txt, pyproject.toml, Pipfile, go.mod, Cargo.toml, Gemfile or index.html, or set the runtime explicitly
+```
+
+The deploy gets the status `build_failed`. The live deploy continues to answer.
+
+## Why it occurs
+
+The <Term id="build-context" /> has no file that tells Ferry how to build the app. Ferry finds the <Term id="runtime" /> from these files.
+
+## How to repair it
+
+| Case | Repair |
+|---|---|
+| The file is not there | Add a <Term id="dockerfile" />, or the project file of your language (`package.json`, `go.mod`, …). |
+| The app is in a subdirectory | Set `--root-dir`. |
+| You know the runtime | Set `--runtime`. |
+
+See [Builds & runtimes](/docs/concepts/builds).

@@ -1,0 +1,61 @@
+---
+title: Variables in a build
+description: Your build gets the environment variables of the service, with some exceptions.
+---
+
+<Diagram
+  nodes={[
+    { id: 'groups', at: [0, 0], icon: 'layers', label: 'Env groups', note: 'linked' },
+    { id: 'svc', at: [0, 1], icon: 'variable', label: 'Service', note: 'its variables' },
+    { id: 'ferry', at: [0, 2], icon: 'ban', label: 'PORT, FERRY_…', note: 'from Ferry' },
+    { id: 'build', at: [1.75, 0.5], icon: 'hammer', label: 'Build' },
+    { id: 'app', at: [1.75, 2], icon: 'box', label: 'Container', note: 'when the app runs' },
+  ]}
+  edges={[
+    { from: 'groups', to: 'build' },
+    { from: 'svc', to: 'build' },
+    { from: 'ferry', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'The build gets the variables of the linked env groups and of the service.',
+      flow: ['groups>build', 'svc>build'],
+      tones: { build: 'primary' },
+    },
+    {
+      caption: 'Ferry merges them as it does when the app runs. It replaces the references first.',
+      flow: ['groups>build', 'svc>build'],
+      tones: { groups: 'primary', svc: 'primary' },
+    },
+    {
+      caption: 'The variables that Ferry adds when the app runs are not in the build.',
+      flow: ['ferry>app'],
+      tones: { ferry: 'muted', build: 'muted' },
+    },
+  ]}
+/>
+
+The build gets the <Term id="env-var">environment variables</Term> of the service and of its <Term id="env-group">env groups</Term>. See [Environment & env groups](/docs/concepts/environment).
+
+Two examples of use: an install step reads the token of a private registry, and a build puts a public API URL into the code.
+
+## What the build does not get
+
+| Not in the build | The log says |
+|---|---|
+| The <Term id="injected-variable">variables that Ferry adds</Term> when the app runs (`PORT`, `FERRY_…`) | Nothing |
+| A `${{…}}` <Term id="reference" /> that Ferry cannot replace, for example to a service with no deploy | `==> Warning: not available at build time (unresolved references): …` |
+| A reserved name, or a name that is not a correct variable name | `==> Not available at build time (reserved or invalid names): …` |
+
+## How to use a variable
+
+The variables come as <Term id="build-secret">build secrets</Term>. See [Secrets in a build](/docs/concepts/builds/build-secrets).
+
+<Accordions>
+  <Accordion title="The reserved names">
+    Ferry never gives these names to a build. Thus they cannot break the build.
+
+    - `PATH`, `HOME`, `PWD`, `OLDPWD`, `HOSTNAME`, `SHELL`, `USER`, `LOGNAME`, `TERM`, `SHLVL`, `TMPDIR`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `SSH_AUTH_SOCK`.
+    - Names that start with `DOCKER_`, `BUILDKIT_`, `BUILDX_`, `COMPOSE_`, `XDG_` or `FERRY_BUILD_`.
+  </Accordion>
+</Accordions>

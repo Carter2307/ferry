@@ -1,0 +1,86 @@
+---
+title: Custom domains
+description: A custom domain is one more hostname for one web service or static site.
+---
+
+<Diagram
+  nodes={[
+    { id: 'h1', at: [0, 0], label: 'shop.localhost', note: 'default host' },
+    { id: 'h2', at: [0, 1], label: 'shop.example.com', note: 'custom domain' },
+    { id: 'h3', at: [0, 2], label: 'www.example.com', note: 'custom domain' },
+    { id: 'proxy', at: [1.5, 1], icon: 'route', label: 'Proxy' },
+    { id: 'shop', at: [3, 1], icon: 'box', label: 'shop', note: 'web service' },
+  ]}
+  edges={[
+    { from: 'h1', to: 'proxy' },
+    { from: 'h2', to: 'proxy' },
+    { from: 'h3', to: 'proxy' },
+    { from: 'proxy', to: 'shop' },
+  ]}
+  steps={[
+    {
+      caption: 'The service shop answers at its default host.',
+      hide: ['h2', 'h3'],
+      flow: ['h1>proxy', 'proxy>shop'],
+    },
+    {
+      caption: 'You add shop.example.com. The proxy routes it immediately, with no deploy.',
+      hide: ['h3'],
+      flow: ['h2>proxy', 'proxy>shop'],
+      tones: { h2: 'primary' },
+    },
+    {
+      caption: 'You can add more hostnames. Each one belongs to one service.',
+      flow: ['h3>proxy', 'proxy>shop'],
+      tones: { h3: 'primary' },
+    },
+  ]}
+/>
+
+A <Term id="custom-domain" /> is one more <Term id="hostname" /> for one <Term id="web-service" /> or <Term id="static-site" />. The <Term id="proxy" /> routes it when you add it. No deploy is necessary.
+
+## The rules
+
+- The domain must be a valid DNS name with one dot or more. It cannot be an <Term id="ip-address" />.
+- Ferry stores it in lower case, with no dot at the end.
+- A domain belongs to one service.
+- It cannot be the default host of a service: `<name>.<domain>` under a domain of the server.
+- It cannot be the dashboard host.
+- Point the DNS of the domain at your server. Use an `A`/`AAAA` <Term id="dns-record">record</Term>, or a `CNAME` to a name that resolves to it.
+
+## Add a custom domain
+
+<Tabs items={['CLI', 'API', 'Blueprint']} groupId="interface" persist>
+<Tab value="CLI">
+
+```bash title="Terminal"
+ferry domains add shop shop.example.com
+# Added shop.example.com. Point its DNS (A/AAAA or CNAME) at this server.
+ferry domains shop            # list
+ferry domains rm shop shop.example.com
+```
+
+</Tab>
+<Tab value="API">
+
+```bash title="Terminal"
+curl -X POST http://127.0.0.1:7878/api/v1/services/shop/domains \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"domain": "shop.example.com"}'
+```
+
+</Tab>
+<Tab value="Blueprint">
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: shop
+    domains: [shop.example.com, www.example.com]
+```
+
+</Tab>
+</Tabs>
+
+For the complete procedure, follow [Custom domains & HTTPS](/docs/guides/custom-domains-https).

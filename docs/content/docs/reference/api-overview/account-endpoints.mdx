@@ -1,0 +1,70 @@
+---
+title: Account endpoints
+description: The endpoints below /api/v1/auth control the account. An API token cannot use them.
+---
+
+<Diagram
+  nodes={[
+    { id: 'who', at: [0, 0], icon: 'user', label: 'Caller' },
+    { id: 'auth', at: [1.75, 0], icon: 'lock', label: '/api/v1/auth' },
+  ]}
+  edges={[{ from: 'who', to: 'auth' }]}
+  steps={[
+    {
+      caption: 'Six endpoints need no authentication. A browser or a terminal calls them before it has a proof.',
+      flow: ['who>auth'],
+      tones: { auth: 'success' },
+      notes: { who: 'no proof yet', auth: 'setup, login, cli' },
+    },
+    {
+      caption: 'The other endpoints accept only the session of the dashboard.',
+      flow: ['who>auth'],
+      tones: { auth: 'success' },
+      notes: { who: 'session cookie', auth: 'password, tokens' },
+    },
+    {
+      caption: 'An API token gets the answer 403 session_required.',
+      flow: ['who>auth'],
+      tones: { auth: 'danger' },
+      notes: { who: 'API token', auth: '403' },
+    },
+  ]}
+/>
+
+All that controls the account is below `/api/v1/auth`. The [API reference](/docs/reference/api/auth) describes each <Term id="account-endpoint" />.
+
+## No authentication
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/v1/auth/status` | Answers `{setup_required, auth, user}`. See below. |
+| `POST /api/v1/auth/setup` | Creates the account from `{email, password, code}` and signs the browser in (201). `code` is the setup code. |
+| `POST /api/v1/auth/login` | Signs in with `{email, password}`. The answer sets the session cookie. |
+| `POST /api/v1/auth/logout` | Signs out. |
+| `POST /api/v1/auth/cli` | Starts a `ferry login`. |
+| `POST /api/v1/auth/cli/{id}/token` | The terminal calls it again and again until its `ferry login` has an answer. |
+
+## Session only
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/v1/auth/password` | Changes the password. |
+| `GET /api/v1/auth/sessions` | Lists the sessions. |
+| `DELETE /api/v1/auth/sessions/{id}` | Ends a session: that browser signs out. |
+| `GET /api/v1/auth/tokens` | Lists the API tokens. |
+| `POST /api/v1/auth/tokens` | Creates an API token. `expires_in_days` is optional, from 1 to 3650. |
+| `DELETE /api/v1/auth/tokens/{id}` | Revokes an API token. |
+| `GET /api/v1/auth/cli/{id}` | Shows a `ferry login` request. |
+| `POST /api/v1/auth/cli/{id}/approve` | Approves it. |
+| `POST /api/v1/auth/cli/{id}/deny` | Denies it. |
+
+<Accordions>
+  <Accordion title="The answer of auth/status">
+    - `setup_required`: the server has no account yet.
+    - `auth`: the proof of the request: `"session"`, `"token"` or `null`.
+    - `user`: the account, when the proof is a session.
+  </Accordion>
+  <Accordion title="The limit on failed sign-ins">
+    After 10 failed sign-ins in 5 minutes, `login` and `setup` answer 429 `too_many_attempts`. They do so until the oldest failure is 5 minutes old. The limit counts for the full server, not for each IP address.
+  </Accordion>
+</Accordions>

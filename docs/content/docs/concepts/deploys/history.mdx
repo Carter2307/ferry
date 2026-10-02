@@ -1,0 +1,43 @@
+---
+title: History and logs
+description: Ferry keeps each deploy with its status, trigger, source, image, commit and log.
+---
+
+## List the deploys
+
+<Terminal
+  lines={[
+    '$ ferry deploys node-hello',
+    'ID                         STATUS          TRIGGER      COMMIT   CREATED   DURATION',
+    'dep-fad68a5ea71b43ae9820   live            upload       -        7m ago    2s',
+    'dep-7d2d938ff3614c238ecb   canceled        manual       -        10m ago   0s',
+    'dep-d21d077ff8464b4a9501   deactivated     manual       -        11m ago   2s',
+    'dep-ca4bc7b5862742959b70   deploy_failed   upload       -        17m ago   1s',
+    '✗ dep-ca4bc7b5862742959b70: instance d1c6b8 crashed (exit code 1)',
+  ]}
+/>
+
+The command shows the 20 newest deploys. Add `-n` for more. The cause of each failed deploy is at the end.
+
+## Read the log of one deploy
+
+```bash title="Terminal"
+ferry logs --deploy dep-ba5a7fce730d4061aaa7      # the full log
+ferry logs --deploy dep-ba5a7fce730d4061aaa7 -f   # continue while the deploy runs
+```
+
+In the dashboard, open the deploy from the **Deploys** page.
+
+## What is in the log
+
+| Lines | From |
+|---|---|
+| `==> …` | Ferry |
+| Build output | Docker, during the build |
+| `[e5725a] …` | A new instance, during the health check |
+
+<Accordions>
+  <Accordion title="API">
+    `GET /api/v1/deploys/{deploy_id}/logs` sends the log as Server-Sent Events. See [Logs & events](/docs/concepts/logs).
+  </Accordion>
+</Accordions>

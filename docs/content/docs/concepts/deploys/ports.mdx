@@ -1,0 +1,36 @@
+---
+title: The port of your app
+description: Ferry chooses one container port at each deploy and gives it to your app in PORT.
+---
+
+<Flow
+  caption="Ferry uses the first value that it finds"
+  steps={[
+    { title: 'Port setting', text: 'The port setting of the service (--port).' },
+    { title: 'PORT variable', text: 'A PORT variable that you set in the environment of the service.' },
+    { title: 'Build', text: 'What the build knows: 80 for a static site.' },
+    { title: 'Image', text: 'The port that the image exposes, if it exposes only one.' },
+    { title: 'Default', text: 'The default of the server: 10000 (--default-port).', tone: 'muted' },
+  ]}
+/>
+
+## What your app must do
+
+Listen on the port in `PORT`, on the address `0.0.0.0`.
+
+```js title="server.js"
+const port = process.env.PORT;
+app.listen(port, '0.0.0.0');
+```
+
+<Callout type="warning">
+An app that listens on `127.0.0.1` in its container gets no traffic.
+</Callout>
+
+## See the choice
+
+The deploy log shows the port and where it comes from.
+
+```text title="Deploy log" noCopy
+==> Using port 8000 (EXPOSEd by the image)
+```

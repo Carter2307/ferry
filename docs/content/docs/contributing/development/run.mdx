@@ -1,0 +1,57 @@
+---
+title: Start the server
+description: ferryd run keeps the server in the foreground. You see its log, and Ctrl+C stops it.
+---
+
+```bash title="Terminal"
+./target/debug/ferryd run --data-dir ./ferry-data
+```
+
+<Diagram
+  nodes={[
+    { id: 'fg', at: [0, 0], icon: 'terminal', label: 'ferryd run', note: 'foreground' },
+    { id: 'term', at: [1.75, 0], icon: 'eye', label: 'Your terminal', note: 'the log, Ctrl+C' },
+    { id: 'bg', at: [0, 1], icon: 'server', label: 'ferryd', note: 'background' },
+    { id: 'file', at: [1.75, 1], icon: 'file', label: 'ferryd.log', note: 'ferryd logs -f' },
+  ]}
+  edges={[
+    { from: 'fg', to: 'term', label: 'log' },
+    { from: 'bg', to: 'file', label: 'log' },
+  ]}
+  steps={[
+    {
+      caption: 'With run, the server keeps the terminal. The log is in front of you, and Ctrl+C stops the server.',
+      flow: ['fg>term'],
+      tones: { fg: 'primary', bg: 'muted', file: 'muted' },
+    },
+    {
+      caption: 'Without run, the server starts in the background. Its log goes to ferry-data/ferryd.log.',
+      flow: ['bg>file'],
+      tones: { bg: 'primary', fg: 'muted', term: 'muted' },
+    },
+  ]}
+/>
+
+## What the server prints
+
+`ferryd` prints the URL of the <Term id="api" />. While the server has no <Term id="admin-account" />, it also prints the `Create your account` link.
+
+Open the link one time. It creates the account that you use to sign in to the dashboard.
+
+## The data directory
+
+`./ferry-data` is the default <Term id="data-directory" />. git ignores it.
+
+| File | Use |
+|---|---|
+| `ferry-data/api_token` | The <Term id="server-token" />, for the commands of [the next page](/docs/contributing/development/deploy) |
+| `ferry-data/ferryd.log` | The log of a server in the <Term id="background" />. Read it with `ferryd logs -f`. |
+
+## More detail in the log
+
+Set the variable `RUST_LOG` before you start the server. The default level is `info`.
+
+| Value | Result |
+|---|---|
+| `RUST_LOG=debug` | More detail from each crate |
+| `RUST_LOG=ferry_engine=debug` | A filter: more detail from one crate |

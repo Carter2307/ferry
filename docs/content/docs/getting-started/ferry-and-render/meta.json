@@ -1,0 +1,11 @@
+{
+  "title": "Ferry and Render",
+  "icon": "Scale",
+  "pages": [
+    "services",
+    "deploys",
+    "operations",
+    "not-in-ferry",
+    "inside"
+  ]
+}

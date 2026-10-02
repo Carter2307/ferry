@@ -1,0 +1,32 @@
+---
+title: Domains
+description: The domains key gives custom domains to a web service or a static site.
+---
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: web
+    domains:
+      - app.example.com
+```
+
+A <Term id="custom-domain" /> is one more hostname for one service. See [Custom domains](/docs/concepts/networking/custom-domains).
+
+## The key
+
+| Key | Type | Default | Ferry setting and notes |
+|---|---|---|---|
+| `domains` | list of strings | none | `custom_domains`, for web services and static sites. |
+
+- If the entry has no `domains`, a service that exists keeps its domains.
+- When `domains` changes, Ferry refreshes the routes. It starts no deploy.
+
+## If a domain is in use
+
+A domain can be on one service only.
+
+| Status | Message | Cause |
+|---|---|---|
+| 409 | `service 'web': domain 'app.example.com' is already used by service 'old-web'` | A service that is not in the blueprint has the domain. |
+| 400 | | Two entries of the file have the same domain. |

@@ -1,0 +1,105 @@
+---
+title: Log in
+description: ferry login connects one terminal to a server. You approve the terminal in the dashboard.
+---
+
+<Diagram
+  nodes={[
+    { id: 'term', at: [0, 0], icon: 'terminal', label: 'Terminal', note: 'ferry login' },
+    { id: 'dash', at: [0, 1], icon: 'browser', label: 'Dashboard', note: 'you approve' },
+    { id: 'ferryd', at: [1.75, 0.5], icon: 'server', label: 'ferryd' },
+  ]}
+  edges={[
+    { from: 'term', to: 'ferryd' },
+    { id: 'token', from: 'ferryd', to: 'term' },
+    { from: 'dash', to: 'ferryd' },
+  ]}
+  steps={[
+    {
+      caption: 'ferry login sends a request to the server. The terminal shows a code.',
+      flow: ['term>ferryd'],
+      tones: { term: 'primary' },
+      notes: { term: 'code MRDB-M7EE' },
+    },
+    {
+      caption: 'A page opens in your browser. It shows the same code.',
+      tones: { dash: 'primary' },
+      notes: { term: 'code MRDB-M7EE', dash: 'code MRDB-M7EE' },
+    },
+    {
+      caption: 'You click Approve.',
+      flow: ['dash>ferryd'],
+      tones: { dash: 'success' },
+      notes: { dash: 'Approve' },
+    },
+    {
+      caption: 'The terminal gets an API token of its own and saves it.',
+      flow: ['token'],
+      tones: { term: 'success' },
+      notes: { term: 'token saved' },
+    },
+  ]}
+/>
+
+## Do it
+
+<Steps>
+<Step>
+
+### Run the command
+
+<Terminal
+  lines={[
+    '$ ferry login --server http://127.0.0.1:7878',
+    'To connect this terminal, open this page and sign in:',
+    '',
+    '  http://127.0.0.1:7878/cli-login?id=d54ce0ee…',
+    '',
+    'Approve the request there if it shows this code:  MRDB-M7EE',
+    'Waiting for the approval... (Ctrl-C to cancel)',
+  ]}
+/>
+
+[`ferry login`](/docs/reference/cli#ferry-login) opens the page in your browser. With `--no-browser`, it only prints the URL. Then you open the URL.
+
+</Step>
+<Step>
+
+### Sign in to the dashboard
+
+Sign in if the dashboard asks you. The page shows who asks: the user and the host of the terminal, for example `ada@laptop`. It also shows a code.
+
+</Step>
+<Step>
+
+### Compare the code, then click **Approve**
+
+The code must be the same as in your terminal. **Deny** refuses the request.
+
+```text title="Output" noCopy
+Logged in to http://127.0.0.1:7878 (Ferry 0.1.0)
+Saved to /home/you/.config/ferry/config.json
+```
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="The token">
+    Ferry makes the token for this terminal. The token has the name of the terminal (`ada@laptop`). `ferry login` tests it, then saves it with the server URL.
+
+    The dashboard shows the token under **Server → Account → API tokens**. You can revoke it there.
+  </Accordion>
+  <Accordion title="The server URL">
+    - The server URL is the API address of `ferryd`. The default is `http://127.0.0.1:7878`.
+    - If you do not write `http://`, Ferry adds it.
+    - With no `--server`, no `FERRY_SERVER` and no saved login, `ferry login` uses `http://127.0.0.1:7878`. It tells you so.
+    - The dashboard shows the command for its own address under **Connect** and on **Server → Connections**.
+  </Accordion>
+  <Accordion title="If the request expires">
+    A request expires after 10 minutes. Run `ferry login` again.
+  </Accordion>
+  <Accordion title="A new server">
+    The server needs its account first. On a new server, create the account with the link that `ferryd` printed. See [Installation](/docs/getting-started/installation).
+  </Accordion>
+</Accordions>

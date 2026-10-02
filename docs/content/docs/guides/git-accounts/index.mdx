@@ -1,0 +1,80 @@
+---
+title: Connect GitHub or GitLab
+description: A git connection lets your Ferry server read the repositories of a GitHub or GitLab account.
+icon: Plug
+---
+
+<Diagram
+  caption="The authorization of an account"
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry', note: 'the dashboard' },
+    { id: 'page', at: [2, 0], icon: 'shield-check', label: 'Provider page', note: 'GitHub or GitLab' },
+    { id: 'repos', at: [2, 1], icon: 'repo', label: 'Repositories', note: 'of the account' },
+  ]}
+  edges={[
+    { id: 'go', from: 'ferry', to: 'page' },
+    { id: 'back', from: 'page', to: 'ferry' },
+    { id: 'read', from: 'ferry', to: 'repos', label: 'read only' },
+  ]}
+  steps={[
+    {
+      caption: 'You click Connect GitHub. Ferry sends your browser to a page of GitHub.',
+      hide: ['repos'],
+      cut: ['back'],
+      flow: ['go'],
+    },
+    {
+      caption: 'You approve on that page. You type no token.',
+      hide: ['repos'],
+      cut: ['back'],
+      tones: { page: 'warning' },
+      notes: { page: 'you approve' },
+    },
+    {
+      caption: 'GitHub sends your browser back to Ferry. The connection is ready.',
+      hide: ['repos'],
+      cut: ['go'],
+      flow: ['back'],
+      tones: { ferry: 'success', page: 'success' },
+      notes: { ferry: 'connected' },
+    },
+    {
+      caption: 'Ferry lists the repositories of the account and clones them for each deploy.',
+      cut: ['back'],
+      flow: ['read'],
+      tones: { ferry: 'success' },
+      notes: { ferry: 'connected' },
+    },
+  ]}
+/>
+
+A <Term id="git-connection" /> is a GitHub or GitLab account that lets your Ferry server read its <Term id="repository">repositories</Term>. You give the permission on a page of the <Term id="git-provider" />. You type no token.
+
+A connection does two things:
+
+- The <Term id="dashboard" /> lists the repositories and the <Term id="branch">branches</Term> of the account. You choose what to deploy from a list.
+- Ferry <Term id="clone">clones</Term> the repositories with the account. A private repository needs no credentials in its URL.
+
+It works with github.com, gitlab.com, GitHub Enterprise Server and self-managed GitLab.
+
+<Callout title="The connection belongs to the server">
+You connect an account one time. Then each <Term id="service" /> of the server uses it.
+</Callout>
+
+## Where to connect
+
+If the server has no connected account, the home page of the dashboard shows **Connect GitHub** and **Connect GitLab**.
+
+You can also connect from these places:
+
+- **+ New service → Git repository → Connected account**
+- **Server → Connections → Git accounts**
+
+## In this section
+
+<Cards>
+  <Card title="Connect GitHub" href="/docs/guides/git-accounts/github" description="Ferry creates a GitHub App for your server." />
+  <Card title="Connect GitLab" href="/docs/guides/git-accounts/gitlab" description="You create one application, then you authorize it." />
+  <Card title="Deploy a repository" href="/docs/guides/git-accounts/deploy" description="Choose a repository and a branch from a list." />
+  <Card title="Use an access token" href="/docs/guides/git-accounts/token" description="The method for scripts." />
+</Cards>

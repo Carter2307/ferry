@@ -1,0 +1,65 @@
+---
+title: Multiple servers
+description: Two or more Ferry servers can share one Docker daemon. Each has its own data, prefix and ports.
+icon: Server
+---
+
+<Diagram
+  caption="One CLI, two servers, one Docker daemon"
+  nodes={[
+    { id: 'cli', at: [0, 0.5], icon: 'terminal', label: 'ferry CLI' },
+    { id: 'prod', at: [1.25, 0], icon: 'server', label: 'production', note: 'API :7878' },
+    { id: 'staging', at: [1.25, 1], icon: 'server', label: 'staging', note: 'API :7879' },
+    { id: 'docker', at: [2.5, 0.5], icon: 'container', label: 'Docker', note: 'one daemon' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'prod' },
+    { from: 'cli', to: 'staging' },
+    { from: 'prod', to: 'docker' },
+    { from: 'staging', to: 'docker' },
+  ]}
+  steps={[
+    {
+      caption: 'Two ferryd servers run on one machine. They share one Docker daemon.',
+      flow: ['prod>docker', 'staging>docker'],
+    },
+    {
+      caption: 'Each server has its own name prefix. Docker keeps their containers apart.',
+      flow: ['prod>docker', 'staging>docker'],
+      tones: { prod: 'primary', staging: 'primary' },
+      notes: { prod: 'prefix ferry', staging: 'prefix staging' },
+    },
+    {
+      caption: 'The CLI saves one server. A command with no option goes to this server.',
+      flow: ['cli>prod'],
+      tones: { prod: 'success' },
+    },
+    {
+      caption: 'A flag or a variable sends one command to the other server.',
+      flow: ['cli>staging'],
+      tones: { staging: 'success' },
+      notes: { cli: '--server …:7879' },
+    },
+  ]}
+/>
+
+More than one <Term id="ferryd" /> can share one <Term id="docker-daemon" />. For example, run a <Term id="staging" /> server and a production server on the same machine. Or run a temporary server for tests next to your real server.
+
+## Start a second server
+
+```bash title="Terminal"
+ferryd --data-dir /var/lib/ferry-staging \
+  --name-prefix staging \
+  --api-addr 127.0.0.1:7879 \
+  --proxy-addr 0.0.0.0:8081 \
+  --base-domain staging.localhost
+```
+
+## In this section
+
+<Cards>
+  <Card title="Run a second server" href="/docs/guides/multiple-servers/second-server" description="The five settings that each server must own." />
+  <Card title="Choose the server in the CLI" href="/docs/guides/multiple-servers/choose-server" description="Send one command to another server." />
+  <Card title="The name prefix" href="/docs/guides/multiple-servers/name-prefix" description="How Docker keeps two servers apart." />
+  <Card title="The safety checks" href="/docs/guides/multiple-servers/safety-checks" description="Why ferryd refuses to start." />
+</Cards>

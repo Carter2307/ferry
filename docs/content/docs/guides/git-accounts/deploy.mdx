@@ -1,0 +1,73 @@
+---
+title: Deploy a repository
+description: Choose a repository and a branch of a connected account from a list, then deploy.
+---
+
+<Flow
+  steps={[
+    { icon: 'user', title: 'Account', text: 'Choose a connected account.' },
+    { icon: 'repo', title: 'Repository', text: 'Choose a repository from the list. The newest update is first.' },
+    { icon: 'branch', title: 'Branch', text: 'Choose a branch. Ferry asks the repository for its branches.' },
+    { icon: 'deploy', title: 'Deploy', text: 'Ferry clones the repository with the account and deploys it.', tone: 'success' },
+  ]}
+/>
+
+## In the dashboard
+
+<Steps>
+<Step>
+
+### Open the tab
+
+Click **+ New service**. Open **Git repository → Connected account**.
+
+</Step>
+<Step>
+
+### Choose the account
+
+If you connected more than one account, choose the account. **Add account** connects one more.
+
+</Step>
+<Step>
+
+### Choose the repository
+
+Search by owner or by name. Click the <Term id="repository" />.
+
+A private repository has a **Private** badge. You cannot choose a repository that has no <Term id="commit" />.
+
+Ferry fills the default <Term id="branch" /> and the name of the <Term id="service" />, unless you typed a name.
+
+</Step>
+<Step>
+
+### Choose the branch
+
+Open the **Branch** list. The default branch is first. You can also type the name of a branch that you did not push yet.
+
+</Step>
+<Step>
+
+### Deploy
+
+Click **Create and deploy**. Ferry <Term id="clone">clones</Term> the repository with the account. The deploy log shows it:
+
+```text title="Deploy log" noCopy
+==> Cloning with the GitHub account 'you'
+==> Cloning from https://github.com/you/api.git (branch main)
+==> Checked out d258434: Initial commit
+```
+
+</Step>
+</Steps>
+
+<Callout title="Auto-deploy is separate">
+A connection lets Ferry read repositories. It does not make the provider tell Ferry about a push. To deploy on each push, set up the [GitHub webhook](/docs/guides/github-auto-deploy). Or call the [deploy hook](/docs/guides/github-auto-deploy/deploy-hooks) of the service from your CI.
+</Callout>
+
+<Accordions>
+  <Accordion title="The Repository URL tab">
+    The **Repository URL** tab accepts each git URL: a public repository, an SSH URL, or a path on the server. Its **Branch** list works the same way. If the URL is a private repository of a connected account, Ferry clones it with that account too.
+  </Accordion>
+</Accordions>

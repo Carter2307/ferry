@@ -1,0 +1,54 @@
+---
+title: Memory and CPU limits
+description: Each datastore has a memory limit and a CPU limit. A change applies with no restart.
+---
+
+<Terminal
+  lines={[
+    '$ ferry db update app-db --memory 2G',
+    "Updated datastore 'app-db': memory limit 2 GiB",
+    'Applied to the running container (no restart).',
+  ]}
+/>
+
+The <Term id="container" /> of a <Term id="datastore" /> has its own <Term id="resource-limit">limits</Term>, or the defaults of the server. The defaults are 512 MiB and 1 CPU, unless `ferryd` sets other values.
+
+You can change the limits at all times, in each status of the datastore. The container gets the new limits immediately. A service is different: it needs a restart.
+
+## Go back to the default
+
+```bash title="Terminal"
+ferry db update cache --cpu default     # back to the server default
+```
+
+In the dashboard, use the **Resources** section on the page of the datastore.
+
+<Callout type="warning" title="Be careful when you lower a limit">
+A memory limit below the current use of the datastore can fail to apply. The system can also stop the datastore, because it has no more memory. This is an <Term id="oom" />.
+</Callout>
+
+<Accordions>
+  <Accordion title="If the new limits do not apply">
+    Ferry saves the new limits anyway, and the error tells you. Run the update again to try again.
+  </Accordion>
+  <Accordion title="Repair a failed datastore">
+    A `failed` datastore keeps the new limits for its next start. Use this when a datastore had no more memory during its creation:
+
+    ```text noCopy
+    the postgres container ran out of memory (limit 512 MiB) — raise the datastore's memory limit
+    ```
+
+    Raise the limit. The next retry uses it.
+  </Accordion>
+  <Accordion title="Redis">
+    Redis gets a `maxmemory` of 3/4 of its memory limit. When Redis is full, it refuses writes, and the system does not stop it.
+
+    Redis keeps each key in memory. Keep the limit well above the size of your data.
+  </Accordion>
+  <Accordion title="API">
+    `PATCH /api/v1/datastores/{id}`. See [Change a datastore's resource limits](/docs/reference/api/datastores#change-a-datastores-resource-limits).
+  </Accordion>
+  <Accordion title="Defaults and other guards">
+    See [Resource limits](/docs/concepts/resource-limits).
+  </Accordion>
+</Accordions>

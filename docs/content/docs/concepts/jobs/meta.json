@@ -1,0 +1,14 @@
+{
+  "title": "Jobs & cron",
+  "icon": "Clock",
+  "pages": [
+    "one-off",
+    "cron",
+    "schedule",
+    "scheduled-runs",
+    "container",
+    "disk",
+    "runs",
+    "cancel"
+  ]
+}

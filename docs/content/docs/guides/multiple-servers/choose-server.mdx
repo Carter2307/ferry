@@ -1,0 +1,64 @@
+---
+title: Choose the server in the CLI
+description: The CLI saves one server. Flags or environment variables send one command to another server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0.5], icon: 'terminal', label: 'ferry CLI', note: 'saved: production' },
+    { id: 'prod', at: [1.75, 0], icon: 'server', label: 'production', note: '127.0.0.1:7878' },
+    { id: 'staging', at: [1.75, 1], icon: 'server', label: 'staging', note: '127.0.0.1:7879' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'prod' },
+    { from: 'cli', to: 'staging' },
+  ]}
+  steps={[
+    {
+      caption: 'The CLI saves one server in its config. A command with no option goes there.',
+      flow: ['cli>prod'],
+      tones: { prod: 'success' },
+    },
+    {
+      caption: 'FERRY_SERVER and FERRY_TOKEN send one command to staging.',
+      flow: ['cli>staging'],
+      tones: { staging: 'success' },
+      notes: { cli: 'FERRY_SERVER=…' },
+    },
+    {
+      caption: 'The flags --server and --token do the same.',
+      flow: ['cli>staging'],
+      tones: { staging: 'success' },
+      notes: { cli: '--server …' },
+    },
+    {
+      caption: 'The saved config did not change. The next command goes to production again.',
+      flow: ['cli>prod'],
+      tones: { prod: 'success' },
+    },
+  ]}
+/>
+
+The <Term id="cli" /> uses a flag or an <Term id="env-var" /> before its saved config.
+
+## Send one command to another server
+
+```bash title="Terminal"
+FERRY_SERVER=http://127.0.0.1:7879 FERRY_TOKEN=$(cat /var/lib/ferry-staging/api_token) ferry ls
+ferry --server http://127.0.0.1:7879 --token fy_… ls
+```
+
+A token works only on the server that it belongs to.
+
+## Where to get the token
+
+| You are | Token |
+|---|---|
+| On the machine that runs the server | The <Term id="server-token" /> in its data directory. The first line above reads it. |
+| On another machine | Create an <Term id="api-token" /> under **Server → Account** in the staging dashboard. |
+
+<Callout type="warning" title="ferry login replaces the saved server">
+`ferry login --server http://127.0.0.1:7879` also works. But it replaces the saved login.
+</Callout>
+
+See [Set up the CLI](/docs/getting-started/cli) for the config file, the flags and the variables.

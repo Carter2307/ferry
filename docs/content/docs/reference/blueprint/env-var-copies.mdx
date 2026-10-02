@@ -1,0 +1,72 @@
+---
+title: Copy a variable with envVarKey
+description: envVarKey copies the value of a variable of a different service during the apply.
+---
+
+<Diagram
+  nodes={[
+    { id: 'api', at: [0, 0], icon: 'box', label: 'api', note: 'TOKEN=abc' },
+    { id: 'apply', at: [1.5, 0], icon: 'ship', label: 'Apply' },
+    { id: 'worker', at: [3, 0], icon: 'box', label: 'worker', note: 'KEY=abc' },
+  ]}
+  edges={[
+    { from: 'api', to: 'apply' },
+    { from: 'apply', to: 'worker' },
+  ]}
+  steps={[
+    {
+      caption: 'The apply reads the value of TOKEN in the service api.',
+      flow: ['api>apply'],
+      notes: { worker: 'KEY not set' },
+    },
+    {
+      caption: 'The apply writes this value into KEY. It is a copy, not a reference.',
+      flow: ['apply>worker'],
+      tones: { worker: 'success' },
+    },
+    {
+      caption: 'TOKEN changes later. KEY keeps the old value.',
+      cut: ['api>apply', 'apply>worker'],
+      tones: { api: 'warning' },
+      notes: { api: 'TOKEN=xyz' },
+    },
+    {
+      caption: 'The next apply copies the new value.',
+      flow: ['api>apply', 'apply>worker'],
+      tones: { worker: 'success' },
+      notes: { api: 'TOKEN=xyz', worker: 'KEY=xyz' },
+    },
+  ]}
+/>
+
+```yaml title="ferry.yaml"
+services:
+  - type: worker
+    name: worker
+    envVars:
+      - key: KEY
+        fromService:
+          type: web
+          name: api
+          envVarKey: TOKEN
+```
+
+`envVarKey` gives a copy, not a <Term id="reference" />. A later change of the source variable reaches the copy only at the next <Term id="apply" />.
+
+`envVarKey` works only with services, not with datastores.
+
+## Where the value comes from
+
+1. From the blueprint, when the other service has that key in its `envVars`.
+2. If not, from the saved environment of the service that exists.
+3. If no one has it, the apply leaves the variable with no value and gives a warning:
+
+```text noCopy
+env var 'KEY' not copied: service 'api' has no variable 'TOKEN' yet
+```
+
+<Accordions>
+  <Accordion title="Copies in a circle">
+    Two services can copy from each other in a circle. Ferry skips these copies with a warning.
+  </Accordion>
+</Accordions>

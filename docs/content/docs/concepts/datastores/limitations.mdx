@@ -1,0 +1,35 @@
+---
+title: What a datastore cannot do
+description: A datastore is one container. After its creation, you can change only its limits.
+---
+
+<Flow
+  caption="A datastore keeps its version. To upgrade Postgres, move the data."
+  steps={[
+    { icon: 'database', title: 'New datastore', text: 'Create a datastore with the new version.' },
+    { icon: 'backup', title: 'pg_dump', text: 'Write the data of the old datastore into a file.' },
+    { icon: 'terminal', title: 'psql', text: 'Load the file into the new datastore.', tone: 'success' },
+  ]}
+/>
+
+## The limits
+
+| What | The rule |
+|---|---|
+| One container | A datastore has no <Term id="replica" />, no <Term id="high-availability" /> and no <Term id="connection-pooler" />. |
+| No change after creation | You can change only the [memory and CPU limits](/docs/concepts/datastores/limits). There is no version upgrade, no new password and no new name. |
+| No disk quota | The volume can grow until the disk of the server is full. |
+| Two kinds | Ferry has only Postgres and Redis datastores. |
+
+## Other databases
+
+Run each other database as a [private service](/docs/concepts/services) with a [disk](/docs/concepts/scaling/disks).
+
+<Accordions>
+  <Accordion title="A blueprint with different values">
+    A blueprint can list a different version, database or user for a datastore that exists. Then Ferry only gives a warning. But Ferry does change the limits.
+  </Accordion>
+  <Accordion title="The tools">
+    <Term id="pg-dump" /> and <Term id="psql" /> are tools of Postgres. See [Back up a datastore](/docs/concepts/datastores/backup) for a `pg_dump` command.
+  </Accordion>
+</Accordions>

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  draftOf,
   fieldForServerError,
+  formFromDraft,
   INITIAL_FORM,
   normalizeDomain,
   toCreateRequest,
@@ -148,6 +150,7 @@ describe('toCreateRequest', () => {
     const body = toCreateRequest(
       form({
         name: 'web',
+        repoMode: 'url',
         repoUrl: 'https://github.com/a/b',
         branch: '',
         port: '3000',
@@ -176,6 +179,35 @@ describe('toCreateRequest', () => {
     expect(body).not.toHaveProperty('image')
     expect(body).not.toHaveProperty('schedule')
   })
+  it('a repository picked from a connected account is sent as its clone URL', () => {
+    const picked = {
+      connectionId: 'git-0123456789abcdef0123',
+      fullName: 'octocat/app',
+      cloneUrl: 'https://github.com/octocat/app.git',
+      private: true,
+      defaultBranch: 'trunk',
+    }
+    // The URL typed in the other mode is not what gets deployed.
+    const f = form({ name: 'app', repository: picked, repoUrl: 'https://example.com/other.git', branch: 'trunk' })
+    expect(validateForm(f, none)).toEqual({})
+    const body = toCreateRequest(f, [])
+    expect(body).toMatchObject({
+      repo_url: 'https://github.com/octocat/app.git',
+      branch: 'trunk',
+      auto_deploy: true,
+      deploy: true,
+    })
+    // A service names no connection: the server finds the one for the repository's host.
+    expect(JSON.stringify(body)).not.toContain('git-0123456789abcdef0123')
+    // Back in URL mode the picked repository is left out.
+    expect(toCreateRequest({ ...f, repoMode: 'url' }, []).repo_url).toBe('https://example.com/other.git')
+  })
+  it('a git source needs its repository, picked or typed', () => {
+    expect(validateForm(form({ name: 'app' }), none)).toEqual({ repository: 'Select a repository.' })
+    expect(validateForm(form({ name: 'app', repoMode: 'url' }), none).repoUrl).toBeDefined()
+    expect(validateForm(form({ name: 'app', repoMode: 'url', repoUrl: 'https://github.com/a/b' }), none)).toEqual({})
+    expect(validateForm(form({ name: 'app', source: 'upload' }), none)).toEqual({})
+  })
   it('sends resource limits only when set (default = the server default)', () => {
     const plain = toCreateRequest(form({ name: 'api', source: 'image', image: 'nginx' }), [])
     expect(plain).not.toHaveProperty('memory_limit_mb')
@@ -197,6 +229,50 @@ describe('toCreateRequest', () => {
     expect(body.deploy).toBe(false)
     expect(body).not.toHaveProperty('repo_url')
     expect(body).not.toHaveProperty('auto_deploy')
+  })
+})
+
+describe('the draft kept while an account is being connected', () => {
+  const picked = {
+    connectionId: 'git-0123456789abcdef0123',
+    fullName: 'octocat/app',
+    cloneUrl: 'https://github.com/octocat/app.git',
+    private: true,
+    defaultBranch: 'main',
+  }
+
+  it('comes back as it was', () => {
+    const f = form({
+      name: 'app',
+      type: 'static_site',
+      repository: picked,
+      domains: ['app.example.com'],
+      autoDeploy: false,
+      memoryLimit: { choice: 'custom', custom: '768' },
+    })
+    expect(formFromDraft(JSON.stringify(draftOf(f)))).toEqual(f)
+    expect(formFromDraft(JSON.stringify(draftOf(form({}))))).toEqual(INITIAL_FORM)
+  })
+
+  it('never stores credentials of a repository URL', () => {
+    // Put together here: nothing in the repository looks like a URL with a password.
+    const userinfo = ['deploy', 'not-kept'].join(':')
+    const typed = form({ repoMode: 'url', repoUrl: `https://${userinfo}@gitlab.com/acme/app.git` })
+    expect(JSON.stringify(draftOf(typed))).not.toContain('not-kept')
+    expect(draftOf(typed).repoUrl).toBe('')
+    // URLs without credentials, and scp-like ones (the user is not a secret), are kept.
+    for (const url of ['https://github.com/a/b.git', 'git@github.com:a/b.git', '/srv/repos/app']) {
+      expect(draftOf(form({ repoUrl: url })).repoUrl).toBe(url)
+    }
+  })
+
+  it('ignores what is not a draft', () => {
+    for (const bad of [null, '', 'not json', '[]', '"text"', '42']) expect(formFromDraft(bad)).toBeNull()
+    // Unknown fields are dropped; fields of the wrong shape keep their initial value.
+    const odd = formFromDraft(
+      JSON.stringify({ name: 'api', branch: 7, domains: 'x', repository: 'x', autoDeploy: 'yes', extra: true }),
+    )
+    expect(odd).toEqual({ ...INITIAL_FORM, name: 'api' })
   })
 })
 

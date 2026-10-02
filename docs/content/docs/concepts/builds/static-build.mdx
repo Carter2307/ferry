@@ -1,0 +1,66 @@
+---
+title: The build of a static site
+description: A static site can have a build step. Ferry runs it with the tools of your project.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cmd', at: [0, 0], icon: 'terminal', label: 'Build command', note: '--build-cmd' },
+    { id: 'pkg', at: [0, 1], icon: 'file', label: 'package.json', note: 'a build script' },
+    { id: 'step', at: [1.5, 0.5], icon: 'hammer', label: 'Build step' },
+    { id: 'out', at: [3, 0.5], icon: 'folder', label: 'dist', note: 'publish directory' },
+  ]}
+  edges={[
+    { from: 'cmd', to: 'step' },
+    { from: 'pkg', to: 'step' },
+    { from: 'step', to: 'out' },
+  ]}
+  steps={[
+    {
+      caption: 'A build command on the service gives a build step.',
+      cut: ['pkg>step'],
+      flow: ['cmd>step'],
+      tones: { cmd: 'primary', pkg: 'muted' },
+    },
+    {
+      caption: 'A build script in package.json gives a build step too.',
+      cut: ['cmd>step'],
+      flow: ['pkg>step'],
+      tones: { pkg: 'primary', cmd: 'muted' },
+    },
+    {
+      caption: 'The build writes the site into the publish directory.',
+      flow: ['step>out'],
+      tones: { out: 'success' },
+    },
+  ]}
+/>
+
+With no <Term id="build-command" /> and no `build` script, there is no build step.
+
+## The tools of the build
+
+Ferry chooses the <Term id="toolchain" /> from the files of the project.
+
+| Project | Toolchain |
+|---|---|
+| `package.json` | Node.js, with the package manager of the project |
+| `requirements.txt`, `pyproject.toml` or `Pipfile` (MkDocs, Pelican…) | Python |
+| `Gemfile` (Jekyll…) | Ruby |
+| A `hugo.toml` / `hugo.yaml` / `hugo.json`, or a build command that runs `hugo` | Hugo on Alpine |
+| `go.mod` | Go |
+| None of these | A plain `node:22-alpine` image |
+
+A runtime that you set (`--runtime python`, for example) chooses the toolchain.
+
+## A build command that installs dependencies
+
+<Callout type="warning" title="Use npm ci --include=dev">
+The build command runs with `NODE_ENV=production`. Thus `npm ci` does not install the `devDependencies`. Your build tools are in them.
+</Callout>
+
+```bash title="Terminal"
+ferry update docs --build-cmd "cd docs && npm ci --include=dev && npm run build" --publish-dir docs/out
+```
+
+This case occurs when your build command installs the dependencies, for example in a subdirectory. Ferry does not install them there for you.

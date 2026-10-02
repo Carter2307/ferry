@@ -1,0 +1,67 @@
+---
+title: Reach a remote server
+description: ferryd listens only on 127.0.0.1. An SSH tunnel gives your laptop a way to its API.
+---
+
+<Diagram
+  nodes={[
+    { id: 'laptop', at: [0, 0], icon: 'laptop', label: 'Your laptop', note: 'ferry' },
+    { id: 'tunnel', at: [1.6, 0], icon: 'lock', label: 'SSH tunnel', note: 'port 7878' },
+    { id: 'server', at: [3.2, 0], icon: 'server', label: 'ferryd', note: '127.0.0.1:7878' },
+  ]}
+  edges={[
+    { from: 'laptop', to: 'tunnel' },
+    { from: 'tunnel', to: 'server' },
+  ]}
+  groups={[{ label: 'Your server', around: ['server'] }]}
+  steps={[
+    {
+      caption: 'By default, ferryd listens only on 127.0.0.1. Your laptop cannot reach it.',
+      hide: ['tunnel'],
+      tones: { server: 'warning' },
+    },
+    {
+      caption: 'An SSH tunnel connects port 7878 of your laptop to port 7878 of the server.',
+      flow: ['laptop>tunnel', 'tunnel>server'],
+      tones: { tunnel: 'primary' },
+    },
+    {
+      caption: 'On your laptop, ferry uses the address 127.0.0.1:7878.',
+      flow: ['laptop>tunnel', 'tunnel>server'],
+      tones: { laptop: 'success', server: 'success' },
+    },
+  ]}
+/>
+
+## Do it
+
+<Steps>
+<Step>
+
+### Open the tunnel
+
+```bash title="Terminal"
+ssh -N -L 7878:127.0.0.1:7878 you@your-server &
+```
+
+The <Term id="ssh-tunnel" /> stays open in the background.
+
+</Step>
+<Step>
+
+### Log in to the local address
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878
+```
+
+The approval page opens through the same tunnel. Its address in your browser is `http://127.0.0.1:7878`.
+
+</Step>
+</Steps>
+
+## With HTTPS and no tunnel
+
+It is possible to put the dashboard on the proxy with <Term id="https" /> (`--dashboard-host`). Then you can log in to that URL, for example `https://ferry.apps.example.com`.
+
+See [Production setup](/docs/guides/production).

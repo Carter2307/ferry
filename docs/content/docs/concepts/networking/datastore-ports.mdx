@@ -1,0 +1,57 @@
+---
+title: Datastore ports
+description: Each datastore publishes its port on 127.0.0.1 of the server, for the tools that run there.
+---
+
+<Diagram
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'laptop', label: 'Your machine', note: 'psql, a GUI' },
+    { id: 'net', at: [0, 1], icon: 'globe', label: 'Internet' },
+    { id: 'host', at: [1.5, 0], icon: 'plug', label: '127.0.0.1:62975', note: 'port on the server' },
+    { id: 'db', at: [3, 0], icon: 'database', label: 'app-db', note: 'datastore' },
+  ]}
+  edges={[
+    { from: 'you', to: 'host', label: 'SSH tunnel' },
+    { from: 'net', to: 'host', dashed: true, tone: 'danger' },
+    { from: 'host', to: 'db' },
+  ]}
+  groups={[{ label: 'Your server', around: ['host', 'db'] }]}
+  steps={[
+    {
+      caption: 'Ferry publishes the port of the datastore on 127.0.0.1 of the server.',
+      cut: ['you>host', 'net>host'],
+      flow: ['host>db'],
+      tones: { host: 'primary' },
+    },
+    {
+      caption: 'The internet cannot connect to 127.0.0.1.',
+      cut: ['you>host'],
+      tones: { net: 'danger' },
+      notes: { net: 'no access' },
+    },
+    {
+      caption: 'From your machine, an SSH tunnel gives you the port.',
+      cut: ['net>host'],
+      flow: ['you>host', 'host>db'],
+      tones: { you: 'success' },
+    },
+  ]}
+/>
+
+Each <Term id="datastore" /> also publishes its <Term id="port" /> on the server: on `127.0.0.1`, with a port that Ferry chooses one time, when you create the datastore.
+
+The external <Term id="connection-string" /> uses that port. Thus tools on the server itself can connect: `psql`, or a GUI through an <Term id="ssh-tunnel" />.
+
+## Open a tunnel
+
+```bash title="Terminal"
+ssh -L 62975:127.0.0.1:62975 you@your-server   # then use the external URL on your machine
+```
+
+## The host in the connection string
+
+`--advertise-host` changes only the host that Ferry prints in external connection strings. The default is `127.0.0.1`.
+
+The port stays bound to `127.0.0.1`. Ferry never exposes a datastore on a public interface.
+
+See [Datastores](/docs/concepts/datastores).

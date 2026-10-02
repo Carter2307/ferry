@@ -1,0 +1,42 @@
+---
+title: A pass for one service
+description: For each service, the reconciler keeps the correct containers, starts new ones and removes the others.
+---
+
+<Flow
+  steps={[
+    { icon: 'lock', title: 'Lock', text: 'The reconciler takes the service lock and does not wait. It skips a busy service until the next pass.' },
+    { icon: 'split', title: 'Sort', text: 'It sorts the containers of the service: kept or removed.' },
+    { icon: 'route', title: 'Routes', text: 'It updates the routes from the kept instances.' },
+    { icon: 'play', title: 'Start', text: 'It starts the instances that are not there, from the snapshot of the live deploy.' },
+    { icon: 'trash', title: 'Remove', text: 'It removes the stale containers and the instances above the wanted count.' },
+  ]}
+/>
+
+A service is busy when a deploy starts its instances, or during a scale or a suspend. See [The service lock](/docs/architecture/deploy-pipeline/lock).
+
+The <Term id="reconciler" /> then works on the containers of the <Term id="live-deploy" /> only.
+
+The routes change before a removal. Thus traffic never goes to an instance that stops next.
+
+## Kept or removed
+
+| Result | Containers |
+|---|---|
+| Kept | Containers of the live deploy in the state `running` or `restarting`, up to the wanted instance count. Those in the state `running` come first. |
+| Removed | Containers that exited, are dead or never started. Containers of each other deploy. Instances above the wanted count. |
+
+<Accordions>
+  <Accordion title="How it starts an instance">
+    The reconciler always uses the [snapshot](/docs/architecture/deploy-pipeline/snapshot) of the live deploy: the image, the resolved environment, the command, the port, the disk and the resource limits. The engine saved them when that deploy went live. If the snapshot has no limits, the server defaults apply.
+
+    It never uses the current settings. If the image does not exist, the reconciler logs a warning and starts nothing. Deploy again.
+  </Accordion>
+  <Accordion title="How fast it removes a container">
+    - Stale containers of deploys that never went live (failed, canceled, interrupted): immediately.
+    - The others get 10 seconds to stop. Examples: the containers of a previous deploy, or the instances above the count after a scale down.
+  </Accordion>
+  <Accordion title="A service with a disk">
+    The order is the opposite. The service has one instance at most. The reconciler removes the stale container before it starts a new one, because two containers cannot share the volume safely.
+  </Accordion>
+</Accordions>

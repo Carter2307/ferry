@@ -1,0 +1,41 @@
+---
+title: Environment variables
+description: Ferry sets, generates, links or copies each variable of the blueprint. The form of the entry decides.
+---
+
+```yaml title="render.yaml"
+envVars:
+  - key: DATABASE_URL
+    fromDatabase: { name: app-db, property: connectionString }   # ${{datastore.app-db.connectionString}}
+  - key: API_HOST
+    fromService: { type: pserv, name: api, property: hostport }  # ${{service.api.hostport}}
+```
+
+A `fromDatabase` or `fromService` entry becomes a <Term id="reference" />. Ferry replaces the reference with the real value when the service starts.
+
+## Each form
+
+| Form | On Ferry |
+|---|---|
+| `{key, value}` | Ferry sets it. The value stays as you wrote it: `3.10` stays `3.10`. |
+| `{key, generateValue: true}` | A random value of 64 hex characters. |
+| `{key, sync: false}` | Ferry does not set it. A warning gives the `ferry env set` command to run. |
+| `{key, fromDatabase: {name, property}}` | A [reference](/docs/concepts/environment) `${{datastore.NAME.PROPERTY}}`. |
+| `{key, fromService: {type, name, property}}` | A reference to the service, or to the <Term id="datastore" /> for `type: redis` / `keyvalue`. |
+| `{key, fromService: {name, envVarKey}}` | Ferry **copies** the variable of the other service when you apply the file. |
+| `{fromGroup: NAME}` | Ferry links the <Term id="env-group" /> to the service (services only). |
+| `previewValue` | Ferry ignores it, with a warning. |
+
+## Properties
+
+| For | Properties |
+|---|---|
+| `fromDatabase` and key value stores | `connectionString`, `host`, `port`, `hostport`, `user`, `password`, `database` |
+| Services | `host`, `port`, `hostport`, `url`, `internalUrl` |
+
+<Accordions>
+  <Accordion title="Details">
+    - `generateValue`: Ferry generates the value only if the variable does not exist. Thus the value stays when you apply the file again.
+    - `envVarKey`: after the copy, Ferry does not keep the two variables the same.
+  </Accordion>
+</Accordions>

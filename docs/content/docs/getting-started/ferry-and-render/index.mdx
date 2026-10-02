@@ -1,0 +1,55 @@
+---
+title: Ferry and Render
+description: Ferry has the main parts of Render, on one server that you operate.
+icon: Scale
+---
+
+<Diagram
+  nodes={[
+    { id: 'code', at: [0, 0.5], icon: 'repo', label: 'Your code', note: 'and render.yaml' },
+    { id: 'render', at: [1.75, 0], icon: 'cloud', label: 'Render', note: 'their servers' },
+    { id: 'ferry', at: [1.75, 1], icon: 'ship', label: 'Ferry', note: 'your server' },
+  ]}
+  edges={[
+    { from: 'code', to: 'render' },
+    { from: 'code', to: 'ferry' },
+  ]}
+  steps={[
+    {
+      caption: 'With Render, your apps run on the servers of Render.',
+      flow: ['code>render'],
+      tones: { render: 'primary', ferry: 'muted' },
+    },
+    {
+      caption: 'With Ferry, your apps run on one server that you control.',
+      flow: ['code>ferry'],
+      tones: { ferry: 'success', render: 'muted' },
+    },
+    {
+      caption: 'The two have the same service types and read the same file: render.yaml.',
+      flow: ['code>render', 'code>ferry'],
+      tones: { code: 'primary' },
+    },
+  ]}
+/>
+
+Ferry is a <Term id="self-hosted" /> alternative to <Term id="render" />. It builds your code, deploys it with <Term id="zero-downtime" /> and gives it a URL.
+
+Ferry also scales, repairs and logs your apps. It runs Postgres and Redis, <Term id="cron-job">cron jobs</Term>, <Term id="env-group">env groups</Term>, and custom domains with automatic <Term id="https" />.
+
+## Use your render.yaml
+
+```bash title="Terminal"
+ferry blueprint apply
+```
+
+Ferry reads the same <Term id="blueprint" /> file as Render. See [Migrate from Render](/docs/guides/migrate-from-render).
+
+## In this section
+
+<Cards>
+  <Card title="What you can run" href="/docs/getting-started/ferry-and-render/services" description="Service types, datastores, disks and jobs." />
+  <Card title="How you deploy" href="/docs/getting-started/ferry-and-render/deploys" description="Git, auto-deploy, zero downtime and rollbacks." />
+  <Card title="Not in Ferry v1" href="/docs/getting-started/ferry-and-render/not-in-ferry" description="The features of Render that Ferry does not have." />
+  <Card title="Inside Ferry" href="/docs/getting-started/ferry-and-render/inside" description="The parts of ferryd and how they work together." />
+</Cards>

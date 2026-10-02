@@ -1,0 +1,65 @@
+---
+title: Install Ferry and create its user
+description: Copy the two programs to the server and create a Linux user that runs only ferryd.
+---
+
+<Diagram
+  caption="The user ferry controls Docker because it is in the group docker"
+  nodes={[
+    { id: 'user', at: [0, 0], icon: 'user', label: 'User ferry', note: 'runs ferryd' },
+    { id: 'group', at: [1.25, 0], icon: 'users', label: 'Group docker' },
+    { id: 'docker', at: [2.5, 0], icon: 'container', label: 'Docker', note: 'the Docker socket' },
+  ]}
+  edges={[
+    { from: 'user', to: 'group', label: 'member', flow: true },
+    { from: 'group', to: 'docker', label: 'can use', flow: true },
+  ]}
+/>
+
+Run these commands on the server, in the folder that contains the two <Term id="binary">binaries</Term>. <Term id="sudo" /> runs each command as <Term id="root" />.
+
+<Steps>
+<Step>
+
+### Copy the binaries
+
+```bash title="Terminal"
+sudo install -m 755 ferryd ferry /usr/local/bin/
+```
+
+The two programs are now in `/usr/local/bin`. The <Term id="file-mode" /> `755` lets each user run them.
+
+</Step>
+<Step>
+
+### Create the user
+
+```bash title="Terminal"
+sudo useradd --system --create-home --home-dir /home/ferry --shell /usr/sbin/nologin --groups docker ferry
+```
+
+The user `ferry` is a <Term id="system-user" />. It is a member of the <Term id="linux-group" /> `docker`.
+
+</Step>
+<Step>
+
+### Create the folders
+
+```bash title="Terminal"
+sudo install -d -o ferry -g ferry -m 700 /var/lib/ferry /etc/ferry
+```
+
+`/var/lib/ferry` is for the data. `/etc/ferry` is for the configuration. Only the user `ferry` can open them.
+
+</Step>
+</Steps>
+
+<Callout type="warning" title="The group docker has the power of root">
+`ferryd` needs the <Term id="docker-socket" />. For this reason the user is in the group `docker`. A member of this group has the same power as root on the server. Keep the account `ferry` for `ferryd` only.
+</Callout>
+
+<Accordions>
+  <Accordion title="Private repositories over SSH">
+    If your services clone private repositories over SSH, put the key in `/home/ferry/.ssh`.
+  </Accordion>
+</Accordions>

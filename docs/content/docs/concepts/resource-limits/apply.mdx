@@ -1,0 +1,75 @@
+---
+title: When a new limit applies
+description: A new limit of a service applies at the next deploy or restart.
+---
+
+<Diagram
+  nodes={[
+    { id: 'settings', at: [0, 0.5], icon: 'sliders', label: 'Settings', note: 'limit: 512 MiB' },
+    { id: 'snapshot', at: [1.5, 0.5], icon: 'save', label: 'Snapshot', note: 'of the live deploy' },
+    { id: 'inst', at: [3, 0], icon: 'box', label: 'Instance', note: '512 MiB' },
+    { id: 'job', at: [3, 1], icon: 'terminal', label: 'Job run', note: '512 MiB' },
+  ]}
+  edges={[
+    { from: 'settings', to: 'snapshot', label: 'restart' },
+    { from: 'snapshot', to: 'inst' },
+    { from: 'snapshot', to: 'job' },
+  ]}
+  steps={[
+    {
+      caption: 'Each container of the service starts with the limits of the snapshot.',
+      cut: ['settings>snapshot'],
+      flow: ['snapshot>inst', 'snapshot>job'],
+    },
+    {
+      caption: 'You change the limit to 2 GiB. The containers keep the old limit.',
+      cut: ['settings>snapshot'],
+      tones: { settings: 'warning' },
+      notes: { settings: 'limit: 2 GiB' },
+    },
+    {
+      caption: 'You restart the service. Ferry makes a new snapshot with the new limit.',
+      flow: ['settings>snapshot'],
+      tones: { snapshot: 'primary' },
+      notes: { settings: 'limit: 2 GiB' },
+    },
+    {
+      caption: 'Each new container gets 2 GiB.',
+      flow: ['snapshot>inst', 'snapshot>job'],
+      tones: { inst: 'success', job: 'success' },
+      notes: { settings: 'limit: 2 GiB', inst: '2 GiB', job: '2 GiB' },
+    },
+  ]}
+/>
+
+A deploy or a restart saves the limits in its <Term id="snapshot" />, with the image, the environment and the command. All that starts a container later uses the live snapshot.
+
+## Apply a new limit
+
+A restart is sufficient. It uses the live image again and builds nothing.
+
+```bash title="Terminal"
+ferry update api --memory 2G
+ferry restart api --follow
+```
+
+The deploy log shows the limits of the new instances.
+
+```text title="Deploy log (excerpt)" noCopy
+==> Using port 10000 (default port)
+==> Limits: 2 GiB memory, 1 CPU per instance
+==> Starting 1 instance(s)
+```
+
+<Accordions>
+  <Accordion title="Who uses the live snapshot">
+    - A scale and a resume.
+    - The [reconciler](/docs/concepts/self-healing), when it replaces a crashed instance.
+    - One-off jobs and cron runs.
+  </Accordion>
+  <Accordion title="Special cases">
+    - For a cron job, the deploy log says `per run`, not `per instance`.
+    - A blueprint apply restarts each live service whose limits changed. You do not have to restart them.
+    - The limits of a datastore apply immediately. See [Set the limits of a datastore](/docs/concepts/resource-limits/datastore).
+  </Accordion>
+</Accordions>

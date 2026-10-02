@@ -1,0 +1,50 @@
+---
+title: The Server page
+description: The Server page has the settings of the full server, in five sections.
+---
+
+<Diagram
+  nodes={[
+    { id: 'general', at: [0, 0], icon: 'info', label: 'General' },
+    { id: 'domains', at: [1, 0], icon: 'globe', label: 'Domains' },
+    { id: 'account', at: [2, 0], icon: 'user', label: 'Account' },
+    { id: 'conn', at: [0.5, 1], icon: 'plug', label: 'Connections' },
+    { id: 'api', at: [1.5, 1], icon: 'braces', label: 'API' },
+  ]}
+  groups={[{ label: 'Server', around: ['general', 'domains', 'account', 'conn', 'api'] }]}
+  steps={[
+    { caption: 'General: the versions, the limits and the addresses of the server.', tones: { general: 'primary' } },
+    { caption: 'Domains: the domains of the server and the certificates.', tones: { domains: 'primary' } },
+    { caption: 'Account: your password, the API tokens and the sessions.', tones: { account: 'primary' } },
+    { caption: 'Connections: how the CLI, GitHub and GitLab connect to the server.', tones: { conn: 'primary' } },
+    { caption: 'API: how a program calls the server.', tones: { api: 'primary' } },
+  ]}
+/>
+
+Click **Server** in the icon rail. A side menu shows the five sections.
+
+## The sections
+
+| Section | Content |
+|---|---|
+| **General** | The versions of Ferry and Docker. The default limits of a container, with the CPUs and the memory of the Docker host. The default domain, the proxy URL and the dashboard URL. If TLS and the GitHub webhook are on. The state of the live updates. The theme. |
+| **Domains** | See [Server: Domains](/docs/getting-started/dashboard/server-domains). |
+| **Account** | See [Server: Account](/docs/getting-started/dashboard/server-account). |
+| **Connections** | The `ferry login` command. The `FERRY_SERVER` and `FERRY_TOKEN` variables for CI. The connected GitHub and GitLab accounts. The settings of the GitHub webhook. A link to the deploy hooks of the services. |
+| **API** | The base URL. How to authenticate: an <Term id="api-token" /> as a bearer token. An example request. Links to the <Term id="swagger-ui" /> at `/api/docs` and to the <Term id="openapi" />. The streams of <Term id="sse" />. |
+
+<Accordions>
+  <Accordion title="Connections: GitHub and GitLab accounts">
+    For each account, you can do these actions:
+
+    - Connect it.
+    - Complete its authorization, or do the authorization again.
+    - Change the repositories that a <Term id="github-app" /> can read.
+    - Disconnect it.
+
+    See [Connect GitHub or GitLab](/docs/guides/git-accounts).
+  </Accordion>
+  <Accordion title="Connections: the GitHub webhook">
+    The section shows the values to paste into GitHub: the payload URL, the content type and the events. See [Auto-deploy from GitHub](/docs/guides/github-auto-deploy).
+  </Accordion>
+</Accordions>

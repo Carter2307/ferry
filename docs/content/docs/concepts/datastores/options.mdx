@@ -1,0 +1,46 @@
+---
+title: Options of a datastore
+description: You give a name. Ferry chooses the version, the database, the user and the password.
+---
+
+<Diagram
+  nodes={[
+    { id: 'name', at: [0, 0], icon: 'tag', label: 'Name', note: 'app-db' },
+    { id: 'db', at: [1.5, 0], icon: 'database', label: 'Database', note: 'app_db' },
+    { id: 'user', at: [3, 0], icon: 'user', label: 'User', note: 'app_db' },
+    { id: 'pw', at: [1.5, 1], icon: 'key', label: 'Password', note: '32 hex characters' },
+  ]}
+  edges={[
+    { from: 'name', to: 'db', label: '- becomes _' },
+    { from: 'db', to: 'user', label: 'same name' },
+  ]}
+  steps={[
+    { caption: 'You give only a name to a Postgres datastore.', hide: ['db', 'user', 'pw'], tones: { name: 'primary' } },
+    { caption: 'The database gets the name, with _ in the place of each -.', hide: ['user', 'pw'], flow: ['name>db'], tones: { db: 'primary' } },
+    { caption: 'The user gets the name of the database.', hide: ['pw'], flow: ['db>user'], tones: { user: 'primary' } },
+    { caption: 'Ferry makes a random password of 32 hex characters.', tones: { pw: 'primary' } },
+  ]}
+/>
+
+```bash title="Terminal"
+ferry db create reports --version 17 --database reports --user analyst
+```
+
+## The options
+
+| Option | Postgres | Redis |
+|---|---|---|
+| Name | 1 to 40 characters: lowercase letters, digits or `-`. The first character is a letter. | The same |
+| Version (`--version`) | The major version. Default: `16`. | Default: `7`. |
+| Image | `postgres:<version>-alpine` | `redis:<version>-alpine` |
+| Database (`--database`) | Default: the name, with `_` in the place of `-`. | Not supported |
+| User (`--user`) | Default: the name of the database. | Always `default` |
+| Password | 32 random hex characters | The same |
+| Memory limit (`--memory`) | Default: the limit of the server (`--default-memory-limit`, 512 MiB). | The same |
+| CPU limit (`--cpu`) | Default: the limit of the server (`--default-cpu-limit`, 1 CPU). | The same |
+
+## The rules
+
+- Services and <Term id="datastore">datastores</Term> share one set of names.
+- A version has only digits and dots (`16`, `7.2`). Ferry pulls the official <Term id="alpine" /> <Term id="image" /> with that tag.
+- You can change the limits later. See [Memory and CPU limits](/docs/concepts/datastores/limits).

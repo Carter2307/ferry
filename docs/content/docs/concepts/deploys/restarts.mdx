@@ -1,0 +1,30 @@
+---
+title: Restart a service
+description: A restart is a deploy that uses the live image again with the current settings.
+---
+
+```bash title="Terminal"
+ferry restart api --follow
+```
+
+<Flow
+  steps={[
+    { icon: 'package', title: 'Same image', text: 'Ferry uses the live image again. It builds nothing.', tone: 'muted' },
+    { icon: 'sliders', title: 'New settings', text: 'The new instances get the current settings and variables.' },
+    { icon: 'health', title: 'Health check', text: 'Each new instance must pass the test.', tone: 'warning' },
+    { icon: 'switch', title: 'Switch', text: 'The proxy sends the traffic to the new instances. No downtime.', tone: 'success' },
+  ]}
+/>
+
+Use a restart to apply a change of settings or variables. The trigger of the deploy is `restart`.
+
+A change of variables with `ferry env set` does the same work. Its trigger is `env_change`.
+
+<Accordions>
+  <Accordion title="Special cases">
+    - A service with a disk is offline for a short time during a restart.
+    - A restart uses the deploy that is live when the restart runs. If it waits in the queue behind a deploy, it restarts that deploy.
+    - If the service has a deploy in the queue, Ferry merges the restart into that deploy.
+    - You cannot restart a service that has no live deploy and no deploy in progress. Deploy it first.
+  </Accordion>
+</Accordions>

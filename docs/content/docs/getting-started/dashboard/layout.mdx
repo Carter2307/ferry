@@ -1,0 +1,60 @@
+---
+title: The frame of each screen
+description: "Each screen has the same frame: a top bar, an icon rail and the page."
+---
+
+<Diagram
+  nodes={[
+    { id: 'top', at: [0, 0], icon: 'monitor', label: 'Top bar', note: 'where you are' },
+    { id: 'rail', at: [0, 1], icon: 'layers', label: 'Icon rail', note: '5 main pages' },
+    { id: 'page', at: [1.75, 0.5], icon: 'file', label: 'Page', note: 'the content' },
+  ]}
+  edges={[
+    { from: 'top', to: 'page' },
+    { from: 'rail', to: 'page' },
+  ]}
+  steps={[
+    {
+      caption: 'The top bar is at the top of each screen. It shows where you are.',
+      tones: { top: 'primary' },
+    },
+    {
+      caption: 'The icon rail is on the left. Each icon opens one main page.',
+      flow: ['rail>page'],
+      tones: { rail: 'primary' },
+    },
+    {
+      caption: 'On a service, the top bar has a switcher. It goes to another service.',
+      flow: ['top>page'],
+      tones: { top: 'primary' },
+      notes: { top: 'switch service' },
+    },
+    {
+      caption: 'Only the page changes. The frame stays.',
+      tones: { page: 'success' },
+    },
+  ]}
+/>
+
+## The top bar
+
+| Side | What it has |
+|---|---|
+| Left | The <Term id="breadcrumb" />: the server, with its default domain and its version. On a service: the switcher, the type and the state. |
+| Right | **Connect**, **Docs**, the search field, the theme menu, help, **Sign out** and the account menu. |
+
+- The theme menu has three values: light, dark or system.
+- The account menu shows the email of your account. It opens **Server → Account**.
+- [**Connect**](/docs/getting-started/dashboard/connect) and [the search field](/docs/getting-started/dashboard/command-palette) have their own pages.
+
+## The icon rail
+
+| Icon | Page |
+|---|---|
+| **Services** | [The home page](/docs/getting-started/dashboard/services) |
+| **Datastores** | [Datastores](/docs/getting-started/dashboard/datastores) |
+| **Env groups** | [Env groups](/docs/getting-started/dashboard/env-groups) |
+| **Blueprints** | [Blueprints](/docs/getting-started/dashboard/blueprints) |
+| **Server** | [Server](/docs/getting-started/dashboard/server) |
+
+The button at the bottom of the <Term id="icon-rail" /> shows or hides the labels. On a phone, the rail becomes a menu button in the top bar.

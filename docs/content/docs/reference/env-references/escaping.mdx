@@ -1,0 +1,21 @@
+---
+title: Escaping
+description: "Write $${{ to put a literal ${{ in a value."
+---
+
+```bash title="Terminal"
+ferry env set api 'GREETING_TEMPLATE=Hello $${{ name }}'
+# → GREETING_TEMPLATE=Hello ${{ name }} in the container
+```
+
+Ferry reads `${{` as the start of a <Term id="reference" />. To put a literal `${{` in a value, <Term id="escape" /> it: write `$${{`.
+
+## The rule
+
+| You write | The container gets |
+|---|---|
+| `$${{ name }}` | `${{ name }}` |
+
+Ferry keeps all the text after `$${{`, up to `}}`, as plain text.
+
+See [Syntax](/docs/reference/env-references/syntax) for the full grammar.

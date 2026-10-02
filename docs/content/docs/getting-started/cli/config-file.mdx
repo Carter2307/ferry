@@ -1,0 +1,40 @@
+---
+title: The config file
+description: ferry login saves the server URL and the token in one small file in your home folder.
+---
+
+<Files>
+  <Folder name="~/.config" defaultOpen>
+    <Folder name="ferry (mode 0700)" defaultOpen>
+      <File name="config.json (mode 0600)" />
+    </Folder>
+  </Folder>
+</Files>
+
+```json title="~/.config/ferry/config.json"
+{
+  "server": "http://127.0.0.1:7878",
+  "token": "fy_3f9c…"
+}
+```
+
+`ferry login` writes the <Term id="config-file" />. Each next command reads the server and the token from it.
+
+## Where the file is
+
+| Case | Path |
+|---|---|
+| Default | `~/.config/ferry/config.json` |
+| `XDG_CONFIG_HOME` has an absolute path | `$XDG_CONFIG_HOME/ferry/config.json` |
+
+## Who can read it
+
+The file contains a secret: the token. `ferry login` creates the file with the <Term id="file-mode" /> `0600`, and its folder with `0700`.
+
+Thus only your user can read the file.
+
+## One login
+
+The file keeps one login. If you run `ferry login` again, the new login replaces the old one.
+
+To use more than one server, see [Choose a server](/docs/getting-started/cli/server).

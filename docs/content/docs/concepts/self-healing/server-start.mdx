@@ -1,0 +1,34 @@
+---
+title: When ferryd starts again
+description: At its start, ferryd marks the interrupted work, installs the routes and repairs the rest.
+---
+
+<Flow
+  steps={[
+    { icon: 'flag', title: 'Mark', text: 'Ferry marks the interrupted deploys and job runs as failed.', tone: 'warning' },
+    { icon: 'route', title: 'Routes', text: 'Ferry installs the routes of each service. Then the proxy accepts connections.' },
+    { icon: 'wrench', title: 'Repair', text: 'In the background, Ferry removes the containers of interrupted deploys and starts what is not there.' },
+    { icon: 'repeat', title: 'Loops', text: 'Ferry starts the reconciler loop, the watchers and the cron scheduler.', tone: 'success' },
+  ]}
+/>
+
+Your apps get traffic again immediately, because each <Term id="proxy-route" /> is there before the <Term id="proxy" /> accepts connections.
+
+## Deploy again
+
+Ferry does not try an interrupted deploy again. Start it again.
+
+```bash title="Terminal"
+ferry deploy NAME
+```
+
+## The four steps
+
+| Step | What Ferry does |
+|---|---|
+| Mark | Deploys that were `queued`, `building` or `deploying` become `build_failed` or `deploy_failed`. The error is "interrupted by server restart". Job runs in progress become `failed`. |
+| Routes | Ferry installs the routes of each service before the proxy accepts connections. |
+| Repair | Ferry removes the containers of interrupted deploys, starts the instances that are not there and restarts datastores. |
+| Loops | Ferry starts the <Term id="reconciler" /> loop, the <Term id="route-watcher" />, the out-of-memory watcher and the cron scheduler. It continues the creation of datastores that was in progress. |
+
+See also [If the server stops during a deploy](/docs/concepts/deploys/interrupted).

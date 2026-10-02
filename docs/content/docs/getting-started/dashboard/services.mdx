@@ -1,0 +1,75 @@
+---
+title: The Services page
+description: The home page shows each service as a card, with its state and its last deploy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'name', at: [0, 0], icon: 'box', label: 'Name', note: 'and source' },
+    { id: 'badges', at: [1, 0], icon: 'tag', label: 'Badges' },
+    { id: 'menu', at: [2, 0], icon: 'settings', label: '⋮ menu', note: 'the actions' },
+    { id: 'address', at: [0, 1], icon: 'link', label: 'Address' },
+    { id: 'status', at: [1, 1], icon: 'activity', label: 'Status line' },
+  ]}
+  groups={[{ label: 'One service card', around: ['name', 'badges', 'menu', 'address', 'status'] }]}
+  steps={[
+    {
+      caption: 'The card starts with the name and the source of the service.',
+      tones: { name: 'primary' },
+      notes: { name: 'repository, image' },
+    },
+    {
+      caption: 'The badges give the type, the runtime and the number of instances.',
+      tones: { badges: 'primary' },
+      notes: { badges: 'type, runtime' },
+    },
+    {
+      caption: 'The address is the public URL, the private address or the cron schedule.',
+      tones: { address: 'primary' },
+    },
+    {
+      caption: 'The status line gives the state and the time of the last deploy.',
+      tones: { status: 'success' },
+      notes: { status: 'Service is live' },
+    },
+    {
+      caption: 'The ⋮ menu has the actions for this service.',
+      tones: { menu: 'primary' },
+    },
+  ]}
+/>
+
+The source on a card is a repository and its branch, an image, or the text `Upload via ferry up`.
+
+## Find a service
+
+| Tool | Use |
+|---|---|
+| **Search** | Find a service by its name. |
+| **Status** | Filter: live, deploying, degraded, failed, suspended, not deployed. |
+| Sort | By name or by last deploy. |
+| View | Grid or list. |
+
+## The ⋮ menu of a card
+
+The menu has these actions: open, deploy, restart, suspend or resume, copy the URL, delete.
+
+## The Ferry server panel
+
+The **Ferry server** panel is on the right side. It shows:
+
+- The versions of Ferry and Docker.
+- The address of the proxy.
+- The number of services, datastores, env groups and live instances.
+
+While the dashboard gets [live updates](/docs/getting-started/dashboard/live-updates), the bottom of the panel shows **Live updates**.
+
+<Accordions>
+  <Accordion title="The first time: Connect GitHub or GitLab">
+    If the server has no GitHub or GitLab account, the page starts with **Connect GitHub** and **Connect GitLab**.
+
+    Click one. You authorize the server on the page of the provider. After that, a new service gets its repository and its branch from a list. See [Connect GitHub or GitLab](/docs/guides/git-accounts).
+
+    **Not now** hides this part of the page.
+  </Accordion>
+</Accordions>

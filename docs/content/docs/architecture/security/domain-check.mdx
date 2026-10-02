@@ -1,0 +1,55 @@
+---
+title: The domain check path
+description: The proxy answers one path with no authentication. Ferry uses it to test that a domain reaches this server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry' },
+    { id: 'name', at: [1.5, 0], icon: 'globe', label: 'Your domain', note: 'through DNS' },
+    { id: 'proxy', at: [3, 0], icon: 'route', label: 'Proxy' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'name' },
+    { from: 'name', to: 'proxy' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry sends a request to your domain, with a token in the path.',
+      flow: ['ferry>name'],
+    },
+    {
+      caption: 'If the domain points to this server, the request arrives at its proxy.',
+      flow: ['name>proxy'],
+    },
+    {
+      caption: 'The proxy answers with the token and an id of its process.',
+      tones: { proxy: 'success' },
+      notes: { proxy: 'token + id' },
+    },
+    {
+      caption: 'The id is correct. Ferry knows that the domain reaches this server.',
+      tones: { ferry: 'success', proxy: 'success' },
+      notes: { ferry: 'domain verified' },
+    },
+  ]}
+/>
+
+```text title="The path"
+/.well-known/ferry-domain-check/<token>
+```
+
+The <Term id="proxy" /> answers this path for each host, with no authentication.
+
+## What the answer contains
+
+| Part | Rule |
+|---|---|
+| The token | The same token as in the path. It must be alphanumeric. |
+| An id | The process made it up when it started. |
+
+The answer tells nothing about the services.
+
+## Related
+
+[Connect a domain](/docs/guides/domains) shows how you use the check.

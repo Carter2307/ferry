@@ -1,0 +1,69 @@
+---
+title: Move a server to another data directory
+description: Stop ferryd, move the full directory, then start ferryd with the new path and the same prefix.
+---
+
+<Diagram
+  nodes={[
+    { id: 'old', at: [0, 0], icon: 'folder', label: 'Old directory', note: 'instance_id' },
+    { id: 'new', at: [1.5, 0], icon: 'folder', label: 'New directory' },
+    { id: 'marker', at: [3, 0], icon: 'tag', label: 'Marker volume', note: 'ferry-owner' },
+  ]}
+  edges={[
+    { from: 'old', to: 'new', label: 'move' },
+    { from: 'new', to: 'marker', label: 'same identity' },
+  ]}
+  steps={[
+    {
+      caption: 'The marker volume of the prefix records the identity of the server.',
+      cut: ['old>new', 'new>marker'],
+      hide: ['new'],
+    },
+    {
+      caption: 'You move the directory. The file instance_id moves with it.',
+      cut: ['new>marker'],
+      flow: ['old>new'],
+      tones: { new: 'primary', old: 'muted' },
+      notes: { new: 'instance_id', old: 'empty' },
+    },
+    {
+      caption: 'The identity is the same. The server still owns the prefix and controls its containers again.',
+      hide: ['old'],
+      flow: ['new>marker'],
+      tones: { new: 'success', marker: 'success' },
+      notes: { new: 'instance_id' },
+    },
+  ]}
+/>
+
+This procedure moves the <Term id="data-directory" /> on the same machine.
+
+<Steps>
+<Step>
+
+### Stop ferryd
+
+</Step>
+<Step>
+
+### Move the directory
+
+Move or copy the full directory. Keep its permissions: mode `0700`, and the owner is the user that runs `ferryd`.
+
+</Step>
+<Step>
+
+### Start ferryd
+
+Start `ferryd` with the new `--data-dir` and **the same** `--name-prefix`.
+
+</Step>
+</Steps>
+
+## If the server refuses the prefix
+
+The cause: the <Term id="instance-id" /> file did not move. For example, you restored only `ferry.db`. Start the server one time with `--take-over`. The server replaces the marker with its own identity.
+
+<Callout type="danger" title="Never use --take-over for a second server">
+Do not use `--take-over` to start a second server on a prefix that another server uses. The new server removes the containers of the other server as orphans.
+</Callout>

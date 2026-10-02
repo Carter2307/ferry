@@ -1,0 +1,45 @@
+---
+title: Service types
+description: Each service type of Render has an equal type on Ferry.
+---
+
+<Diagram
+  caption="The type in render.yaml, and the type on Ferry"
+  nodes={[
+    { id: 'web', at: [0, 0], label: 'web' },
+    { id: 'pserv', at: [0, 1], label: 'pserv' },
+    { id: 'worker', at: [0, 2], label: 'worker' },
+    { id: 'fweb', at: [1.1, 0], label: 'Web service', tone: 'primary' },
+    { id: 'fpserv', at: [1.1, 1], label: 'Private service', tone: 'primary' },
+    { id: 'fworker', at: [1.1, 2], label: 'Background worker', tone: 'primary' },
+    { id: 'cron', at: [2.3, 0], label: 'cron' },
+    { id: 'static', at: [2.3, 1], label: 'static' },
+    { id: 'redis', at: [2.3, 2], label: 'redis, keyvalue' },
+    { id: 'fcron', at: [3.4, 0], label: 'Cron job', tone: 'primary' },
+    { id: 'fstatic', at: [3.4, 1], label: 'Static site', tone: 'primary' },
+    { id: 'fredis', at: [3.4, 2], label: 'Redis datastore', tone: 'primary' },
+  ]}
+  edges={[
+    { from: 'web', to: 'fweb' },
+    { from: 'pserv', to: 'fpserv' },
+    { from: 'worker', to: 'fworker' },
+    { from: 'cron', to: 'fcron' },
+    { from: 'static', to: 'fstatic' },
+    { from: 'redis', to: 'fredis' },
+  ]}
+/>
+
+| Render `type` | Ferry |
+|---|---|
+| `web` | <Term id="web-service">Web service</Term>. With `runtime: static` (or the old `env: static`), a static site. |
+| `pserv` | <Term id="private-service">Private service</Term>. |
+| `worker` | <Term id="worker">Background worker</Term>. |
+| `cron` | <Term id="cron-job">Cron job</Term>. |
+| `static` | <Term id="static-site">Static site</Term>. |
+| `redis`, `keyvalue` | A <Term id="redis" /> <Term id="datastore" />. |
+
+## Key value stores
+
+For a <Term id="key-value-store" />, Ferry uses only `name` and `plan`, and its own keys `memoryLimit` and `cpuLimit`.
+
+Ferry ignores each other key, such as `ipAllowList` or `maxmemoryPolicy`, with a warning.

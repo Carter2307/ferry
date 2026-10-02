@@ -1,0 +1,42 @@
+---
+title: When limits change
+description: A new limit restarts a live service. A datastore gets it in place, with no restart.
+---
+
+<Diagram
+  caption="An apply with new limits"
+  nodes={[
+    { id: 'file', at: [0, 1], icon: 'file-code', label: 'New limits', note: 'in the blueprint' },
+    { id: 'live', at: [1.75, 0], icon: 'restart', label: 'Live service', note: 'restart, no build' },
+    { id: 'susp', at: [1.75, 1], icon: 'pause', label: 'Suspended', note: 'warning, no change', tone: 'warning' },
+    { id: 'db', at: [1.75, 2], icon: 'database', label: 'Datastore', note: 'in place' },
+  ]}
+  edges={[
+    { from: 'file', to: 'live', flow: true },
+    { from: 'file', to: 'susp', dashed: true },
+    { from: 'file', to: 'db', flow: true },
+  ]}
+/>
+
+The <Term id="dry-run" /> shows each change, for example `memory_limit: 512 MiB → 2 GiB` or `cpu_limit: (server default) → 2 CPUs`.
+
+## How the change applies
+
+| Resource | Result |
+|---|---|
+| A live service | Ferry restarts it (trigger `restart`). It keeps its image: there is no new build. |
+| A live service, when a build or deploy key also changed | Its `blueprint` deploy brings the new limits. |
+| A service with no deploy yet | It gets the limits with its first deploy. |
+| A suspended service | It keeps its limits. The apply gives the warning `service 'NAME' is suspended: resume and restart it to apply the new resource limits`. |
+| A datastore | It gets the limits in place, with no restart. The `maxmemory` of Redis follows. |
+
+<Callout type="warning" title="Less memory can stop a datastore">
+If the new memory limit is below what the datastore uses, the kernel can kill it.
+</Callout>
+
+## Limits that the entry does not set
+
+A service or a datastore that exists keeps each limit that the entry does not set. `numInstances` follows the same rule.
+
+- Limits from `ferry update --memory` or from the dashboard stay after a new apply of a file with no `plan`, `memoryLimit` or `cpuLimit`.
+- A limit that the entry sets wins. A new apply of a file with `plan: starter` puts back 512 MiB and 0.5 CPU.

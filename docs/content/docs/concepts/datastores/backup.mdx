@@ -1,0 +1,31 @@
+---
+title: Back up a datastore
+description: Ferry makes no backup of a datastore. Write the data into a file yourself, on a schedule.
+---
+
+<Diagram
+  caption="pg_dump writes the full database into one file"
+  nodes={[
+    { id: 'ds', at: [0, 0], icon: 'database', label: 'Container', note: 'ferry-ds-app-db' },
+    { id: 'dump', at: [1.5, 0], icon: 'backup', label: 'pg_dump' },
+    { id: 'file', at: [3, 0], icon: 'file', label: 'app-db.sql', note: 'on the server' },
+  ]}
+  edges={[
+    { from: 'ds', to: 'dump', flow: true },
+    { from: 'dump', to: 'file', flow: true },
+  ]}
+/>
+
+<Callout type="warning" title="Ferry does not back up datastores">
+Make each <Term id="backup" /> yourself, on a schedule. When you [delete a datastore](/docs/concepts/datastores/delete), you lose its data.
+</Callout>
+
+## Make a backup of Postgres
+
+```bash title="Terminal"
+docker exec ferry-ds-app-db pg_dump -U app_db app_db > app-db.sql
+```
+
+The command runs <Term id="pg-dump" /> in the <Term id="container" /> of the <Term id="datastore" /> `app-db`. `app_db` is the user and the database. The result is the file `app-db.sql`.
+
+[Production setup](/docs/guides/production) tells you what else to back up.

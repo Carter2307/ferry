@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 import { AlertTriangle, Download, ExternalLink, FileJson, Info, Webhook } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { CopyField } from '@/components/patterns/Copy'
+import { CodeBlock, CopyField } from '@/components/patterns/Copy'
 import { API_DOCS_URL, OPENAPI_URL } from '@/components/shell/nav'
 import { Callout, ErrorState } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
@@ -16,19 +16,27 @@ import { errorMessage, request } from '@/lib/api/client'
 import { useLive, type LiveMode } from '@/lib/api/events'
 import { useOpenApiSpec, useServerInfo } from '@/lib/api/queries'
 import type { ServerInfo } from '@/lib/api/types'
+import { defaultDomain } from '@/lib/domains'
 import { bytes } from '@/lib/format'
 import { defaultCpuText, defaultMemoryText, formatCpus } from '@/lib/resources'
-import { useAuth } from '@/stores/auth'
 
+import { GitAccountsSection } from './GitAccountsSection'
 import { MaskedCommand, OnOffPill, RowValue, ThemePicker } from './parts'
 
 function useOrigin(): string {
   return typeof window === 'undefined' ? '' : window.location.origin
 }
 
-function useMaskedToken(): { token: string; masked: string } {
-  const token = useAuth((s) => s.token) ?? ''
-  return { token, masked: token ? `${'•'.repeat(8)}${token.slice(-4)}` : '<token>' }
+/** Link to Server → Account, where API tokens are created. */
+function AccountLink({ children }: { children: React.ReactNode }) {
+  return (
+    <Link
+      to="/server?section=account"
+      className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {children}
+    </Link>
+  )
 }
 
 const LIVE_LABELS: Record<LiveMode, { label: string; hint: string }> = {
@@ -109,14 +117,23 @@ function ServerInfoCard({ info }: { info: ServerInfo }) {
         )}
       </FormRow>
       <FormRow
-        label="Base domain"
+        label="Default domain"
         description={
           <>
-            Services are served at <span className="font-mono text-[12.5px]">&lt;name&gt;.{info.base_domain}</span>.
+            Services are shown at{' '}
+            <span className="font-mono text-[12.5px]">&lt;name&gt;.{defaultDomain(info)}</span>. Connect a domain of
+            yours under{' '}
+            <Link
+              to="/server?section=domains"
+              className="rounded-sm text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Domains
+            </Link>
+            .
           </>
         }
       >
-        <CopyField value={info.base_domain} what="base domain" aria-label="Base domain" />
+        <CopyField value={defaultDomain(info)} what="default domain" aria-label="Default domain" />
       </FormRow>
       <FormRow label="Proxy URL" description="Public entry point of the reverse proxy that routes to your services.">
         <div className="flex gap-2">
@@ -132,11 +149,12 @@ function ServerInfoCard({ info }: { info: ServerInfo }) {
         label="TLS"
         description={
           info.tls_enabled ? (
-            'Automatic HTTPS (Let’s Encrypt) for custom domains.'
+            'Automatic HTTPS (Let’s Encrypt) for every public hostname.'
           ) : (
             <>
               Start ferryd with <code className="font-mono text-[12.5px]">--acme-email</code> and{' '}
-              <code className="font-mono text-[12.5px]">--https-addr</code> to get certificates for custom domains.
+              <code className="font-mono text-[12.5px]">--https-addr</code> to get a certificate for every public
+              hostname.
             </>
           )
         }
@@ -207,34 +225,37 @@ export function GeneralSection() {
 
 export function ConnectionsSection() {
   const origin = useOrigin()
-  const { token, masked } = useMaskedToken()
   const { data: info, isLoading } = useServerInfo()
   const hookUrl = `${origin}/hooks/github`
   return (
     <>
-      <PageHeader title="Connections" description="Connect the CLI, CI jobs and GitHub to this server." />
+      <PageHeader
+        title="Connections"
+        description="Connect the CLI, CI jobs and your GitHub or GitLab accounts to this server."
+      />
       <PageSection title="Command line">
         <FormCard asDiv>
           <FormRow
             layout="vertical"
             label="Log in with the CLI"
-            description="Verifies the server, then saves it and your token to ~/.config/ferry/config.json."
+            description="Opens this dashboard to approve the terminal. The terminal then gets an API token of its own, saved in ~/.config/ferry/config.json; revoke it under Account."
           >
-            <MaskedCommand
-              display={`ferry login --server ${origin} --token ${masked}`}
-              value={`ferry login --server ${origin} --token ${token}`}
-              what="login command (includes your token)"
-            />
+            <CodeBlock code={`ferry login --server ${origin}`} prompt />
           </FormRow>
           <FormRow
             layout="vertical"
             label="Environment variables"
-            description="For CI and scripts: these override the saved config."
+            description={
+              <>
+                For CI and scripts, where nobody can approve a login: create an API token under{' '}
+                <AccountLink>Account</AccountLink> and export it. These override the saved config.
+              </>
+            }
           >
             <MaskedCommand
-              display={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=${masked}`}
-              value={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=${token}`}
-              what="environment variables (include your token)"
+              display={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=<token>`}
+              value={`export FERRY_SERVER=${origin}\nexport FERRY_TOKEN=<token>`}
+              what="environment variables"
             />
           </FormRow>
           <FormRow label="Server URL" description="What the CLI and API clients connect to.">
@@ -242,6 +263,8 @@ export function ConnectionsSection() {
           </FormRow>
         </FormCard>
       </PageSection>
+
+      <GitAccountsSection />
 
       <PageSection
         title="GitHub webhook"
@@ -336,7 +359,7 @@ function ApiReferenceCard() {
       <FormCard asDiv>
         <FormRow
           label="Interactive docs"
-          description="Swagger UI: browse every endpoint and try requests with your token."
+          description="Swagger UI: browse every endpoint and try requests with an API token."
         >
           <RowValue>
             {missing ? (
@@ -389,7 +412,6 @@ function ApiReferenceCard() {
 
 export function ApiSection() {
   const origin = useOrigin()
-  const { token, masked } = useMaskedToken()
   return (
     <>
       <PageHeader title="API" description="Everything the dashboard and the CLI do goes through this HTTP API." />
@@ -401,21 +423,17 @@ export function ApiSection() {
           <FormRow
             layout="vertical"
             label="Authentication"
-            description="Send your API token as a bearer token on every request."
+            description={
+              <>
+                Send an API token as a bearer token on every request. Create one under{' '}
+                <AccountLink>Account</AccountLink>.
+              </>
+            }
           >
-            <MaskedCommand
-              prompt={false}
-              display={`Authorization: Bearer ${masked}`}
-              value={`Authorization: Bearer ${token}`}
-              what="authorization header (includes your token)"
-            />
+            <CodeBlock code="Authorization: Bearer <token>" />
           </FormRow>
           <FormRow layout="vertical" label="Example" description="List the services on this server.">
-            <MaskedCommand
-              display={`curl -H "Authorization: Bearer ${masked}" ${origin}/api/v1/services`}
-              value={`curl -H "Authorization: Bearer ${token}" ${origin}/api/v1/services`}
-              what="curl command (includes your token)"
-            />
+            <CodeBlock code={`curl -H "Authorization: Bearer <token>" ${origin}/api/v1/services`} prompt />
           </FormRow>
         </FormCard>
       </PageSection>
@@ -430,7 +448,7 @@ export function ApiSection() {
       </PageSection>
       <PageSection
         title="Server-sent events"
-        description="Streams read with fetch() so the token stays in the Authorization header."
+        description="Read them with fetch(), so the token stays in the Authorization header."
       >
         <FormCard asDiv>
           <FormRow label="Change feed" description="One event per created, updated or deleted resource.">

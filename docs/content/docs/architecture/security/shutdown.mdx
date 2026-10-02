@@ -1,0 +1,32 @@
+---
+title: Shutdown
+description: The first signal stops ferryd in order. The containers continue to run.
+---
+
+<Flow
+  steps={[
+    { icon: 'power', title: 'First signal', text: 'The first SIGINT or SIGTERM starts a graceful shutdown.' },
+    { icon: 'shield-check', title: 'API', text: 'The API accepts no new request. The requests in progress get up to 10 seconds.' },
+    { icon: 'route', title: 'Proxy', text: 'The proxy drains its connections.' },
+    { icon: 'ship', title: 'Engine', text: 'The engine stops job runs and records interrupted deploys. It gets up to 25 seconds.' },
+    { icon: 'box', title: 'Containers', text: 'The containers continue to run. The next start of ferryd finds them.', tone: 'success' },
+  ]}
+/>
+
+A <Term id="graceful-shutdown" /> stops `ferryd`, not your apps. A <Term id="signal" /> starts it.
+
+## Stop the server
+
+```bash title="On the server"
+ferryd stop
+```
+
+`ferryd stop` sends `SIGTERM`. For a server in the foreground, press <kbd>Ctrl</kbd>+<kbd>C</kbd>: this sends `SIGINT`.
+
+## A second signal
+
+A second signal stops `ferryd` immediately. The <Term id="exit-code" /> is 130.
+
+## What a shutdown does to a deploy
+
+A deploy in progress fails. See [If the server stops during a deploy](/docs/concepts/deploys/interrupted).

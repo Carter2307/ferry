@@ -1,0 +1,34 @@
+---
+title: Log in with a token
+description: With a token, ferry login needs no approval. Use it for CI, scripts and machines without a browser.
+---
+
+<Flow
+  steps={[
+    { icon: 'key', title: 'Get a token', text: 'Create an API token in the dashboard.' },
+    { icon: 'terminal', title: 'Log in', text: 'Give the token to ferry login. It does not ask for an approval.' },
+    { icon: 'shield-check', title: 'Test', text: 'ferry login tests the token on the server.', tone: 'warning' },
+    { icon: 'save', title: 'Save', text: 'The token is good. ferry login saves it with the server URL.', tone: 'success' },
+  ]}
+/>
+
+## Do it
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878 --token <token>
+```
+
+`ferry login` reads the token from `--token` or from `FERRY_TOKEN`.
+
+## Where to get a token
+
+| Token | Where |
+|---|---|
+| An <Term id="api-token" /> | In the dashboard: **Server → Account → API tokens**. See [Server: Account](/docs/getting-started/dashboard/server-account). |
+| The <Term id="server-token" /> | On the server: the file `<data-dir>/api_token`. |
+
+## When to use it
+
+Use a token when no person can approve the login. Examples: <Term id="ci" />, a script, a machine without a browser.
+
+For a CI job, you can also use two variables and no login. See [Use the CLI in CI](/docs/getting-started/cli/ci).

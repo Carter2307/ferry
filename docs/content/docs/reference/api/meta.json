@@ -3,6 +3,7 @@
   "icon": "Braces",
   "pages": [
     "info",
+    "auth",
     "services",
     "deploys",
     "env",
@@ -10,6 +11,7 @@
     "domains",
     "jobs",
     "datastores",
+    "git",
     "blueprints",
     "events",
     "hooks"

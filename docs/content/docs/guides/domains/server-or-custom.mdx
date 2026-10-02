@@ -1,0 +1,45 @@
+---
+title: Domain of the server or custom domain
+description: A domain of the server covers each service. A custom domain is one more name for one service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'wild', at: [0, 0.5], icon: 'globe', label: '*.example.com', note: 'one DNS record' },
+    { id: 'shop', at: [1.5, 0], icon: 'box', label: 'shop', note: 'shop.example.com' },
+    { id: 'api', at: [1.5, 1], icon: 'box', label: 'api', note: 'api.example.com' },
+    { id: 'www', at: [3, 0], icon: 'link', label: 'www.example.com', note: 'its own record' },
+  ]}
+  edges={[
+    { from: 'wild', to: 'shop' },
+    { from: 'wild', to: 'api' },
+    { from: 'www', to: 'shop' },
+  ]}
+  steps={[
+    {
+      caption: 'A domain of the server gives a hostname to each service, with one DNS record.',
+      hide: ['www'],
+      flow: ['wild>shop', 'wild>api'],
+      tones: { wild: 'primary' },
+    },
+    {
+      caption: 'A custom domain is one more name for one service. It has its own DNS record.',
+      flow: ['www>shop'],
+      tones: { www: 'primary', shop: 'primary' },
+    },
+  ]}
+/>
+
+Ferry has two types of domain: the <Term id="server-domain" /> and the <Term id="custom-domain" />. You can use the two together.
+
+| | Domain of the server | Custom domain |
+|---|---|---|
+| Covers | Each service | One service |
+| <Term id="hostname">Hostname</Term> | `<service>.example.com` | `www.example.com`, or the domain itself |
+| DNS | One <Term id="wildcard-record" /> | One record for each name |
+| Command | `ferry domains connect` | `ferry domains add` |
+
+## Which guide to read
+
+- For one record that covers all your services, continue with this guide.
+- For one more name on one service, read [Custom domains & HTTPS](/docs/guides/custom-domains-https).

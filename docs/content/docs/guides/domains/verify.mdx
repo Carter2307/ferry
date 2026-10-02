@@ -1,0 +1,65 @@
+---
+title: How Ferry verifies a domain
+description: Ferry asks for a new name under the domain and makes sure that the request comes back to this server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dns', at: [1.5, 0], icon: 'globe', label: 'DNS' },
+    { id: 'ferryd', at: [0, 1], icon: 'ship', label: 'ferryd' },
+    { id: 'proxy', at: [3, 1], icon: 'route', label: 'Proxy', note: 'port 80' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'dns' },
+    { from: 'ferryd', to: 'proxy', label: 'GET the new name' },
+  ]}
+  groups={[{ label: 'Your server', around: ['ferryd', 'proxy'] }]}
+  steps={[
+    {
+      caption: 'Ferry makes a name that nobody used before: ferry-check-<random>.example.com.',
+      tones: { ferryd: 'primary' },
+    },
+    {
+      caption: 'The dns check: the name must resolve to the public address of the server.',
+      flow: ['ferryd>dns'],
+      tones: { dns: 'primary' },
+      notes: { dns: '203.0.113.10' },
+    },
+    {
+      caption: 'The http check: Ferry sends a request for the name to the public HTTP port.',
+      flow: ['ferryd>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'The proxy of this server answers. The domain is active.',
+      tones: { ferryd: 'success', proxy: 'success' },
+      notes: { proxy: 'active' },
+    },
+  ]}
+/>
+
+Ferry uses a new name each time, for two reasons. Only a <Term id="wildcard-record" /> can answer for a new name. And no <Term id="dns-cache" /> has an old answer for it.
+
+## The two checks
+
+| Check | Question | It passes when |
+|---|---|---|
+| `dns` | What does the name <Term id="resolve">resolve</Term> to? | It resolves to the <Term id="public-address" /> of the server. |
+| `http` | Who answers a request for it on the public HTTP port? | This server answers. |
+
+For the `http` check, the <Term id="proxy" /> answers on a path that only this check uses. The answer is a value that only this process knows.
+
+## Verify now
+
+Ferry tests a domain each 15 seconds. To test immediately, click **Verify now**, or run the command.
+
+<Terminal
+  lines={[
+    '$ ferry domains verify example.com',
+    'example.com reaches this server: services are served at https://<service>.example.com',
+    '  dns   passed   *.example.com resolves to 203.0.113.10, this server.',
+    '  http  passed   This server answers on port 80 for names under example.com.',
+  ]}
+/>
+
+While the domain does not reach the server, the command stops with the <Term id="exit-code" /> 1. Thus a script can wait for the domain.

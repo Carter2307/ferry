@@ -1,0 +1,53 @@
+---
+title: The administrator account
+description: A Ferry server has one account. The person who signs in with it controls the full server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'user', label: 'You', note: 'email + password' },
+    { id: 'server', at: [1.5, 0], icon: 'server', label: 'Server' },
+    { id: 'db', at: [3, 0], icon: 'database', label: 'ferry.db', note: 'Argon2id hash' },
+  ]}
+  edges={[
+    { from: 'you', to: 'server' },
+    { from: 'server', to: 'db' },
+  ]}
+  steps={[
+    { caption: 'You send your email and your password to the server.', flow: ['you>server'] },
+    {
+      caption: 'The server calculates the Argon2id hash of the password.',
+      tones: { server: 'primary' },
+      notes: { server: 'makes the hash' },
+    },
+    {
+      caption: 'The server compares it with the hash in its database. It never stores the password.',
+      flow: ['server>db'],
+      tones: { db: 'primary' },
+    },
+    {
+      caption: 'The two hashes are the same. The server signs you in.',
+      tones: { you: 'success', server: 'success' },
+      notes: { you: 'signed in' },
+    },
+  ]}
+/>
+
+A server has one <Term id="admin-account" />: an email and a password of 8 characters or more. The server stores an <Term id="argon2id" /> <Term id="password-hash" /> of the password, never the password.
+
+The account controls the full server. No other users, roles or permissions per service exist.
+
+## How each caller proves its identity
+
+| Caller | Proof |
+|---|---|
+| You, in the dashboard | Your email and password, then the [session cookie](/docs/architecture/security/sessions) |
+| The CLI, scripts and CI | An [API token](/docs/architecture/security/api-tokens) |
+| Scripts on the server | The [server token](/docs/architecture/security/server-token) |
+| A deploy hook | The [key in its URL](/docs/architecture/security/hook-keys) |
+| GitHub | The [signature of each delivery](/docs/architecture/security/github-webhooks) |
+
+## Create or repair the account
+
+- A new server has no account. [Create it with the setup code](/docs/architecture/security/setup-code).
+- If you forget the password, [replace it on the server](/docs/architecture/security/reset-password).

@@ -1,0 +1,40 @@
+---
+title: What you need
+description: A Linux server with three open ports, Docker, git, a domain and the two Ferry programs.
+---
+
+<Diagram
+  caption="The three ports that the internet must reach"
+  nodes={[
+    { id: 'net', at: [0, 1], icon: 'globe', label: 'Internet' },
+    { id: 'p22', at: [1.25, 0], icon: 'terminal', label: 'Port 22', note: 'SSH, for you' },
+    { id: 'p80', at: [1.25, 1], icon: 'plug', label: 'Port 80', note: 'HTTP' },
+    { id: 'p443', at: [1.25, 2], icon: 'lock', label: 'Port 443', note: 'HTTPS' },
+    { id: 'server', at: [2.5, 1], icon: 'server', label: 'Linux server', note: 'public IP address' },
+  ]}
+  edges={[
+    { from: 'net', to: 'p22' },
+    { from: 'net', to: 'p80', flow: true },
+    { from: 'net', to: 'p443', flow: true },
+    { from: 'p22', to: 'server' },
+    { from: 'p80', to: 'server', flow: true },
+    { from: 'p443', to: 'server', flow: true },
+  ]}
+/>
+
+Make sure that you have each item before you start.
+
+## The checklist
+
+| Item | Detail |
+|---|---|
+| A Linux server | A <Term id="virtual-machine" /> is fine. It must have a public <Term id="ip-address" />. |
+| Three open ports | Ports 22, 80 and 443 must be open to the internet. If the server has a <Term id="firewall" />, open them there. |
+| Docker | Docker Engine with its `docker` CLI and <Term id="buildkit" />. BuildKit is the default builder of current Docker versions. |
+| `git` | Ferry runs `docker build` and `git` for the builds. |
+| A domain | You must control its <Term id="dns" />. This guide uses `apps.example.com` for the apps. |
+| `ferryd` and `ferry` | The two <Term id="binary">binaries</Term>. See [Installation](/docs/getting-started/installation). |
+
+## Build the binaries for the server
+
+Build `ferryd` and `ferry` for the <Term id="cpu-architecture" /> of the server. Build them with the dashboard embedded.

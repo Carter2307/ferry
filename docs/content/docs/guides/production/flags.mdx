@@ -1,0 +1,36 @@
+---
+title: The flags of ferryd
+description: Five flags in the unit give ferryd its data folder, its domain, its public ports and HTTPS.
+---
+
+```ini title="/etc/systemd/system/ferryd.service (excerpt)"
+ExecStart=/usr/local/bin/ferryd run \
+  --data-dir /var/lib/ferry \
+  --base-domain apps.example.com \
+  --proxy-addr 0.0.0.0:80 \
+  --https-addr 0.0.0.0:443 \
+  --acme-email you@example.com
+```
+
+## What each flag does
+
+| Flag | Effect |
+|---|---|
+| `--data-dir /var/lib/ferry` | The <Term id="data-directory" />: the database, logs, uploads, git caches and certificates. Ferry creates it with mode `0700`. |
+| `--base-domain apps.example.com` | The <Term id="base-domain" />: your apps answer at `<name>.apps.example.com`. It is the first [domain of the server](/docs/guides/domains). You connect other domains while the server runs. |
+| `--proxy-addr 0.0.0.0:80` | Public HTTP. <Term id="lets-encrypt" /> does its test on port 80. For a host that has a certificate, the proxy redirects HTTP requests to HTTPS. |
+| `--https-addr 0.0.0.0:443` and `--acme-email` | Together, they turn on [automatic HTTPS](/docs/concepts/networking). Both are necessary. |
+
+## What needs no flag
+
+The <Term id="api" /> and the <Term id="dashboard" /> stay on `127.0.0.1:7878`. This is the default of `--api-addr`.
+
+Each container gets 512 MiB of memory and 1 CPU by default. You need no flag at the start. [Size the limits](/docs/guides/production/limits) when you know what the server runs.
+
+[Server options](/docs/reference/server-options) lists each option.
+
+<Accordions>
+  <Accordion title="If you restart often: --acme-staging">
+    Let's Encrypt has a <Term id="rate-limit" /> for production certificates. If you expect to restart often, first try the certificate setup with `--acme-staging`. When you remove the flag, Ferry replaces the certificates of the staging <Term id="certificate-authority" /> automatically.
+  </Accordion>
+</Accordions>

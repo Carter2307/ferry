@@ -1,0 +1,66 @@
+---
+title: Health checks
+description: A health check is the test that a new instance must pass before it gets traffic.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry' },
+    { id: 'new', at: [1.75, 0], icon: 'box', label: 'New instance' },
+  ]}
+  edges={[{ from: 'ferry', to: 'new', label: 'GET /healthz' }]}
+  steps={[
+    {
+      caption: 'Ferry tests each new instance one time each second.',
+      flow: ['ferry>new'],
+      tones: { new: 'warning' },
+      notes: { new: 'not ready' },
+    },
+    {
+      caption: 'The answer has a status below 400. The instance is healthy.',
+      flow: ['ferry>new'],
+      tones: { new: 'success' },
+      notes: { new: 'healthy' },
+    },
+    {
+      caption: 'No good answer after 120 seconds: the deploy fails.',
+      tones: { new: 'danger' },
+      notes: { new: 'timeout' },
+    },
+  ]}
+/>
+
+## The three tests
+
+| Service | Test |
+|---|---|
+| Web, private or static, **with** a health check path | `GET <path>` must answer with a status below 400. |
+| Web, private or static, **without** a path | The port must accept a TCP connection and keep it open. |
+| Background worker | The process must run for 5 seconds. |
+
+## Set a health check path
+
+```bash title="Terminal"
+ferry update api --health /healthz
+```
+
+In the dashboard, use **Health check path** in the settings.
+
+<Callout type="tip">
+Make an endpoint only for this test. It must answer quickly when the app is ready.
+</Callout>
+
+<Accordions>
+  <Accordion title="If the test fails">
+    - Each 10 seconds, the log tells you why an instance is not healthy.
+    - If an instance stops during the test, the deploy fails immediately. Ferry copies the last 50 lines of its output into the deploy log.
+    - If the instance stops with exit code 0, the error gives the command and a hint. See [The app exits right away](/docs/guides/troubleshooting/app-exits).
+    - To change the 120 seconds, start `ferryd` with `--health-check-timeout`.
+  </Accordion>
+  <Accordion title="After the deploy">
+    Ferry uses the health check path only during a deploy. After that, the proxy sends traffic to each instance whose port accepts connections. The [reconciler](/docs/concepts/self-healing) replaces an instance that stops.
+  </Accordion>
+  <Accordion title="The Host header of the test">
+    Ferry sends `GET <path>` to the instance with the hostname of the service in the `Host` header.
+  </Accordion>
+</Accordions>

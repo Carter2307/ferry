@@ -1,0 +1,79 @@
+---
+title: Security model
+description: One administrator controls the full server. Only the proxy is open to the internet.
+icon: ShieldCheck
+---
+
+<Diagram
+  caption="The trust boundaries of a Ferry server"
+  nodes={[
+    { id: 'net', at: [0, 0], icon: 'globe', label: 'Internet' },
+    { id: 'you', at: [0, 1], icon: 'user', label: 'Administrator', note: 'cookie or token' },
+    { id: 'proxy', at: [1.25, 0], icon: 'route', label: 'Proxy', note: '0.0.0.0:8080' },
+    { id: 'api', at: [1.25, 1], icon: 'shield-check', label: 'API', note: '127.0.0.1:7878' },
+    { id: 'app', at: [2.5, 0], icon: 'box', label: 'Containers', note: '127.0.0.1 only' },
+    { id: 'docker', at: [2.5, 1], icon: 'container', label: 'Docker' },
+  ]}
+  groups={[{ label: 'Your server', around: ['proxy', 'api', 'app', 'docker'] }]}
+  edges={[
+    { from: 'net', to: 'proxy' },
+    { from: 'proxy', to: 'app' },
+    { from: 'you', to: 'api' },
+    { from: 'api', to: 'docker' },
+    { from: 'docker', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'The internet reaches only the proxy. The proxy is the public edge of the server.',
+      flow: ['net>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'The proxy sends each request to a container of the correct service.',
+      flow: ['net>proxy', 'proxy>app'],
+    },
+    {
+      caption: 'The API and the dashboard listen on 127.0.0.1. Only the server itself reaches them.',
+      tones: { api: 'success' },
+      notes: { api: 'localhost only' },
+    },
+    {
+      caption: 'The administrator proves their identity with a session cookie or an API token.',
+      flow: ['you>api'],
+      tones: { you: 'primary' },
+    },
+    {
+      caption: 'The API tells Docker what to run. Docker starts the containers.',
+      flow: ['api>docker', 'docker>app'],
+    },
+  ]}
+/>
+
+Ferry is for one team that runs its own server. A server has one <Term id="admin-account" />. The person who signs in with it, or who has one of its <Term id="api-token">API tokens</Term>, controls the full server.
+
+## What the model protects
+
+- The account, the tokens and the secrets stay on the server.
+- Only the <Term id="proxy" /> is on the network.
+- One runaway app cannot stop the server.
+- Two Ferry servers cannot damage the containers of each other.
+
+Ferry has no other users, no roles and no permissions per service. Read the [known limitations](/docs/architecture/security/limitations) before you put a server on the internet.
+
+## Connect from your machine
+
+On a production server, keep the <Term id="api" /> on <Term id="localhost" />. Reach it through an <Term id="ssh-tunnel" />.
+
+```bash title="Terminal"
+ssh -L 7878:127.0.0.1:7878 you@your-server
+ferry login --server http://127.0.0.1:7878
+```
+
+## In this section
+
+<Cards>
+  <Card title="The administrator account" href="/docs/architecture/security/account" description="One account, and how each caller proves its identity." />
+  <Card title="API tokens" href="/docs/architecture/security/api-tokens" description="The proof that the CLI, scripts and CI send." />
+  <Card title="What listens where" href="/docs/architecture/security/exposure" description="Which ports are open, and to whom." />
+  <Card title="One runaway service" href="/docs/architecture/security/containment" description="The limits that keep the server alive." />
+</Cards>

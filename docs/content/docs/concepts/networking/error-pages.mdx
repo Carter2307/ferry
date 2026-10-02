@@ -1,0 +1,36 @@
+---
+title: Error pages of the proxy
+description: If the proxy cannot send a request to your app, it answers with its own page and an x-ferry-error header.
+---
+
+<Terminal
+  lines={[
+    '$ curl -sI http://nope.localhost:8080/',
+    'HTTP/1.1 404 Not Found',
+    'x-ferry-error: not_found',
+  ]}
+/>
+
+If the <Term id="proxy" /> cannot send a request to your app, it answers with its own HTML page. The answer has an `x-ferry-error` <Term id="header" />.
+
+Thus you can tell an error of the proxy from an error of your app.
+
+## The errors
+
+| <Term id="status-code">Status</Term> | `x-ferry-error` | Cause |
+|---|---|---|
+| `400` | `bad_request` | The request has no `Host` header, has two, or has a bad one. |
+| `404` | `not_found` | No service owns this host. The page says "No service is configured for …". |
+| `405` | `method_not_allowed` | The request is a `CONNECT` request. |
+| `408` | `request_timeout` | The client sent no part of its request body for 60 seconds. |
+| `503` | `suspended` | You [suspended](/docs/concepts/scaling) the service. |
+| `503` | `no_upstreams` | The service has no instance that runs. See below. |
+| `502` | `bad_gateway` | The instance refused the connection, or failed in the middle of the request. |
+
+## The causes of no_upstreams
+
+- You never deployed the service.
+- Its last deploy failed.
+- A deploy is in progress.
+
+The answer has the header `Retry-After: 5`.

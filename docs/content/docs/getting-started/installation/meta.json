@@ -1,0 +1,18 @@
+{
+  "title": "Installation",
+  "icon": "Download",
+  "pages": [
+    "requirements",
+    "docker",
+    "macos",
+    "build",
+    "start",
+    "account",
+    "tokens",
+    "ports",
+    "data-directory",
+    "background",
+    "stop",
+    "production"
+  ]
+}

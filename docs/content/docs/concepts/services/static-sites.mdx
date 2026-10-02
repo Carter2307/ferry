@@ -1,0 +1,53 @@
+---
+title: Static sites
+description: A static site is a folder of files that nginx serves behind the proxy.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.15, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'nginx', at: [2.3, 0.5], icon: 'server', label: 'nginx', note: 'port 80' },
+    { id: 'page', at: [3.45, 0], icon: 'file', label: 'about.html' },
+    { id: 'missing', at: [3.45, 1], icon: 'file', label: '404.html' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'nginx' },
+    { from: 'nginx', to: 'page' },
+    { from: 'nginx', to: 'missing' },
+  ]}
+  steps={[
+    {
+      caption: 'A browser asks for /about. The proxy sends the request to nginx.',
+      flow: ['browser>proxy', 'proxy>nginx'],
+      tones: { nginx: 'primary' },
+    },
+    {
+      caption: 'nginx finds about.html and sends it.',
+      flow: ['nginx>page'],
+      tones: { page: 'success' },
+    },
+    {
+      caption: 'For a page that does not exist, nginx sends your 404.html.',
+      flow: ['nginx>missing'],
+      tones: { missing: 'warning' },
+    },
+  ]}
+/>
+
+A <Term id="static-site" /> is files that <Term id="nginx" /> serves behind the <Term id="proxy" />. A build step before that is optional: `npm run build`, Hugo, MkDocs, Jekyll…
+
+Ferry makes the <Term id="image" />: an `nginx:alpine` server that listens on port 80.
+
+## Create a static site
+
+```bash title="Terminal"
+ferry up my-site --type static --dir ./public
+```
+
+## How nginx finds a page
+
+For `/about`, nginx serves `about.html` or `about/index.html`.
+
+For the exact rules, the build step and the publish directory, see [Static sites](/docs/concepts/builds/static-sites) in Builds.

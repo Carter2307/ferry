@@ -1,0 +1,63 @@
+---
+title: API tokens
+description: An API token is the proof that the CLI, scripts and CI send with each request.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'CLI' },
+    { id: 'ci', at: [0, 1], icon: 'workflow', label: 'Script or CI' },
+    { id: 'server', at: [1.5, 0.5], icon: 'server', label: 'Server' },
+    { id: 'db', at: [3, 0.5], icon: 'database', label: 'ferry.db', note: 'SHA-256 only' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'server' },
+    { from: 'ci', to: 'server' },
+    { from: 'server', to: 'db' },
+  ]}
+  steps={[
+    {
+      caption: 'A program sends its token in a header with each request.',
+      flow: ['cli>server', 'ci>server'],
+    },
+    {
+      caption: 'The server calculates the SHA-256 hash of the token. It looks for the hash in its database.',
+      flow: ['server>db'],
+    },
+    {
+      caption: 'The hash is there. The server accepts the request.',
+      tones: { server: 'success' },
+      notes: { server: 'accepted' },
+    },
+    {
+      caption: 'You revoke the token in the dashboard. The server refuses it immediately.',
+      flow: ['cli>server'],
+      tones: { server: 'danger' },
+      notes: { server: '401' },
+    },
+  ]}
+/>
+
+The <Term id="cli" />, scripts and <Term id="ci" /> prove their identity with an <Term id="api-token" />. A token is `fy_` and then 40 <Term id="hex">hex characters</Term>.
+
+## Create a token
+
+In the dashboard, open **Server → Account**. Give the token a name. An expiry is optional.
+
+The dashboard shows the token one time, when you create it. The server stores only its <Term id="sha-256" /> hash. The list shows the last 4 characters of each token and the time of its last use.
+
+## Send a token
+
+```bash title="Terminal"
+curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/services
+```
+
+A token has full access. Read [What a token can do](/docs/architecture/security/token-access).
+
+<Accordions>
+  <Accordion title="A token in the URL">
+    The header comes first: `Authorization: Bearer <token>`. `?access_token=` works on `GET` requests only. It is for `EventSource` streams in a browser, which cannot set a header.
+
+    The request log of `ferryd` records paths without their <Term id="query-string" />.
+  </Accordion>
+</Accordions>

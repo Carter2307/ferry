@@ -1,0 +1,63 @@
+---
+title: Create your account
+description: A Ferry server has one administrator account, with an email and a password.
+---
+
+<Steps>
+<Step>
+
+### Open the link
+
+While the server has no account, the <Term id="banner" /> ends with a link. Open it in a browser.
+
+```text title="Output" noCopy
+  Create your account: http://127.0.0.1:7878/setup?code=5b0e…
+```
+
+</Step>
+<Step>
+
+### Enter your email and a password
+
+The password must have 8 characters or more. The <Term id="setup-code" /> from the link is in the form already.
+
+</Step>
+<Step>
+
+### Click **Create account**
+
+Ferry creates the account and signs this browser in to the dashboard.
+
+</Step>
+</Steps>
+
+This <Term id="admin-account" /> is the only user. There are no other users, teams or roles.
+
+<Callout type="warning" title="The account controls the full server">
+A person who signs in can deploy code and read each environment variable of the server. Do not open the API to the internet without HTTPS. See [Security model](/docs/architecture/security).
+</Callout>
+
+## After the account exists
+
+The banner ends with this line. You sign in to the dashboard with your email and password.
+
+```text title="Output" noCopy
+  Connect the CLI : ferry login
+```
+
+<Accordions>
+  <Accordion title="Who can create the account">
+    The account needs the setup code. Thus only a person who can read the terminal of the server, or its data directory, can create it.
+
+    The code is also in `<data-dir>/setup_code` (mode `0600`). `ferryd` deletes this file when the account exists.
+  </Accordion>
+  <Accordion title="If you lost the link">
+    `ferryd status` prints the link again.
+  </Accordion>
+  <Accordion title="If you forget the password">
+    Run [`ferryd reset-password`](/docs/reference/server-options#ferryd-reset-password) on the server. It asks for a new password two times and signs each browser out.
+  </Accordion>
+  <Accordion title="Another API address">
+    If the API is not at the default `http://127.0.0.1:7878`, the line is `ferry login --server <url>`. The banner does not print a token.
+  </Accordion>
+</Accordions>

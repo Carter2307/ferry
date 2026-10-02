@@ -1,0 +1,70 @@
+---
+title: An upload
+description: ferry up sends a folder from your machine to the server. Ferry builds it and deploys it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'folder', at: [0, 0], icon: 'folder', label: 'Your folder' },
+    { id: 'archive', at: [1.15, 0], icon: 'archive', label: '.tar.gz', note: '512 MiB at most' },
+    { id: 'server', at: [2.3, 0], icon: 'server', label: 'Ferry server' },
+    { id: 'deploy', at: [3.45, 0], icon: 'deploy', label: 'New deploy' },
+  ]}
+  edges={[
+    { from: 'folder', to: 'archive' },
+    { from: 'archive', to: 'server' },
+    { from: 'server', to: 'deploy' },
+  ]}
+  steps={[
+    {
+      caption: 'ferry up packs the folder as a .tar.gz archive.',
+      hide: ['deploy'],
+      flow: ['folder>archive'],
+      tones: { archive: 'primary' },
+    },
+    {
+      caption: 'The CLI creates the service if necessary, then uploads the archive.',
+      hide: ['deploy'],
+      flow: ['archive>server'],
+      tones: { server: 'primary' },
+    },
+    {
+      caption: 'Ferry builds the code and deploys it.',
+      flow: ['server>deploy'],
+      tones: { deploy: 'success' },
+    },
+  ]}
+/>
+
+A service with no repository and no image deploys an <Term id="upload" />.
+
+## Upload a folder
+
+```bash title="Terminal"
+ferry up my-app              # packs ., creates my-app if needed, uploads and deploys
+ferry up my-app --dir ./app  # another directory
+```
+
+## What goes into the archive
+
+| Files | In the <Term id="archive" /> |
+|---|---|
+| Files that `.gitignore`, `.ignore` or `.ferryignore` exclude | No |
+| `.git`, `node_modules`, `target`, `.venv`, `venv`, `__pycache__`, Python virtualenvs | Never |
+| Hidden files such as `.env.example` or `.npmrc` | Yes |
+| <Term id="symlink">Symlinks</Term> that point outside the directory | No, with a warning |
+
+<Accordions>
+  <Accordion title="The ignore files">
+    `ferry up` follows `.gitignore` also outside a git repository. `.ferryignore` wins over the other <Term id="ignore-file">ignore files</Term>. Thus a `!pattern` line in `.ferryignore` adds a file that git ignores.
+  </Accordion>
+  <Accordion title="A manual deploy">
+    `ferry deploy my-app`, or **Manual deploy** in the dashboard, builds the newest upload again.
+  </Accordion>
+  <Accordion title="ferry up on a git or image service">
+    `ferry up` also works on a service that has a repository or an image. That deploy builds your local files and tells you so.
+  </Accordion>
+  <Accordion title="Size limits">
+    The archive can be 512 MiB at most. For the limits on the server, see [Limits](/docs/concepts/builds/limits).
+  </Accordion>
+</Accordions>

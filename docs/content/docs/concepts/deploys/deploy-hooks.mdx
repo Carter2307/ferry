@@ -1,0 +1,49 @@
+---
+title: Deploy hooks
+description: A deploy hook is a secret URL. A request to this URL deploys the service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ci', at: [0, 0], icon: 'workflow', label: 'Your CI', note: 'or a registry' },
+    { id: 'hook', at: [1.25, 0], icon: 'link', label: 'Deploy hook', note: 'POST …?key=…', tone: 'primary' },
+    { id: 'deploy', at: [2.5, 0], icon: 'deploy', label: 'New deploy', note: 'answer: 202' },
+  ]}
+  edges={[
+    { from: 'ci', to: 'hook', flow: true },
+    { from: 'hook', to: 'deploy', flow: true },
+  ]}
+/>
+
+Each service has one deploy hook. The request needs no API token, because the key is in the URL.
+
+## Use the hook
+
+<Terminal
+  lines={[
+    '$ ferry deploy-hook show api',
+    'http://127.0.0.1:7878/hooks/deploy/srv-fd3c827106384b268113?key=9e15bc88e44747ea86477949fae877f8',
+    "$ curl -X POST 'http://127.0.0.1:7878/hooks/deploy/srv-fd3c827106384b268113?key=9e15bc88e44747ea86477949fae877f8'",
+  ]}
+/>
+
+The answer is `202`, with a summary of the deploy in the queue. `GET` also works.
+
+## If the URL leaks
+
+<Callout type="warning" title="The URL is a password">
+Each person who has the URL can deploy the service. If the URL leaks, replace the key. The old URL stops immediately.
+</Callout>
+
+```bash title="Terminal"
+ferry deploy-hook rotate api
+```
+
+<Accordions>
+  <Accordion title="A CI system outside your server">
+    `ferry deploy-hook show` makes the URL from the server address of the CLI. A CI system on another machine cannot reach `127.0.0.1`. Give it an address that it can reach: the dashboard host with HTTPS. See [Production setup](/docs/guides/production).
+  </Accordion>
+  <Accordion title="Errors">
+    A bad key and an unknown service id get the same answer: `401`. See the [API reference](/docs/reference/api/hooks#deploy-hook).
+  </Accordion>
+</Accordions>

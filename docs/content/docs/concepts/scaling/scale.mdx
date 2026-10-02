@@ -1,0 +1,69 @@
+---
+title: Scale a service
+description: One command changes the number of instances. There is no new deploy and no downtime.
+---
+
+<Terminal
+  lines={[
+    '$ ferry scale api 3',
+    '$ ferry status api',
+    'api: live — 3/3 instance(s) running',
+    'INSTANCE   DEPLOY     STATE     PORT    CPU            MEMORY                 RESTARTS   STARTED',
+    '6040c7     4a6f817d   running   63295   0.0% / 1 CPU   11.9 MiB / 512.0 MiB   0          16s ago',
+    '8cb56c     4a6f817d   running   63326   0.0% / 1 CPU   11.9 MiB / 512.0 MiB   0          6s ago',
+    '90f134     4a6f817d   running   63325   0.0% / 1 CPU   11.9 MiB / 512.0 MiB   0          6s ago',
+  ]}
+/>
+
+<Term id="scaling">Scaling</Term> changes the number of <Term id="instance">instances</Term> of a service. A <Term id="web-service" />, a <Term id="static-site" />, a <Term id="private-service" /> or a <Term id="worker" /> runs 1 instance by default. The maximum is 50.
+
+## What Ferry does
+
+<Diagram
+  nodes={[
+    { id: 'snap', at: [0, 1], icon: 'save', label: 'Snapshot', note: 'of the live deploy' },
+    { id: 'a', at: [1.75, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [1.75, 1], icon: 'box', label: 'Instance 2' },
+    { id: 'c', at: [1.75, 2], icon: 'box', label: 'Instance 3' },
+  ]}
+  edges={[
+    { from: 'snap', to: 'a' },
+    { from: 'snap', to: 'b' },
+    { from: 'snap', to: 'c' },
+  ]}
+  steps={[
+    { caption: 'The service runs 1 instance.', hide: ['a', 'c'], tones: { b: 'success' } },
+    { caption: 'Scale up to 3: Ferry starts 2 instances from the snapshot of the live deploy.', flow: ['snap>a', 'snap>c'], tones: { a: 'primary', b: 'success', c: 'primary' }, notes: { a: 'starts', c: 'starts' } },
+    { caption: 'A new instance gets traffic when it accepts connections.', tones: { a: 'success', b: 'success', c: 'success' }, notes: { a: 'gets traffic', c: 'gets traffic' } },
+    { caption: 'Scale down to 2: Ferry stops one instance. It has 10 seconds to stop.', tones: { a: 'success', b: 'success', c: 'warning' }, notes: { c: 'stops' } },
+  ]}
+/>
+
+The <Term id="snapshot" /> has the image, the variables, the command and the limits of the live deploy. Settings, limits or variables that you changed after the last deploy do not apply to the new instances. To apply them, [restart the service](/docs/concepts/scaling/restart).
+
+## Set the number at creation
+
+```bash title="Terminal"
+ferry create api --repo https://github.com/you/api --instances 2   # at creation
+```
+
+<Accordions>
+  <Accordion title="What you cannot scale">
+    - A <Term id="cron-job" />: each run starts its own container.
+    - A service with a [disk](/docs/concepts/scaling/disk-deploys): it has exactly 1 instance.
+    - Below 1 instance. To stop a service, [suspend](/docs/concepts/scaling/suspend) it.
+  </Accordion>
+  <Accordion title="During a deploy">
+    Ferry saves the new number. Ferry applies it immediately after the deploy.
+  </Accordion>
+  <Accordion title="API">
+    ```bash title="Terminal"
+    curl -X POST http://127.0.0.1:7878/api/v1/services/api/scale \
+      -H "Authorization: Bearer $FERRY_TOKEN" \
+      -H 'Content-Type: application/json' \
+      -d '{"instances": 3}'
+    ```
+
+    `PATCH /api/v1/services/api` with `{"instances": 3}` does the same. See [Scale a service](/docs/reference/api/services#scale-a-service).
+  </Accordion>
+</Accordions>

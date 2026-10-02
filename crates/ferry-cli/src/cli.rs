@@ -10,7 +10,7 @@ use ferry_core::{DatastoreKind, EnvVar, Runtime, ServiceType, resources, validat
     name = "ferry",
     version,
     about = "Command-line client for Ferry, a self-hosted Render alternative",
-    after_help = "Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the config saved by 'ferry login'."
+    after_help = "Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the server and token saved by 'ferry login'."
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -33,13 +33,30 @@ pub struct GlobalArgs {
     pub json: bool,
 }
 
+#[derive(Debug, Clone, Default, Args)]
+pub struct LoginArgs {
+    /// Only print the page to open, without opening a browser
+    #[arg(long)]
+    pub no_browser: bool,
+    /// Milliseconds between two checks of the approval (default: what the server asks)
+    #[arg(long, hide = true, value_name = "MS")]
+    pub poll_ms: Option<u64>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Print this command-line reference as Markdown (used to generate the docs site)
     #[command(name = "markdown-help", hide = true)]
     MarkdownHelp,
-    /// Verify the server URL and token (from --server/--token) and save them
-    Login,
+    /// Connect this terminal to a server and save the connection
+    ///
+    /// Without a token, opens the dashboard to approve the login there: sign
+    /// in, check that the page shows the code the terminal prints, approve.
+    /// The server then gives this terminal an API token of its own, which
+    /// you can revoke in the dashboard. With --token (or FERRY_TOKEN), that
+    /// token is verified and saved instead: for servers without a browser
+    /// at hand, scripts and CI.
+    Login(LoginArgs),
     /// Show server information
     Info,
     /// List services
@@ -80,8 +97,11 @@ pub enum Command {
     Logs(LogsArgs),
     /// List or change a service's environment variables
     Env(EnvArgs),
-    /// List or change a service's custom domains
+    /// The server's domains (services are served at <service>.<domain>), or a service's custom domains
     Domains(DomainsArgs),
+    /// Show the certificate of every hostname the server routes
+    #[command(visible_alias = "certs")]
+    Certificates,
     /// Run a one-off job (or trigger a cron job now)
     Run(RunArgs),
     /// List a service's job runs, or cancel one
@@ -460,25 +480,52 @@ pub struct EnvUnsetArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct DomainsArgs {
     #[command(subcommand)]
     pub command: Option<DomainsCommand>,
-    /// Service name or id (lists its custom domains)
-    #[arg(required = true)]
+    /// Service name or id: lists its custom domains. Without it: the
+    /// server's domains
     pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum DomainsCommand {
-    /// List custom domains
+    /// Connect a domain to the server: services are then served at
+    /// <service>.DOMAIN. Prints the DNS record to create
+    Connect(ServerDomainArg),
+    /// Check now whether a domain's DNS points at this server (exit 1
+    /// while it doesn't)
+    Verify(ServerDomainArg),
+    /// Make a domain the default one: the domain of the URL services are
+    /// shown with
+    Default(ServerDomainArg),
+    /// Disconnect a domain from the server: services stop being served
+    /// under it
+    Disconnect(DisconnectDomainArgs),
+    /// List a service's custom domains
     #[command(visible_alias = "list")]
     Ls(NameArg),
-    /// Add a custom domain
+    /// Add a custom domain to a service
     Add(DomainArgs),
-    /// Remove a custom domain
+    /// Remove a custom domain from a service
     #[command(visible_alias = "remove")]
     Rm(DomainArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ServerDomainArg {
+    /// Domain name, e.g. example.com
+    pub domain: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DisconnectDomainArgs {
+    /// Domain name, e.g. example.com
+    pub domain: String,
+    /// Don't ask for confirmation
+    #[arg(short, long)]
+    pub yes: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -788,7 +835,11 @@ mod tests {
         assert!(c.global.json);
         assert!(matches!(c.command, Command::Services));
         assert!(matches!(parse(&["ls"]).command, Command::Services));
-        assert!(matches!(parse(&["login", "--server", "u", "--token", "t"]).command, Command::Login));
+        assert!(matches!(parse(&["login", "--server", "u", "--token", "t"]).command, Command::Login(_)));
+        match parse(&["login", "--no-browser"]).command {
+            Command::Login(args) => assert!(args.no_browser && args.poll_ms.is_none()),
+            other => panic!("{other:?}"),
+        }
         assert!(matches!(parse(&["info"]).command, Command::Info));
     }
 
@@ -1013,8 +1064,23 @@ mod tests {
         assert_eq!((d.name.as_str(), d.domain.as_str()), ("web", "app.example.com"));
         let Command::Domains(a) = parse(&["domains", "rm", "web", "app.example.com"]).command else { panic!() };
         assert!(matches!(a.command, Some(DomainsCommand::Rm(_))));
-        fails(&["domains"]);
         fails(&["domains", "add", "web"]);
+        // The server's own domains.
+        let Command::Domains(a) = parse(&["domains"]).command else { panic!() };
+        assert!(a.command.is_none() && a.name.is_none());
+        let Command::Domains(a) = parse(&["domains", "connect", "example.com"]).command else { panic!() };
+        let Some(DomainsCommand::Connect(d)) = a.command else { panic!() };
+        assert_eq!(d.domain, "example.com");
+        for verb in ["verify", "default"] {
+            let Command::Domains(a) = parse(&["domains", verb, "example.com"]).command else { panic!() };
+            assert!(matches!(a.command, Some(DomainsCommand::Verify(_) | DomainsCommand::Default(_))), "{verb}");
+        }
+        let Command::Domains(a) = parse(&["domains", "disconnect", "example.com", "--yes"]).command else { panic!() };
+        let Some(DomainsCommand::Disconnect(d)) = a.command else { panic!() };
+        assert!(d.yes);
+        fails(&["domains", "connect"]);
+        assert!(matches!(parse(&["certs"]).command, Command::Certificates));
+        assert!(matches!(parse(&["certificates"]).command, Command::Certificates));
     }
 
     #[test]

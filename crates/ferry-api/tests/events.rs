@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::body::{Body, BodyDataStream};
 use common::{TOKEN, TestApp};
-use ferry_core::DeployStatus;
+use ferry_core::{DeployStatus, GitConnection, GitProvider};
 use futures::StreamExt;
 use http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
@@ -157,6 +157,67 @@ async fn engine_side_changes_are_found_by_polling() {
     assert_eq!(seen.len(), 1, "{seen:?}");
     app.store.set_live_deploy(&id(&web), Some(&deploy_id)).await.unwrap();
     feed.until("service", &id(&web), "updated").await;
+}
+
+#[tokio::test]
+async fn git_connections_are_reported() {
+    let app = TestApp::new().await;
+    let mut feed = Feed::open(&app).await;
+    // Connecting asks the provider (tests/git.rs): write the store directly.
+    let conn = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "a-token");
+    app.store.create_git_connection(&conn).await.unwrap();
+    let seen = feed.until("git_connection", &conn.id, "created").await;
+    assert_eq!(
+        seen.last().unwrap(),
+        &json!({"kind": "git_connection", "id": conn.id, "service_id": null, "action": "created"})
+    );
+    // a renewed token isn't a change of the connection (no event)...
+    app.store.set_git_tokens(&conn.id, "another-token", None, None).await.unwrap();
+    let datastore = app.post("/api/v1/datastores", json!({"name": "cache", "kind": "redis"})).await.json();
+    let seen = feed.until("datastore", &id(&datastore), "created").await;
+    assert!(!seen.iter().any(|c| c["kind"] == "git_connection"), "{seen:?}");
+    // ...an authorization is
+    let mut again = app.store.require_git_connection(&conn.id).await.unwrap();
+    again.account_name = Some("The Octocat".into());
+    app.store.update_git_connection(&again).await.unwrap();
+    feed.until("git_connection", &conn.id, "updated").await;
+    // disconnecting: the services it cloned for name no connection, so only it changes
+    let web = app.create_service(json!({"name": "web", "repo_url": "https://github.com/octocat/web"})).await;
+    feed.until("service", &id(&web), "created").await;
+    let disconnect = app.delete(&format!("/api/v1/git/connections/{}?force=true", conn.id)).await;
+    assert_eq!(disconnect.status, StatusCode::NO_CONTENT);
+    let seen = feed.until("git_connection", &conn.id, "deleted").await;
+    let web_id = id(&web);
+    assert!(!seen.iter().any(|c| c["kind"] == "service" && c["id"] == web_id.as_str()), "{seen:?}");
+}
+
+#[tokio::test]
+async fn domains_are_reported_with_what_the_engine_finds() {
+    let app = TestApp::new().await;
+    let mut feed = Feed::open(&app).await;
+    let d = app.post("/api/v1/domains", json!({"name": "example.com"})).await.json();
+    let domain_id = id(&d);
+    let seen = feed.until("domain", &domain_id, "created").await;
+    assert_eq!(
+        seen.last().unwrap(),
+        &json!({"kind": "domain", "id": domain_id, "service_id": null, "action": "created"})
+    );
+    // A verification the engine makes on its own (it writes the store): found by polling.
+    let mut row = app.store.require_domain(&domain_id).await.unwrap();
+    row.status = ferry_core::DomainStatus::Active;
+    row.checked_at = Some(ferry_core::now());
+    app.store.record_domain_check(&row).await.unwrap();
+    feed.until("domain", &domain_id, "updated").await;
+    // The default domain changes two rows.
+    assert_eq!(app.patch("/api/v1/domains/example.com", json!({"is_default": true})).await.status, StatusCode::OK);
+    let base_id = app.store.require_domain("localhost").await.unwrap().id;
+    let seen = feed.until("domain", &domain_id, "updated").await;
+    if !seen.iter().any(|c| c["kind"] == "domain" && c["id"] == base_id.as_str()) {
+        // Changes of one kind come in the order of their ids.
+        feed.until("domain", &base_id, "updated").await;
+    }
+    assert_eq!(app.delete("/api/v1/domains/example.com").await.status, StatusCode::NO_CONTENT);
+    feed.until("domain", &domain_id, "deleted").await;
 }
 
 #[tokio::test]

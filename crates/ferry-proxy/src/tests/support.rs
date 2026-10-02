@@ -53,6 +53,7 @@ pub(crate) struct Options {
     pub tls: Option<Arc<rustls::ServerConfig>>,
     pub hooks: Option<Arc<dyn TlsHooks>>,
     pub redirect_https: bool,
+    pub probe_id: Option<String>,
     pub drain: Duration,
     pub limits: ConnectionLimits,
 }
@@ -63,6 +64,7 @@ impl Default for Options {
             tls: None,
             hooks: None,
             redirect_https: false,
+            probe_id: None,
             drain: server::DRAIN_TIMEOUT,
             limits: ConnectionLimits::default(),
         }
@@ -90,6 +92,7 @@ impl TestProxy {
             tls: opts.tls,
             tls_hooks: opts.hooks,
             redirect_https: opts.redirect_https,
+            domain_probe_id: opts.probe_id,
             limits: opts.limits,
         };
         let routes = RouteTable::new();

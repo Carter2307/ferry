@@ -1,0 +1,62 @@
+---
+title: Start the server
+description: The command ferryd starts the server in the background and prints its addresses.
+---
+
+<Steps>
+<Step>
+
+### Run ferryd
+
+`ferryd` needs the <Term id="docker-daemon" />. Run it as a user that can use Docker.
+
+<Terminal
+  lines={[
+    '$ ferryd',
+    '  Ferry 0.1.0 is running in the background (pid 48213)',
+    '  Dashboard + API : http://127.0.0.1:7878',
+    '  Dashboard (proxy): http://ferry.localhost:8080',
+    '  Apps            : http://<name>.localhost:8080',
+    '  Docker          : 29.2.0 (8 CPUs, 7.7 GiB)',
+    '  Data            : /home/you/ferry-data',
+    '  Limits          : 512 MiB / 1 CPU per container (default), 1024 pids, logs rotated at 10 MiB × 3',
+    '  Free disk check : deploys need 1 GiB free',
+    '',
+    '  Create your account: http://127.0.0.1:7878/setup?code=5b0e…',
+    '',
+    '  Logs            : ferryd logs -f',
+    '  Stop            : ferryd stop',
+  ]}
+/>
+
+You can use the terminal again. The server continues to run after you close the terminal.
+
+</Step>
+<Step>
+
+### Make sure that it answers
+
+```bash title="Terminal"
+curl http://127.0.0.1:7878/healthz
+# ok
+```
+
+</Step>
+</Steps>
+
+## The lines of the banner
+
+The <Term id="banner" /> is the text that `ferryd` prints at each start.
+
+| Line | Meaning |
+|---|---|
+| `Docker` | The CPUs and the memory of the <Term id="docker-host" /> |
+| `Data` | The <Term id="data-directory" />. `ferryd` creates it at the first start. |
+| `Limits` | The [memory and CPU limits](/docs/concepts/resource-limits) of each container, if its service or datastore sets no other value |
+| `Create your account` | The link for the [next page](/docs/getting-started/installation/account) |
+
+<Accordions>
+  <Accordion title="If the server cannot start">
+    Possible causes: Docker does not run, or another program uses a port. `ferryd` prints the error and stops with <Term id="exit-code" /> 1. See [Troubleshooting](/docs/guides/troubleshooting).
+  </Accordion>
+</Accordions>

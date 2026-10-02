@@ -1,0 +1,77 @@
+---
+title: "Blueprint spec"
+description: A blueprint is one YAML file that describes your env groups, datastores and services.
+icon: FileCode
+---
+
+<Diagram
+  caption="What an apply does"
+  nodes={[
+    { id: 'file', at: [0, 1], icon: 'file-code', label: 'ferry.yaml', note: 'the blueprint' },
+    { id: 'ferry', at: [1.25, 1], icon: 'ship', label: 'Ferry', note: 'apply' },
+    { id: 'groups', at: [2.75, 0], icon: 'variable', label: 'Env groups' },
+    { id: 'stores', at: [2.75, 1], icon: 'database', label: 'Datastores' },
+    { id: 'services', at: [2.75, 2], icon: 'box', label: 'Services' },
+  ]}
+  edges={[
+    { from: 'file', to: 'ferry' },
+    { from: 'ferry', to: 'groups' },
+    { from: 'ferry', to: 'stores' },
+    { from: 'ferry', to: 'services' },
+  ]}
+  groups={[{ label: 'Your server', around: ['ferry', 'groups', 'stores', 'services'] }]}
+  steps={[
+    {
+      caption: 'You write your env groups, datastores and services in one file.',
+      hide: ['groups', 'stores', 'services'],
+      tones: { file: 'primary' },
+    },
+    {
+      caption: 'Ferry reads the file and compares it with the server.',
+      hide: ['groups', 'stores', 'services'],
+      flow: ['file>ferry'],
+      tones: { ferry: 'primary' },
+      notes: { ferry: 'compares' },
+    },
+    {
+      caption: 'Ferry creates what is not there: the env groups, then the datastores, then the services.',
+      flow: ['ferry>groups', 'ferry>stores', 'ferry>services'],
+      tones: { groups: 'success', stores: 'success', services: 'success' },
+      notes: { groups: 'created', stores: 'created', services: 'created' },
+    },
+    {
+      caption: 'Ferry deploys each new service that has a source.',
+      flow: ['ferry>services'],
+      tones: { services: 'success' },
+      notes: { services: 'deploy in queue' },
+    },
+    {
+      caption: 'You change the file and apply it again. Ferry updates only what changed. It deletes nothing.',
+      flow: ['file>ferry', 'ferry>stores'],
+      tones: { file: 'primary', stores: 'primary' },
+      notes: { groups: 'unchanged', stores: 'updated', services: 'unchanged' },
+    },
+  ]}
+/>
+
+A <Term id="blueprint" /> describes your <Term id="env-group">env groups</Term>, your <Term id="postgres" /> databases, your <Term id="redis" /> datastores and your <Term id="service">services</Term> in one <Term id="yaml" /> file.
+
+An <Term id="apply" /> creates what is not there and updates what changed. It never deletes. A second apply of the same file changes nothing.
+
+Ferry reads the `render.yaml` format of <Term id="render" />, with its <Term id="camel-case" /> keys. It supports a practical part of this format. Ferry ignores a key that it does not support, with a warning and never an error. Thus a `render.yaml` that you have applies as it is. The `plan` of Render becomes the [resource limits](/docs/reference/blueprint/limits) of the containers.
+
+## Apply a blueprint
+
+```bash title="Terminal"
+ferry blueprint apply --dry-run   # show what would change
+ferry blueprint apply             # apply ./ferry.yaml, else ./render.yaml
+```
+
+## In this section
+
+<Cards>
+  <Card title="Example" href="/docs/reference/blueprint/example" description="One file with an env group, two datastores and two services." />
+  <Card title="Service entries" href="/docs/reference/blueprint/services" description="The keys of a service, by group." />
+  <Card title="Resource limits" href="/docs/reference/blueprint/limits" description="A plan of Render becomes a memory limit and a CPU limit." />
+  <Card title="How an apply works" href="/docs/reference/blueprint/apply-steps" description="Parse, plan, write, deploy." />
+</Cards>

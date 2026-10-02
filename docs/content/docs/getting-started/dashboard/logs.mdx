@@ -1,0 +1,56 @@
+---
+title: "Service: Logs"
+description: The Logs page shows the output of all instances of one service in one live list.
+---
+
+<Diagram
+  nodes={[
+    { id: 'a', at: [0, 0], icon: 'box', label: 'Instance', note: 'stdout, stderr' },
+    { id: 'b', at: [0, 1], icon: 'box', label: 'Instance', note: 'stdout, stderr' },
+    { id: 'page', at: [1.75, 0.5], icon: 'logs', label: 'Logs page', note: 'one list' },
+  ]}
+  edges={[
+    { from: 'a', to: 'page' },
+    { from: 'b', to: 'page' },
+  ]}
+  steps={[
+    {
+      caption: 'Each instance that runs writes lines of output.',
+      tones: { a: 'primary', b: 'primary' },
+    },
+    {
+      caption: 'The Logs page puts the lines of all instances in one list, live.',
+      flow: ['a>page', 'b>page'],
+      tones: { page: 'primary' },
+    },
+    {
+      caption: 'You scroll up to read. The auto-scroll stops.',
+      tones: { page: 'warning' },
+      notes: { page: 'auto-scroll paused' },
+    },
+    {
+      caption: 'Jump to latest starts the auto-scroll again.',
+      flow: ['a>page', 'b>page'],
+      tones: { page: 'success' },
+    },
+  ]}
+/>
+
+The page shows the <Term id="stdout" /> and the <Term id="stderr" /> of the instances that run. This is the <Term id="runtime-log" /> of the service.
+
+## The tools
+
+| Tool | Use |
+|---|---|
+| History | Load the last 100, 500 or 1000 lines, or all the lines. |
+| Pause, resume | Stop the live list, then start it again. |
+| Search | Find text in the lines. |
+| Wrap | Wrap the long lines. |
+| Columns | Show or hide the timestamps and the instance column. |
+| Download | Save the lines that are on the screen. |
+
+## Read old lines
+
+Scroll up. The auto-scroll stops. Click **Jump to latest** to start it again.
+
+See [Logs & events](/docs/concepts/logs).

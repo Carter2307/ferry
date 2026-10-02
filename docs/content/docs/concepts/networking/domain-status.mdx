@@ -1,0 +1,65 @@
+---
+title: The status of a domain
+description: Ferry tests a connected domain until a request for a name under it comes back to this server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferry', at: [0, 0], icon: 'ship', label: 'Ferry', note: 'each 15 seconds' },
+    { id: 'dns', at: [1.5, 0], icon: 'globe', label: 'DNS' },
+    { id: 'proxy', at: [3, 0], icon: 'route', label: 'Proxy', note: 'this server' },
+    { id: 'domain', at: [1.5, 1], icon: 'flag', label: 'example.com', note: 'pending' },
+  ]}
+  edges={[
+    { from: 'ferry', to: 'dns', label: 'made-up name' },
+    { from: 'dns', to: 'proxy', label: 'request' },
+  ]}
+  steps={[
+    {
+      caption: 'You connect example.com. The domain starts as pending.',
+      tones: { domain: 'primary' },
+    },
+    {
+      caption: 'Ferry resolves a made-up name under the domain.',
+      flow: ['ferry>dns'],
+      tones: { domain: 'primary' },
+    },
+    {
+      caption: 'Ferry sends a request for that name. The request must come back to this server.',
+      flow: ['ferry>dns', 'dns>proxy'],
+      tones: { domain: 'primary' },
+    },
+    {
+      caption: 'The request came back. The domain is active: each service answers under it, with no deploy.',
+      tones: { domain: 'success', proxy: 'success' },
+      notes: { domain: 'active' },
+    },
+    {
+      caption: 'Later, the DNS breaks. After three failed checks, the status is misconfigured, but Ferry continues to serve the domain.',
+      cut: ['dns>proxy'],
+      tones: { domain: 'warning', dns: 'danger' },
+      notes: { domain: 'misconfigured' },
+    },
+  ]}
+/>
+
+## The statuses
+
+| Status | Meaning |
+|---|---|
+| `pending` | You connected the domain. Ferry verifies it each 15 seconds. |
+| `active` | The test passed. Ferry serves each service under the domain. No deploy is necessary. |
+| `misconfigured` | The <Term id="dns" /> of the domain broke, and three checks failed. Ferry continues to serve the domain. |
+
+## See the status
+
+```bash title="Terminal"
+ferry domains
+```
+
+The command shows the status of each domain, and what its last verification found.
+
+## Domains with no test
+
+- Ferry always serves the <Term id="base-domain" />.
+- Ferry never verifies a <Term id="local-name" />: `localhost`, `*.localhost`, `*.local`, `*.internal`, `*.test`.

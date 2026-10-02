@@ -1,0 +1,41 @@
+---
+title: Base URL
+description: The API is at http://127.0.0.1:7878 by default. Each resource is below /api/v1.
+---
+
+```bash title="Terminal"
+# On the server itself: the server token. Elsewhere, an API token created in the dashboard.
+export FERRY_TOKEN="$(cat ferry-data/api_token)"
+curl -H "Authorization: Bearer $FERRY_TOKEN" http://127.0.0.1:7878/api/v1/info
+```
+
+```json title="Response"
+{
+  "version": "0.1.0",
+  "base_domain": "localhost",
+  "proxy_url": "http://localhost:8080",
+  "tls_enabled": false,
+  "dashboard_url": "http://ferry.localhost:8080",
+  "github_webhook_enabled": false,
+  "docker_version": "29.2.0",
+  "default_memory_limit_mb": 512,
+  "default_cpu_limit": 1.0,
+  "docker_cpus": 8,
+  "docker_memory_bytes": 8217030656
+}
+```
+
+The <Term id="base-url" /> is the address of the API, then `/api/v1`.
+
+## The two addresses
+
+| Address | Example | When |
+|---|---|---|
+| `ferryd --api-addr` | `http://127.0.0.1:7878/api/v1` | Always. This is the default address. |
+| The <Term id="dashboard-host" />, through the public <Term id="proxy" /> | `http://ferry.localhost:8080/api/v1` | When the dashboard host is on. The default host for a local base domain is `ferry.localhost`. |
+
+The two addresses give the same API.
+
+<Callout type="warning" title="Before you open the API to the internet">
+Read [server options](/docs/reference/server-options) and the [Security model](/docs/architecture/security).
+</Callout>

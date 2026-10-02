@@ -1,0 +1,63 @@
+---
+title: Branches and commits
+description: A new feature starts from dev, on its own branch. Each commit message starts with the area that it changes.
+---
+
+<Diagram
+  nodes={[
+    { id: 'dev', at: [0, 0], icon: 'branch', label: 'dev', note: 'up to date' },
+    { id: 'feat', at: [1.5, 1], icon: 'commit', label: 'feat/my-feature', note: 'your commits' },
+    { id: 'merged', at: [3, 0], icon: 'branch', label: 'dev', note: 'with your change' },
+  ]}
+  edges={[
+    { from: 'dev', to: 'feat', label: 'git switch -c' },
+    { from: 'feat', to: 'merged', label: 'merge' },
+    { from: 'dev', to: 'merged', dashed: true },
+  ]}
+  steps={[
+    {
+      caption: 'Start from a dev branch that is up to date.',
+      hide: ['feat', 'merged'],
+      tones: { dev: 'primary' },
+    },
+    {
+      caption: 'Create a branch with the name of the change. Commit your work there.',
+      hide: ['merged'],
+      flow: ['dev>feat'],
+      tones: { feat: 'primary' },
+    },
+    {
+      caption: 'Merge the branch back into dev.',
+      flow: ['feat>merged'],
+      tones: { merged: 'success' },
+    },
+  ]}
+/>
+
+## Start a branch
+
+New features start from `dev`. Give the <Term id="branch" /> the name of the change. Then <Term id="merge" /> it back into `dev`.
+
+```bash title="Terminal"
+git switch dev && git pull
+git switch -c feat/my-feature
+```
+
+## Write the commit message
+
+Start with the area that the <Term id="commit" /> changes: the crate name, `web` or `docs`. Then write a short summary.
+
+```text title="Examples" noCopy
+ferry-api: SSE change feed, embedded web client, job cancel
+web: blue primary color
+ferry-engine: fix verified findings
+```
+
+If the commit has more than one change, list the changes as bullets in the body.
+
+## In the same change
+
+| If you change | Also do this |
+|---|---|
+| A CLI command, a `ferryd` flag, an API route or a <Term id="dto" /> | Run `npm run generate` in `docs/` and commit the result. See [Generated references](/docs/contributing/docs-site/generated). |
+| A contract between crates, an API route or a documented behavior | Update `DESIGN.md`. |

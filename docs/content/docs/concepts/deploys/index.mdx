@@ -1,0 +1,77 @@
+---
+title: Deploys
+description: A deploy puts one version of your service online. The old version answers until the new version is ready.
+icon: CloudUpload
+---
+
+<Diagram
+  caption="A deploy with zero downtime"
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'old', at: [2.5, 0], icon: 'box', label: 'Old instance', note: 'version 1' },
+    { id: 'new', at: [2.5, 1], icon: 'box', label: 'New instance', note: 'version 2' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'old' },
+    { from: 'proxy', to: 'new' },
+  ]}
+  groups={[{ label: 'Your server', around: ['proxy', 'old', 'new'] }]}
+  steps={[
+    {
+      caption: 'The old instance answers the requests.',
+      hide: ['new'],
+      flow: ['browser>proxy', 'proxy>old'],
+    },
+    {
+      caption: 'Ferry builds version 2 and starts a new instance.',
+      cut: ['proxy>new'],
+      flow: ['browser>proxy', 'proxy>old'],
+      tones: { new: 'primary' },
+      notes: { new: 'starts' },
+    },
+    {
+      caption: 'Ferry tests the new instance. This is the health check.',
+      cut: ['proxy>new'],
+      flow: ['browser>proxy', 'proxy>old'],
+      tones: { new: 'warning' },
+      notes: { new: 'health check' },
+    },
+    {
+      caption: 'The test is good. The proxy sends the traffic to the new instance.',
+      cut: ['proxy>old'],
+      flow: ['browser>proxy', 'proxy>new'],
+      tones: { new: 'success', old: 'muted' },
+      notes: { new: 'live', old: 'no traffic' },
+    },
+    {
+      caption: 'Ferry stops the old instance. The deploy is live.',
+      hide: ['old'],
+      flow: ['browser>proxy', 'proxy>new'],
+      tones: { new: 'success' },
+      notes: { new: 'live' },
+    },
+  ]}
+/>
+
+A <Term id="deploy" /> is one release of a <Term id="service" />. Ferry starts the new version next to the old version. Then Ferry moves the traffic.
+
+If the new version fails, Ferry removes it. The old version stays online.
+
+## Start a deploy
+
+```bash title="Terminal"
+ferry deploy api --follow
+```
+
+`--follow` shows the log until the deploy is live.
+
+## In this section
+
+<Cards>
+  <Card title="The steps of a deploy" href="/docs/concepts/deploys/steps" description="From the queue to live, in six steps." />
+  <Card title="Health checks" href="/docs/concepts/deploys/health-checks" description="How Ferry tests a new instance." />
+  <Card title="Restart, roll back, cancel" href="/docs/concepts/deploys/restarts" description="Change what runs without a new build." />
+  <Card title="Statuses" href="/docs/concepts/deploys/statuses" description="What queued, live and failed mean." />
+</Cards>

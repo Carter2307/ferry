@@ -7,6 +7,9 @@
 //! * stores account + certificates under `certs_dir` (PEM, 0600 keys) and
 //!   reloads them on start;
 //! * renews certificates expiring in < 30 days;
+//! * asks for the certificates of new hosts as soon as the proxy routes them
+//!   ([`CertManager::spawn_with_wake`]), and tells the API where each host
+//!   stands ([`Certificates`]: issued, being asked for, failed and why);
 //! * resolves certificates by SNI for the proxy's rustls `ServerConfig`,
 //!   falling back to a cached self-signed certificate (rcgen) for hosts
 //!   without one (e.g. `*.localhost`) so TLS handshakes never hard-fail.
@@ -37,11 +40,11 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ferry_core::config::is_local_host;
-use ferry_core::tls::TlsHooks;
+use ferry_core::tls::{CertificateStatus, Certificates, TlsHooks};
 use ferry_core::{CancellationToken, Error, Result};
 use instant_acme::Account;
 use rustls::crypto::CryptoProvider;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::acme::IssueError;
@@ -61,6 +64,10 @@ pub const LETS_ENCRYPT_STAGING: &str = "https://acme-staging-v02.api.letsencrypt
 pub const RENEW_BEFORE_DAYS: i64 = 30;
 /// Interval of the background loop started by [`CertManager::spawn`].
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// How long the loop waits after it was woken before it looks at the hosts:
+/// a deploy installs the routes of a service in a few steps, a new domain
+/// those of every service.
+pub const WAKE_DELAY: Duration = Duration::from_secs(2);
 /// Maximum number of ACME orders in flight at the same time.
 pub const MAX_CONCURRENT_ORDERS: usize = 2;
 /// Budget for restoring/registering the ACME account.
@@ -233,6 +240,11 @@ impl CertManager {
         self.clone()
     }
 
+    /// Where the certificate of each host stands, for the API.
+    pub fn certificates(self: &Arc<Self>) -> Arc<dyn Certificates> {
+        self.clone()
+    }
+
     /// Obtain certificates for hosts that lack one and renew those expiring
     /// within 30 days. Local hosts are skipped. Failures are logged and
     /// retried on a later call (with per-host backoff); never panics.
@@ -270,6 +282,20 @@ impl CertManager {
         hosts: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
+        self.spawn_with_wake(hosts, Arc::new(Notify::new()), shutdown)
+    }
+
+    /// [`spawn`](Self::spawn), with a pass [`WAKE_DELAY`] after `wake` is
+    /// notified instead of at the next minute: given the route table's
+    /// "hosts changed" signal, a new service or a new domain gets its
+    /// certificates right away. A notification during a pass is not lost
+    /// (`Notify` keeps one).
+    pub fn spawn_with_wake(
+        self: &Arc<Self>,
+        hosts: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+        wake: Arc<Notify>,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
             debug!("certificate manager loop started");
@@ -280,10 +306,18 @@ impl CertManager {
                     _ = shutdown.cancelled() => break,
                     _ = manager.ensure_certificates(&list) => {}
                 }
-                tokio::select! {
+                let woken = tokio::select! {
                     biased;
                     _ = shutdown.cancelled() => break,
-                    _ = tokio::time::sleep(CHECK_INTERVAL) => {}
+                    _ = wake.notified() => true,
+                    _ = tokio::time::sleep(CHECK_INTERVAL) => false,
+                };
+                if woken {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => break,
+                        _ = tokio::time::sleep(WAKE_DELAY) => {}
+                    }
                 }
             }
             debug!("certificate manager loop stopped");
@@ -462,6 +496,29 @@ impl TlsHooks for CertManager {
 
     fn has_certificate(&self, host: &str) -> bool {
         self.store.has_valid_issued(strip_port(host.trim()), Utc::now())
+    }
+}
+
+impl Certificates for CertManager {
+    fn certificate(&self, host: &str) -> CertificateStatus {
+        let host = normalize_host(strip_port(host.trim()));
+        let now = Utc::now();
+        // A certificate being renewed, or whose renewal failed, is still the
+        // one browsers get.
+        if let Some(not_after) = self.store.issued_not_after(&host).filter(|not_after| *not_after > now) {
+            return CertificateStatus::Issued { not_after };
+        }
+        if self.in_flight.lock().unwrap_or_else(PoisonError::into_inner).contains(&host) {
+            return CertificateStatus::Issuing;
+        }
+        match self.backoff.lock().unwrap_or_else(PoisonError::into_inner).get(&host) {
+            Some(b) => {
+                let wait = b.next_attempt.saturating_duration_since(tokio::time::Instant::now());
+                let retry_at = chrono::Duration::from_std(wait).ok().map(|wait| now + wait);
+                CertificateStatus::Failed { error: b.last_error.clone(), retry_at }
+            }
+            None => CertificateStatus::Pending,
+        }
     }
 }
 

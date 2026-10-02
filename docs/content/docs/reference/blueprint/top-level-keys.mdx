@@ -1,0 +1,42 @@
+---
+title: Top-level keys
+description: A blueprint has four top-level keys. Ferry ignores each other key with a warning.
+---
+
+```yaml title="ferry.yaml"
+envVarGroups:          # env groups
+  - name: shared-settings
+databases:             # Postgres databases
+  - name: app-db
+services:              # services and Redis datastores
+  - type: web
+    name: hello
+```
+
+A <Term id="top-level-key" /> starts one part of the file.
+
+## The four keys
+
+| Top-level key | Contains |
+|---|---|
+| `envVarGroups` | [Env groups](/docs/reference/blueprint/env-groups): sets of variables that services link to. |
+| `databases` | [Postgres databases](/docs/reference/blueprint/databases). |
+| `services` | [Services](/docs/reference/blueprint/services) of each type, and Redis datastores (`type: redis` or `keyvalue`). |
+| `projects` | The projects of Render. Ferry applies their `environments[].services`, `databases` and `envVarGroups` to this server, with a warning. Ferry has no projects and no environments. |
+
+## Other keys
+
+Ferry ignores each other top-level key with a warning. This includes the `x-` keys that hold a <Term id="yaml-anchor" />. The anchor continues to work:
+
+```yaml title="ferry.yaml"
+x-defaults: &defaults
+  autoDeploy: false
+
+services:
+  - <<: *defaults # [!code highlight]
+    type: worker
+    name: queue
+    repo: https://github.com/acme/queue
+```
+
+See also [How Ferry reads values](/docs/reference/blueprint/yaml-rules).

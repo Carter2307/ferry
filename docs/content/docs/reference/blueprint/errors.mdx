@@ -1,0 +1,56 @@
+---
+title: Errors
+description: An error stops the apply before Ferry writes something. The message gives the name of the entry.
+---
+
+<Diagram
+  nodes={[
+    { id: 'file', at: [0, 0], icon: 'file-code', label: 'ferry.yaml' },
+    { id: 'check', at: [1.5, 0], icon: 'search', label: 'Validation' },
+    { id: 'server', at: [3, 0], icon: 'server', label: 'Your server' },
+  ]}
+  edges={[
+    { from: 'file', to: 'check' },
+    { from: 'check', to: 'server' },
+  ]}
+  steps={[
+    {
+      caption: 'An error stops the apply. Ferry writes nothing.',
+      flow: ['file>check'],
+      cut: ['check>server'],
+      tones: { check: 'danger' },
+      notes: { check: '400 or 409', server: 'not changed' },
+    },
+    {
+      caption: 'A warning does not stop the apply.',
+      flow: ['file>check', 'check>server'],
+      tones: { check: 'warning', server: 'success' },
+      notes: { check: 'warning', server: 'updated' },
+    },
+  ]}
+/>
+
+## Status 400: the file is not valid
+
+| Example message | Cause |
+|---|---|
+| `invalid blueprint YAML: …` | The file is not valid YAML, or a key is two times in one block. |
+| `service 'x': unsupported service type 'nope' (expected web, pserv, worker, cron, static, redis or keyvalue)` | An unknown `type`. |
+| `services[0]: 'name' is required` | An entry has no `name` or no `type`. |
+| `service 'api': env var 'DB': references unknown database 'nope'` | The target of a reference is not on the server and not in the file. |
+| `service 'w': env var 'U': service 'w2' is a private service (pserv) and has no public URL …` | The target cannot give this property. |
+| `service 'api': fromGroup references unknown env group 'shared'` | `fromGroup` gives the name of a group that does not exist. |
+| `service 'api': 'memoryLimit': invalid memory size 'lots' (examples: 512M, 1G, 1.5G)` | Ferry cannot read a `memoryLimit` or a `cpuLimit`, or a `cpuLimit` rounds to 0 (`4m`). |
+| `service 'api': memory limit must be between 16 MiB and 1024 GiB (got 8 MiB)` | A limit is out of range. For the CPU: 0.01 to 512. |
+| `name 'api' is used by more than one blueprint entry` | Two entries have the same name. |
+
+## Status 409: a conflict with the server
+
+| Example message | Cause |
+|---|---|
+| `service 'cache': the name is already used by a datastore` | A resource of the other kind has this name. |
+| `service 'web': domain 'app.example.com' is already used by service 'old-web'` | A service that is not in the blueprint has this custom domain. |
+
+If two entries of the file have the same custom domain, the status is 400.
+
+See also [Warnings](/docs/reference/blueprint/warnings).

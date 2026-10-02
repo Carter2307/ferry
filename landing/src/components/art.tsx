@@ -8,14 +8,11 @@ import { BrandIcon } from './BrandIcon'
  * blue and green only where they mean something. They fade into the card.
  */
 
-const MARK = [
-  'M4 13.5h16l-2.2 4.2a2 2 0 0 1-1.77 1.07H7.97A2 2 0 0 1 6.2 17.7L4 13.5Z',
-  'M7.5 13.5V9.25c0-.69.56-1.25 1.25-1.25h6.5c.69 0 1.25.56 1.25 1.25v4.25',
-  'M12 8V4.5',
-  'M3 21.25c1.5 0 1.5-.9 3-.9s1.5.9 3 .9 1.5-.9 3-.9 1.5.9 3 .9 1.5-.9 3-.9 1.5.9 3 .9',
-]
+/* The logo's silhouette: the outline of assets/ferry-logo.svg at whole units of its 772 × 582 box, without the sketch's tick marks. */
+const SILHOUETTE =
+  'M339 150v-73c0-32-6-68 35-71c4-1 15-1 17-2h1c2 1 15 1 18 2c15 2 27 9 32 24c0 3 1 7 2 9l-1 1c0 9 0 29 0 39c0 24 0 48 1 71h51c13 0 30-1 42 2c13 3 25 10 35 20c7 7 13 17 16 26l2 9c5 41 9 83 13 125c15 3 30 8 45 12c10 3 22 6 32 10c3 1 8 4 10 7c3 3 4 8 3 12c-2 12-55 92-67 106c-9 11-19 21-30 29c42-13 77-18 116 6c24 15 31 21 59 28l1 4l-2 2c-1 1-1 0-1 1c-20 18-38 16-62 7c-1-1-3-1-5-2c-8-4-7-2-16-5c-4-1-10-3-14-5c-4 0-8-1-12-1c-26 0-52 14-75 24c-42 19-82 20-123 0c-22-11-45-27-70-28h-1c-38 1-65 29-102 37c-38 9-70 0-104-18c-23-12-45-20-70-17c-4 1-13 5-16 4l3-2l-1 1c-2-1-29 8-34 9c-18 4-37 5-52-7l-1-1v-4c7-5 16-9 23-14c47-32 72-50 130-37c-29-33-56-76-76-115c-11-20 38-29 48-32c14-3 28-7 41-10c1-15 14-124 13-127l-2-1c4 1 4-6 5-9c3-9 8-17 15-24c10-10 22-17 35-20c12-3 30-2 43-2h50zM240 317c3-28 5-57 7-85c3-30 22-25 46-25c9-1 17 0 25 0l47-1c7 0 20 0 26 1l1-1v58v13h-1c-15 3-42 10-57 14c-31 9-64 17-94 26zM468 207l3-1c15 1 34-1 49 1c18 3 17 28 18 41l4 46c0 1 0 3 0 4c1 6 1 12 2 18l-16-4l-1-1c-8-2-17-4-26-7c-6-1-20-5-26-6l-53-14c-9-2-21-6-30-7v-13v-58l76 1z'
 
-/** The Ferry mark as a double outline on a construction grid. */
+/** The Ferry logo's silhouette as a double outline on a construction grid. */
 export function ArtFerry() {
   return (
     <svg viewBox="0 0 260 260" fill="none" aria-hidden="true" className="h-full w-full">
@@ -26,19 +23,14 @@ export function ArtFerry() {
       </g>
       <rect x="30" y="30" width="200" height="200" rx="46" fill="var(--surface-75)" stroke="var(--border-stronger)" />
       <rect x="42" y="42" width="176" height="176" rx="38" stroke="var(--border)" />
-      <g transform="translate(40 33) scale(7.5)" strokeLinecap="round" strokeLinejoin="round">
-        {MARK.map((d) => (
-          <path
-            key={d}
-            d={d}
-            vectorEffect="non-scaling-stroke"
-            strokeWidth={6}
-            className="stroke-foreground-muted transition-colors duration-300 group-hover:stroke-primary"
-          />
-        ))}
-        {MARK.map((d) => (
-          <path key={`in-${d}`} d={d} vectorEffect="non-scaling-stroke" strokeWidth={3.5} stroke="var(--surface-75)" />
-        ))}
+      <g transform="translate(56.7 74.7) scale(0.19)" strokeLinejoin="round">
+        <path
+          d={SILHOUETTE}
+          vectorEffect="non-scaling-stroke"
+          strokeWidth={6}
+          className="stroke-foreground-muted transition-colors duration-300 group-hover:stroke-primary"
+        />
+        <path d={SILHOUETTE} vectorEffect="non-scaling-stroke" strokeWidth={3.5} stroke="var(--surface-75)" />
       </g>
     </svg>
   )

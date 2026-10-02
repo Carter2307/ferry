@@ -1,0 +1,44 @@
+---
+title: Restart to apply changes
+description: A restart is a new deploy of the live image with the current settings and variables.
+---
+
+```bash title="Terminal"
+ferry restart api --follow
+```
+
+<Diagram
+  nodes={[
+    { id: 'set', at: [0, 0], icon: 'sliders', label: 'Settings', note: 'current values' },
+    { id: 'img', at: [0, 1], icon: 'package', label: 'Live image', note: 'no new build' },
+    { id: 'new', at: [1.75, 0.5], icon: 'box', label: 'New instance' },
+  ]}
+  edges={[
+    { from: 'set', to: 'new' },
+    { from: 'img', to: 'new' },
+  ]}
+  steps={[
+    { caption: 'You saved a change. The instances that run have the old values.', hide: ['new'], tones: { set: 'warning' }, notes: { set: 'changed' } },
+    { caption: 'A restart starts new instances: the live image with the current settings.', flow: ['set>new', 'img>new'], tones: { new: 'primary' }, notes: { new: 'starts' } },
+    { caption: 'Health check, then switch. Then the old instances stop, as in each deploy.', tones: { new: 'success' }, notes: { new: 'live' } },
+  ]}
+/>
+
+A <Term id="restart" /> is a new <Term id="deploy" /> with the <Term id="trigger" /> `restart`. It uses the image of the live deploy again. It builds nothing.
+
+## What a restart applies
+
+A restart brings your saved changes to a service that runs:
+
+- variables
+- links to <Term id="env-group">env groups</Term>
+- settings
+- [resource limits](/docs/concepts/resource-limits)
+
+`ferry env set` and `ferry env-group set` restart the service for you.
+
+## The rule
+
+The service must have a <Term id="live-deploy" />.
+
+[Restart a service](/docs/concepts/deploys/restarts) shows the steps of a restart. [Deploys](/docs/concepts/deploys) explains rollbacks, cancels and statuses.

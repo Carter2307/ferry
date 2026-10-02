@@ -1,0 +1,38 @@
+---
+title: Ruby
+description: What the generated Dockerfile does for a Ruby project, when you set no build or start command.
+---
+
+<Flow
+  caption="The Ruby Dockerfile"
+  steps={[
+    { icon: 'layers', title: 'Base image', text: 'The image is ruby:<version>-slim.' },
+    { icon: 'wrench', title: 'System tools', text: 'Ferry installs the system tools that some gems need.' },
+    { icon: 'package', title: 'Install', text: 'bundle install installs the gems.' },
+    { icon: 'hammer', title: 'Build', text: 'Your build command runs, if you set one.' },
+    { icon: 'play', title: 'Start', text: 'With a config.ru file, rackup starts the app.', tone: 'success' },
+  ]}
+/>
+
+## The defaults
+
+| Step | What Ferry does |
+|---|---|
+| Base image | The <Term id="base-image" /> is `ruby:<version>-slim`. The version comes from `.ruby-version` or from the `ruby` line of the Gemfile. The default is 3.3. |
+| System tools | `build-essential`, `git`, `libpq-dev`, `libyaml-dev` and `pkg-config`. Gems with native extensions need them. |
+| Dependencies | `bundle install` |
+| Build | None by default. Your build command runs after the install. |
+| Start | With a `config.ru`: the command below. |
+
+```bash title="The default start command" noCopy
+bundle exec rackup -o 0.0.0.0 -p ${PORT:-10000}
+```
+
+<Accordions>
+  <Accordion title="MySQL">
+    When the project uses `mysql2`, Ferry also installs the client library of MySQL.
+  </Accordion>
+  <Accordion title="A project with no config.ru">
+    Ferry has no default start command for it. The build fails and tells you what to add. Set a [start command](/docs/concepts/builds/start-command), or add a Procfile.
+  </Accordion>
+</Accordions>

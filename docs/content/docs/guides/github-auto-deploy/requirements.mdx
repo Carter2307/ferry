@@ -1,0 +1,33 @@
+---
+title: Before you start
+description: GitHub must reach the webhook endpoint of your Ferry server through HTTPS.
+---
+
+<Diagram
+  caption="GitHub reaches the webhook endpoint through the proxy"
+  nodes={[
+    { id: 'github', at: [0, 0], icon: 'cloud', label: 'GitHub' },
+    { id: 'proxy', at: [1.5, 0], icon: 'route', label: 'Proxy', note: 'port 443' },
+    { id: 'api', at: [3, 0], icon: 'server', label: 'API', note: '/hooks/github' },
+  ]}
+  edges={[
+    { from: 'github', to: 'proxy', label: 'HTTPS', flow: true },
+    { from: 'proxy', to: 'api', flow: true },
+  ]}
+  groups={[{ label: 'Your server, with --dashboard-host', from: [1.5, 0], to: [3, 0] }]}
+/>
+
+## What you need
+
+- A Ferry server that GitHub can reach through <Term id="https">HTTPS</Term>.
+- The `ferry` <Term id="cli" />, with a login to that server.
+
+## Why the dashboard host
+
+The <Term id="api" /> serves the <Term id="webhook" /> endpoint. To open the API to GitHub, start `ferryd` with `--dashboard-host`, together with [automatic HTTPS](/docs/concepts/networking). Then the <Term id="proxy" /> sends the requests for that <Term id="dashboard-host" /> to the API.
+
+The [Production setup](/docs/guides/production) guide shows the two settings.
+
+<Callout type="warning" title="The dashboard host opens the full API">
+`--dashboard-host` sends the dashboard, the REST API and the webhooks through the public proxy. Each API call still needs an <Term id="api-token" /> or a signed-in session. But use it only with HTTPS. Then the password, the session and the tokens never travel in clear text.
+</Callout>

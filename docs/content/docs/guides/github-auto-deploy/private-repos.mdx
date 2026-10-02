@@ -1,0 +1,46 @@
+---
+title: Private repositories
+description: Ferry needs read access to clone a private repository. There are three ways to give it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'account', at: [0, 0], icon: 'plug', label: 'Account', note: 'connected to Ferry' },
+    { id: 'token', at: [0, 1], icon: 'key', label: 'Token', note: 'in the HTTPS URL' },
+    { id: 'ssh', at: [0, 2], icon: 'file-key', label: 'SSH key', note: 'of the ferryd user' },
+    { id: 'clone', at: [1.5, 1], icon: 'download', label: 'Ferry clones', tone: 'primary' },
+    { id: 'repo', at: [3, 1], icon: 'lock', label: 'Private repo', tone: 'success' },
+  ]}
+  edges={[
+    { from: 'account', to: 'clone', flow: true },
+    { from: 'token', to: 'clone', flow: true },
+    { from: 'ssh', to: 'clone', flow: true },
+    { from: 'clone', to: 'repo' },
+  ]}
+/>
+
+## A connected account
+
+[Connect your GitHub account](/docs/guides/git-accounts) to the server. You authorize it on a page of GitHub. This makes a <Term id="git-connection" />.
+
+Then Ferry <Term id="clone">clones</Term> the repositories of the account with the account. This applies to each method that creates a service. The URL has no credentials.
+
+## HTTPS with a token
+
+Put a GitHub personal <Term id="access-token" /> in the URL. The token needs read access to the contents of the <Term id="repository" />.
+
+```text title="Repository URL" noCopy
+https://USERNAME:TOKEN@github.com/you/api
+```
+
+Ferry keeps the credentials out of the build logs and the error messages. It gives them to git through the environment, not through the command line.
+
+## SSH
+
+Use the SSH URL. Give the user that runs `ferryd` an SSH key that GitHub accepts, for example a deploy key.
+
+```text title="Repository URL" noCopy
+git@github.com:you/api.git
+```
+
+Git runs in batch mode. It accepts the host key at the first connection.

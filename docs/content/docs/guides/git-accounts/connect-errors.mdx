@@ -1,0 +1,37 @@
+---
+title: Problems when you connect
+description: Each error of an authorization has a cause and a fix.
+---
+
+<Flow
+  caption="Where an authorization can stop"
+  steps={[
+    { icon: 'play', title: 'Start', text: 'The server cannot reach the provider.', tone: 'warning' },
+    { icon: 'shield-check', title: 'Provider page', text: 'GitLab refuses the redirect URI, or you click Deny.', tone: 'warning' },
+    { icon: 'login', title: 'Return', text: 'The authorization is too old, or an owner must approve the app.', tone: 'warning' },
+    { icon: 'globe', title: 'Later', text: 'The dashboard has a new address.', tone: 'warning' },
+  ]}
+/>
+
+## The messages
+
+| What you see | Why, and what to do |
+|---|---|
+| **cannot reach GitLab at https://…** | The server cannot reach the provider at that address. Ferry reads an address with no scheme as `https://`. For a provider that speaks only http, write `http://…`. |
+| GitLab tells you: **The redirect URI included is not valid** | The Redirect URI of the application is not the address where you opened the dashboard. Copy it again from the dialog. An application accepts more than one redirect URI, one on each line. |
+| **The account was not connected**: GitLab did not authorize Ferry | You clicked **Deny** on GitLab, or the Secret is wrong. Start again with **Finish connecting**. **Use another application** takes a new Application ID and Secret. |
+| **This authorization has expired or was already used** | The page of the provider stayed open for more than one hour. Or you loaded the callback page again. Or the server restarted during that time. Start again. |
+| The installation **waits for an owner of the organization to approve it** | You asked to install the app in an organization that you do not own. Click **Finish connecting** after an owner approves it. |
+
+## The dashboard has a new address
+
+The <Term id="git-provider" /> sends the browser back to the old address.
+
+- **GitLab:** add the new <Term id="redirect-uri" /> to the application.
+- **GitHub:** connect again from the new address. Ferry creates a new app. Then delete the old app on GitHub.
+
+<Accordions>
+  <Accordion title="git_application_required from the API">
+    Ferry has no application for that GitLab yet. Send its `client_id` and `client_secret` with the request. The dashboard asks you for them.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,69 @@
+---
+title: Set up the CLI
+description: The ferry command sends each of your commands to the API of your server.
+icon: Terminal
+---
+
+<Diagram
+  caption="From your terminal to Docker"
+  nodes={[
+    { id: 'term', at: [0, 0], icon: 'terminal', label: 'Terminal', note: 'you type' },
+    { id: 'ferry', at: [1.15, 0], icon: 'ship', label: 'ferry', note: 'the CLI' },
+    { id: 'api', at: [2.3, 0], icon: 'server', label: 'ferryd', note: 'the API' },
+    { id: 'docker', at: [3.45, 0], icon: 'container', label: 'Docker' },
+  ]}
+  edges={[
+    { from: 'term', to: 'ferry' },
+    { from: 'ferry', to: 'api', label: 'HTTP' },
+    { id: 'answer', from: 'api', to: 'ferry' },
+    { from: 'api', to: 'docker' },
+  ]}
+  groups={[
+    { label: 'Your machine', around: ['term', 'ferry'] },
+    { label: 'Your server', around: ['api', 'docker'] },
+  ]}
+  steps={[
+    {
+      caption: 'You type a command in a terminal.',
+      flow: ['term>ferry'],
+      tones: { term: 'primary' },
+    },
+    {
+      caption: 'ferry sends a request to the API of ferryd, with your API token.',
+      flow: ['ferry>api'],
+      tones: { ferry: 'primary' },
+    },
+    {
+      caption: 'ferryd tells Docker what to do.',
+      flow: ['api>docker'],
+      tones: { api: 'primary' },
+    },
+    {
+      caption: 'ferryd sends the answer. ferry prints the result.',
+      flow: ['answer'],
+      tones: { term: 'success' },
+      notes: { term: 'the result' },
+    },
+  ]}
+/>
+
+`ferry` is the <Term id="cli" /> of Ferry. Each command is a request to the <Term id="api" /> of <Term id="ferryd" />.
+
+Thus the CLI works on the server, on your laptop or in a <Term id="ci" /> job. It only needs to reach the API through HTTP.
+
+## Connect it to your server
+
+```bash title="Terminal"
+ferry login --server http://127.0.0.1:7878
+```
+
+The [CLI reference](/docs/reference/cli) lists each command and each option. To deploy your first app, read the [Quickstart](/docs/getting-started/quickstart).
+
+## In this section
+
+<Cards>
+  <Card title="Install the CLI" href="/docs/getting-started/cli/install" description="Build the binary and put it on your machine." />
+  <Card title="Log in" href="/docs/getting-started/cli/login" description="Approve the terminal in the dashboard." />
+  <Card title="Choose a server" href="/docs/getting-started/cli/server" description="Flags, variables or the saved login." />
+  <Card title="The commands that you use most" href="/docs/getting-started/cli/commands" description="List, deploy, read logs." />
+</Cards>

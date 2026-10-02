@@ -1,0 +1,56 @@
+---
+title: Your own Dockerfile
+description: With a Dockerfile in the root directory, Ferry builds your Dockerfile as it is.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ctx', at: [0, 0], icon: 'folder', label: 'Root directory', note: 'the build context' },
+    { id: 'df', at: [0, 1], icon: 'file-code', label: 'Dockerfile', note: 'your file' },
+    { id: 'build', at: [1.5, 0.5], icon: 'hammer', label: 'docker build' },
+    { id: 'img', at: [3, 0.5], icon: 'package', label: 'Image' },
+  ]}
+  edges={[
+    { from: 'ctx', to: 'build' },
+    { from: 'df', to: 'build' },
+    { from: 'build', to: 'img' },
+  ]}
+  steps={[
+    {
+      caption: 'The root directory has a Dockerfile. The runtime is docker.',
+      tones: { df: 'primary' },
+    },
+    {
+      caption: 'Docker gets the root directory as the build context. Your .dockerignore applies.',
+      flow: ['ctx>build', 'df>build'],
+      tones: { ctx: 'primary' },
+    },
+    {
+      caption: 'Docker builds the image. Ferry changes nothing in your Dockerfile.',
+      flow: ['build>img'],
+      tones: { img: 'success' },
+    },
+  ]}
+/>
+
+Ferry uses your <Term id="dockerfile" /> when the runtime is `docker`. It also uses it when the runtime is `auto` and the <Term id="root-directory" /> has a `Dockerfile`.
+
+```text title="Deploy log" noCopy
+==> Using Dockerfile at ./Dockerfile
+```
+
+## The rules
+
+| Subject | Rule |
+|---|---|
+| Path | `--dockerfile` sets a path from the root directory. The default is `Dockerfile`. |
+| Context | The <Term id="build-context" /> is the root directory. Your `.dockerignore` applies. |
+| Start command | If the service has a <Term id="start-command" />, it replaces the `CMD` of the image. Ferry runs it with `/bin/sh -c`. |
+| Port | The port setting, a `PORT` variable, or the one port that the image `EXPOSE`s. If there is none, set `--port`. See [The port of your app](/docs/concepts/deploys/ports). |
+| Variables | Your build gets them as secrets and as build arguments. See [Secrets in a build](/docs/concepts/builds/build-secrets). |
+
+<Accordions>
+  <Accordion title="A Dockerfile above the root directory">
+    The path can point above the root directory, for example `../Dockerfile`. It must stay in the repository.
+  </Accordion>
+</Accordions>

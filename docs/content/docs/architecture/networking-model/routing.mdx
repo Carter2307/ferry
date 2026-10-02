@@ -1,0 +1,63 @@
+---
+title: Hostnames and routing
+description: The proxy reads the Host header of each request to find the service.
+---
+
+<Diagram
+  nodes={[
+    { id: 'name', at: [0, 0], icon: 'globe', label: 'web.localhost', note: '<name>.<domain>' },
+    { id: 'custom', at: [0, 1], icon: 'globe', label: 'Custom domain' },
+    { id: 'dash', at: [0, 2], icon: 'globe', label: 'ferry.localhost', note: 'dashboard host' },
+    { id: 'proxy', at: [1.5, 1], icon: 'route', label: 'Proxy', note: 'reads Host' },
+    { id: 'web', at: [3, 0], icon: 'box', label: 'Service web' },
+    { id: 'shop', at: [3, 1], icon: 'box', label: 'Service', note: 'owns the domain' },
+    { id: 'api', at: [3, 2], icon: 'plug', label: 'API', note: 'and dashboard' },
+  ]}
+  edges={[
+    { from: 'name', to: 'proxy' },
+    { from: 'custom', to: 'proxy' },
+    { from: 'dash', to: 'proxy' },
+    { from: 'proxy', to: 'web' },
+    { from: 'proxy', to: 'shop' },
+    { from: 'proxy', to: 'api' },
+  ]}
+  steps={[
+    {
+      caption: 'A hostname <name>.<domain> goes to the web service or static site with that name.',
+      flow: ['name>proxy', 'proxy>web'],
+      tones: { name: 'primary', web: 'primary' },
+    },
+    {
+      caption: 'A custom domain goes to the service that claimed it.',
+      flow: ['custom>proxy', 'proxy>shop'],
+      tones: { custom: 'primary', shop: 'primary' },
+    },
+    {
+      caption: 'The dashboard host goes to the API and the dashboard.',
+      flow: ['dash>proxy', 'proxy>api'],
+      tones: { dash: 'primary', api: 'primary' },
+    },
+  ]}
+/>
+
+The proxy listens on `--proxy-addr` (default `0.0.0.0:8080`), and on `--https-addr` for TLS. It routes each request by its <Term id="host-header" />. It ignores the port in the header.
+
+| Hostname | Goes to |
+|---|---|
+| `<name>.<domain>`, for each served domain of the server | The web service or static site `<name>` |
+| A <Term id="custom-domain" /> | The service that claimed it |
+| `ferry.<base-domain>`, the dashboard host | The API and the dashboard (`--api-addr`) |
+
+<Accordions>
+  <Accordion title="Served domains">
+    - Ferry always serves the <Term id="base-domain" /> (`--base-domain`).
+    - Ferry serves a [connected domain](/docs/architecture/networking-model/domains) after its DNS reaches the server.
+    - With the default base domain `localhost`, browsers resolve `*.localhost` to `127.0.0.1` with no DNS setup.
+  </Accordion>
+  <Accordion title="Custom domains">
+    A custom domain belongs to one service only. It cannot be a hostname below a domain of the server.
+  </Accordion>
+  <Accordion title="The dashboard host">
+    The dashboard host is on by default only for local base domains. See [the security model](/docs/architecture/security).
+  </Accordion>
+</Accordions>

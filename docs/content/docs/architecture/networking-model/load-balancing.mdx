@@ -1,0 +1,55 @@
+---
+title: Load balancing
+description: The proxy shares the requests of a service over its instances in turn.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'a', at: [2.75, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [2.75, 1], icon: 'box', label: 'Instance 2' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'a' },
+    { from: 'proxy', to: 'b' },
+  ]}
+  steps={[
+    {
+      caption: 'Request 1 goes to instance 1.',
+      flow: ['browser>proxy', 'proxy>a'],
+      tones: { a: 'primary' },
+    },
+    {
+      caption: 'Request 2 goes to instance 2. This is round-robin.',
+      flow: ['browser>proxy', 'proxy>b'],
+      tones: { b: 'primary' },
+    },
+    {
+      caption: 'A GET with no body goes to instance 1, but the connection fails.',
+      flow: ['browser>proxy'],
+      cut: ['proxy>a'],
+      tones: { a: 'danger' },
+      notes: { a: 'connection fails' },
+    },
+    {
+      caption: 'The proxy tries the request one more time, on instance 2.',
+      flow: ['browser>proxy', 'proxy>b'],
+      cut: ['proxy>a'],
+      tones: { a: 'danger', b: 'success' },
+      notes: { a: 'connection fails', b: 'answers' },
+    },
+  ]}
+/>
+
+The proxy does <Term id="load-balancing" /> with <Term id="round-robin" /> over the instances of the service that can get traffic.
+
+## What the proxy supports
+
+| Subject | Behavior |
+|---|---|
+| Clients | HTTP/1.1 and <Term id="http2" /> |
+| <Term id="websocket">Websockets</Term> | The proxy passes them through. |
+| Retry | A `GET` or `HEAD` with no body whose connection fails gets one retry on another instance. |
+| To the app | HTTP/1.1, with the original `Host` and the proxy headers. See [the security model](/docs/architecture/security). |

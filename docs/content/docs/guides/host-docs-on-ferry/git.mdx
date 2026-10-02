@@ -1,0 +1,50 @@
+---
+title: Build from git
+description: Ferry clones the repository, builds the docs on the server and deploys them again at each push.
+---
+
+```bash title="Terminal"
+ferry create ferry-docs --type static \
+  --repo https://github.com/Carter2307/ferry --branch dev \
+  --build-cmd "cd docs && npm ci --include=dev && npm run build" \
+  --publish-dir docs/out \
+  -e DOCS_SITE_URL=https://docs.example.com \
+  --domain docs.example.com \
+  --follow
+```
+
+<Flow
+  steps={[
+    { icon: 'repo', title: 'Clone', text: 'Ferry clones the branch dev of the repository.' },
+    { icon: 'hammer', title: 'Build', text: 'Ferry runs the build command from the root of the repository.' },
+    { icon: 'folder', title: 'Publish', text: 'Ferry takes the files of docs/out.' },
+    { icon: 'health', title: 'Test', text: 'nginx must answer before the new version gets traffic.', tone: 'warning' },
+    { icon: 'globe', title: 'Live', text: 'The site answers on your domain.', tone: 'success' },
+  ]}
+/>
+
+## Why each setting
+
+| Setting | Cause |
+|---|---|
+| `--branch dev` | The `docs/` folder is on the `dev` branch, where new work comes first. When `main` has `docs/`, change the branch: `ferry update ferry-docs --branch main`. |
+| `cd docs` and `--publish-dir docs/out` | The <Term id="build-command" /> and the <Term id="publish-directory" />. The build runs from the root of the repository, not from `docs/`. The site imports the design tokens from `../web/src/styles/tokens.css`, thus the build needs the full repository. |
+| `--include=dev` | The root has no `package.json`. Thus Ferry runs the build command in a plain `node:22-alpine` image, with `NODE_ENV=production` set. Without the flag, `npm ci` does not install the <Term id="dev-dependencies" />, which include the build tools. |
+| `-e DOCS_SITE_URL=…` | The build command can read the variables of the service. Thus the export gets the correct public URL. |
+| `--domain` | Ferry serves the site on your own domain. It gets a certificate if the server has [automatic HTTPS](/docs/concepts/networking). See [Custom domains & HTTPS](/docs/guides/custom-domains-https). |
+
+## Deploy again
+
+The service follows `dev`, with <Term id="auto-deploy" /> on. Add the GitHub webhook from [Auto-deploy from GitHub](/docs/guides/github-auto-deploy). Then each push to `dev` builds and deploys the docs again.
+
+To deploy by hand, run `ferry deploy ferry-docs --follow`.
+
+<Callout type="info" title="Deploys are atomic">
+The new version gets traffic only after its build is good and nginx answers. A failed build leaves the current version online.
+</Callout>
+
+<Accordions>
+  <Accordion title="How this site works">
+    [Docs site internals](/docs/contributing/docs-site) describes how the site builds its pages. [Language guides](/docs/guides/language-guides) describes how Ferry builds and serves static sites.
+  </Accordion>
+</Accordions>

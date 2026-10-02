@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { stripAnsi } from '@/lib/format'
-import { useAuth } from '@/stores/auth'
+import { useSignedIn } from '@/stores/auth'
 
 import { ApiError, errorMessage } from './client'
 import { backoffDelay, isAbortError, readSse, sleep } from './sse'
@@ -51,7 +51,7 @@ export interface LogStreamResult {
  */
 export function useLogStream(path: string | null, options: LogStreamOptions = {}): LogStreamResult {
   const { follow = true, tail, enabled = true, maxLines = 5000, reconnect = true } = options
-  const token = useAuth((s) => s.token)
+  const signedIn = useSignedIn()
 
   const [lines, setLines] = useState<LogEntry[]>([])
   const [status, setStatus] = useState<LogStreamStatus>('idle')
@@ -67,7 +67,7 @@ export function useLogStream(path: string | null, options: LogStreamOptions = {}
   }, [maxLines])
 
   // Reset the buffer when the stream identity changes (render-time reset, no effect).
-  const active = Boolean(path && enabled && token)
+  const active = Boolean(path && enabled && signedIn)
   const streamKey = active ? `${path}|${follow}|${tail ?? ''}|${generation}` : null
   const [currentKey, setCurrentKey] = useState<string | null>(null)
   if (streamKey !== currentKey) {
@@ -105,7 +105,7 @@ export function useLogStream(path: string | null, options: LogStreamOptions = {}
   const restart = useCallback(() => setGeneration((g) => g + 1), [])
 
   useEffect(() => {
-    if (!path || !enabled || !token) return
+    if (!path || !enabled || !signedIn) return
     const ctrl = new AbortController()
     const { signal } = ctrl
     const resumable = tail !== undefined
@@ -187,7 +187,7 @@ export function useLogStream(path: string | null, options: LogStreamOptions = {}
         frameRef.current = null
       }
     }
-  }, [path, follow, tail, enabled, token, reconnect, generation, flush, scheduleFlush])
+  }, [path, follow, tail, enabled, signedIn, reconnect, generation, flush, scheduleFlush])
 
   return { lines, status, error, clear, restart }
 }

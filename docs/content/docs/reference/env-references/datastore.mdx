@@ -1,0 +1,38 @@
+---
+title: Datastore properties
+description: A reference of the kind datastore gives the connection string of a datastore, or one part of it.
+---
+
+```bash title="Terminal"
+ferry env set api 'DATABASE_URL=${{datastore.app-db.connectionString}}'
+# → DATABASE_URL=postgresql://app_db:<password>@app-db:5432/app_db in the containers of api
+```
+
+The kind is `datastore`. You can also write `db` or `database`. The name is the name of the <Term id="datastore" />. See [Datastores](/docs/concepts/datastores).
+
+## The properties
+
+| Property | Other names | Postgres | Redis |
+|---|---|---|---|
+| `connectionString` | `url`, `internalUrl` | `postgresql://USER:PASSWORD@NAME:5432/DATABASE` | `redis://default:PASSWORD@NAME:6379` |
+| `externalConnectionString` | `externalUrl` | The same URL with `ADVERTISE_HOST:HOST_PORT` | The same URL with `ADVERTISE_HOST:HOST_PORT` |
+| `host` | `hostname` | `NAME` | `NAME` |
+| `port` | | `5432` | `6379` |
+| `user` | `username` | The Postgres user | `default` |
+| `password` | | The password that Ferry made | The password that Ferry made |
+| `database` | `databaseName` | The name of the database | An error: Redis has no database name |
+
+## Private or external
+
+| Property | Network | Use |
+|---|---|---|
+| `connectionString`, `host` | The <Term id="private-network" /> | From each service on the same server |
+| `externalConnectionString` | The port that the datastore publishes on the server | From tools that run outside Docker |
+
+<Accordions>
+  <Accordion title="The external connection string">
+    - The datastore publishes its port on `127.0.0.1` of the server. This is the <Term id="host-port" />.
+    - The host in the URL comes from `ferryd --advertise-host`. The default is `127.0.0.1`.
+    - The reference fails until the datastore has a host port.
+  </Accordion>
+</Accordions>

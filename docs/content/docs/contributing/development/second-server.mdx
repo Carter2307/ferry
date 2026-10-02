@@ -1,0 +1,61 @@
+---
+title: Keep your real server safe
+description: If a Ferry server runs on the machine, give the development server its own data directory, name prefix and ports.
+---
+
+<Diagram
+  nodes={[
+    { id: 'real', at: [0, 0], icon: 'server', label: 'Your server', note: 'prefix ferry' },
+    { id: 'dev', at: [0, 1], icon: 'wrench', label: 'Dev server', note: 'prefix ferrydev' },
+    { id: 'c1', at: [1.9, 0], icon: 'boxes', label: 'ferry-…', note: 'your apps' },
+    { id: 'c2', at: [1.9, 1], icon: 'boxes', label: 'ferrydev-…', note: 'your tests' },
+  ]}
+  edges={[
+    { from: 'real', to: 'c1' },
+    { from: 'dev', to: 'c2' },
+    { id: 'wrong', from: 'dev', to: 'c1', tone: 'danger', dashed: true },
+  ]}
+  groups={[{ label: 'One Docker daemon', around: ['c1', 'c2'] }]}
+  steps={[
+    {
+      caption: 'Your usual server owns the containers with the prefix ferry.',
+      hide: ['dev', 'c2'],
+      flow: ['real>c1'],
+    },
+    {
+      caption: 'The development server has its own data directory, name prefix and ports.',
+      cut: ['wrong'],
+      flow: ['dev>c2'],
+      tones: { dev: 'primary', c2: 'primary' },
+    },
+    {
+      caption: 'A server refuses to start on a prefix that another data directory owns.',
+      hide: ['c2'],
+      tones: { dev: 'danger' },
+      notes: { dev: 'prefix ferry' },
+    },
+  ]}
+/>
+
+## The flags
+
+```bash title="Terminal"
+./target/debug/ferryd run \
+  --data-dir ./dev-data \
+  --name-prefix ferrydev \
+  --api-addr 127.0.0.1:17878 \
+  --proxy-addr 127.0.0.1:18080
+```
+
+| Flag | The development server gets |
+|---|---|
+| `--data-dir ./dev-data` | Its own <Term id="data-directory" /> |
+| `--name-prefix ferrydev` | Its own <Term id="name-prefix" /> for the Docker names |
+| `--api-addr 127.0.0.1:17878` | Its own address for the API |
+| `--proxy-addr 127.0.0.1:18080` | Its own address for the <Term id="proxy" /> |
+
+## Why it is safe
+
+`ferryd` refuses to start on a prefix that another data directory owns. This protects the containers of the other server.
+
+[Multiple servers](/docs/guides/multiple-servers) gives the full rules.

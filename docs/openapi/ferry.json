@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ferry API",
-    "description": "The HTTP API of [Ferry](https://github.com/Carter2307/ferry), a self-hosted Render alternative. The `ferry` CLI and the web dashboard use exactly this API.\n\n**Authentication.** Every `/api/v1` route needs the server's API token (printed by `ferryd` on first start, stored in `<data-dir>/api_token`) as `Authorization: Bearer <token>`; use the **Authorize** button to set it here. `GET` requests may pass it as `?access_token=<token>` instead, because browsers' `EventSource` can't set headers (prefer the header: query strings end up in logs). Webhooks (`/hooks/...`) authenticate with their own secrets, and `/healthz`, this document and Swagger UI need no token.\n\n**Conventions.** JSON bodies with snake_case fields; request bodies reject unknown fields and an empty body counts as `{}`. `{id}` path segments accept a resource id **or** its name. Errors are `ApiErrorBody` documents (`{\"error\": {\"code\", \"message\"}}`) with the matching HTTP status; unknown `/api` routes are JSON 404s. Boolean query flags accept `true/false`, `1/0`, `yes/no`, `on/off`, and an empty value means `true` (`?follow`).\n\n**Streams.** Logs and the change feed are Server-Sent Events (`text/event-stream`): see the `logs` operations and `GET /api/v1/events`. Idle streams get a `: keep-alive` comment every 15 s, and every stream ends when the server shuts down.",
+    "description": "The HTTP API of [Ferry](https://github.com/Carter2307/ferry), a self-hosted Render alternative. The `ferry` CLI and the web dashboard use exactly this API.\n\n**Authentication.** Every `/api/v1` route needs an API token as `Authorization: Bearer <token>`: one created in the dashboard (Server → Account) or by `ferry login`, or the server token stored in `<data-dir>/api_token`. Use the **Authorize** button to set it here. `GET` requests may pass it as `?access_token=<token>` instead, because browsers' `EventSource` can't set headers (prefer the header: query strings end up in logs). The dashboard itself signs in to the server's account (`POST /api/v1/auth/login`) and is then authenticated by its session cookie; the operations on the account, its sessions and its tokens (`/api/v1/auth/...`) only accept that session. Webhooks (`/hooks/...`) authenticate with their own secrets, and `/healthz`, this document, Swagger UI and the calls made before signing in (the `auth` tag says which) need no token.\n\n**Conventions.** JSON bodies with snake_case fields; request bodies reject unknown fields and an empty body counts as `{}`. `{id}` path segments accept a resource id **or** its name. Errors are `ApiErrorBody` documents (`{\"error\": {\"code\", \"message\"}}`) with the matching HTTP status; unknown `/api` routes are JSON 404s. Boolean query flags accept `true/false`, `1/0`, `yes/no`, `on/off`, and an empty value means `true` (`?follow`).\n\n**Streams.** Logs and the change feed are Server-Sent Events (`text/event-stream`): see the `logs` operations and `GET /api/v1/events`. Idle streams get a `: keep-alive` comment every 15 s, and every stream ends when the server shuts down.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -30,6 +30,1023 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/auth/cli": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a `ferry login`",
+        "description": "What `ferry login` calls first. The terminal then shows `code` and opens `/cli-login?id=<id>` of the dashboard, where the signed-in administrator checks the code and approves; meanwhile the terminal polls `POST /api/v1/auth/cli/{id}/token` with `secret`. A request waits 10 minutes, and a restart of the server forgets it. No token needed.",
+        "operationId": "startCliLogin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartCliLogin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliLoginStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The server has no account yet: set it up first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests are waiting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/cli/{id}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Show a `ferry login` request",
+        "description": "What the approval page shows: who asks and the code the terminal displays. Needs the dashboard's session.",
+        "operationId": "getCliLogin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Id of the request.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliLoginView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, expired or already collected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/cli/{id}/approve": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Approve a `ferry login`",
+        "description": "Creates an API token named after the request and hands it to the terminal that asked, the next time it polls. Approve only when the code on the page is the one your terminal shows. Needs the dashboard's session.",
+        "operationId": "approveCliLogin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Id of the request.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliLoginView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, expired or already answered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/cli/{id}/deny": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Deny a `ferry login`",
+        "description": "The terminal that asked is told so the next time it polls. Needs the dashboard's session.",
+        "operationId": "denyCliLogin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Id of the request.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliLoginView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, expired or already answered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/cli/{id}/token": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Collect the token of a `ferry login`",
+        "description": "What the terminal polls, every `interval` seconds, with the `secret` it got when it started the request. `pending` until the request is answered; `approved` comes with the API token, once: the request is gone afterwards, like after `denied`. No token needed.",
+        "operationId": "pollCliLogin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Id of the request.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliLoginPoll"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where the request stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliLoginResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not the secret of this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, expired or already collected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign in to the dashboard",
+        "description": "Checks the email and password of the account and starts a session: the answer sets the session cookie (`HttpOnly`, `SameSite=Strict`; named `ferry_session_<port>` after the port of the address the browser uses, so that servers sharing a host name keep a session each), which authenticates the dashboard's requests from then on. A session ends 30 days after it was last used. After 10 failed attempts in 5 minutes, sign-ins are refused until the oldest is 5 minutes old. No token needed.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Login"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong email or password (code `invalid_credentials`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed attempts (code `too_many_attempts`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign out",
+        "description": "Ends the session of the request's cookie and clears the cookie. Succeeds without a session too.",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Signed out."
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change the password",
+        "description": "Needs the dashboard's session and the current password. Every other session of the account ends; this one stays. (A forgotten password is replaced on the server with `ferryd reset-password`.)",
+        "operationId": "changePassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed."
+          },
+          "400": {
+            "description": "The new password is shorter than 8 characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the current password is wrong (code `invalid_credentials`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed attempts (code `too_many_attempts`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List the sessions",
+        "description": "The browsers signed in to the account, the last used first; `current` marks the one of this request. Needs the dashboard's session.",
+        "operationId": "listSessions",
+        "responses": {
+          "200": {
+            "description": "The sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "End a session",
+        "description": "Signs that browser out. Ending the session of this request is signing out. Needs the dashboard's session.",
+        "operationId": "deleteSession",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Ended."
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Create the administrator's account",
+        "description": "Only while the server has no account (`setup_required`). `code` is the setup code: `ferryd` prints it in a link (`/setup?code=…`) when it starts without an account, and keeps it in `<data-dir>/setup_code`, so only someone on the server can create the account. The answer signs the browser in (it sets the session cookie). No token needed.",
+        "operationId": "setupAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The account was created and this browser is signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email, or a password shorter than 8 characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong setup code (code `invalid_setup_code`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The server already has an account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed attempts (code `too_many_attempts`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/status": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Is there an account, and is this request signed in",
+        "description": "What the dashboard asks first. `setup_required` is true while the server has no account: it is then created with `POST /api/v1/auth/setup`. `auth` says how the request is authenticated (`session` for the dashboard's cookie, `token` for an API token), or is `null` when it isn't; credentials that are wrong or expired count as none. No token needed.",
+        "operationId": "getAuthStatus",
+        "responses": {
+          "200": {
+            "description": "The status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthStatus"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/tokens": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List the API tokens",
+        "description": "The named API tokens, the newest first: their name, the end of the token and when they were last used. Never the tokens themselves. The server token of `<data-dir>/api_token` isn't listed. Needs the dashboard's session.",
+        "operationId": "listApiTokens",
+        "responses": {
+          "200": {
+            "description": "The API tokens.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiTokenView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Create an API token",
+        "description": "A token for the CLI, a script or CI: it authenticates as `Authorization: Bearer <token>` and can do everything the API offers except manage the account and its tokens. The answer is the only time the token is shown; the server keeps its SHA-256. Needs the dashboard's session.",
+        "operationId": "createApiToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The token, shown once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApiToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name or `expires_in_days`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revoke an API token",
+        "description": "The token stops working at once. Needs the dashboard's session.",
+        "operationId": "deleteApiToken",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "API token id (`tok-…`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated with an API token (code `session_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such API token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/v1/blueprints/apply": {
@@ -90,7 +1107,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -123,6 +1140,62 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/certificates": {
+      "get": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "List the certificates of the routed hosts",
+        "description": "One entry per hostname the proxy routes — the dashboard's, then every hostname of every web service and static site (under each served domain, and its custom domains) — with where its certificate stands: `issued` (and until when), `pending` or `issuing` (a new host gets its certificate within seconds of being routed), `failed` with the reason and the time of the next attempt, `local` for names no authority certifies, `disabled` when the server runs without HTTPS.",
+        "operationId": "listCertificates",
+        "responses": {
+          "200": {
+            "description": "The certificates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CertificateView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -149,7 +1222,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -172,6 +1245,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -214,7 +1290,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -247,6 +1323,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -281,7 +1360,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -314,6 +1393,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -359,7 +1441,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -402,6 +1484,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -455,7 +1540,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -498,6 +1583,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -532,7 +1620,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -565,6 +1653,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -600,7 +1691,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -643,6 +1734,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -697,7 +1791,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -730,6 +1824,452 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/domains": {
+      "get": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "List the server's domains",
+        "description": "The domains services are served under, the default one first: the server's base domain (`source: config`) and the connected ones. Each comes with the DNS records that point it at this server and what its last verification found.",
+        "operationId": "listServerDomains",
+        "responses": {
+          "200": {
+            "description": "The domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DomainView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Connect a domain",
+        "description": "Adds a domain (or a subdomain) of yours. It starts `pending`: create the `records` it comes with where its DNS is managed — one wildcard record covers every service. The server then verifies it every few seconds; once its names reach the server it is `active`, every web service and static site is served at `<service>.<name>` (with a certificate when the server has HTTPS), and it becomes the default domain if the default one was a local name. A local name (`*.localhost`, `.test`…) is served at once.",
+        "operationId": "connectDomain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connected domain, with the DNS records to create.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a domain name (a URL, a wildcard, an address), or too many domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The domain is already connected, or a service would be served at a hostname that is taken: a custom domain of another service, or the dashboard's host.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/domains/{id}": {
+      "get": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Get a domain",
+        "operationId": "getServerDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Disconnect a domain",
+        "description": "The services stop being served under the domain at once (their other hostnames and their custom domains stay), and its certificates are no longer renewed. When it was the default domain, the base domain is again. The DNS records stay where they were created. The base domain of the server (`source: config`) can't be removed here: it is set by `--base-domain`.",
+        "operationId": "disconnectDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected."
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is the base domain of the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Make a domain the default",
+        "description": "`is_default: true` makes it the domain of the URL every service is shown and linked with (`url`, `FERRY_EXTERNAL_URL`); the services stay served under the other domains too. Running services read the new `FERRY_EXTERNAL_URL` at their next deploy or restart.",
+        "operationId": "updateServerDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`is_default: false`: make another domain the default instead.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The domain is not served yet (its DNS doesn't point at this server).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/domains/{id}/verify": {
+      "post": {
+        "tags": [
+          "domains"
+        ],
+        "summary": "Verify a domain now",
+        "description": "Checks at once, instead of at the server's next pass, whether the names under the domain reach this server: what a made-up name under it resolves to (`dns`), and whether this server answers a request for it on its public HTTP port (`http`). The answer is the domain with its new `status` and `checks`. A local domain has nothing to verify and is returned as it is.",
+        "operationId": "verifyDomain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain id or name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain, with what the verification found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -756,7 +2296,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -779,6 +2319,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -820,7 +2363,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -853,6 +2396,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -887,7 +2433,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -920,6 +2466,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -974,7 +2523,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1017,6 +2566,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1081,7 +2633,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1114,6 +2666,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -1176,7 +2731,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1209,6 +2764,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1223,7 +2781,7 @@
         "operationId": "streamEvents",
         "responses": {
           "200": {
-            "description": "Server-Sent Events. First `event: ready` (`data: {}`) once the feed watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: `kind` is `service`, `deploy`, `datastore`, `env_group` or `job`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts down.",
+            "description": "Server-Sent Events. First `event: ready` (`data: {}`) once the feed watches the store: changes after it are reported, so (re)fetch your data after `ready`. Then one `event: change` per change, whose `data` is a `ChangeEvent` JSON object `{kind, id, service_id, action}`: `kind` is `service`, `deploy`, `datastore`, `env_group`, `job`, `git_connection` or `domain`; `action` is `created`, `updated` or `deleted`; `service_id` is set for services (their own id), deploys and jobs, `null` otherwise. A subscriber that falls behind gets `{\"kind\": \"all\", \"id\": \"*\", \"service_id\": null, \"action\": \"resync\"}` and should refetch everything. `: keep-alive` comments every 15 s; the stream only ends when the server shuts down.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -1234,7 +2792,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1257,6 +2815,653 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/authorize": {
+      "post": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Authorize a git account in the browser",
+        "description": "Starts connecting an account on the provider's own pages and answers with where to send the browser (`status: redirect`): a URL to navigate to (`method: get`) or to submit a form with `fields` to (`method: post`). When the provider is done it sends the browser back to `redirect_uri` (the dashboard's `/git/callback` page) with query parameters to hand to `POST /api/v1/git/callback`.\n\n**GitHub**: the browser posts a manifest to GitHub, which registers a private GitHub App for this server (on the user's account, or in `organization`) and then asks the account which repositories the app may read. No token is ever typed: the app's key mints short-lived tokens.\n\n**GitLab**: the account authorizes an OAuth application created for this server (scopes `read_api` and `read_repository`, redirect URI = `redirect_uri`). Give its `client_id` and `client_secret` the first time (400 `git_application_required` otherwise); they are kept for later authorizations.\n\nWith `connection_id`, resumes a `pending` connection or authorizes a connection again; the answer is `status: connected` when nothing is left to do (a GitHub App that is already installed).",
+        "operationId": "authorizeGit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeGit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where to send the browser, or the connection when it is already complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitAuthorization"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid `redirect_uri`, `base_url` or organization; a provider that needs its OAuth application first (code `git_application_required`); or the provider refused (code `git_authorization_rejected`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection (`connection_id`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached, or answered an error (code `git_provider_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/branches": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "List the branches of a repository",
+        "description": "The branches of a repository and its default one, asked from the repository's remote itself (`git ls-remote`) on every call. Works for any repository URL a service can deploy from; it is read the way a deploy would clone it: with the git connection that serves the URL when there is one (`connection_id` in the answer), with the credentials the URL carries, or without any.",
+        "operationId": "listGitBranches",
+        "parameters": [
+          {
+            "name": "repo_url",
+            "in": "query",
+            "description": "The repository: any URL a service can deploy from (`https://…`,\n`git@host:owner/name.git`, a path on the server).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branches.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitBranches"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed repository URL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The remote refused, wasn't found or didn't answer in time (code `git_remote_unreachable`): the message says why, and what to do when it looks like a private repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/callback": {
+      "post": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Finish a step of a browser authorization",
+        "description": "Takes the query parameters the provider sent the browser back with (to the `redirect_uri` given to `POST /api/v1/git/authorize`): `state`, and `code` and / or `installation_id`. Answers with the next page to send the browser to (`status: redirect`: after GitHub registered the app, its installation page) or with the connection (`status: connected`). A `state` works once, for an hour. Without `state` but with an `installation_id` (GitHub sends the browser back after an installation was changed on its own pages), the connection of that installation is read again.",
+        "operationId": "gitCallback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitCallback"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The next step, or the connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitAuthorization"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown, expired or already used `state`; a missing parameter; or the provider refused: the user denied the authorization, the code is no longer valid (code `git_authorization_rejected`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached, or answered an error (code `git_provider_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/connections": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "List git connections",
+        "description": "The GitHub / GitLab accounts this server is authorized to read the repositories of, with the names of the services whose repository each one clones. A `pending` connection was started in the browser and not finished. Secrets are never returned.",
+        "operationId": "listGitConnections",
+        "responses": {
+          "200": {
+            "description": "All git connections.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GitConnectionView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Connect a git account with an access token",
+        "description": "The alternative to authorizing in the browser (`POST /api/v1/git/authorize`), for scripts and for instances where no application can be registered: connects the account a personal access token belongs to. Ferry asks the provider who the token is, then stores it. On GitHub use a classic personal access token with the `repo` scope, or a fine-grained one with read access to Contents and Metadata; on GitLab one with the `read_api` and `read_repository` scopes. `base_url` selects a self-hosted instance (GitHub Enterprise Server, GitLab self-managed). An account that is already connected gets the token instead of what it had (200 instead of 201). The token is never returned by the API.",
+        "operationId": "connectGit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectGit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The account was already connected: it now uses this token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitConnectionView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitConnectionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed token or `base_url`, or the provider rejected the token (code `git_authorization_rejected`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached, or answered an error (code `git_provider_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/connections/{id}": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Get a git connection",
+        "operationId": "getGitConnection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Git connection id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Disconnect a git account",
+        "description": "Deletes the connection and its secrets. What it authorized stays on the provider until it is removed there: the GitHub App (delete it in GitHub's settings), the OAuth grant or the token. Refused while services' repositories are cloned with it, unless `force=true`: those services keep their repository and are cloned without credentials from then on, which fails for private repositories.",
+        "operationId": "deleteGitConnection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Git connection id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Disconnect even though services are cloned with the connection.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected."
+          },
+          "400": {
+            "description": "Malformed request: invalid JSON body or query string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Services are cloned with it (the message lists them).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/git/connections/{id}/repositories": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "List the repositories of a git connection",
+        "description": "The repositories the connection can read, asked from the provider on every call, most recently updated first: for a GitHub App the repositories the account allowed it to read (see `manage_url`); otherwise the account's own, its organizations' / groups' and those it collaborates on. At most 1000 are listed (`truncated` says when there are more). Use a repository's `clone_url` as the `repo_url` of a service: it is cloned with this connection.",
+        "operationId": "listGitRepositories",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Git connection id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The repositories.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepositoryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token, or no session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such git connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The connection is pending, or the provider no longer accepts its authorization: an expired or revoked token, an uninstalled app (code `git_authorization_rejected`). Connect the account again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached, or answered an error (code `git_provider_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Server error (`docker_error` as 502, `database_error`, `internal_error`...).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1267,7 +3472,7 @@
           "info"
         ],
         "summary": "Server info",
-        "description": "Version, base domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
+        "description": "Version, base domain and default domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
         "operationId": "getServerInfo",
         "responses": {
           "200": {
@@ -1281,7 +3486,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1304,6 +3509,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1338,7 +3546,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1371,6 +3579,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1406,7 +3617,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1449,6 +3660,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1503,7 +3717,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1536,6 +3750,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1563,7 +3780,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1586,6 +3803,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -1628,7 +3848,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1661,6 +3881,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1695,7 +3918,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1728,6 +3951,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -1773,7 +3999,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1816,6 +4042,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -1869,7 +4098,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1912,6 +4141,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -1947,7 +4179,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1980,6 +4212,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -2039,7 +4274,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2072,6 +4307,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -2125,7 +4363,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2168,6 +4406,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -2236,7 +4477,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2289,6 +4530,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -2326,7 +4570,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2359,6 +4603,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -2415,7 +4662,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2458,6 +4705,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -2504,7 +4754,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2537,6 +4787,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -2575,7 +4828,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2608,6 +4861,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -2673,7 +4929,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2706,6 +4962,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -2771,7 +5030,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2804,6 +5063,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -2859,7 +5121,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2892,6 +5154,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -2935,7 +5200,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2968,6 +5233,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3027,7 +5295,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3060,6 +5328,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       },
@@ -3113,7 +5384,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3156,6 +5427,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3221,7 +5495,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3254,6 +5528,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3289,7 +5566,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3332,6 +5609,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3367,7 +5647,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3400,6 +5680,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3455,7 +5738,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3498,6 +5781,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3553,7 +5839,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3586,6 +5872,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3621,7 +5910,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3654,6 +5943,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -3689,7 +5981,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API token.",
+            "description": "Missing or invalid API token, or no session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3722,6 +6014,9 @@
         "security": [
           {
             "bearer": []
+          },
+          {
+            "session": []
           }
         ]
       }
@@ -4057,6 +6352,47 @@
           }
         }
       },
+      "ApiTokenView": {
+        "type": "object",
+        "description": "A named API token. The token itself is only in the answer that creates it.",
+        "required": [
+          "id",
+          "name",
+          "hint",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`null`: valid until it is revoked."
+          },
+          "hint": {
+            "type": "string",
+            "description": "The last characters of the token."
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "ApplyBlueprint": {
         "type": "object",
         "description": "`POST /api/v1/blueprints/apply` (JSON body) — or send the raw YAML with\n`Content-Type: application/yaml` and `?dry_run=true`.",
@@ -4070,6 +6406,109 @@
           "yaml": {
             "type": "string",
             "description": "Contents of `ferry.yaml` / `render.yaml`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AuthKind": {
+        "type": "string",
+        "description": "How a request is authenticated.",
+        "enum": [
+          "session",
+          "token"
+        ]
+      },
+      "AuthStatus": {
+        "type": "object",
+        "description": "`GET /api/v1/auth/status` — what the dashboard needs to know before\nanything else: is there an account, and is this browser signed in.",
+        "required": [
+          "setup_required"
+        ],
+        "properties": {
+          "auth": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuthKind",
+                "description": "How this request is authenticated; `null` when it isn't."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setup_required": {
+            "type": "boolean",
+            "description": "The server has no account yet: it must be created first\n(`POST /api/v1/auth/setup`)."
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UserView",
+                "description": "The account, for a request with a session."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AuthorizeGit": {
+        "type": "object",
+        "description": "`POST /api/v1/git/authorize` — start, or resume, the authorization of a\ngit provider account in the browser.",
+        "required": [
+          "redirect_uri"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Web URL of a self-hosted instance (GitHub Enterprise Server, GitLab\nself-managed), e.g. `https://gitlab.example.com`. Default:\n`https://github.com` / `https://gitlab.com`."
+          },
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitLab: the Application ID of the OAuth application created for\nthis server. Needed the first time (and to replace the application)."
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitLab: the application's secret."
+          },
+          "connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resume the authorization of this (pending) connection, or authorize\nit again."
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub: register the app in this organization instead of the\nuser's own account, to reach the organization's repositories."
+          },
+          "provider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GitProvider",
+                "description": "The provider to authorize. Not needed with `connection_id`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redirect_uri": {
+            "type": "string",
+            "description": "Where the provider sends the browser back when it is done: the\ndashboard's `/git/callback` page, which hands the query parameters\nit receives to `POST /api/v1/git/callback`."
           }
         },
         "additionalProperties": false
@@ -4137,6 +6576,64 @@
           }
         }
       },
+      "CertificateState": {
+        "type": "string",
+        "description": "What the server knows about the certificate of a hostname.",
+        "enum": [
+          "disabled",
+          "local",
+          "pending",
+          "issuing",
+          "issued",
+          "failed"
+        ]
+      },
+      "CertificateView": {
+        "type": "object",
+        "description": "`GET /api/v1/certificates` — the certificate of one hostname the proxy\nroutes.",
+        "required": [
+          "host",
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`failed`: what the certificate authority (or reaching it) answered."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`issued`: when the certificate expires."
+          },
+          "host": {
+            "type": "string"
+          },
+          "retry_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`failed`: when the server asks again."
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the service the host is routed to; `null` for the dashboard."
+          },
+          "state": {
+            "$ref": "#/components/schemas/CertificateState"
+          }
+        }
+      },
       "ChangeAction": {
         "type": "string",
         "description": "What happened (`resync`: refetch everything).",
@@ -4190,8 +6687,212 @@
           "datastore",
           "env_group",
           "job",
+          "git_connection",
+          "domain",
           "all"
         ]
+      },
+      "ChangePassword": {
+        "type": "object",
+        "description": "`POST /api/v1/auth/password`",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string",
+            "description": "At least 8 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CheckOutcome": {
+        "type": "string",
+        "enum": [
+          "passed",
+          "warning",
+          "failed",
+          "skipped"
+        ]
+      },
+      "CliLoginPoll": {
+        "type": "object",
+        "description": "`POST /api/v1/auth/cli/{id}/token`",
+        "required": [
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "The `secret` of the answer that started the request."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CliLoginResult": {
+        "type": "object",
+        "description": "Answer of `POST /api/v1/auth/cli/{id}/token`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CliLoginStatus"
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The API token, once: with `approved`, the first time it is collected."
+          }
+        }
+      },
+      "CliLoginStarted": {
+        "type": "object",
+        "description": "Answer of `POST /api/v1/auth/cli`.",
+        "required": [
+          "id",
+          "code",
+          "secret",
+          "expires_in",
+          "interval"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Shown by the terminal and by the approval page: the person approving\nchecks that both match."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until the request expires.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "Names the request: the approval page is `/cli-login?id=<id>` of the dashboard."
+          },
+          "interval": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds to wait between two polls.",
+            "minimum": 0
+          },
+          "secret": {
+            "type": "string",
+            "description": "What the terminal collects the token with. It is never shown."
+          }
+        }
+      },
+      "CliLoginStatus": {
+        "type": "string",
+        "description": "Where a `ferry login` request stands.",
+        "enum": [
+          "pending",
+          "approved",
+          "denied"
+        ]
+      },
+      "CliLoginView": {
+        "type": "object",
+        "description": "`GET /api/v1/auth/cli/{id}` — what the approval page shows.",
+        "required": [
+          "id",
+          "name",
+          "code",
+          "status",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CliLoginStatus"
+          }
+        }
+      },
+      "ConnectDomain": {
+        "type": "object",
+        "description": "`POST /api/v1/domains` — connect a domain: once its DNS points at this\nserver, services are served at `<service>.<name>`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "A domain or a subdomain of yours: `example.com`, `apps.example.com`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectGit": {
+        "type": "object",
+        "description": "`POST /api/v1/git/connections` — connect an account of a git provider\nwith a personal access token (instead of authorizing it in the browser).",
+        "required": [
+          "provider",
+          "token"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Web URL of a self-hosted instance (GitHub Enterprise Server, GitLab\nself-managed), e.g. `https://gitlab.example.com`. Default:\n`https://github.com` / `https://gitlab.com`."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/GitProvider"
+          },
+          "token": {
+            "type": "string",
+            "description": "A personal access token of the account: on GitHub a classic token\nwith the `repo` scope (or a fine-grained one with read access to\nContents and Metadata), on GitLab one with the `read_api` and\n`read_repository` scopes."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateApiToken": {
+        "type": "object",
+        "description": "`POST /api/v1/auth/tokens`",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Days until the token expires (1 to 3650). Default: it doesn't.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "What the token is for, e.g. `CI` or `laptop` (1 to 100 characters)."
+          }
+        },
+        "additionalProperties": false
       },
       "CreateDatastore": {
         "type": "object",
@@ -4440,6 +7141,23 @@
           }
         },
         "additionalProperties": false
+      },
+      "CreatedApiToken": {
+        "type": "object",
+        "description": "Answer of `POST /api/v1/auth/tokens`: the only time the token is shown.",
+        "required": [
+          "token",
+          "api_token"
+        ],
+        "properties": {
+          "api_token": {
+            "$ref": "#/components/schemas/ApiTokenView"
+          },
+          "token": {
+            "type": "string",
+            "description": "The token, to send as `Authorization: Bearer <token>`. Keep it: the\nserver only stores its digest."
+          }
+        }
       },
       "Datastore": {
         "type": "object",
@@ -4787,6 +7505,123 @@
           "upload"
         ]
       },
+      "DnsRecord": {
+        "type": "object",
+        "description": "A DNS record to create where the zone of a domain is managed.",
+        "required": [
+          "type",
+          "name",
+          "required"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "`*`: every name under the domain, so every service. `@`: the domain\nitself."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "`false` for what only serving the domain itself needs."
+          },
+          "type": {
+            "type": "string",
+            "description": "`A` (an IPv4 address) or `AAAA` (IPv6)."
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address this server is reached at from the internet; `null` when\nthe server could not find it out."
+          }
+        }
+      },
+      "Domain": {
+        "type": "object",
+        "description": "A domain services are served under: `<service>.<name>`. One DNS record\n(`*.<name>`) points every service at the server.",
+        "required": [
+          "id",
+          "name",
+          "source",
+          "status",
+          "is_default",
+          "checks",
+          "created_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was last verified."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainCheck"
+            },
+            "description": "What the last verification found (empty before the first one)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "The domain of the URL a service is shown and linked with. One domain\nis the default."
+          },
+          "name": {
+            "type": "string",
+            "description": "Lowercase, without a trailing dot."
+          },
+          "source": {
+            "$ref": "#/components/schemas/DomainSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DomainStatus"
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When its names last reached this server."
+          }
+        }
+      },
+      "DomainCheck": {
+        "type": "object",
+        "description": "One step of a domain verification, and what it found.",
+        "required": [
+          "kind",
+          "outcome",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DomainCheckKind"
+          },
+          "message": {
+            "type": "string",
+            "description": "What was found, in a sentence a person can act on."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/CheckOutcome"
+          }
+        }
+      },
+      "DomainCheckKind": {
+        "type": "string",
+        "enum": [
+          "dns",
+          "http"
+        ]
+      },
       "DomainRequest": {
         "type": "object",
         "description": "`POST /api/v1/services/{id}/domains`",
@@ -4799,6 +7634,59 @@
           }
         },
         "additionalProperties": false
+      },
+      "DomainSource": {
+        "type": "string",
+        "enum": [
+          "config",
+          "connected"
+        ]
+      },
+      "DomainStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "active",
+          "misconfigured"
+        ]
+      },
+      "DomainView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Domain"
+          },
+          {
+            "type": "object",
+            "required": [
+              "local",
+              "served",
+              "records",
+              "url_pattern"
+            ],
+            "properties": {
+              "local": {
+                "type": "boolean",
+                "description": "A name that never leaves this machine or its network (`*.localhost`,\n`.test`…): nothing to verify, no certificate."
+              },
+              "records": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DnsRecord"
+                },
+                "description": "The DNS records that point the domain at this server (none for a\nlocal domain)."
+              },
+              "served": {
+                "type": "boolean",
+                "description": "Whether services are served at `<service>.<name>` now."
+              },
+              "url_pattern": {
+                "type": "string",
+                "description": "Where a service is found under this domain, with `<service>` in the\nplace of its name: `https://<service>.example.com`."
+              }
+            }
+          }
+        ],
+        "description": "A domain as returned by the API (the stored row plus computed fields)."
       },
       "EnvGroup": {
         "type": "object",
@@ -4872,6 +7760,382 @@
           }
         },
         "additionalProperties": false
+      },
+      "GitAuth": {
+        "type": "string",
+        "enum": [
+          "github_app",
+          "oauth",
+          "token"
+        ]
+      },
+      "GitAuthorization": {
+        "type": "object",
+        "description": "The next step of a browser authorization (`POST /api/v1/git/authorize`\nand `POST /api/v1/git/callback`).",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "connection": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GitConnectionView",
+                "description": "`connected`: the connection."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fields": {
+            "type": "object",
+            "description": "`redirect` with `post`: the fields of the form to submit.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GitRedirectMethod",
+                "description": "`redirect`: how."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/GitAuthorizationStatus"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`redirect`: the provider's page to send the browser to."
+          }
+        }
+      },
+      "GitAuthorizationStatus": {
+        "type": "string",
+        "description": "What a browser authorization needs next.",
+        "enum": [
+          "redirect",
+          "connected"
+        ]
+      },
+      "GitBranches": {
+        "type": "object",
+        "description": "`GET /api/v1/git/branches?repo_url=` — the branches of a repository, as\nits remote lists them.",
+        "required": [
+          "branches"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every branch: the default one first, then by name. Empty for a\nrepository without commits."
+          },
+          "connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id of the git connection the repository was read with; `null` when\nit was read without one."
+          },
+          "default_branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The branch the repository's `HEAD` points to, when it says."
+          }
+        }
+      },
+      "GitCallback": {
+        "type": "object",
+        "description": "`POST /api/v1/git/callback` — the query parameters the provider sent the\nbrowser back with.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `code` parameter."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `error` parameter, when the provider reports one (the user\nrefused, the application is misconfigured)."
+          },
+          "error_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installation_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "GitHub: the `installation_id` parameter.",
+            "minimum": 0
+          },
+          "setup_action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub: the `setup_action` parameter (`install`, `update`, `request`)."
+          },
+          "state": {
+            "type": "string",
+            "description": "The `state` parameter: names the authorization this answers."
+          }
+        },
+        "additionalProperties": false
+      },
+      "GitConnectionStatus": {
+        "type": "string",
+        "description": "Whether a git connection can be used.",
+        "enum": [
+          "connected",
+          "pending"
+        ]
+      },
+      "GitConnectionView": {
+        "type": "object",
+        "description": "A git connection as returned by the API. Its secrets (tokens, an app's\nprivate key and client secret) are never returned.",
+        "required": [
+          "id",
+          "provider",
+          "base_url",
+          "auth",
+          "status",
+          "account",
+          "scopes",
+          "services",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account": {
+            "type": "string",
+            "description": "Login of the account. Empty while an OAuth application waits for\nits first authorization."
+          },
+          "account_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name of the account, if it has one."
+          },
+          "app_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub App: its URL name."
+          },
+          "app_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub App: its page."
+          },
+          "auth": {
+            "$ref": "#/components/schemas/GitAuth",
+            "description": "Where its tokens come from."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Web URL of the provider instance, e.g. `https://github.com`."
+          },
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id of the OAuth application or GitHub App (not a secret)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "manage_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub App: where the account chooses the repositories it may read."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/GitProvider"
+          },
+          "repository_selection": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub App: `all` or `selected` repositories of the account."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Scopes of the token, when the provider reports them (empty otherwise)."
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of the services whose repository is cloned with this\nconnection."
+          },
+          "status": {
+            "$ref": "#/components/schemas/GitConnectionStatus"
+          },
+          "token_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a personal access token expires, when the provider reports it.\n`null` for the other kinds: their tokens are renewed."
+          },
+          "token_hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The end of a personal access token (`…a1b2`), to tell tokens apart.\n`null` for the other kinds."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GitProvider": {
+        "type": "string",
+        "enum": [
+          "github",
+          "gitlab"
+        ]
+      },
+      "GitRedirectMethod": {
+        "type": "string",
+        "description": "How the browser is sent to the provider.",
+        "enum": [
+          "get",
+          "post"
+        ]
+      },
+      "GitRepository": {
+        "type": "object",
+        "description": "A repository a git connection can access.",
+        "required": [
+          "id",
+          "full_name",
+          "name",
+          "owner",
+          "private",
+          "archived",
+          "clone_url",
+          "web_url"
+        ],
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "clone_url": {
+            "type": "string",
+            "description": "The https clone URL: use it as a service's `repo_url`."
+          },
+          "default_branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`None` for a repository without commits."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "full_name": {
+            "type": "string",
+            "description": "`owner/name` (GitLab: the full path, subgroups included)."
+          },
+          "id": {
+            "type": "string",
+            "description": "The provider's id of the repository."
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string",
+            "description": "The user, organization or group that owns it."
+          },
+          "private": {
+            "type": "boolean",
+            "description": "Not public (GitLab: `private` or `internal`)."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last push (GitHub) or activity (GitLab)."
+          },
+          "web_url": {
+            "type": "string",
+            "description": "The repository's page on the provider."
+          }
+        }
+      },
+      "GitRepositoryList": {
+        "type": "object",
+        "description": "`GET /api/v1/git/connections/{id}/repositories`",
+        "required": [
+          "repositories",
+          "truncated"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GitRepository"
+            },
+            "description": "Most recently updated first."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "The account can access more repositories than listed (the listing\nstops at 1000)."
+          }
+        }
       },
       "GithubHookResponse": {
         "type": "object",
@@ -5139,6 +8403,23 @@
           "system"
         ]
       },
+      "Login": {
+        "type": "object",
+        "description": "`POST /api/v1/auth/login`",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "PatchEnv": {
         "type": "object",
         "description": "`PATCH /api/v1/services/{id}/env` (and env groups): upsert `set`, delete `unset`.",
@@ -5271,7 +8552,8 @@
         ],
         "properties": {
           "base_domain": {
-            "type": "string"
+            "type": "string",
+            "description": "The server's `--base-domain`."
           },
           "dashboard_url": {
             "type": [
@@ -5283,6 +8565,10 @@
             "type": "number",
             "format": "double",
             "description": "CPU limit (CPUs) of containers that set none. 0 = unlimited."
+          },
+          "default_domain": {
+            "type": "string",
+            "description": "The domain of the URL services are shown with: the default domain\n(§21). The base domain on a server that connected none."
           },
           "default_memory_limit_mb": {
             "type": "integer",
@@ -5594,6 +8880,69 @@
         ],
         "description": "A service as returned by the API (the stored row plus computed fields)."
       },
+      "SessionView": {
+        "type": "object",
+        "description": "A browser signed in to the dashboard.",
+        "required": [
+          "id",
+          "created_at",
+          "last_used_at",
+          "expires_at",
+          "current"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "The session of this request."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "A session ends 30 days after it was last used."
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The browser, as it named itself when it signed in."
+          }
+        }
+      },
+      "SetupAccount": {
+        "type": "object",
+        "description": "`POST /api/v1/auth/setup` — create the administrator's account of a\nserver that has none.",
+        "required": [
+          "email",
+          "password",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The setup code: the `code` of the link `ferryd` prints while the\nserver has no account (also in `<data-dir>/setup_code`)."
+          },
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "description": "At least 8 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "SourceArchive": {
         "type": "string",
         "format": "binary",
@@ -5608,6 +8957,20 @@
           "image",
           "upload"
         ]
+      },
+      "StartCliLogin": {
+        "type": "object",
+        "description": "`POST /api/v1/auth/cli` — a terminal asks to be connected (`ferry login`).",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asks, e.g. `ada@laptop`: shown on the approval page, and the name\nof the API token that approving creates."
+          }
+        },
+        "additionalProperties": false
       },
       "TriggerDeploy": {
         "type": "object",
@@ -5645,6 +9008,20 @@
             "format": "int32",
             "description": "Memory limit, in MiB. 0 clears (server default); omitted keeps it.",
             "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateDomain": {
+        "type": "object",
+        "description": "`PATCH /api/v1/domains/{id}`",
+        "properties": {
+          "is_default": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` makes it the default domain: the one of the URL every service\nis shown with. `false` is refused (make another domain the default)."
           }
         },
         "additionalProperties": false
@@ -5786,6 +9163,27 @@
           }
         },
         "additionalProperties": false
+      },
+      "UserView": {
+        "type": "object",
+        "description": "The account the dashboard is signed in to.",
+        "required": [
+          "id",
+          "email",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -5793,7 +9191,13 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "API token",
-        "description": "The server's API token (`ferryd` prints it on first start; it is stored in `<data-dir>/api_token`). `GET` requests may send it as `?access_token=` instead."
+        "description": "An API token: one created in the dashboard or by `ferry login`, or the server token stored in `<data-dir>/api_token`. `GET` requests may send it as `?access_token=` instead."
+      },
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ferry_session",
+        "description": "The dashboard's session: the cookie `POST /api/v1/auth/login` sets, named `ferry_session` followed by the port of the address the browser uses (`ferry_session_7878`). A request that changes something must also come from the dashboard's own origin."
       }
     }
   },
@@ -5801,6 +9205,10 @@
     {
       "name": "info",
       "description": "Server info, liveness and this document."
+    },
+    {
+      "name": "auth",
+      "description": "The account of the server (its administrator), signing in and out of the dashboard, the sessions and the API tokens, and `ferry login` (a terminal asks, the dashboard approves). The status, the first-run setup, signing in and out, and the two calls of a terminal need no authentication; the others only accept the dashboard's session, never an API token."
     },
     {
       "name": "services",
@@ -5820,7 +9228,7 @@
     },
     {
       "name": "domains",
-      "description": "Custom domains of web services and static sites (unique across services)."
+      "description": "The domains services are served under — `<service>.<domain>` for every web service and static site: the server's base domain and the domains connected to it, each pointed at the server with one wildcard DNS record and verified by the server — the certificates of the routed hostnames, and the custom domains of one service (unique across services)."
     },
     {
       "name": "jobs",
@@ -5829,6 +9237,10 @@
     {
       "name": "datastores",
       "description": "Managed Postgres and Redis instances with their connection strings and resource limits."
+    },
+    {
+      "name": "git",
+      "description": "Git connections: the GitHub / GitLab accounts this server is authorized to read the repositories of, to pick a repository and a branch from a list and to clone private repositories. An account is authorized in the browser (a GitHub App on GitHub, an OAuth application on GitLab) or with an access token. Connections belong to the server, not to a service: a repository is cloned with the connection that serves its URL."
     },
     {
       "name": "blueprints",

@@ -1,0 +1,62 @@
+---
+title: Domains of the server
+description: A change of the domains of the server changes the routes, but it changes no container.
+---
+
+<Diagram
+  nodes={[
+    { id: 'db', at: [0, 0], icon: 'database', label: 'Database', note: 'all the domains' },
+    { id: 'config', at: [1.25, 0], icon: 'settings', label: 'Configuration', note: 'the served set' },
+    { id: 'routes', at: [2.5, 0], icon: 'route', label: 'Route table', note: 'hostnames' },
+    { id: 'boxes', at: [2.5, 1], icon: 'boxes', label: 'Containers', note: 'upstreams' },
+  ]}
+  edges={[
+    { from: 'db', to: 'config' },
+    { from: 'config', to: 'routes' },
+    { from: 'routes', to: 'boxes' },
+  ]}
+  steps={[
+    {
+      caption: 'The domains of the server are in the database.',
+      tones: { db: 'primary' },
+    },
+    {
+      caption: 'The set of served domains is in the configuration. Each part of ferryd makes its hostnames from this set.',
+      flow: ['db>config'],
+      tones: { config: 'primary' },
+    },
+    {
+      caption: 'You connect, verify, promote or disconnect a domain. The engine replaces the set.',
+      flow: ['db>config'],
+      tones: { config: 'warning' },
+      notes: { config: 'a new set' },
+    },
+    {
+      caption: 'The engine installs the routes of each service again, with the new hostnames.',
+      flow: ['config>routes'],
+      tones: { routes: 'primary' },
+      notes: { routes: 'new hostnames' },
+    },
+    {
+      caption: 'The upstreams do not change. The engine touches no container, and no deploy is necessary.',
+      flow: ['routes>boxes'],
+      tones: { boxes: 'success' },
+      notes: { boxes: 'not changed' },
+    },
+  ]}
+/>
+
+A <Term id="server-domain" /> gives a hostname to each public service. The <Term id="route-table" /> has one route for each hostname.
+
+## The four operations
+
+Each operation replaces the served set:
+
+- Connect a domain.
+- Verify a domain.
+- Promote a domain.
+- Disconnect a domain.
+
+Ferry serves a connected domain only after the engine [verifies it](/docs/architecture/networking-model/domain-check).
+
+For the steps that you do, see [Connect a domain](/docs/guides/domains).

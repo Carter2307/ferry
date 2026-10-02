@@ -1,0 +1,50 @@
+---
+title: Design
+description: The site uses the design tokens of the dashboard. Change a color only in tokens.css.
+---
+
+<Diagram
+  nodes={[
+    { id: 'tokens', at: [0, 0], icon: 'sliders', label: 'tokens.css', note: 'web/src/styles/' },
+    { id: 'css', at: [1.6, 0], icon: 'file-code', label: 'app/global.css', note: 'in docs/' },
+    { id: 'theme', at: [3.2, 0], icon: 'moon', label: 'Fumadocs theme', note: 'light and dark' },
+  ]}
+  edges={[
+    { from: 'tokens', to: 'css', label: 'import' },
+    { from: 'css', to: 'theme', label: 'map' },
+  ]}
+  steps={[
+    {
+      caption: 'The colors are in the file tokens.css of the dashboard.',
+      cut: ['tokens>css', 'css>theme'],
+      tones: { tokens: 'primary' },
+    },
+    {
+      caption: 'The file app/global.css of the docs imports ../web/src/styles/tokens.css.',
+      cut: ['css>theme'],
+      flow: ['tokens>css'],
+      tones: { css: 'primary' },
+    },
+    {
+      caption: 'It maps the tokens onto the theme variables of Fumadocs, for light and dark mode.',
+      flow: ['css>theme'],
+      tones: { theme: 'success' },
+    },
+  ]}
+/>
+
+The site uses the <Term id="design-token">design tokens</Term> of the dashboard. See [Design tokens](/docs/contributing/web-client/design-tokens).
+
+Because of this import, the root of the Next.js <Term id="bundler" /> is the repository, not `docs/`.
+
+## Classes for custom UI
+
+| Class | Use |
+|---|---|
+| `bg-surface-100`, `text-foreground-light`, `border-border-strong`, `text-primary`, `mono-label`… | The token utilities |
+| `rounded-[var(--ferry-radius-md)]` | Controls |
+| `rounded-[var(--ferry-radius-lg)]` | Cards |
+
+## Change a color
+
+Change colors only in `tokens.css`. Then build the dashboard and the docs again.

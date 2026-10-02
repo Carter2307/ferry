@@ -1,0 +1,32 @@
+---
+title: How you deploy
+description: Ferry deploys from git, from an image or from a folder, with zero downtime and rollbacks.
+---
+
+<Flow
+  steps={[
+    { icon: 'branch', title: 'Git', text: 'Ferry takes each git URL. A path on the server is good too.' },
+    { icon: 'webhook', title: 'Auto-deploy', text: 'A push to GitHub starts a deploy.' },
+    { icon: 'health', title: 'Zero downtime', text: 'The old version answers until the new version passes its health check.', tone: 'warning' },
+    { icon: 'history', title: 'History', text: 'Ferry keeps each deploy with its build log.' },
+    { icon: 'rollback', title: 'Rollback', text: 'One command brings an earlier deploy back.', tone: 'success' },
+  ]}
+/>
+
+| Render feature | In Ferry |
+|---|---|
+| Deploy from Git, auto-deploy on push | Yes: a GitHub <Term id="webhook" /> (`/hooks/github`), and each git URL, also a path on the server |
+| Zero-downtime deploys, health checks | Yes: each deploy is blue-green. `--health` sets the <Term id="health-check" /> path. |
+| <Term id="rollback">Rollbacks</Term>, deploy history, build logs | Yes |
+| Manual deploys, <Term id="deploy-hook">deploy hooks</Term> | Yes: a secret URL, `/hooks/deploy/{id}?key=…` |
+| Suspend, resume, restart | Yes |
+
+## Only in Ferry
+
+```bash title="Terminal"
+ferry up
+```
+
+`ferry up` deploys a local folder without git. Render does not have this command.
+
+Read more: [Deploys](/docs/concepts/deploys) and [Auto-deploy from GitHub](/docs/guides/github-auto-deploy).

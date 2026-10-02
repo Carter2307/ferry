@@ -1,0 +1,65 @@
+---
+title: The engine
+description: The engine is the part of ferryd that runs deploys, repairs containers and starts scheduled work.
+---
+
+<Diagram
+  nodes={[
+    { id: 'api', at: [0, 0.5], icon: 'plug', label: 'API', note: 'Engine trait' },
+    { id: 'deploys', at: [1.15, 0], icon: 'deploy', label: 'Deploys', note: 'queue, pipeline' },
+    { id: 'reconciler', at: [2.3, 0], icon: 'restart', label: 'Reconciler' },
+    { id: 'cron', at: [3.45, 0], icon: 'calendar', label: 'Cron and jobs' },
+    { id: 'datastores', at: [1.15, 1], icon: 'database', label: 'Datastores' },
+    { id: 'limits', at: [2.3, 1], icon: 'gauge', label: 'Limits', note: 'and free disk' },
+    { id: 'logs', at: [3.45, 1], icon: 'logs', label: 'Log storage' },
+  ]}
+  edges={[
+    { from: 'api', to: 'deploys' },
+    { from: 'api', to: 'datastores' },
+  ]}
+  groups={[{ label: 'ferry-engine', around: ['deploys', 'reconciler', 'cron', 'datastores', 'limits', 'logs'] }]}
+  steps={[
+    {
+      caption: 'The API calls the engine through the Engine trait.',
+      flow: ['api>deploys', 'api>datastores'],
+      tones: { api: 'primary' },
+    },
+    {
+      caption: 'Deploys: the engine keeps the deploy queue and runs the deploy pipeline.',
+      tones: { deploys: 'primary' },
+    },
+    {
+      caption: 'Reconciler: the engine makes Docker agree with the store.',
+      tones: { reconciler: 'primary' },
+    },
+    {
+      caption: 'Cron and jobs: the engine starts the cron runs and the one-off jobs.',
+      tones: { cron: 'primary' },
+    },
+    {
+      caption: 'Datastores: the engine creates and repairs the datastore containers.',
+      tones: { datastores: 'primary' },
+    },
+    {
+      caption: 'The engine also applies the resource limits, checks the free disk space and stores the logs.',
+      tones: { limits: 'primary', logs: 'primary' },
+    },
+  ]}
+/>
+
+The <Term id="engine" /> is the center of <Term id="ferryd" />. Its <Term id="crate" /> is `ferry-engine`. It implements the <Term id="trait" /> `ferry_core::Engine`, and the API calls that trait.
+
+## What the engine uses
+
+| Part | The engine uses it to |
+|---|---|
+| [The store](/docs/architecture/overview/store) | Read what must run. Write the status of each deploy. |
+| [`ferry-build`](/docs/architecture/overview/docker) | Make an image from the source. |
+| [`ferry-docker`](/docs/architecture/overview/docker) | Create, start and remove containers. |
+| [The proxy](/docs/architecture/overview/proxy) | Update the <Term id="route-table" />. |
+
+## Read more
+
+- [Deploy pipeline](/docs/architecture/deploy-pipeline): each step of a deploy.
+- [Reconciler](/docs/architecture/reconciler): the loop that repairs.
+- [Background tasks](/docs/architecture/overview/background-tasks): what runs with no request.

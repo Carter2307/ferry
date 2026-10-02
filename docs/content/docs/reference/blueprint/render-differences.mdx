@@ -1,0 +1,40 @@
+---
+title: Differences from Render
+description: Six keys or features do not have the same result on Ferry as on Render.
+---
+
+<Diagram
+  caption="What Ferry does with a key of render.yaml"
+  nodes={[
+    { id: 'key', at: [0, 1], icon: 'file-code', label: 'A key', note: 'of render.yaml' },
+    { id: 'changed', at: [1.75, 0], icon: 'switch', label: 'Changed', note: 'plan', tone: 'primary' },
+    { id: 'ignored', at: [1.75, 1], icon: 'ban', label: 'Ignored', note: 'region, scaling', tone: 'muted' },
+    { id: 'needed', at: [1.75, 2], icon: 'pencil', label: 'You add it', note: 'repo', tone: 'warning' },
+  ]}
+  edges={[
+    { from: 'key', to: 'changed' },
+    { from: 'key', to: 'ignored', dashed: true },
+    { from: 'key', to: 'needed' },
+  ]}
+/>
+
+## The differences
+
+| Key or feature | On Ferry |
+|---|---|
+| `plan` | It becomes [resource limits](/docs/reference/blueprint/limits): the memory of the plan and, for services, its CPU. `free` gets 0.5 CPU, not the 0.1 of Render. |
+| `region`, `scaling`, `previews`, `ipAllowList` and other options of the host | Ferry has no such option. It ignores them. |
+| `repo` | It has no default. Render uses the repository of the blueprint itself. Ferry does not know it. |
+| `image.creds` | Ferry ignores it. Ferry does not support private registries. |
+| <Term id="secret-file">Secret files</Term> | Ferry does not support them. Use environment variables. |
+| `port` | A <Term id="ferry-extension" />. Render has no such key. |
+
+## Set the repository
+
+Set `repo` on each service. Or deploy local code:
+
+```bash title="Terminal"
+ferry up NAME
+```
+
+The [Render migration guide](/docs/guides/migrate-from-render) shows a full migration.

@@ -1,0 +1,33 @@
+---
+title: Where the code is
+description: Seven folders of docs/ hold the pages, the components, the scripts and the app.
+---
+
+<Diagram
+  caption="From an MDX file to a page"
+  nodes={[
+    { id: 'content', at: [0, 0], icon: 'file', label: 'content/docs/', note: 'the pages' },
+    { id: 'lib', at: [1.6, 0], icon: 'plug', label: 'lib/', note: 'the content source' },
+    { id: 'app', at: [3.2, 0], icon: 'browser', label: 'app/', note: 'layout and page' },
+    { id: 'mdx', at: [3.2, 1], icon: 'layers', label: 'components/', note: 'the MDX components' },
+  ]}
+  edges={[
+    { from: 'content', to: 'lib', flow: true },
+    { from: 'lib', to: 'app', flow: true },
+    { from: 'mdx', to: 'app' },
+  ]}
+/>
+
+## The folders
+
+| Path | Contains |
+|---|---|
+| `app/` | The landing page, the docs layout and page, the 404 page (`not-found.tsx`), the search index, Open Graph images and `global.css`. Also Markdown versions of the pages for LLMs (`llms.txt`, `llms-full.txt`). |
+| `components/layout/` | The site header with the Light / Dark / System theme menu, the docs header slot and the sidebar. Also the section links that show in the sidebar and in the mobile drawer below `lg`. |
+| `components/` | The search dialog (`search.tsx`): it ranks first the pages whose title or headings match. The API page renderer (`api-page.tsx`): it adds the `Authorization` header to the request samples. |
+| `components/mdx/` | Callout, Cards, Badge, Mermaid and the figures (Diagram, Flow, Terminal, Term). `components/mdx.tsx` is the MDX component map. |
+| `content/docs/` | The pages |
+| `lib/` | The content source, the OpenAPI loader and shared settings |
+| `scripts/` | `generate.mjs`, `check-links.mjs`, and `check-ste.mjs` with `check-figures.mjs` (`npm run check-content`) |
+
+The component map gives each <Term id="mdx" /> page its components with no import.

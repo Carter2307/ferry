@@ -21,6 +21,7 @@ code).
 |---|---|
 | Web services, private services, background workers, cron jobs, static sites | ✅ `ServiceType` |
 | Deploy from Git (auto-deploy on push) | ✅ GitHub webhook `/hooks/github`, any git URL incl. local paths |
+| Connect GitHub / GitLab, pick a repository and a branch, deploy private repositories | ✅ git connections: the account authorizes the server on the provider's own pages — a GitHub App, a GitLab OAuth application — or with an access token (§18) |
 | Deploy prebuilt Docker image | ✅ `image` / runtime `image` |
 | Native runtimes (Node, Python, Go, Rust, Ruby, static) + Dockerfile | ✅ builder detection + generated Dockerfiles |
 | Zero-downtime deploys + health checks | ✅ blue/green per deploy, `health_check_path` |
@@ -31,6 +32,7 @@ code).
 | Managed Postgres, Key Value (Redis) | ✅ containers + volumes, internal & external URLs |
 | Persistent disks | ✅ named volume, recreate deploys, 1 instance |
 | Custom domains + free TLS | ✅ ACME HTTP-01 (Let's Encrypt) |
+| A subdomain per service (`<name>.onrender.com`) | ✅ `<service>.<domain>` under the server's domains: the one it is started with, and domains connected while it runs and verified through their DNS (§21) |
 | Manual scaling (instances) | ✅ round-robin in the proxy |
 | Instance types (`plan`) | ✅ memory/CPU limits per service and datastore (server defaults 512 MiB / 1 CPU); blueprint `plan` → limits (§14) |
 | Suspend / resume, restart | ✅ |
@@ -64,13 +66,14 @@ auth, secret files, IP allow lists, teams/RBAC.
 
 | crate | kind | depends on | responsibility |
 |---|---|---|---|
-| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers. **Frozen.** |
+| `ferry-core` | lib | — | models, DTOs, config, `Store` (SQLite), env resolution, naming, `Engine` trait, `TlsHooks` trait, validation, resource limits (`resources`: ranges, size / CPU parsing and formatting), cron schedules, git URL helpers, git connections (§18), the server's domains (§21). **Frozen.** |
 | `ferry-docker` | lib | core | typed Docker wrapper (containers, images, volumes, networks, logs, stats, exec) |
-| `ferry-build` | lib | core | git fetch / archive extract, runtime detection, Dockerfile generation, `docker build` |
+| `ferry-build` | lib | core | git fetch / archive extract, the branches of a remote (`git ls-remote`), runtime detection, Dockerfile generation, `docker build` |
+| `ferry-scm` | lib | core | git providers (§18): GitHub / GitLab REST clients, authorizing an account in the browser (GitHub App manifest + installation, GitLab OAuth), the tokens of a connection (minted or renewed on demand), which connection reads a repository |
 | `ferry-proxy` | lib | core | `RouteTable`, HTTP/HTTPS reverse proxy, websockets, error pages |
-| `ferry-tls` | lib | core | ACME certificates, SNI resolver, `TlsHooks` impl |
-| `ferry-engine` | lib | core, docker, build, proxy | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs |
-| `ferry-api` | lib | core | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, serves the embedded web client (`web/dist`) |
+| `ferry-tls` | lib | core | ACME certificates, SNI resolver, `TlsHooks` impl, the state of each certificate (`Certificates`) |
+| `ferry-engine` | lib | core, docker, build, proxy, scm | `FerryEngine: Engine` — deploys, reconciler, cron, jobs, datastores, logs, verifying domains (§21) |
+| `ferry-api` | lib | core, build, scm | axum router: REST, SSE (logs + `/api/v1/events`), webhooks, blueprints, OpenAPI + Swagger UI, git connections (§18; `build` only for the branches of a remote), serves the embedded web client (`web/dist`) |
 | `ferry-cli` | bin `ferry` | core | CLI client |
 | `ferryd` | bin | all | wiring (already written) |
 
@@ -90,9 +93,11 @@ Leaf crates must not depend on each other beyond this table.
   engine refreshes routes from `inspect`/`list` data in every reconcile pass.
 * Datastores publish on `config.datastore_bind_ip:<fixed host_port>` (allocated
   once with `ferry_docker::free_host_port()` and stored).
-* Public hostnames: `<name>.<base_domain>` (default `*.localhost`, which
-  browsers resolve to 127.0.0.1) plus custom domains. Dashboard:
-  `ferry.<base_domain>` routed to the API address (service id `__dashboard`).
+* Public hostnames: `<name>.<domain>` under every served domain of the
+  server (§21) — the base domain (default `localhost`: browsers resolve
+  `*.localhost` to 127.0.0.1) and the domains connected to it — plus custom
+  domains. Dashboard: `ferry.<base_domain>` routed to the API address
+  (service id `__dashboard`).
 
 ## 4. Docker resource naming & labels
 
@@ -126,7 +131,10 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    nor pull, and must keep working on a host that is short on disk.
    Git/Archive → `Builder::build` with image tag
    `naming.image_tag(name, deploy_id)`, build args = the service's resolved env,
-   labels `naming.service_labels`. Image → `docker.ensure_image` (pull; always
+   labels `naming.service_labels`. A Git deploy whose repository is served
+   by one of the server's git connections (§18) clones with a token of that
+   connection (`BuildSource::Git.credentials`), after `==> Cloning with the
+   GitHub account 'octocat'`. Image → `docker.ensure_image` (pull; always
    pull when the tag is `latest`/untagged). Reuse → verify the image exists.
    Record `image`, `commit_sha`, `commit_message` on the deploy (the commit is
    recorded as soon as it is checked out — `BuildEvent::CheckedOut` — so failed
@@ -136,6 +144,13 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    `:latest` moves. Build-time env reaches builds as **BuildKit secrets**
    (`--secret id=KEY,env=KEY`; generated Dockerfiles mount them per `RUN`),
    never as `ARG`s, so values don't end up in the image history.
+   A generated Dockerfile's build log says which command the image starts
+   and where it comes from (`GeneratedDockerfile.start`): `==> Start
+   command: npm start (the "start" script of package.json)` — the service's
+   start command, the Procfile, or the runtime's fallback, e.g. `node
+   ./dist/index.js (package.json has no "start" script: its "main" file is
+   run)`. A command nobody chose is the first thing to look at when an
+   instance doesn't stay up.
    Cron jobs stop here: log their limits (`==> Limits: … per run`), mark
    `live`, set `live_deploy_id`, deactivate previous.
 4. **Start** (`deploying`): port = `env::choose_port(service.port, user_env,
@@ -169,6 +184,19 @@ failures `build_failed` / `deploy_failed`; `canceled`.
      (`die` with its `exitCode`, `oom`; a bounded query with `until` = now):
      an app that runs a while before each OOM kill is still reported as out
      of memory;
+   * exit code 0 is explained (`health::clean_exit`): nothing crashed and
+     often nothing was printed, so the error names what ran (read from
+     Docker before the instance is removed: its command, a shell wrapper
+     shown as its script) and why ending is a failure —
+     `instance ab12cd exited with code 0: its command `node ./dist/index.js`
+     ended without an error, but a web service must keep running and listen
+     on port 10000` — and the failure carries a hint that depends on where
+     the command comes from: the service's start command, the image's own
+     command (`docker` / `image` runtimes), or picked from the project for a
+     service without a start command (then: set the start command of an
+     app; create a project that only builds files as a static site).
+     Workers are told that what runs and ends belongs in a cron job or a
+     one-off job;
    * web/private/static with `health_check_path`: `GET http://127.0.0.1:<host_port><path>`
      with `Host: <default host>` → success on status < 400;
    * without path: TCP connect to `127.0.0.1:<host_port>` succeeds;
@@ -188,7 +216,13 @@ failures `build_failed` / `deploy_failed`; `canceled`.
    only through a deploy or restart (like Render), and a failed env-change
    deploy can't break self-healing.
 7. **Failure**: remove new containers, keep old ones serving, status
-   `build_failed`/`deploy_failed` with a concise `error`.
+   `build_failed`/`deploy_failed` with a concise `error`. When the engine
+   can tell what to do (a clone the remote refused, §18; an instance whose
+   command ended), a `==> Hint: …` line follows the failure line. The
+   server log gets one line per failed deploy, at `WARN`, with the same
+   content: `deploy failed: <error>` and the fields `service` (its name),
+   `deploy`, `status` and `hint` (`-` when there is none); canceled deploys
+   are logged at `INFO`. The app's own output stays in the deploy log.
 8. **Cleanup**: keep the newest `config.keep_images` images of this service
    (never the live one; only images whose repo is `naming.image_repo(name)` —
    never delete pulled public images); delete scratch dirs.
@@ -197,7 +231,9 @@ failures `build_failed` / `deploy_failed`; `canceled`.
 
 Log conventions (deploy log): system lines start with `==> ` (e.g.
 `==> Cloning from https://github.com/a/b (branch main)`,
-`==> Using Dockerfile at ./Dockerfile`, `==> Build successful 🎉`,
+`==> Using Dockerfile at ./Dockerfile`,
+`==> Start command: npm start (the "start" script of package.json)`,
+`==> Build successful 🎉`,
 `==> Limits: 512 MiB memory, 1 CPU per instance`, `==> Starting 2 instance(s)`,
 `==> Health check passed`, `==> Your service is live 🎉`).
 
@@ -337,20 +373,25 @@ log (runtime logs are Docker's container logs).
 
 ## 10. HTTP API (`ferry-api`)
 
-Auth: `Authorization: Bearer <token>` on `/api/*` (except the OpenAPI
-document and Swagger UI below); GET requests may use `?access_token=<token>`
-instead (EventSource can't set headers). Constant-time compare. Errors:
-`ApiErrorBody` with `Error::status()`. `{id}` = id or name. JSON bodies; 404
-JSON for unknown `/api` routes (behind the token, like every `/api` path).
+Auth (§20): every `/api/*` request — except the OpenAPI document, Swagger
+UI and the public `/api/v1/auth` calls below — carries an API token as
+`Authorization: Bearer <token>` (GET requests may use `?access_token=<token>`
+instead: EventSource can't set headers) or the dashboard's session cookie.
+The account's own operations (`/api/v1/auth/...`) only take the session.
+Errors: `ApiErrorBody` with `Error::status()`. `{id}` = id or name. JSON
+bodies; 404 JSON for unknown `/api` routes (behind the authentication, like
+every `/api` path).
 
 **OpenAPI.** Every handler carries a `#[utoipa::path]` (method, path, tag,
 params, bodies, responses with `ApiErrorBody` errors); `openapi::ApiDoc`
 (`#[derive(OpenApi)]`, OpenAPI **3.1**) gathers them with every DTO schema,
-a `bearer` HTTP security scheme (required by every `/api/v1` operation, none
-for `/healthz`, the webhooks and the document) and one tag per resource. It is
+two security schemes — `bearer` (an API token) and `session` (the
+session cookie) — either of which every `/api/v1` operation
+requires, except the account's (`session` only) and the public ones (none,
+like `/healthz`, the webhooks and the document), and one tag per resource. It is
 served at `GET /api/openapi.json`, and Swagger UI (`utoipa-swagger-ui`, assets
 vendored into the binary: works offline, no validator call) at `/api/docs`;
-both without auth, and outside the token-checking API router so neither
+both without auth, and outside the authenticating API router so neither
 fallback can shadow them. `tests/openapi.rs` keeps one authoritative list of
 routes and checks that the document, the router and `lib.rs` agree.
 
@@ -360,8 +401,22 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /` (and any other non-API path) | the web client (§13; SPA fallback, no auth) |
 | `GET /api/openapi.json` | the OpenAPI 3.1 document (no auth) |
 | `GET /api/docs` | Swagger UI (no auth; redirects to `/api/docs/`, its **Authorize** takes the API token) |
-| `GET /api/v1/info` | `ServerInfo` (including the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
-| `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
+| `GET /api/v1/auth/status` | `AuthStatus` `{setup_required, auth, user}` (no auth): is there an account, and how this request is authenticated (`session`, `token`, or `null` — wrong credentials count as none) |
+| `POST /api/v1/auth/setup` | `SetupAccount` `{email, password, code}` → 201 `AuthStatus` + the session cookie (no auth; only while the server has no account). 403 `invalid_setup_code`, 409 when the account exists, 429 `too_many_attempts` |
+| `POST /api/v1/auth/login` | `Login` `{email, password}` → `AuthStatus` + the session cookie (no auth). 401 `invalid_credentials`, 429 `too_many_attempts` |
+| `POST /api/v1/auth/logout` | 204, ends the session of the cookie and clears it (no auth: fine without a session) |
+| `POST /api/v1/auth/password` | `ChangePassword` `{current_password, new_password}` → 204; the other sessions end. 401 `invalid_credentials` |
+| `GET /api/v1/auth/sessions` | `[SessionView]` `{id, user_agent, created_at, last_used_at, expires_at, current}`, the last used first |
+| `DELETE /api/v1/auth/sessions/{id}` | 204 (its own: also clears the cookie) |
+| `GET /api/v1/auth/tokens` | `[ApiTokenView]` `{id, name, hint, created_at, last_used_at, expires_at}`: never a token |
+| `POST /api/v1/auth/tokens` | `CreateApiToken` `{name, expires_in_days?}` → 201 `CreatedApiToken` `{token, api_token}`: the only time the token is shown |
+| `DELETE /api/v1/auth/tokens/{id}` | 204 |
+| `POST /api/v1/auth/cli` | `StartCliLogin` `{name?}` → 201 `CliLoginStarted` `{id, code, secret, expires_in, interval}` (no auth): a `ferry login` asks to be connected. 409 while the server has no account |
+| `GET /api/v1/auth/cli/{id}` | `CliLoginView` `{id, name, code, status, created_at, expires_at}`: what the approval page shows |
+| `POST /api/v1/auth/cli/{id}/approve` · `/deny` | `CliLoginView`; approving creates the API token the terminal collects |
+| `POST /api/v1/auth/cli/{id}/token` | `CliLoginPoll` `{secret}` → `CliLoginResult` `{status, token?}` (no auth): `pending`, `denied`, or `approved` with the token, once. 401 for another secret, 404 once expired or collected |
+| `GET /api/v1/info` | `ServerInfo` (including `base_domain`, the `default_domain` service URLs are shown with (§21), the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
+| `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`/`git_connection`/`domain`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
 | `GET /api/v1/services` | `[ServiceView]` |
 | `POST /api/v1/services` | `CreateService` → 201 `ServiceView` (queues a `create` deploy when it has a repo/image, unless `deploy:false`) |
 | `GET /api/v1/services/{id}` | `ServiceView` |
@@ -386,8 +441,15 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `POST /api/v1/services/{id}/env-groups` | `LinkEnvGroup` → `ServiceView` |
 | `DELETE /api/v1/services/{id}/env-groups/{group}` | `ServiceView` |
 | `GET /api/v1/services/{id}/domains` | `[String]` custom domains |
-| `POST /api/v1/services/{id}/domains` | `DomainRequest` → `[String]` (validated, unique across services, not a default host) |
+| `POST /api/v1/services/{id}/domains` | `DomainRequest` → `[String]` (validated, unique across services, not a default host under any domain of the server) |
 | `DELETE /api/v1/services/{id}/domains/{domain}` | `[String]` |
+| `GET /api/v1/domains` | `[DomainView]` (§21): the domains services are served under, the default one first. `DomainView` = the `Domain` (`id`, `name`, `source`, `status`, `is_default`, `checks`, `created_at`, `verified_at`, `checked_at`) + `local`, `served`, `records` (the DNS records to create) and `url_pattern` (`https://<service>.example.com`) |
+| `POST /api/v1/domains` | `ConnectDomain` `{name}` → 201 `DomainView`, `pending` (a local name: `active`). 400 for a URL, a wildcard, an address, or past 20 connected domains; 409 when it is connected already, is the base domain, or would put a service on a hostname that is taken |
+| `GET /api/v1/domains/{id}` | `DomainView` |
+| `PATCH /api/v1/domains/{id}` | `UpdateDomain` `{is_default: true}` → `DomainView`: the default domain. 409 while the domain is not served; 400 for `false` (make another one the default) |
+| `POST /api/v1/domains/{id}/verify` | `DomainView` after a verification made now (`engine.verify_domain`); a local domain is returned as it is |
+| `DELETE /api/v1/domains/{id}` | 204: services stop being served under it; the default goes back to the base domain. 409 for the base domain (`source: config`) |
+| `GET /api/v1/certificates` | `[CertificateView]` `{host, service, state, expires_at, error, retry_at}`: every routed hostname — the dashboard's (`service: null`), then each service's — with the state of its certificate: `issued`, `issuing`, `pending`, `failed`, `local`, or `disabled` without HTTPS |
 | `GET /api/v1/services/{id}/jobs?limit=20` | `[JobRun]` |
 | `POST /api/v1/services/{id}/jobs` | `RunJobRequest` → 202 `JobRun` |
 | `GET /api/v1/jobs/{job_id}` | `JobRun` |
@@ -400,6 +462,13 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /api/v1/env-groups` · `POST` | `[EnvGroupView]` · `CreateEnvGroup` → 201 `EnvGroupView` |
 | `GET /api/v1/env-groups/{id}` · `DELETE ?force=&restart=` | `EnvGroupView` · 204 (409 while linked, unless `force=true`; `restart=true` restarts the linked live services) |
 | `PUT` / `PATCH /api/v1/env-groups/{id}/env?restart=` | `ReplaceEnv` / `PatchEnv` → `EnvGroupView` (restart linked live services) |
+| `GET /api/v1/git/connections` | `[GitConnectionView]` (§18; no secret is ever returned, of a personal token only `token_hint`). `status` is `pending` for an authorization that was started and not finished |
+| `POST /api/v1/git/authorize` | `AuthorizeGit` `{provider?, base_url?, connection_id?, redirect_uri, organization?, client_id?, client_secret?}` → `GitAuthorization` `{status, url, method, fields, connection}`: where to send the browser (`status: redirect`; `method: post` = submit a form with `fields`), or the connection when nothing is left to do (`status: connected`). GitHub: the page that registers the server's GitHub App from a manifest. GitLab: the page where the account authorizes the server's OAuth application — 400 `git_application_required` until its `client_id` / `client_secret` were given once. `connection_id` resumes a pending connection or authorizes one again. 400 `git_authorization_rejected`, 502 `git_provider_unavailable` |
+| `POST /api/v1/git/callback` | `GitCallback` `{state, code?, installation_id?, setup_action?, error?, error_description?}` — the query parameters the provider sent the browser back with → `GitAuthorization`: the next page (GitHub: install the app that was just registered) or the connection. A `state` works once, for an hour; without one, an `installation_id` re-reads that installation. 400 for an unknown `state`, 400 `git_authorization_rejected` when the provider or the user refused, 502 `git_provider_unavailable` |
+| `POST /api/v1/git/connections` | `ConnectGit` `{provider, token, base_url?}` → 201 `GitConnectionView`: the way without a browser — asks the provider whose token it is, then stores it. 200 when that account was already connected (the token replaces what it had). 400 `git_authorization_rejected` when the provider rejects the token, 502 `git_provider_unavailable` when it can't be reached |
+| `GET /api/v1/git/connections/{id}` · `DELETE ?force=` | `GitConnectionView` · 204 (409 while it clones the repository of services, unless `force=true`: they are cloned without credentials from then on). `{id}` is the id only |
+| `GET /api/v1/git/connections/{id}/repositories` | `GitRepositoryList` `{repositories, truncated}`: what the connection can read, most recently updated first, asked from the provider on every call (at most 1000). 409 `git_authorization_rejected` when the connection is pending or the provider no longer accepts its authorization, 502 `git_provider_unavailable` |
+| `GET /api/v1/git/branches?repo_url=` | `GitBranches` `{default_branch, branches, connection_id}`: the branches of any repository a service can deploy from, read from its remote (`git ls-remote`, 20 s) the way a deploy would clone it; the default branch first, then by name. 400 for a malformed URL, 502 `git_remote_unreachable` |
 | `POST /api/v1/blueprints/apply` | `ApplyBlueprint` JSON, or raw YAML (`Content-Type: application/yaml` / `text/yaml`, `?dry_run=`) → `BlueprintResult` |
 | `GET\|POST /hooks/deploy/{service_id}?key=` | 202 minimal deploy summary (trigger `deploy_hook`, credentials redacted); service **id** only; unknown id or wrong key → the same 401 (no enumeration) |
 | `POST /hooks/github` | GitHub webhook. 404 unless `github_webhook_secret` set; verify `X-Hub-Signature-256` (HMAC-SHA256, constant-time) → 401; `ping` → 200; `push` → deploy (trigger `webhook`, commit = `after`) every service with `auto_deploy`, matching `git::normalize_repo_url` of `repository.clone_url`/`ssh_url`/`html_url`, and `refs/heads/<branch>`; deleted-branch pushes ignored → 200 `{"deploys": [...]}` |
@@ -415,9 +484,12 @@ limit or `0` means the server default, as on PATCH. Request bodies reject
 unknown fields.
 Git inputs are validated up front (`validate::repo_url` — absolute local
 paths only —, `branch`, `commit`). Switching a service between git and image
-requires clearing the other source in the same PATCH. Cron jobs always have
-exactly 1 instance. Writes to one service are serialized, and custom-domain
-claims are globally serialized. GitHub webhooks also accept form-encoded
+requires clearing the other source in the same PATCH. A service names no
+git connection: its repository is cloned with the connection of the server
+that serves `repo_url` (§18). Cron jobs always have
+exactly 1 instance. Writes to one service are serialized, and the claims
+of hostnames — custom domains and the server's domains (§21) — are
+globally serialized. GitHub webhooks also accept form-encoded
 deliveries and ignore replayed payloads.
 
 ## 11. Blueprints (`ferry.yaml` / `render.yaml`)
@@ -516,17 +588,23 @@ services:
   datastore's status (§8; a failure becomes a warning). Blueprint applies
   also take the row locks of the existing datastores they name.
   Services with neither repo nor image produce a warning ("deploy with `ferry up <name>`").
+* Blueprints don't mention git connections (§18): a service's `repo` is
+  cloned with the connection of the server that serves it, like any other
+  service's.
 * `dry_run: true` computes the same result without writing anything.
 
 ## 12. CLI (`ferry`)
 
-Config: `~/.config/ferry/config.json` `{server, token}` (0600). Overrides:
+Config: `~/.config/ferry/config.json` `{server, token}` (0600), written by
+`ferry login`. Overrides:
 `--server/--token` flags, `FERRY_SERVER`/`FERRY_TOKEN` env. Global `--json`
 prints raw API JSON. Tables are aligned plain text; colors only on a TTY and
 never with `NO_COLOR`. Exit code 1 with the API error message on failure.
 
 ```
-ferry login --server URL --token TOKEN     # verifies with /api/v1/info, saves config
+ferry login [--server URL] [--no-browser]   # approved in the dashboard (§20): prints a page and a code,
+      # opens the page, polls until it is answered, then verifies (/api/v1/info) and saves the token it got
+ferry login --server URL --token TOKEN     # (or FERRY_TOKEN) verifies and saves a given token: CI, no browser
 ferry info                                 # incl. default limits and the Docker host's CPUs / memory
 ferry services | ferry ls
 ferry create NAME [--type web|pserv|worker|cron|static] [--repo URL] [--branch B] [--image IMG]
@@ -558,7 +636,13 @@ ferry status NAME                                                   # instances 
 ferry logs NAME [-f] [--tail N] | ferry logs --deploy DEPLOY_ID [-f] | ferry logs --job JOB_ID [-f]
 ferry env NAME                                                     # list
 ferry env set NAME K=V... [--no-restart]  |  ferry env unset NAME K... [--no-restart]
-ferry domains NAME | ferry domains add NAME DOMAIN | ferry domains rm NAME DOMAIN
+ferry domains NAME | ferry domains add NAME DOMAIN | ferry domains rm NAME DOMAIN    # custom domains of a service
+ferry domains                                  # the server's domains (§21): status, default, where services are served,
+      # and for one that doesn't reach the server: what the last verification found and the DNS record to create
+ferry domains connect DOMAIN                   # prints the DNS records to create
+ferry domains verify DOMAIN                    # verifies now; exit 1 while its names don't reach the server
+ferry domains default DOMAIN | ferry domains disconnect DOMAIN [--yes]
+ferry certificates | ferry certs               # every routed hostname with the state of its certificate
 ferry run NAME [--follow] [-- CMD...]                               # one-off job / trigger cron now
 ferry jobs NAME
 ferry db create NAME [--kind postgres|redis] [--version V] [--database D] [--user U] [--memory SIZE] [--cpu CPUS] [--wait]
@@ -584,14 +668,77 @@ Rust build never runs Node.
   (`createBrowserRouter`, history URLs, code-split pages); Vitest for the pure
   helpers (SSE parser, formatting, `.env` parsing, resource limits) and a few
   components (rendered with `react-dom/server`). Light and dark themes.
-* **Views:** login (token, validated with `GET /api/v1/info`) · services
+* **Views:** setup (`/setup?code=…`, the first run: create the account) ·
+  login (email + password) · the approval of a `ferry login`
+  (`/cli-login?id=…`, outside the shell) · services
   (list, new) · service detail: Overview, Deploys (+ deploy detail with live
   build logs, rollback, cancel), Logs, Jobs (+ job detail), Environment
   (variables, env group links, "save & restart"), Settings (build & deploy,
   resources, custom domains, deploy hook) · datastores (+ detail,
   connection strings, resources) · env groups (+ detail) · blueprints (paste
-  YAML → dry run → apply) · server (incl. default container limits and the
-  Docker host's size).
+  YAML → dry run → apply) · server (incl. default container limits, the
+  Docker host's size, the connected git accounts, **Domains** — below —
+  and **Account**: the
+  email, changing the password, the API tokens — created with a name and
+  an expiry, shown once, revoked — and the sessions).
+* **Signing in** (§20): on load, `GET /api/v1/auth/status` decides between
+  the setup page, the login page and the app (`src/stores/auth.ts`:
+  `loading` / `unreachable` / `setup` / `signed-out` / `signed-in`). The
+  session is an `HttpOnly` cookie the page never reads; a 401
+  `unauthorized` on any request means it ended and returns to `/login`
+  (`?next=` brings the user back; a wrong password is 401
+  `invalid_credentials` and changes nothing).
+* **Git connections in the UI** (§18):
+  * *Asking for one.* As long as the server has no connected account, the
+    services page (the home page) asks to connect GitHub or GitLab — or to
+    finish an authorization that was left half-way. It can be dismissed
+    (per browser).
+  * *Connecting.* The dialog's button sends the browser, in the same tab,
+    to the provider's own pages: GitHub registers the server's app, then
+    asks which repositories it may read; GitLab asks to authorize the
+    server's application, whose Application ID and Secret the dialog takes
+    the first time, next to the redirect URI and scopes to create it with.
+    No token is typed; "Use an access token instead" is the dialog's other
+    way. Options: a GitHub organization, the address of a self-hosted
+    instance.
+  * *Coming back.* The provider sends the browser to `/git/callback`, a
+    page outside the app shell that hands the query parameters to `POST
+    /api/v1/git/callback`, goes on to the provider's next page when there
+    is one, and otherwise returns to where the user was (kept in
+    `localStorage` for an hour; only ever a path of the app) with a toast —
+    or says why the account was not connected.
+  * *Picking a repository.* A new service's Git source is either a
+    repository picked from a "Connected account" (the default) or a
+    "Repository URL". The picker lists the repositories of the connected
+    accounts with a search (private / archived badges; one without commits
+    can't be picked); picking one fills in its default branch and, unless
+    one was typed, the service name. Connecting an account from the form
+    keeps the form: its draft waits in `sessionStorage` (never the
+    credentials of a URL) and the new account is selected on return.
+  * *Branches* are a searchable list read from the repository itself when
+    the list opens (`GET /api/v1/git/branches`, the default branch first),
+    for a picked repository as for a typed URL, in the new-service form and
+    in Settings → Build & deploy; a name can still be typed (a branch that
+    isn't pushed yet). The settings also say which account clones the
+    repository.
+  * *Managing.* Server → Connections → "Git accounts" lists the connections
+    (how each was authorized, the services it clones for) with "Finish
+    connecting", "Authorize again", "Repositories" (GitHub's page of the
+    installation), "Replace token" and "Disconnect".
+* **Domains in the UI** (§21): Server → Domains lists the server's
+  domains with their state (`Active`, `Waiting for DNS`, `Misconfigured`,
+  `Local`), the default one, and where services are found under each.
+  "Connect a domain" asks for the name, then shows the DNS records to
+  create — type, name and address, each with a copy button, the names in
+  the parent's zone for a subdomain — and what the last verification
+  found; the dialog follows the domain and turns to "connected" on its
+  own. Each row verifies now, makes the domain the default or disconnects
+  it; its records are open while its DNS needs attention. Below, every
+  routed hostname with the state of its certificate (asked every 3 s
+  while one is on its way: certificates are not in the change feed), or
+  how to turn HTTPS on. `src/lib/domains.ts` mirrors
+  `ferry_core::domains::connectable_name`. The server's name in the top
+  bar and the URL previewed for a new service use the default domain.
 * **Resource limits in the UI** (§14): "Memory limit" / "CPU limit" selects
   (`Server default (512 MiB)` from `/api/v1/info`, presets, Custom…) in the
   service's Settings → Resources ("Changes apply on the next deploy or
@@ -604,16 +751,20 @@ Rust build never runs Node.
   when Docker's `oom_killed` is set, an "OOM killed" badge linking to the
   settings.
 * **Transport: REST + SSE** (no gRPC, no WebSocket). Queries and mutations
-  are the JSON REST API of §10 on the same origin (no CORS), with
-  `Authorization: Bearer`. Push uses Server-Sent Events read with `fetch()`
-  and a streaming parser, so the token stays in a header: log streams
+  are the JSON REST API of §10 on the same origin (no CORS), authenticated
+  by the session cookie. Push uses Server-Sent Events read with `fetch()`
+  and a streaming parser, with the same cookie: log streams
   (`event: log` … `event: end`) and the change feed `GET /api/v1/events`,
   whose `change` events become TanStack Query invalidations; it reconnects
   with exponential backoff (1 s → 15 s) and, while the feed is down (or 404
   on an older server), falls back to polling.
-* **Storage:** the token in `localStorage` under `ferry.token`, UI
+* **Storage:** nothing about the session (the cookie is the browser's; the
+  `ferry.token` of earlier versions is removed on load). UI
   preferences under `ferry.ui` (theme applied before first paint by
-  `public/theme-init.js`, so a strict `script-src 'self'` CSP works).
+  `public/theme-init.js`, so a strict `script-src 'self'` CSP works). While
+  a git account is being authorized: `ferry.git.authorizing` (where to go
+  back) in `localStorage`, `ferry.new-service.draft` in `sessionStorage`;
+  `ferry.git.prompt-dismissed` once the home page's prompt was dismissed.
 * **Embedding:** `npm run build` writes `web/dist`; `ferry-api`'s `build.rs`
   embeds every file of it at compile time (`FERRY_WEB_DIST` overrides the
   directory; without a built client it embeds a placeholder page explaining
@@ -736,7 +887,14 @@ never refreshed: after resizing Docker Desktop's VM, restart ferryd.
 
 **OOM visibility.** Docker's `OOMKilled` flag (inspect only — the list API
 never reports it) is the proof of an out-of-memory kill; exit code 137 alone
-is a SIGKILL, which may have other causes.
+is a SIGKILL, which may have other causes. Docker can record the kill a
+moment after it reports the exit (seen on Linux hosts): an instance or a job
+that ended with a SIGKILL and no kill on record is looked at a while longer —
+its flag, then its `oom` events for 2 s — before it is reported as a plain
+exit. That is all the engine can do: the kill of a container that is gone at
+once (a job whose only process was killed) is not always on Docker's record
+by then (seen on Linux CI), and the job then fails with `exited with code
+137`.
 * Deploys: a new instance OOM-killed during its health check fails the
   deploy with `instance ab12cd ran out of memory (limit 512 MiB) — raise the
   service's memory limit` (§5.5), also when Docker already restarted it
@@ -778,7 +936,21 @@ are never checked; on non-Unix systems the check does nothing.
 ## 15. Operational safety
 
 * The data directory is created `0700` (it holds env values, datastore
-  passwords, credentialed repo URLs); `api_token` and `instance_id` are `0600`.
+  passwords, credentialed repo URLs, the secrets of git connections: access
+  and refresh tokens, GitHub App private keys, OAuth client secrets);
+  `api_token`, `setup_code`, `ferryd.json` and `instance_id` are `0600`.
+* The account's password is stored as an Argon2id hash, sessions and API
+  tokens as SHA-256 digests (§20): reading the database gives none of them
+  away. The server token (`api_token`) is the one credential kept as it
+  is, in the data directory.
+* Git credentials (in a repository URL, or a git connection's token, §18)
+  reach `git` through its environment only, never a command line, the git
+  cache or a log, and only for the host of the remote: a host the remote
+  redirects to gets none.
+* The secrets of git connections never leave the server through the API
+  (`GitConnection` is not serializable), a log or a `Debug` output. An
+  answer of a provider is only accepted with the single-use `state` the
+  server made up for it (§18).
 * `ferryd` holds an exclusive lock on `<data-dir>/ferryd.lock`, and records
   ownership of its Docker name prefix on a marker volume `<prefix>-owner`.
   A server refuses to start on a prefix owned by another data dir (or when an
@@ -787,6 +959,14 @@ are never checked; on non-Unix systems the check does nothing.
 * The dashboard/API is only exposed through the public proxy by default for
   local base domains; on public domains it must be enabled explicitly
   (`--dashboard-host`), ideally with HTTPS.
+* Verifying a domain (§21) makes the proxy answer one path for any host,
+  `/.well-known/ferry-domain-check/<token>`, with the token (alphanumeric,
+  64 characters at most) and an id made up when the process starts: it
+  tells nothing about the services, and nothing in the answer is chosen by
+  the caller beyond that token. A server behind NAT with a non-local
+  domain asks a public address echo service which IPv4 address it has —
+  the only request Ferry makes to a third party on its own; `--public-ip`
+  replaces it.
 * Shutdown: first SIGINT/SIGTERM drains (API ≤ 10s, then the engine stops
   jobs and records interrupted deploys, ≤ 25s); a second signal exits at once.
 * Proxy: `X-Forwarded-For` is the peer address only (client-supplied
@@ -880,4 +1060,586 @@ ancestor cgroup, e.g. `system.slice`, has one too).
   pids limit, `docker update` and real OOM kills) and
   `ferry-engine/tests/e2e.rs`
   (`resource_limits_apply_to_instances_jobs_and_datastores`,
-  `out_of_memory_kills_are_reported`).
+  `out_of_memory_kills_are_reported`). The container of
+  `oom_kills_are_reported` and the job of `out_of_memory_kills_are_reported`
+  run under a shell that outlives the kill for a second, so that Docker
+  records it while the container is still there (§14); when the job's error
+  is not the expected one, its test prints Docker's events for the job's
+  container.
+* Git connections (§18) never call the real providers in tests:
+  `ferry-api/tests/git_connections.rs` runs a fake GitHub Enterprise /
+  GitLab on a local socket — accounts, paginated repositories, rejected
+  and rate-limited tokens; the manifest conversion, installations and
+  installation tokens of a GitHub App, checking the signature of every JWT;
+  an OAuth token endpoint whose refresh tokens work once; and the
+  repositories themselves over git's dumb HTTP protocol, behind those
+  tokens. The GitHub App's RSA key is generated with the `openssl` CLI when
+  the tests start (no key is kept in the repository; the app tests are
+  skipped without `openssl`). `ferry-build` / `ferry-engine` clone and list
+  branches from a local HTTP server that demands the token (also through a
+  redirect, which must not get it).
+* Accounts (§20): `ferry-api/tests/auth.rs` drives the router as a browser
+  would (cookies, `Origin` / `Sec-Fetch-Site`) and as a terminal — setup
+  with and without the code, sign-in and its limits, what a session may
+  change and from where, password changes, sessions, API tokens and the
+  whole `ferry login` exchange; `ferry-cli/tests/cli.rs` runs `ferry login`
+  against a fake server (approved, denied, expired, an older server). No
+  password is written in a test: each one is made up when the test runs.
+* Domains (§21) never use the real DNS in tests: the engine's verifier
+  runs against a fake network (`ferry-engine/src/domains.rs`, `FakeNet`:
+  what the names under a domain resolve to, what answers at each address,
+  the server's public addresses) for every outcome of a verification, the
+  schedule and the status changes; `ferry-engine/src/tests.rs` follows a
+  service that becomes served under a domain once it reaches the server.
+  `ferry-proxy` answers verification requests on a real socket,
+  `ferry-tls` reports the state of certificates and is woken by a new
+  host, `ferry-api/tests/domains.rs` drives the routes with a mock engine
+  and fake certificates, `ferry-cli/tests/cli.rs` the commands against a
+  fake server. No test resolves a real name or connects to an address
+  outside the machine.
+* The background commands of `ferryd` (§19) are tested on the real binary
+  in `ferryd/tests/background.rs`: without Docker, a start that fails
+  before the server listens (its error reaches the terminal, exit code 1)
+  and `status` / `stop` / `logs` when nothing runs; gated, the whole cycle
+  `start` → `status` → `logs` → `stop`.
+
+## 18. Git connections
+
+A **git connection** is an account of a git provider — GitHub or GitLab,
+their public instances or a self-hosted one — that this server is
+authorized to read the repositories of. It does two things: the dashboard
+lists the account's repositories, so a repository is picked instead of
+typed, and every repository the connection serves is cloned with its
+tokens, so private repositories deploy without credentials in their URL.
+
+**Connections belong to the server, not to a service.** A service names no
+connection: its `repo_url` decides which one clones it
+(`git_connection_for`, below). An account is authorized once, for every
+service — also those created later, by the CLI, a blueprint or the API.
+
+**How an account authorizes the server** (`GitAuth`):
+
+| `auth` | provider | what the user does | tokens |
+|---|---|---|---|
+| `github_app` | GitHub | confirms the registration of a GitHub App for this server, then installs it and chooses the repositories it may read | installation tokens (1 h), minted on demand with a JWT signed by the app's private key; kept in memory only |
+| `oauth` | GitLab | authorizes an OAuth application created for this server | an access token (2 h), renewed with its refresh token |
+| `token` | both | pastes a personal access token (the way without a browser) | the token as it is |
+
+The first two happen on the provider's own pages: no token is typed, and
+the server only gets read access (GitHub: `contents: read` and `metadata:
+read` on the chosen repositories; GitLab: `read_api`, `read_repository`).
+A GitHub App can be registered from a **manifest**, so no application has
+to exist beforehand: it works for any server, whatever its address,
+`localhost` included. GitLab has no such registration: its OAuth
+application is created once by the user (redirect URI = the dashboard's
+`/git/callback`, the two scopes, confidential) and its `client_id` /
+`client_secret` are given to the server the first time; the instance's
+next authorizations reuse them.
+
+**Data model.** `GitConnection { id (git-…), provider, base_url, auth,
+account, account_name, token, refresh_token, scopes, token_expires_at,
+client_id, client_secret, app: GithubApp { id, slug, url, private_key,
+webhook_secret }, installation: GithubInstallation { id, url,
+repository_selection } }`; one row per `(provider, base_url, account)`,
+the account compared case-insensitively. Migration
+`0003_git_connections.sql` made the table for pasted tokens, with a
+`git_connection_id` on services; `0004_git_authorization.sql` adds the
+columns of the other kinds and drops that one, so the connections of a
+database that ran the first become `token` connections and its services
+are cloned with the connection of their repository's host. `base_url` is
+the instance's web URL without a trailing slash (`https://github.com`,
+`https://gitlab.com`, `https://gitlab.example.com`), validated by
+`validate::git_base_url`. A
+connection is **pending** until its authorization is finished
+(`is_connected`): a GitHub App that is registered and not installed, an
+OAuth application no account authorized yet (its `account` is empty).
+Pending connections are listed, so the dashboard can finish them, and
+never used. The type is not serializable: the API returns
+`GitConnectionView` — `status` (`connected` / `pending`), `auth`, the
+account, `client_id`, `app_slug` / `app_url`, `manage_url` (GitHub's page
+of the installation, where its repositories are chosen),
+`repository_selection` (`all` / `selected`), the names of the `services`
+it clones for, and for a personal token `token_hint` (its end), `scopes`
+and `token_expires_at` — and no secret.
+
+**Authorizing in the browser** takes two calls, made by the dashboard:
+
+1. `POST /api/v1/git/authorize` (`ferry_scm::start`) answers with the page
+   to send the browser to. Its `redirect_uri` is the dashboard's
+   `/git/callback` page (`validate::git_redirect_uri`: an http(s) URL
+   without credentials, query string or fragment).
+2. The provider sends the browser back to `redirect_uri` with query
+   parameters, which that page hands to `POST /api/v1/git/callback`
+   (`ferry_scm::callback`). It answers with the next page, or with the
+   connection.
+
+Every page the browser is sent to carries a `state` (48 hex characters)
+the server made up and remembers in memory with what it expects back — for
+an hour, at most 256 at a time — and an answer is only accepted with it,
+once. A restart of the server forgets them: the authorization is started
+again.
+
+* **GitHub.** `authorize` answers `method: post`: the browser submits the
+  form field `manifest` to `<base_url>/settings/apps/new?state=…` (or
+  `/organizations/<organization>/settings/apps/new`, since a private app
+  only reads the repositories of the account or organization that owns
+  it). The manifest describes a private app named `ferry-<host>-<random>`
+  with read access to contents and metadata, no webhook, and
+  `redirect_url`, `setup_url` and `callback_urls` all set to
+  `redirect_uri` (`setup_on_update`: GitHub also comes back after an
+  installation's repositories were changed). GitHub redirects with
+  `?code=`; the callback converts it (`POST
+  /app-manifests/{code}/conversions`) into the app's id, slug, client id
+  and secret and private key, saves them as the pending connection of the
+  app's owner, and answers with `<app url>/installations/new?state=…`.
+  GitHub redirects with `?installation_id=`; the callback reads that
+  installation as the app (`GET /app/installations/{id}` — an id that
+  isn't one of this app's is refused) and the connection is connected,
+  under the account the app is installed on. An installation that waits
+  for an organization owner's approval (`setup_action=request`) is told
+  so; a suspended one is refused. A callback without `state` but with an
+  `installation_id` (GitHub's own pages lead there) re-reads that
+  installation, on the connection whose app has it.
+* **GitLab.** `authorize` answers with `<base_url>/oauth/authorize?
+  client_id&redirect_uri&response_type=code&state&scope=read_api+
+  read_repository` — 400 `git_application_required` when the server has no
+  application for that instance and the request brings none. An
+  application given before any account authorized it is kept as a pending
+  connection. GitLab redirects with `?code=`, or with
+  `?error=access_denied` when the user refuses (400
+  `git_authorization_rejected`); the callback exchanges the code (`POST
+  <base_url>/oauth/token`, with the same `redirect_uri`), asks whose token
+  it is (`GET /api/v4/user`) and saves the tokens on that account's
+  connection.
+* **`connection_id`** resumes or repeats an authorization: a GitHub App
+  connection goes to its installation page, or is connected at once when
+  the app turns out to be installed (`status: connected`); an OAuth
+  connection is authorized again, with another application when the
+  request brings one; a connection made with a token takes a new token
+  instead. Connecting an account that is already connected, by any of the
+  three ways, replaces what connected it.
+
+**Tokens** (`ferry_scm::access`). A personal token is used as it is. An
+OAuth access token is renewed with its refresh token 5 minutes before it
+expires — one renewal at a time per connection, because GitLab's refresh
+tokens work once — and both are saved (`Store::set_git_tokens`, which
+leaves `updated_at` alone: a renewal is not a change). An installation
+token is minted when needed (`POST /app/installations/{id}/access_tokens`,
+authenticated by a JWT: RS256, `iss` = the app's id, expiring after 9
+minutes, signed with `ring`), kept in memory until 5 minutes before its
+hour ends, and never stored. When the authorization is gone — the refresh
+token revoked, the app uninstalled or deleted — the error says to connect
+the account again.
+
+**With a token** (`POST /api/v1/git/connections`): the token is checked by
+asking the provider whose it is — GitHub `GET /user` (`api.github.com`, or
+`<base_url>/api/v3` on GitHub Enterprise Server), GitLab `GET
+<base_url>/api/v4/user` — always as `Authorization: Bearer`. The answer
+gives the account, and what is known about the token: its scopes (GitHub's
+`x-oauth-scopes`, for classic tokens; GitLab's `GET
+/personal_access_tokens/self`) and its expiry
+(`github-authentication-token-expiration`; `expires_at`). Needed: on GitHub
+a classic token with `repo` (or a fine-grained one with read access to
+Contents and Metadata), on GitLab `read_api` + `read_repository`.
+
+**Which connection clones a repository** (`git_connection_for`).
+`GitConnection::serves(repo_url)`: an http(s) URL of the same scheme, host
+and port as `base_url` (below its path when it has one), read by
+`git::parse_http_url`, which refuses anything that isn't a plain URL:
+credentials, unusual characters, other schemes. A URL with credentials of
+its own, an ssh URL and a local path are never served, so a token is never
+sent anywhere but to its own provider. Among the connected connections
+that serve the URL, the one of the repository's owner
+(`https://github.com/<account>/…`) comes first, then the most recently
+updated. A GitHub App is only used for the account it is installed on (its
+tokens read nothing else); a user's OAuth or personal token is tried for
+any repository of its instance.
+
+**Listing repositories** (`GET …/connections/{id}/repositories`). A GitHub
+App: `GET /installation/repositories`, exactly what the account allowed.
+Otherwise GitHub `GET /user/repos?sort=pushed` (owned, collaborator and
+organization repositories), GitLab `GET
+/projects?membership=true&order_by=last_activity_at`. 100 per page, at
+most 10 pages (`truncated` says when there are more), the pages after the
+first fetched 4 at a time when the provider says how many there are.
+Nothing is cached on the server; the dashboard keeps a listing for a
+minute and has a Refresh button.
+
+**Branches** (`GET /api/v1/git/branches?repo_url=`) are asked from the
+repository itself, not from the provider's API: `git ls-remote --symref
+<url> HEAD 'refs/heads/*'` (`ferry_build::remote_branches`, 20 s), with
+what a deploy would clone with — the connection that serves the URL, the
+credentials the URL carries, or nothing. It therefore works for any URL a
+service can deploy from (other hosts, ssh, a path on the server) and shows
+what a deploy will see. The answer has the default branch (the remote's
+`HEAD`) first, then the others by name, and `connection_id` when a
+connection was used. A remote that refuses, isn't found or doesn't answer
+is 502 `git_remote_unreachable`, with the hint of the next paragraph.
+
+**Cloning** (§5.3). The pipeline asks `ferry_scm::repo_access` what reads
+the deploy's `repo_url`, logs `==> Cloning with the GitHub account
+'octocat'` and hands `BuildSource::Git` the credentials: the token as the
+password, with the username `x-access-token` (GitHub) or `oauth2`
+(GitLab). `ferry-build` gives them to git like credentials embedded in a
+URL (§15). A connection that can't produce a token is said (`==> Warning:
+the … can't be used (…): cloning without it`) and the clone goes on
+without it: a public repository still deploys. When the remote refuses the
+clone, the deploy log gets a `==> Hint:` — add the repository to the app's
+installation; check the account's access or connect it again; the token
+may have expired; or, without a connection, that a private repository
+needs its account connected to the server. A deploy's `source` and the git
+cache only ever hold the plain URL.
+
+**Provider failures** never answer 401 (which means "wrong Ferry token" to
+API clients: the dashboard signs out). An authorization the provider
+refuses is 400 while it is being made (a rejected token or code, a user
+who said no) and 409 when it is what a connection has stored (also a
+pending connection asked for its repositories) — both with code
+`git_authorization_rejected` — and an unreachable, failing or
+rate-limiting provider is 502 `git_provider_unavailable`. Messages name
+the provider and never contain a secret.
+
+**Removing.** `DELETE /api/v1/git/connections/{id}` is refused (409) while
+the connection clones the repository of services, unless `force=true`;
+those services keep their repository and are cloned without credentials
+from then on (or with another connection that serves it). What was
+authorized stays on the provider until it is removed there: the GitHub App
+(in GitHub's settings), the OAuth grant, the token.
+
+**Change feed.** Connections are the `git_connection` kind of §10's feed,
+fingerprinted by `id` and `updated_at` only: a renewed token is not a
+change.
+
+Not covered: registering webhooks on the provider (the GitHub App has
+none; auto-deploy still needs the GitHub webhook of §10 or a deploy hook),
+encrypting the stored secrets beyond the data directory's permissions
+(§15), and connecting accounts from the CLI or a blueprint (both deploy
+repositories through the server's connections, like the API).
+
+## 19. Running the server (`ferryd`)
+
+`ferryd` is one binary: the server's options (`ferryd --help`) and five
+commands.
+
+| command | does |
+|---|---|
+| `ferryd [options]` | `start` when stdin and stdout are a terminal (and it is not PID 1, Unix only), `run` otherwise: a service manager, a container, a pipe and a script get the foreground server they supervise |
+| `ferryd start [options]` | starts the server in the background and returns once it listens |
+| `ferryd run [options]` | the server itself, in the foreground, until SIGINT / SIGTERM (a second one exits at once) |
+| `ferryd stop` | SIGTERM to the server of the data directory, then waits (up to 60 s) until it released the lock; a second `stop` is the server's second signal: it exits at once |
+| `ferryd status` | where the server of the data directory listens; exit code 0 when one runs, 3 when none does |
+| `ferryd logs [-f] [-n N]` | the end (100 lines) of `ferryd.log`, and with `-f` what is appended to it |
+
+Options are written after the command (`ferryd run --data-dir …`); one in
+front of a command is an error, not ignored. `stop`, `status` and `logs`
+only take `--data-dir` / `FERRY_DATA_DIR`.
+
+**Finding the server** takes two files of the data directory. The lock
+`ferryd.lock` (§15) says whether a server is alive: nothing else is trusted
+for that. `ferryd.json` (`0600`) says what it is — `ServerState { pid,
+version, started_at, background, ready: { api_url, summary }? }` — written
+by every server (`run` too) when it has the lock, completed with `ready`
+(the lines of the startup banner) when the API listens, and removed when
+it stops. A `ferryd.json` without the lock held is a leftover of a server
+that was killed and is ignored; a lock held without the file (a server of
+an older version) is "running" for `status` and an error for `stop`, which
+never signals a process it can't name.
+
+**`start`** (`ferryd::daemon::start`, Unix only — elsewhere it says to use
+`ferryd run`):
+
+1. A server already holds the data directory: prints where it listens and
+   exits 0, changing nothing.
+2. Opens `<data-dir>/ferryd.log` for appending (`0600`), after moving a
+   file bigger than 10 MiB to `ferryd.log.1`.
+3. Executes itself as `ferryd run --detached <the same options>` — the
+   command line as typed, so relative paths and the environment mean the
+   same — with stdin from `/dev/null`, stdout and stderr to the log, in a
+   session of its own (`setsid`): closing the terminal (SIGHUP) and Ctrl-C
+   in it no longer reach the server.
+4. Polls, every 50 ms: the child exited → prints what it logged (its
+   `Error: …` included) and exits 1; `ferryd.json` has the child's pid and
+   `ready` → prints the banner under "running in the background (pid N)",
+   the warnings and errors it logged while starting, and how to follow and
+   stop it; after 60 s → exits 1, saying the server keeps starting.
+
+The banner ends with what to do next, decided when it is printed (`start`,
+`status` and `run` alike): `Create your account: <api_url>/setup?code=…`
+while `<data-dir>/setup_code` exists (§20), else `Connect the CLI : ferry
+login`. It never prints a token.
+
+The server logs with colors only when its stdout is a terminal (and
+`NO_COLOR` is unset): never into `ferryd.log`, a pipe or the journal.
+Nothing rotates `ferryd.log` while a server runs; a long-lived server
+belongs under a service manager with `ferryd run` (README, "Running the
+server").
+
+## 20. Accounts, sessions and API tokens
+
+A server has **one account**: its administrator (`users`, one row). There
+are no teams or roles (§1): whoever is authenticated can do everything.
+What differs is how each client proves who it is.
+
+| client | proves it with | lives |
+|---|---|---|
+| the dashboard | the session cookie (`ferry_session_<port>`), got by signing in with the account's email and password | 30 days after its last use |
+| the CLI, scripts, CI | an API token, `Authorization: Bearer fy_…` | until revoked, or its `expires_at` |
+| scripts on the server | the server token (`<data-dir>/api_token`, `--api-token`) | until the file is replaced |
+
+**Data model** (migration `0005_accounts.sql`). `User { id (usr-…), email
+(lowercase, unique), password_hash, created_at, updated_at }`; `Session {
+id (ses-…), user_id, token_hash, user_agent, created_at, last_used_at,
+expires_at }`; `ApiToken { id (tok-…), name, token_hash, hint, created_at,
+last_used_at, expires_at? }`. `password_hash` is an Argon2id PHC string
+(`ferry_core::auth`, the crate's default cost, a salt per hash, computed on
+a blocking thread). A session secret (`fys_` + 48 hex) and an API token
+(`fy_` + 40 hex, like the server token) are random, so the store keeps
+their SHA-256 only (`token_hash`): a fast digest is enough when there is
+nothing to guess, and a copy of the database authenticates nobody. `hint`
+is the end of a token, to tell tokens apart. None of the three types is
+serializable: the API answers with `UserView`, `SessionView` and
+`ApiTokenView`.
+
+**First run.** While `users` is empty, creating the account takes the
+**setup code**: 24 hex characters in `<data-dir>/setup_code` (`0600`),
+written by `ferryd` at startup (`ferry_api::setup::ensure_code`) and
+printed in a link by the banner (§19). `POST /api/v1/auth/setup` compares
+it in constant time, creates the account only if none exists (one `INSERT
+… WHERE NOT EXISTS`: of two setups at once, one wins), deletes the file
+and signs the browser in. Without the code a server reachable by others —
+`--api-addr 0.0.0.0`, the dashboard host of the proxy — could be claimed by
+whoever opens it first. A server upgraded from a version without accounts
+is in the same state: its next start prints the link.
+
+**Authenticating a request** (`ferry_api::auth::authenticate`, the
+middleware of the `/api` router):
+
+1. A bearer token (or `?access_token=` on GET): the server token, compared
+   in constant time, else the API token with that digest, unless expired.
+   Anything else is 401 `invalid API token`.
+2. Else the cookie: the session with that digest, unless expired (401
+   `your session has ended`). For a method that changes something the
+   request must also come from the dashboard's own pages
+   (`same_origin`): `Sec-Fetch-Site: same-origin` when the browser sends
+   it, else an `Origin` whose host is the request's `X-Forwarded-Host` /
+   `Host`, else (no browser sent the cookie on its own) allowed. Otherwise
+   403 `cross_site_request`. With the cookie's `SameSite=Strict`, this is
+   the whole CSRF defence: there is no CSRF token to carry.
+3. Else 401 `not signed in`.
+
+The handler gets an `Identity` (`Session { session, user }`, `ApiToken`,
+`ServerToken`). The account's routes sit behind a second middleware
+(`require_session`): 403 `session_required` for a token, before the body is
+even read — a token makes no tokens, changes no password and approves no
+terminal. Using a session or a token records `last_used_at` at most every
+5 minutes; for a session it also pushes `expires_at` 30 days ahead.
+
+**The cookie**: `ferry_session_7878=<secret>; Path=/; HttpOnly;
+SameSite=Strict; Max-Age=34560000`, plus `Secure` when the request says
+`X-Forwarded-Proto: https` (the proxy of §3 sets it). Its name ends with
+the port of the address the browser used — of `X-Forwarded-Host` behind a
+proxy, else of `Host`; plain `ferry_session` when there is none
+(`session_cookie_name`) — because browsers keep cookies per host name, not
+per port: two servers reached at `127.0.0.1:7878` and `127.0.0.1:7879`
+(§4's several servers on one machine, or two SSH tunnels) would otherwise
+overwrite each other's session. The long `Max-Age`
+only keeps the browser from dropping it first: the server decides when the
+session ends. `SameSite=Strict` doesn't get in the way of links that
+arrive from elsewhere (the setup link, a provider's redirect to
+`/git/callback`, the page of a `ferry login`): the page is static, and its
+own requests are same-site.
+
+**Signing in** verifies the password against the stored hash — or against
+a throwaway hash when no account has the email, so both refusals take as
+long and say the same (`invalid_credentials`). **Failed attempts** (wrong
+password, wrong setup code, wrong current password) are counted for the
+whole server, in memory: 10 within 5 minutes refuse further attempts with
+429 `too_many_attempts` until the oldest is 5 minutes old. It is not per
+client address — behind the proxy that would trust a header — so someone
+who can reach the API can delay the administrator: one more reason to keep
+the API on localhost or behind HTTPS (§15). Changing the password ends
+every other session; `ferryd reset-password` (the forgotten password:
+asked twice without echo, or one line of standard input) replaces it in
+the database directly — whoever can run it can read the data directory —
+and ends every session. API tokens are untouched by both.
+
+**`ferry login` in the browser** (a device-style flow; the requests live
+in memory, `auth::Runtime`, at most 100, 10 minutes each):
+
+1. The terminal: `POST /api/v1/auth/cli {name: "ada@laptop"}` → `{id,
+   code, secret}`. It prints `<server>/cli-login?id=<id>` and `code`
+   (`ABCD-EFGH`, 8 characters without look-alikes), opens the page, and
+   polls `POST /api/v1/auth/cli/{id}/token {secret}` every 2 s.
+2. The dashboard, signed in (signing in comes back to the page): `GET
+   /api/v1/auth/cli/{id}` shows who asks and the code. The person checks
+   that it is the code of their own terminal — a link someone else sent
+   shows another one — and approves or denies.
+3. Approving creates an API token named after the terminal and keeps it
+   for the next poll, which hands it over **once**; the page never sees it.
+   A token nobody collected before the request expired is revoked.
+
+The terminal then verifies the token and saves it (§12). `--token` /
+`FERRY_TOKEN` skip all of this.
+
+**The server token** (`api_token`) stays what it was — it authenticates
+every API route but the account's — because existing CLI logins, CI and
+scripts on the server use it. It is no longer printed, shown in the
+dashboard or accepted by it; it is as exposed as the data directory.
+
+Not covered: several accounts, roles, an audit log, single sign-on,
+passkeys or a second factor, sessions shown with their address, limiting
+attempts per client, and the scopes of API tokens (each is an
+administrator).
+
+## 21. Domains
+
+A **domain** of the server is a name services are served under: every web
+service and static site answers at `<service>.<domain>`, for each served
+domain, on top of its custom domains. A server starts with one — the
+`--base-domain` it is given — and others are connected while it runs,
+through the API, the CLI or the dashboard: no restart, no deploy.
+
+| | covers | DNS |
+|---|---|---|
+| a domain of the server (this section) | every service: `<service>.example.com` | one wildcard record, `*.example.com` |
+| a custom domain of a service (§10) | that service: `www.example.com` | one record per name |
+
+**Data model** (migration `0006_domains.sql`). `Domain { id (dom-…), name
+(lowercase, unique), source, status, is_default, checks, failures,
+created_at, verified_at?, checked_at? }`.
+
+* `source`: `config` — the base domain: one row, kept in step with
+  `--base-domain` at every start (`Store::sync_base_domain`: a base
+  domain that changed replaces the row, a connected domain of that name
+  becomes it) — or `connected`.
+* `status`: `pending` (its names don't reach the server yet), `active`,
+  or `misconfigured` (they no longer do). A local name — `localhost`,
+  `*.localhost`, `.local`, `.internal`, `.test` (`config::is_local_host`)
+  — is `active` from the start and never verified: there is no DNS to
+  wait for.
+* `is_default`: exactly one row (a partial unique index). The default
+  domain is the one of a service's URL: `ServiceView.url`,
+  `FERRY_EXTERNAL_URL`, the startup banner.
+* `checks`: what the last verification found, `[{kind: dns|http, outcome:
+  passed|warning|failed|skipped, message}]`. `failures`: how many failed
+  in a row (not serialized). `verified_at`: when its names last reached
+  the server; `checked_at`: when it was last verified.
+
+**What is served.** `Domain::is_served`: the base domain, and every
+domain that is not `pending`. The set lives where every part of the
+server already derives hostnames from, the `Config`: `config.domains`
+(`ServedDomains`, shared by the clones of a `Config`), replaced from the
+store by `ferry_core::domains::reload` at startup and whenever a domain
+is connected, verified, made the default or disconnected.
+`Config::service_hosts` is `<name>.<each served domain>` (the default
+one first) plus the custom domains; `Config::default_host` and
+`service_url` use the default domain while it is served, else the base
+domain. The proxy routes, the certificates, the URLs of the API and
+`FERRY_EXTERNAL_URL` follow without knowing about domains. A server that
+sets `--base-domain` loses nothing: that domain is served whatever its
+DNS says, as before.
+
+After a change, `Engine::refresh_domains` reloads the set, installs the
+routes of every service again under its new hostnames (the upstreams
+stay: no instance is touched) and wakes the reconciler. Running
+containers keep the `FERRY_EXTERNAL_URL` they were started with until
+their next deploy or restart.
+
+**DNS records.** `DomainView.records` is what to create where the DNS of
+the domain is managed (`ferry_core::domains::dns_records`):
+
+| type | name | value | |
+|---|---|---|---|
+| `A` | `*` | the server's public IPv4 address | required: every service |
+| `A` | `@` | the same | optional: only to serve the domain itself (a custom domain of a service) |
+
+and the same two as `AAAA` when the server knows an IPv6 address of its
+own (optional next to the IPv4 ones). Names are relative to the domain.
+Without a known address the records come with `value: null`.
+
+The **public addresses** are `--public-ip` (repeatable; `FERRY_PUBLIC_IP`,
+comma-separated) when given. Otherwise the engine finds one IPv4 address
+the first time a non-local domain needs it, and remembers it for 30
+minutes (2 minutes when it found none): the address of the interface
+that routes to the internet when that is a public address; else — a
+server behind NAT — what an address echo service sees
+(`https://api.ipify.org`, `https://ipv4.icanhazip.com`,
+`https://checkip.amazonaws.com`, in that order). An IPv6 address is
+never guessed: the one a machine leaves with is often temporary
+(RFC 8981), and no DNS record should hold it.
+
+**Verification** (`ferry-engine/src/domains.rs`). A domain is verified
+the way a visitor reaches it, with a name nobody used before:
+
+1. **DNS.** The engine resolves `ferry-check-<10 hex>.<domain>` with the
+   system resolver. A new name each time: only a wildcard record answers
+   for it, and no resolver has an old answer in its cache. The addresses
+   are compared with the server's public addresses, per family: an IPv6
+   answer is only judged when the server knows its IPv6 address.
+2. **HTTP.** It requests `GET /.well-known/ferry-domain-check/<token>` for
+   that name from the addresses it resolved to (4 at most, IPv4 first),
+   on the public HTTP port. The proxy answers that path on both
+   listeners, for any `Host`, before routing and before the redirect to
+   HTTPS, with `<token>.<probe id>` — the probe id is made up when the
+   process starts (`config.domains.probe_id()`), so a parked page,
+   another server and another Ferry server are all told apart.
+
+The names **reach the server** when it got its own answer. A server that
+can't reach its own public address (some networks don't route a machine
+back to itself) is believed on its DNS alone — the name resolves to its
+public address and the request timed out or was refused — with an `http`
+warning that says to check the firewall. Every other outcome says what
+it found: no record yet; records that point elsewhere, and where;
+several records of which some are another machine's; a private address
+(reachable from the server, not from the internet); something in between
+that forwards (a CDN, a load balancer); another server answering.
+
+| change | when |
+|---|---|
+| `pending` → `active` | the first verification that reaches the server. Every service is served under the domain at once, and when the default domain was a local name (or one that is not served), this one becomes the default: the URL of a service should be one its visitors can open |
+| `active` → `misconfigured` | 3 failed verifications in a row. The domain **stays served**: an outage of the DNS must not take the services down, and nothing else would answer for these names |
+| `misconfigured` → `active` | the next verification that reaches the server |
+
+The verifier (one task) looks every 5 s, or when a change wakes it, for
+the domains that are due: `pending` ones every 15 s during their first
+hour, then every minute for a day, then every 10 minutes like `active`
+ones; `misconfigured` ones every minute. `POST
+/api/v1/domains/{id}/verify` verifies now. One verification runs at a
+time; resolving is bounded by 5 s, connecting by 4 s, a request by 6 s.
+
+**Hostnames are claimed once.** Connecting a domain and adding a custom
+domain take the same global lock (§10). A domain is refused when it
+would put a service on the dashboard's host or on a custom domain of
+another service. A custom domain can't be `<service>.<domain>` under any
+domain of the server, pending ones included (`Config::claimed_hosts`),
+and a new service can't take a name whose hostnames are custom domains.
+At most 20 connected domains (`MAX_DOMAINS`): each one adds a hostname —
+and with HTTPS a certificate — to every service.
+
+**Certificates.** With HTTPS on, every routed hostname that is not local
+gets its own certificate by HTTP-01, as before; a hostname under a
+connected domain only exists once the domain is verified, so its
+challenge can be answered. What changed is when:
+`RouteTable::hosts_changed()` wakes the certificate loop
+(`CertManager::spawn_with_wake`) 2 s after the set of routed hostnames
+changed, instead of at its next pass, so the services of a domain that
+was just verified have their certificates within seconds. `GET
+/api/v1/certificates` reads the state of each routed hostname through
+`ferry_core::tls::Certificates` (implemented by the manager): `issued`
+with `expires_at`, `issuing`, `pending`, `failed` with `error` and
+`retry_at` (the manager's backoff), `local`, or `disabled` without
+HTTPS.
+
+**Changes** reach the dashboard through the change feed (kind `domain`,
+§10): a verification that changes nothing but `checked_at` is a change
+too, which is how the dashboard shows when a domain was last looked at.
+
+Not covered: a wildcard certificate (one per domain instead of one per
+hostname; it takes the DNS-01 challenge, so the API of the DNS provider —
+and with it, creating the records from the dashboard after authorizing
+Ferry on the provider's own page); serving the dashboard under a
+connected domain (`--dashboard-host` decides, at startup); turning HTTPS
+on without a restart; verifying from outside (the check runs on the
+server: it can't see a firewall that only lets the server reach itself);
+choosing the domains per service (every service is served under every
+domain); internationalized names (use the punycode form).

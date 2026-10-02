@@ -1,0 +1,79 @@
+---
+title: Python
+description: Ferry builds a Python app from requirements.txt, pyproject.toml or Pipfile.
+---
+
+<Flow
+  steps={[
+    { icon: 'search', title: 'Detect', text: 'Ferry finds requirements.txt, pyproject.toml or Pipfile.' },
+    { icon: 'package', title: 'Base image', text: 'python:3.12-slim by default.' },
+    { icon: 'download', title: 'Install', text: 'pip install -r requirements.txt, if the project has that file.' },
+    { icon: 'hammer', title: 'Build', text: 'Your build command, if you set one.' },
+    { icon: 'play', title: 'Start', text: 'python main.py or python app.py. A different server needs a Procfile entry.', tone: 'warning' },
+  ]}
+/>
+
+## A minimal example
+
+<Files>
+  <Folder name="hello-python" defaultOpen>
+    <File name="app.py" />
+    <File name="requirements.txt" />
+    <File name="Procfile" />
+  </Folder>
+</Files>
+
+```txt title="requirements.txt"
+flask==3.1.*
+gunicorn==23.*
+```
+
+```python title="app.py"
+from flask import Flask
+
+app = Flask(__name__)
+
+
+@app.get("/")
+def hello():
+    return "Hello from Python on Ferry\n"
+```
+
+```text title="Procfile"
+web: gunicorn app:app --bind 0.0.0.0:$PORT
+```
+
+```bash title="Terminal"
+ferry up hello-python --follow
+```
+
+The <Term id="procfile" /> line runs with `sh -c`. Thus the <Term id="shell" /> replaces `$PORT` with the value. For FastAPI, use `web: uvicorn main:app --host 0.0.0.0 --port $PORT`.
+
+## What Ferry generates
+
+| Step | What Ferry generates |
+|---|---|
+| <Term id="base-image">Base image</Term> | `python:<version>-slim`. The default is `3.12`. Ferry uses the `major.minor` of `.python-version` or `runtime.txt` (`python-3.11.9`), if there is one. Ferry sets `PYTHONUNBUFFERED=1`. Thus the logs show immediately. |
+| Build | Your build command, if you set one. Example: `python manage.py collectstatic --noinput`. |
+| Start | `python main.py` or `python app.py`, when the file exists. All other servers (Gunicorn, Uvicorn, Django) need a Procfile entry or `--start-cmd`. |
+
+## The install command
+
+| Ferry finds | Install |
+|---|---|
+| `requirements.txt` | `pip install -r requirements.txt` |
+| `uv.lock` | the locked dependencies, with `uv` |
+| `poetry.lock` or `[tool.poetry]` | `poetry install --only main` |
+| a packaged `pyproject.toml` | `pip install .` |
+| a plain PEP 621 `pyproject.toml` | its `[project] dependencies` |
+| `Pipfile` | `pipenv install --system --deploy` (`--skip-lock` with no `Pipfile.lock`) |
+
+## System packages
+
+Ferry adds system packages when your <Term id="dependency">dependencies</Term> need them. The `-binary` variants need nothing.
+
+| Dependency | Packages |
+|---|---|
+| `psycopg2` or `psycopg[c]` | `build-essential libpq-dev` |
+| `psycopg` | `libpq5` |
+| `mysqlclient` | `build-essential default-libmysqlclient-dev pkg-config` |

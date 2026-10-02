@@ -1,0 +1,38 @@
+---
+title: Wait for a referenced port
+description: Before it starts instances, a deploy waits for the first deploy of each service whose port it references.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'deploy', label: 'Deploy of web', note: 'needs the api port' },
+    { id: 'api', at: [2, 0], icon: 'deploy', label: 'Deploy of api', note: 'first deploy' },
+  ]}
+  edges={[{ from: 'web', to: 'api', label: 'port of api?' }]}
+  steps={[
+    {
+      caption: 'A variable of web has a reference to the port of api.',
+      flow: ['web>api'],
+    },
+    {
+      caption: 'The first deploy of api is not complete. The port of api has no value yet, thus the deploy of web waits.',
+      tones: { web: 'warning', api: 'primary' },
+      notes: { web: 'waits', api: 'in progress' },
+    },
+    {
+      caption: 'The deploy of api chooses its port. The deploy of web continues to the start step.',
+      tones: { web: 'success', api: 'success' },
+      notes: { web: 'continues', api: 'port known' },
+    },
+  ]}
+/>
+
+These <Term id="reference">references</Term> need the port of another service. If that service is in its first <Term id="deploy" />, the port has no value yet.
+
+```text title="References to a port" noCopy
+${{service.NAME.port}}
+${{service.NAME.hostport}}
+${{service.NAME.internalUrl}}
+```
+
+The deploy waits only for services that are in their first deploy. See [Env var references](/docs/reference/env-references/port-wait).

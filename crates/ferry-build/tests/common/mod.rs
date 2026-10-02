@@ -58,6 +58,16 @@ pub fn commit_all(dir: &Path, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"])
 }
 
+/// The git source of a local repository.
+pub fn git_source(repo: &Path, branch: &str, commit: Option<String>) -> BuildSource {
+    BuildSource::Git {
+        repo_url: repo.to_string_lossy().into_owned(),
+        branch: branch.to_string(),
+        commit,
+        credentials: None,
+    }
+}
+
 /// `.tar.gz` of `dir`'s contents, optionally under a top-level directory.
 pub fn tar_gz(dir: &Path, top: Option<&str>, out: &Path) {
     let f = fs::File::create(out).unwrap();

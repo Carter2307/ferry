@@ -1,0 +1,73 @@
+---
+title: The server token
+description: The server token is an API token that ferryd makes for scripts on the server itself.
+---
+
+<Diagram
+  nodes={[
+    { id: 'file', at: [0, 0], icon: 'file-key', label: 'api_token', note: 'mode 0600' },
+    { id: 'script', at: [1.5, 0], icon: 'terminal', label: 'Script', note: 'on the server' },
+    { id: 'ferryd', at: [3, 0], icon: 'server', label: 'ferryd' },
+  ]}
+  edges={[
+    { from: 'file', to: 'script', label: 'cat' },
+    { from: 'script', to: 'ferryd', label: 'token' },
+  ]}
+  steps={[
+    {
+      caption: 'At its first start, ferryd makes the server token. It writes the token to the file api_token.',
+      tones: { file: 'primary' },
+      notes: { ferryd: 'makes the token' },
+    },
+    {
+      caption: 'A script on the server reads the file.',
+      flow: ['file>script'],
+    },
+    {
+      caption: 'The script sends the token to the API, like each other API token.',
+      flow: ['script>ferryd'],
+    },
+    {
+      caption: 'ferryd hashes the two values with SHA-256. Then it compares them in constant time.',
+      tones: { ferryd: 'success' },
+      notes: { ferryd: 'accepted' },
+    },
+  ]}
+/>
+
+```bash title="On the server"
+FERRY_TOKEN="$(cat /var/lib/ferry/api_token)" ferry services
+```
+
+`ferryd` has a token of its own: the <Term id="server-token" />. It is for scripts on the server itself. It has the same access as the other [API tokens](/docs/architecture/security/api-tokens).
+
+## What is different
+
+| | Server token | Other tokens |
+|---|---|---|
+| Where it is | `<data-dir>/api_token`, mode `0600` | The dashboard shows it one time |
+| In the list of the dashboard | No | Yes |
+| Revoke in the dashboard | No | Yes |
+
+`ferryd` never prints the server token.
+
+## Replace the server token
+
+Use one of these two procedures:
+
+- Restart `ferryd` with a new `--api-token`.
+- Stop `ferryd`. Delete `<data-dir>/api_token`. Start `ferryd` again: it makes a new token.
+
+Then give the new token to each program that used the old token.
+
+<Accordions>
+  <Accordion title="Set the token yourself">
+    `--api-token` or `FERRY_API_TOKEN` sets the server token. `ferryd` then does not use the file. `ferryd --help` does not show the value from the environment.
+  </Accordion>
+  <Accordion title="Why it works like the other tokens">
+    The server token authenticates the API like the other tokens. Thus the CLI logins and the CI jobs that use it continue to work.
+  </Accordion>
+  <Accordion title="Constant time">
+    `ferryd` hashes both values with SHA-256. Then it compares them with no early exit. The time of the comparison tells nothing about the token.
+  </Accordion>
+</Accordions>

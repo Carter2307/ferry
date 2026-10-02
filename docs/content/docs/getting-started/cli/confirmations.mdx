@@ -1,0 +1,67 @@
+---
+title: Confirm a delete
+description: A command that deletes something asks a question first. In a script, it needs --yes.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cmd', at: [0, 1], icon: 'trash', label: 'ferry delete' },
+    { id: 'ask', at: [1.6, 0], icon: 'info', label: 'Question', note: '[y/N]' },
+    { id: 'yes', at: [1.6, 1], icon: 'check', label: '--yes', note: 'no question' },
+    { id: 'refuse', at: [1.6, 2], icon: 'ban', label: 'Refuses', note: 'error' },
+    { id: 'done', at: [3.2, 0.5], icon: 'ok', label: 'Deleted' },
+  ]}
+  edges={[
+    { from: 'cmd', to: 'ask' },
+    { from: 'cmd', to: 'yes' },
+    { from: 'cmd', to: 'refuse' },
+    { from: 'ask', to: 'done', label: 'y' },
+    { from: 'yes', to: 'done' },
+  ]}
+  steps={[
+    {
+      caption: 'In a terminal, the command asks a question before it deletes.',
+      hide: ['yes', 'refuse'],
+      flow: ['cmd>ask'],
+      tones: { ask: 'warning' },
+    },
+    {
+      caption: 'You answer y. The command deletes.',
+      hide: ['yes', 'refuse'],
+      flow: ['ask>done'],
+      tones: { done: 'success' },
+    },
+    {
+      caption: 'With --yes, the command asks no question.',
+      hide: ['ask', 'refuse'],
+      flow: ['cmd>yes', 'yes>done'],
+      tones: { yes: 'primary', done: 'success' },
+    },
+    {
+      caption: 'In a script with no --yes, the command refuses to run.',
+      hide: ['ask', 'yes', 'done'],
+      flow: ['cmd>refuse'],
+      tones: { refuse: 'danger' },
+    },
+  ]}
+/>
+
+## The commands that ask
+
+`ferry delete`, `ferry db rm`, `ferry env-group rm` and `ferry deploy-hook rotate`.
+
+```text title="The question" noCopy
+Delete service 'node-hello' with all its deploys? [y/N]
+```
+
+## No question
+
+Add `--yes`, or its short form `-y`.
+
+## In a script or a CI job
+
+If the input is not a terminal, these commands refuse to run without `--yes`.
+
+```text title="Error" noCopy
+error: refusing to delete service 'node-hello' with all its deploys without confirmation: re-run with --yes
+```

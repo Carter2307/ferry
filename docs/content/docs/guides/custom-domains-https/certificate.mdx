@@ -1,0 +1,32 @@
+---
+title: Wait for the certificate
+description: Ferry asks for the certificate some seconds after the proxy routes the domain. Follow the request, then test the site.
+---
+
+<Terminal
+  lines={[
+    '$ ferry certificates',
+    'HOST               SERVICE   CERTIFICATE',
+    'shop.example.com   shop      issued        expires in 2mo',
+  ]}
+/>
+
+Ferry asks for the <Term id="certificate" /> some seconds after the proxy routes the domain. The state `issued` tells you that the certificate is ready.
+
+If a request failed, the command shows the cause and the time of the next attempt. The dashboard shows the same data in **Server → Domains**. See [the states](/docs/guides/domains/certificates).
+
+## In the server log
+
+```text title="journalctl -u ferryd" noCopy
+INFO requesting a TLS certificate for shop.example.com
+INFO obtained a TLS certificate for shop.example.com (valid until 2026-12-26 07:12:03 UTC)
+```
+
+## Test the site
+
+```bash title="Terminal"
+curl -I https://shop.example.com
+curl -I http://shop.example.com     # 308 Permanent Redirect to https://shop.example.com/
+```
+
+The second command shows the <Term id="redirect" /> from HTTP to HTTPS.

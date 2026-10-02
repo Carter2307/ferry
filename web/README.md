@@ -20,7 +20,7 @@ npm install
 FERRY_API_URL=http://127.0.0.1:7878 npm run dev     # → http://localhost:5173
 ```
 
-Vite proxies `/api`, `/hooks` and `/healthz` to `FERRY_API_URL`. Server-Sent Events (log streams and the change feed) pass through unbuffered. Sign in with the API token that `ferryd` prints on first start (it is also stored in `<data-dir>/api_token`).
+Vite proxies `/api`, `/hooks` and `/healthz` to `FERRY_API_URL`. Server-Sent Events (log streams and the change feed) pass through unbuffered. Sign in with the server's account (a new server prints the link that creates it: `ferryd status`). The session cookie works through the proxy: the dev server forwards the host the browser used (`xfwd`), which `ferryd` compares with the `Origin` of requests that change something.
 
 | Script | What it does |
 |---|---|
@@ -44,8 +44,8 @@ The app always calls the API on the same origin (`/api/v1/...`), so no CORS setu
 
 ## Transport: why HTTP + SSE (no gRPC, no WebSocket)
 
-- **Queries and mutations use HTTP(S) + JSON REST** (`/api/v1/*`, DESIGN.md §10). It maps directly onto TanStack Query (caching, dedupe, retries, invalidation) and matches what the CLI uses. The token travels in `Authorization: Bearer …`.
-- **Server-to-client push uses Server-Sent Events**, read with `fetch()` and a streaming parser (`src/lib/api/sse.ts`), so the token stays in a header and never in a URL:
+- **Queries and mutations use HTTP(S) + JSON REST** (`/api/v1/*`, DESIGN.md §10). It maps directly onto TanStack Query (caching, dedupe, retries, invalidation) and matches what the CLI uses. The dashboard is authenticated by its session cookie (`HttpOnly`: no script reads it), sent by the browser to its own origin.
+- **Server-to-client push uses Server-Sent Events**, read with `fetch()` and a streaming parser (`src/lib/api/sse.ts`), with the same cookie:
   - log streams: `/api/v1/deploys/{id}/logs`, `/api/v1/jobs/{id}/logs`, `/api/v1/services/{id}/logs` (`event: log` … `event: end`);
   - change feed: `/api/v1/events` (`event: ready`, then `event: change` with `{kind, id, service_id, action}`). Each change turns into TanStack Query invalidations (`src/lib/api/events.ts`). The client reconnects with exponential backoff from 1s to 15s. If the server has no change feed (404), queries fall back to polling: 5s for lists, 2–3s for the detail on screen.
 - **Why not gRPC:** browsers would need gRPC-Web, an extra proxy and a protobuf toolchain, with no benefit for small JSON payloads.
@@ -67,11 +67,14 @@ src/
   lib/api/useLogStream.ts        log stream hook
   lib/format.ts  lib/dotenv.ts   pure helpers (tested)
   lib/resources.ts               memory / CPU limits: parse + format (mirror of ferry-core resources.rs), presets, form model
+  lib/git.ts                     git connections: labels, links to the providers' pages, token scopes / expiry, repository search
+  lib/gitAuthorize.ts            authorizing an account on the provider's pages: redirect URI, callback parameters, where to go back
   stores/auth.ts  stores/ui.ts   zustand
   components/ui/*                shadcn primitives (customized)
   components/shell/*             AppShell, TopBar, IconRail, InnerMenu, CommandMenu, ConnectPopover
+  components/git/*               ConnectGitDialog (authorize a GitHub / GitLab account on the provider's pages, or give a token), BranchSelect (branches read from the repository)
   components/patterns/*          PageHeader, FormCard, InfoTile, MetricCard, EmptyState, LogViewer, …
   pages/**                       routed pages (each file exports a named `XxxPage`)
 ```
 
-The token is kept in `localStorage` under `ferry.token`, the same key the previous single-file dashboard used, so existing sessions carry over. UI preferences (theme, rail, log viewer options) are kept under `ferry.ui`. `public/theme-init.js` applies the saved theme before first paint. It is an external file so the app works under a strict `script-src 'self'` Content Security Policy.
+Nothing about the session is kept by the page: `src/stores/auth.ts` only knows whether there is one (`loading`, `setup`, `signed-out`, `signed-in`), from `GET /api/v1/auth/status` at startup and from the answers of signing in. A 401 `unauthorized` on any request means the session ended and returns to `/login`. The `ferry.token` entry that earlier versions kept in `localStorage` is removed on load. UI preferences (theme, rail, log viewer options) are kept under `ferry.ui`. `public/theme-init.js` applies the saved theme before first paint. It is an external file so the app works under a strict `script-src 'self'` Content Security Policy.

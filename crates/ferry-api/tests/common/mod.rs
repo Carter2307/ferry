@@ -10,9 +10,11 @@ use axum::Router;
 use axum::body::Body;
 use ferry_api::{AppState, router};
 use ferry_core::dto::{InstanceStatus, RuntimeStatus};
+use ferry_core::tls::{CertificateStatus, Certificates};
 use ferry_core::{
-    CancellationToken, Config, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Engine, Error, JobRun,
-    JobStatus, JobTrigger, LogLine, LogOptions, LogStream, Result, ServiceState, Store, compute_service_state,
+    CancellationToken, CheckOutcome, Config, Deploy, DeployRequest, DeploySource, DeployStatus, DeployTrigger, Domain,
+    DomainCheck, DomainCheckKind, DomainStatus, Engine, Error, JobRun, JobStatus, JobTrigger, LogLine, LogOptions,
+    LogStream, Result, ServiceState, Store, compute_service_state,
 };
 use http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -31,6 +33,10 @@ pub struct MockEngine {
     pub fail_update_limits: AtomicBool,
     /// Running instances `service_status` reports (default: all desired).
     pub running: Mutex<Option<u32>>,
+    /// The domains whose names "reach the server" when they are verified.
+    pub reachable: Mutex<Vec<String>>,
+    /// What `public_addresses` answers.
+    pub public_ips: Mutex<Vec<std::net::IpAddr>>,
 }
 
 impl MockEngine {
@@ -43,6 +49,8 @@ impl MockEngine {
             fail_scale: AtomicBool::new(false),
             fail_update_limits: AtomicBool::new(false),
             running: Mutex::new(None),
+            reachable: Mutex::new(Vec::new()),
+            public_ips: Mutex::new(vec!["203.0.113.10".parse().unwrap()]),
         }
     }
 
@@ -268,6 +276,54 @@ impl Engine for MockEngine {
         }
         Ok(())
     }
+
+    async fn refresh_domains(&self) -> Result<()> {
+        self.record("refresh_domains".into());
+        Ok(())
+    }
+
+    /// Like the real engine: a domain in `reachable` becomes active (and the
+    /// default one when the default was a local name), another one records a
+    /// failed check and stays what it was.
+    async fn verify_domain(&self, domain_id: &str) -> Result<Domain> {
+        self.record(format!("verify_domain {domain_id}"));
+        let mut d = self.store.require_domain(domain_id).await?;
+        if d.is_local() {
+            return Ok(d);
+        }
+        let reached = self.reachable.lock().unwrap().contains(&d.name);
+        d.checked_at = Some(ferry_core::now());
+        if reached {
+            d.status = DomainStatus::Active;
+            d.verified_at = d.checked_at;
+            d.checks = vec![DomainCheck::new(DomainCheckKind::Dns, CheckOutcome::Passed, "resolves to this server")];
+        } else {
+            d.failures += 1;
+            d.checks = vec![DomainCheck::new(DomainCheckKind::Dns, CheckOutcome::Failed, "no DNS record yet")];
+        }
+        let d = self.store.record_domain_check(&d).await?;
+        let all = self.store.list_domains().await?;
+        if reached && !all.iter().any(|x| x.is_default && x.is_served() && !x.is_local()) {
+            self.store.set_default_domain(&d.id).await?;
+        }
+        self.store.require_domain(&d.id).await
+    }
+
+    async fn public_addresses(&self) -> Vec<std::net::IpAddr> {
+        self.record("public_addresses".into());
+        self.public_ips.lock().unwrap().clone()
+    }
+}
+
+/// A certificate manager that knows the state of a few hosts (the others
+/// have no certificate yet).
+#[derive(Default)]
+pub struct FakeCertificates(pub Mutex<std::collections::HashMap<String, CertificateStatus>>);
+
+impl Certificates for FakeCertificates {
+    fn certificate(&self, host: &str) -> CertificateStatus {
+        self.0.lock().unwrap().get(host).cloned().unwrap_or(CertificateStatus::Pending)
+    }
 }
 
 /// A router over an in-memory store and a mock engine.
@@ -275,6 +331,8 @@ pub struct TestApp {
     pub router: Router,
     pub store: Store,
     pub engine: Arc<MockEngine>,
+    /// Set (with [`TestApp::with_tls`]) when the server "runs with HTTPS".
+    pub certificates: Option<Arc<FakeCertificates>>,
     pub config: Arc<Config>,
     pub shutdown: CancellationToken,
     pub dir: tempfile::TempDir,
@@ -308,24 +366,41 @@ impl TestApp {
     }
 
     pub async fn with_config(f: impl FnOnce(&mut Config)) -> Self {
+        Self::build(f, None).await
+    }
+
+    /// A server with HTTPS: `--https-addr`, `--acme-email` and a certificate manager.
+    pub async fn with_tls() -> Self {
+        let tls = |c: &mut Config| {
+            c.proxy_addr = "0.0.0.0:80".parse().unwrap();
+            c.proxy_https_addr = Some("0.0.0.0:443".parse().unwrap());
+            c.acme_email = Some("ops@example.com".into());
+        };
+        Self::build(tls, Some(Arc::new(FakeCertificates::default()))).await
+    }
+
+    async fn build(f: impl FnOnce(&mut Config), certificates: Option<Arc<FakeCertificates>>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut config =
             Config { data_dir: dir.path().to_path_buf(), api_token: TOKEN.to_string(), ..Config::default() };
         f(&mut config);
         let config = Arc::new(config);
         let store = Store::open_in_memory().await.unwrap();
+        // What a starting server does with its domains (`ferryd`, the engine).
+        ferry_core::domains::init(&store, &config).await.unwrap();
         let engine = Arc::new(MockEngine::new(store.clone()));
         let shutdown = CancellationToken::new();
         let router = router(AppState {
             config: config.clone(),
             store: store.clone(),
             engine: engine.clone() as Arc<dyn Engine>,
+            certificates: certificates.clone().map(|c| c as Arc<dyn Certificates>),
             docker_version: Some("27.0.0".into()),
             docker_cpus: Some(4),
             docker_memory_bytes: Some(8 << 30),
             shutdown: shutdown.clone(),
         });
-        TestApp { router, store, engine, config, shutdown, dir }
+        TestApp { router, store, engine, certificates, config, shutdown, dir }
     }
 
     pub async fn send(&self, req: Request<Body>) -> Resp {

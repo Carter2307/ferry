@@ -1,0 +1,46 @@
+---
+title: Sign in
+description: You sign in with the email and the password of the account of the server.
+---
+
+<Flow
+  steps={[
+    { icon: 'user', title: 'Create the account', text: 'A new server has no account. You create it one time.' },
+    { icon: 'login', title: 'Sign in', text: 'You enter the email and the password of the account.' },
+    { icon: 'clock', title: 'Stay signed in', text: 'The browser keeps the session while you use the dashboard.', tone: 'success' },
+    { icon: 'power', title: 'Sign out', text: 'You sign out, or 30 days pass with no use of the dashboard.', tone: 'muted' },
+  ]}
+/>
+
+## Do it
+
+<Steps>
+<Step>
+
+### Open the dashboard
+
+Use one of [the two addresses](/docs/getting-started/dashboard/open).
+
+</Step>
+<Step>
+
+### Enter the email and the password
+
+Click **Sign in**. The home page opens: [Services](/docs/getting-started/dashboard/services).
+
+</Step>
+</Steps>
+
+The browser keeps the <Term id="browser-session" /> until you sign out. It also stops after 30 days with no use of the dashboard.
+
+## If the server has no account
+
+A new server has no <Term id="admin-account" />. `ferryd` printed a `Create your account` link when it started. Open this link to create the account. See [Installation](/docs/getting-started/installation).
+
+## If you forget the password
+
+Run this command on the server. See [`ferryd reset-password`](/docs/reference/server-options#ferryd-reset-password).
+
+```bash title="On the server"
+ferryd reset-password
+```

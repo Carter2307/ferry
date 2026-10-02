@@ -1,0 +1,50 @@
+---
+title: The route watcher
+description: The route watcher follows the host port of each instance, each second.
+---
+
+<Diagram
+  nodes={[
+    { id: 'watcher', at: [0, 0], icon: 'eye', label: 'Route watcher', note: 'each second' },
+    { id: 'routes', at: [1.5, 0], icon: 'route', label: 'Route table' },
+    { id: 'box', at: [3, 0], icon: 'box', label: 'Instance', note: 'host port 49321' },
+  ]}
+  edges={[
+    { from: 'watcher', to: 'routes' },
+    { from: 'routes', to: 'box' },
+  ]}
+  steps={[
+    {
+      caption: 'The route goes to the instance on its host port.',
+      flow: ['routes>box'],
+      tones: { box: 'success' },
+    },
+    {
+      caption: 'The container crashes. Docker restarts it, and it gets a new host port.',
+      cut: ['routes>box'],
+      tones: { box: 'danger' },
+      notes: { box: 'new host port' },
+    },
+    {
+      caption: 'Each second, the watcher lists the instances that run. It sees the new port.',
+      cut: ['routes>box'],
+      flow: ['watcher>routes'],
+      tones: { watcher: 'primary', box: 'warning' },
+      notes: { box: 'new host port' },
+    },
+    {
+      caption: 'When the new instance accepts connections, the watcher updates the routes of the service.',
+      flow: ['watcher>routes', 'routes>box'],
+      tones: { box: 'success' },
+      notes: { box: 'new host port' },
+    },
+  ]}
+/>
+
+The <Term id="route-watcher" /> is a task that runs next to the passes of the <Term id="reconciler" />.
+
+## Why it exists
+
+Docker publishes each instance on a random <Term id="host-port" />. When Docker restarts a crashed container, the port can change. See [Why 127.0.0.1](/docs/architecture/networking-model/why-localhost).
+
+A full pass comes only each 10 seconds. The watcher does not wait for the next pass. It updates the routes of that service when the new instance accepts connections.

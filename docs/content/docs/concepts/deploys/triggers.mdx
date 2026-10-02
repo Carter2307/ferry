@@ -1,0 +1,62 @@
+---
+title: What starts a deploy
+description: Each deploy records its trigger, the cause that started it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'you', at: [0, 0], icon: 'terminal', label: 'You', note: 'CLI or dashboard' },
+    { id: 'git', at: [0, 1], icon: 'branch', label: 'git push', note: 'auto-deploy' },
+    { id: 'hook', at: [0, 2], icon: 'link', label: 'Deploy hook', note: 'a secret URL' },
+    { id: 'file', at: [0, 3], icon: 'file-code', label: 'Blueprint', note: 'ferry.yaml' },
+    { id: 'queue', at: [1.5, 1.5], icon: 'queue', label: 'Deploy queue', tone: 'primary' },
+    { id: 'live', at: [2.75, 1.5], icon: 'rocket', label: 'New version', tone: 'success' },
+  ]}
+  edges={[
+    { from: 'you', to: 'queue', flow: true },
+    { from: 'git', to: 'queue', flow: true },
+    { from: 'hook', to: 'queue', flow: true },
+    { from: 'file', to: 'queue', flow: true },
+    { from: 'queue', to: 'live' },
+  ]}
+/>
+
+| Trigger | Cause |
+|---|---|
+| `create` | You create a service that has a repository or an image. Add `--no-deploy` to prevent this deploy. |
+| `manual` | [`ferry deploy`](/docs/reference/cli#ferry-deploy), or **Manual deploy** in the dashboard. |
+| `upload` | `ferry up` sends a local folder. |
+| `webhook` | A push to the branch, if [auto-deploy](/docs/guides/github-auto-deploy) is on. |
+| `deploy_hook` | A request to the [deploy hook](/docs/concepts/deploys/deploy-hooks) of the service. |
+| `blueprint` | `ferry blueprint apply` creates the service, or changes its build or deploy settings. |
+| `rollback` | [`ferry rollback`](/docs/reference/cli#ferry-rollback), or **Roll back to this deploy**. |
+| `restart` | `ferry restart`, or **Restart service**. |
+| `env_change` | You save variables with a restart: `ferry env set`, `ferry env unset`, or **Save & restart**. |
+
+## What a manual deploy uses
+
+| Source of the service | A manual deploy uses |
+|---|---|
+| A git repository | The newest commit of the branch, or `--commit <sha>` |
+| A Docker image | The image, which Ferry pulls again |
+| An upload | The last upload |
+
+```bash title="Terminal"
+ferry deploy api --clear-cache   # build without the Docker cache
+```
+
+<Accordions>
+  <Accordion title="More causes of a restart">
+    These causes also give the trigger `restart`:
+
+    - A blueprint that changes only variables.
+    - A new command for a cron job.
+
+    A change to a linked env group, saved with a restart, gives the trigger `env_change`.
+  </Accordion>
+  <Accordion title="API">
+    - `create`: `POST /api/v1/services`.
+    - `manual`: [`POST /api/v1/services/{id}/deploys`](/docs/reference/api/deploys#deploy-a-service).
+    - `webhook`: GitHub calls `POST /hooks/github`.
+  </Accordion>
+</Accordions>

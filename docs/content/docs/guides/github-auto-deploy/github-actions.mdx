@@ -1,0 +1,63 @@
+---
+title: Deploy from GitHub Actions
+description: A GitHub Actions job runs the tests, then calls the deploy hook.
+---
+
+```yaml title=".github/workflows/deploy.yml"
+name: deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci && npm test
+      - run: curl -fsS -X POST "$FERRY_DEPLOY_HOOK"
+        env:
+          FERRY_DEPLOY_HOOK: ${{ secrets.FERRY_DEPLOY_HOOK }}
+```
+
+This job deploys after the tests pass. If `npm test` fails, the job stops before the `curl` line.
+
+## Set it up
+
+<Steps>
+<Step>
+
+### Get the URL of the deploy hook
+
+```bash title="Terminal"
+ferry deploy-hook show api
+```
+
+The command prints the URL of the <Term id="deploy-hook" />. From GitHub, the URL must start with your public dashboard host.
+
+</Step>
+<Step>
+
+### Store the URL as a secret
+
+Store the URL as a secret of your <Term id="ci" />. The job above reads the secret with the name `FERRY_DEPLOY_HOOK`.
+
+</Step>
+<Step>
+
+### Add the workflow file
+
+Add the file above to your repository.
+
+</Step>
+<Step>
+
+### Turn auto-deploy off
+
+```bash title="Terminal"
+ferry update api --no-auto-deploy
+```
+
+If <Term id="auto-deploy" /> stays on, a push also deploys through the <Term id="webhook" />.
+
+</Step>
+</Steps>

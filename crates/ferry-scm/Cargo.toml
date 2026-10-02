@@ -1,0 +1,24 @@
+[package]
+name = "ferry-scm"
+description = "Git providers (GitHub, GitLab) for Ferry: browser authorization, tokens and repository listing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-core.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+# The providers' REST APIs and OAuth token endpoints.
+reqwest.workspace = true
+# A GitHub App authenticates with RS256 JWTs signed by its private key (PEM).
+ring.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true

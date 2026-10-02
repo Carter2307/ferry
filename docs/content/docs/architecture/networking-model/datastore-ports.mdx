@@ -1,0 +1,32 @@
+---
+title: Datastore ports
+description: A datastore publishes its port on 127.0.0.1 with a fixed host port.
+---
+
+<Terminal
+  lines={[
+    '$ ferry db ls',
+    'NAME     KIND       VERSION   STATUS      INTERNAL      HOST PORT   CREATED',
+    'app-db   postgres   16        available   app-db:5432   63114       10s ago',
+    'cache    redis      7         available   cache:6379    63115       10s ago',
+  ]}
+/>
+
+| Column | Use it from | Address |
+|---|---|---|
+| `INTERNAL` | A container on the private network | `app-db:5432` |
+| `HOST PORT` | A tool on the server | `127.0.0.1:63114` |
+
+## A fixed port
+
+Ferry gives the <Term id="host-port" /> to a <Term id="datastore" /> one time, when you create it. The datastore keeps this port after each restart. It gets a new port only if another program took the old port in the meantime.
+
+## From another machine
+
+The external connection string has this port and the host from `--advertise-host` (default `127.0.0.1`).
+
+This option changes only the host that Ferry prints. The port stays on `127.0.0.1`. To reach a datastore from another machine, use an <Term id="ssh-tunnel" />:
+
+```bash title="Terminal"
+ssh -L 63114:127.0.0.1:63114 your-server
+```

@@ -1,0 +1,47 @@
+---
+title: Out-of-memory kills
+description: An OOM kill stops a container that uses more memory than its limit.
+---
+
+```text title="ferry status api" noCopy
+api: degraded — 1/2 instance(s) running
+INSTANCE   DEPLOY     STATE                                    PORT    CPU              MEMORY                  RESTARTS   STARTED
+3f2a1c     7d0e52aa   running                                  63012   2.1% / 0.5 CPU   301.4 MiB / 512.0 MiB   0          12m ago
+9b4e07     7d0e52aa   restarting (OOM killed, exit code 137)   -       -                -                       3          -
+note: instance 9b4e07 was killed for running out of memory (limit 512 MiB). Raise the limit with 'ferry update api --memory <SIZE>', then 'ferry restart api'.
+```
+
+[`ferry status`](/docs/reference/cli#ferry-status) shows the memory of each instance and its limit. An <Term id="oom" /> has the mark `OOM killed`. The `note:` line tells you how to repair it.
+
+## Repair it
+
+Give the service more memory, then restart it. Or find the memory leak in your app.
+
+```bash title="Terminal"
+ferry update api --memory 1G
+ferry restart api
+ferry db update cache --memory 512M     # a datastore: no restart needed
+```
+
+## In the dashboard
+
+Open the **Overview** of the service. The card of the instance shows an **OOM killed** badge with the <Term id="exit-code" />. The **Raise the limit** link opens **Settings** → **Resources**.
+
+<Accordions>
+  <Accordion title="The mark does not stay">
+    Docker clears the mark when the container runs again. Thus `ferry status` shows it only while the instance is `restarting` or stopped.
+
+    The server log keeps the kills of the past. With systemd, read it with `journalctl -u ferryd`.
+  </Accordion>
+  <Accordion title="Exit code 137 is not a proof">
+    Exit code 137 only means that the process got <Term id="sigkill" />. Ferry uses the out-of-memory mark of Docker.
+
+    Without the mark, a deploy reports `instance ab12cd crashed (exit code 137: killed by SIGKILL)`. `ferry status` then shows the exit code without `OOM killed`.
+  </Accordion>
+  <Accordion title="A container with no memory limit">
+    The kernel stops such a container only when the full server has no free memory. The message is: `… was killed by the kernel's out-of-memory killer (it has no memory limit: the Docker host ran out of memory)`.
+  </Accordion>
+  <Accordion title="API">
+    The API gives the same data as `oom_killed` and `exit_code`. See [Runtime status](/docs/reference/api/services#runtime-status).
+  </Accordion>
+</Accordions>

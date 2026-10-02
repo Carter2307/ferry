@@ -1,6 +1,6 @@
 /**
- * Server-Sent Events over `fetch()` (so the API token travels in the
- * `Authorization` header, never in the URL).
+ * Server-Sent Events over `fetch()`, authenticated like every other request
+ * of the dashboard: by the session cookie, never by something in the URL.
  *
  * `SseParser` implements the WHATWG event-stream interpretation rules:
  * LF / CR / CRLF line endings (also split across chunks), `:` comments,
@@ -9,7 +9,7 @@
  * streaming response body.
  */
 
-import { authHeaders, buildUrl, errorFromResponse, handleUnauthorized, NetworkError, type Query } from './client'
+import { buildUrl, errorFromResponse, handleUnauthorized, NetworkError, type Query } from './client'
 
 export interface SseEvent {
   /** `event:` field, `message` when absent. */
@@ -137,7 +137,7 @@ export async function readSse(path: string, opts: ReadSseOptions): Promise<{ ret
   let res: Response
   try {
     res = await fetch(buildUrl(path, opts.query), {
-      headers: { Accept: 'text/event-stream', 'Cache-Control': 'no-cache', ...authHeaders() },
+      headers: { Accept: 'text/event-stream', 'Cache-Control': 'no-cache' },
       signal: opts.signal,
       credentials: 'same-origin',
       cache: 'no-store',
@@ -148,7 +148,7 @@ export async function readSse(path: string, opts: ReadSseOptions): Promise<{ ret
   }
   if (!res.ok) {
     const err = await errorFromResponse(res)
-    if (res.status === 401) handleUnauthorized(true)
+    handleUnauthorized(err)
     throw err
   }
   if (!res.body) throw new NetworkError('The server returned an empty stream.')

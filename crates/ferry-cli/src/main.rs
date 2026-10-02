@@ -83,7 +83,7 @@ fn load_settings(cli: &Cli) -> Result<Settings> {
     let file = match config::config_path() {
         Some(path) => match config::load(&path) {
             Ok(f) => f,
-            Err(e) if matches!(cli.command, Command::Login) => {
+            Err(e) if matches!(cli.command, Command::Login(_)) => {
                 errln!("warning: ignoring {e:#}");
                 None
             }
@@ -113,7 +113,7 @@ fn report(err: &anyhow::Error) -> ExitCode {
     if let Some(api) = err.chain().find_map(|e| e.downcast_ref::<ApiError>())
         && api.status == 401
     {
-        errln!("hint: check the server URL and token with 'ferry login --server <URL> --token <TOKEN>'");
+        errln!("hint: the token was refused (revoked or expired?): log in again with 'ferry login --server <URL>'");
     }
     ExitCode::FAILURE
 }

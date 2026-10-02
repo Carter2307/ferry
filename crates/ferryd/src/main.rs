@@ -1,24 +1,108 @@
 //! `ferryd` — the Ferry server. Wires together the store, Docker, builder,
 //! proxy, optional TLS manager, engine and API.
 
+mod account;
+mod daemon;
+
+use std::ffi::OsString;
 use std::future::IntoFuture;
+use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use clap::Parser;
-use ferry_core::tls::TlsHooks;
+use clap::{Parser, Subcommand};
+use ferry_core::tls::{Certificates, TlsHooks};
 use ferry_core::{CancellationToken, Config, Engine, Store, resources};
 use tracing_subscriber::EnvFilter;
 
+/// The data directory `ferryd` uses when none is given.
+const DEFAULT_DATA_DIR: &str = "./ferry-data";
+
 /// Ferry server: a self-hosted Render alternative.
+///
+/// Without a command, `ferryd` starts the server in the background when it
+/// is run from a terminal (`ferryd start`), and in the foreground otherwise
+/// (`ferryd run`): under a service manager, in a container, in a pipe.
 #[derive(Debug, Parser)]
-#[command(name = "ferryd", version, about)]
-struct Args {
+#[command(name = "ferryd", version, about, long_about, args_conflicts_with_subcommands = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+    #[command(flatten)]
+    server: ServerArgs,
+    /// Print the OpenAPI document of the API and exit (used to generate the docs site).
+    #[arg(long, hide = true)]
+    dump_openapi: bool,
+    /// Print this command-line reference as Markdown and exit (used to generate the docs site).
+    #[arg(long, hide = true)]
+    dump_markdown_help: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Start the server in the background.
+    ///
+    /// Gives the terminal back once the server listens, or says why it
+    /// didn't start. The server's output goes to <data-dir>/ferryd.log.
+    Start(ServerArgs),
+    /// Run the server in the foreground.
+    ///
+    /// Until Ctrl-C or SIGTERM: for a service manager (systemd, launchd), a
+    /// container, or to watch the server's log in the terminal.
+    Run {
+        #[command(flatten)]
+        server: ServerArgs,
+        /// This process was started by `ferryd start`.
+        #[arg(long, hide = true)]
+        detached: bool,
+    },
+    /// Stop the server.
+    ///
+    /// Asks the server that uses the data directory to shut down, and waits
+    /// until it has. Running it again while the server shuts down forces the
+    /// server to exit at once, like a second Ctrl-C.
+    Stop(DataDir),
+    /// Say whether the server runs.
+    ///
+    /// Prints where the server that uses the data directory listens. The
+    /// exit code is 0 when a server runs and 3 when none does.
+    Status(DataDir),
+    /// Replace the password of the server's account.
+    ///
+    /// For an administrator who forgot it: asks for the new password (or
+    /// reads it from standard input when that isn't a terminal) and signs
+    /// every browser out. Works while the server runs.
+    ResetPassword(DataDir),
+    /// Print the log of a server started in the background.
+    Logs {
+        #[command(flatten)]
+        data_dir: DataDir,
+        /// Keep printing what the server logs, until Ctrl-C.
+        #[arg(short, long)]
+        follow: bool,
+        /// Lines to print from the end of the log.
+        #[arg(short = 'n', long, value_name = "N", default_value_t = 100)]
+        lines: usize,
+    },
+}
+
+/// The data directory of the server a command is about.
+#[derive(Debug, clap::Args)]
+struct DataDir {
+    /// Data directory of the server.
+    #[arg(long, env = "FERRY_DATA_DIR", default_value = DEFAULT_DATA_DIR)]
+    data_dir: PathBuf,
+}
+
+/// The options of the server (`ferryd`, `ferryd start`, `ferryd run`).
+#[derive(Debug, clap::Args)]
+struct ServerArgs {
     /// Directory for the database, logs, build scratch space and certificates.
-    #[arg(long, env = "FERRY_DATA_DIR", default_value = "./ferry-data")]
+    #[arg(long, env = "FERRY_DATA_DIR", default_value = DEFAULT_DATA_DIR)]
     data_dir: PathBuf,
     /// API + dashboard listen address.
     #[arg(long, env = "FERRY_API_ADDR", default_value = "127.0.0.1:7878")]
@@ -29,9 +113,19 @@ struct Args {
     /// Public HTTPS proxy listen address (enables TLS together with --acme-email).
     #[arg(long, env = "FERRY_HTTPS_ADDR")]
     https_addr: Option<SocketAddr>,
-    /// Services are reachable at <name>.<base-domain>.
+    /// Services are reachable at <name>.<base-domain>. More domains are
+    /// connected while the server runs (dashboard: Server → Domains, or
+    /// `ferry domains connect`).
     #[arg(long, env = "FERRY_BASE_DOMAIN", default_value = "localhost")]
     base_domain: String,
+    /// Public address of this server: the value of the DNS records shown for
+    /// a domain, and what a domain is expected to resolve to. Repeat it (or
+    /// separate with commas) for an IPv4 and an IPv6 address. Default: its
+    /// IPv4 address is found out — the address of the outbound interface
+    /// when it is a public one, else asked from api.ipify.org,
+    /// ipv4.icanhazip.com or checkip.amazonaws.com.
+    #[arg(long = "public-ip", env = "FERRY_PUBLIC_IP", value_name = "IP", value_delimiter = ',')]
+    public_ip: Vec<IpAddr>,
     /// Port shown in public URLs (defaults to the proxy port).
     #[arg(long, env = "FERRY_PUBLIC_PORT")]
     public_port: Option<u16>,
@@ -44,7 +138,9 @@ struct Args {
     /// Prefix for Docker resources; lets several Ferry servers share one daemon.
     #[arg(long, env = "FERRY_NAME_PREFIX", default_value = "ferry")]
     name_prefix: String,
-    /// API token. Default: read from / generated into <data-dir>/api_token.
+    /// The server token: an API token that always works, for the CLI and
+    /// automation on the server itself. Default: read from / generated into
+    /// <data-dir>/api_token.
     #[arg(long, env = "FERRY_API_TOKEN", hide_env_values = true)]
     api_token: Option<String>,
     /// Secret for GitHub webhook signatures (enables POST /hooks/github).
@@ -122,12 +218,6 @@ struct Args {
     /// directory or losing the old one (moving a data directory keeps ownership).
     #[arg(long)]
     take_over: bool,
-    /// Print the OpenAPI document of the API and exit (used to generate the docs site).
-    #[arg(long, hide = true)]
-    dump_openapi: bool,
-    /// Print this command-line reference as Markdown and exit (used to generate the docs site).
-    #[arg(long, hide = true)]
-    dump_markdown_help: bool,
 }
 
 /// `--log-max-size` / `--min-free-disk`: a size in MiB (`10M`, `1G`, `0`).
@@ -308,7 +398,7 @@ fn read_private_file(path: &Path) -> Option<String> {
 
 /// Hold an exclusive lock on `<data-dir>/ferryd.lock` for the process lifetime.
 fn lock_data_dir(data_dir: &Path) -> anyhow::Result<std::fs::File> {
-    let path = data_dir.join("ferryd.lock");
+    let path = daemon::lock_path(data_dir);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -405,7 +495,7 @@ fn load_or_create_token(data_dir: &Path) -> anyhow::Result<String> {
     Ok(token)
 }
 
-fn build_config(args: Args) -> anyhow::Result<Config> {
+fn build_config(args: ServerArgs) -> anyhow::Result<Config> {
     secure_dir(&args.data_dir)?;
     let data_dir = args.data_dir.canonicalize().unwrap_or(args.data_dir.clone());
     let api_token = match args.api_token {
@@ -427,7 +517,9 @@ fn build_config(args: Args) -> anyhow::Result<Config> {
         api_addr: args.api_addr,
         proxy_addr: args.proxy_addr,
         proxy_https_addr: args.https_addr,
-        base_domain: args.base_domain.to_ascii_lowercase(),
+        base_domain: args.base_domain.trim().trim_end_matches('.').to_ascii_lowercase(),
+        domains: Default::default(),
+        public_ips: args.public_ip,
         public_port: args.public_port,
         dashboard_host,
         name_prefix: args.name_prefix,
@@ -484,11 +576,94 @@ async fn shutdown_signal() {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Is `ferryd` run by a person at a terminal? Then a bare `ferryd` gives the
+/// terminal back. Not as PID 1: a container ends with its first process.
+fn interactive() -> bool {
+    cfg!(unix) && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() && std::process::id() != 1
+}
+
+/// The options to pass on to the `ferryd run` that `ferryd start` executes:
+/// the command line as it was typed, without the `start` command.
+fn server_args(argv: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let mut args: Vec<OsString> = argv.into_iter().skip(1).collect();
+    if args.first().is_some_and(|a| a == "start") {
+        args.remove(0);
+    }
+    args
+}
+
+fn main() -> anyhow::Result<ExitCode> {
+    let cli = Cli::parse();
+    if cli.dump_openapi {
+        println!("{}", ferry_api::openapi::document_json());
+        return Ok(ExitCode::SUCCESS);
+    }
+    if cli.dump_markdown_help {
+        print!("{}", clap_markdown::help_markdown::<Cli>());
+        return Ok(ExitCode::SUCCESS);
+    }
+    // The commands printed as hints name a data directory that the next
+    // `ferryd` wouldn't find by itself.
+    let hint = |dir: &Path| {
+        let found = dir == Path::new(DEFAULT_DATA_DIR) || std::env::var_os("FERRY_DATA_DIR").is_some();
+        daemon::data_dir_hint(dir, found)
+    };
+    let start = |args: ServerArgs| {
+        secure_dir(&args.data_dir)?;
+        daemon::start(&args.data_dir, &server_args(std::env::args_os()), &hint(&args.data_dir))
+    };
+    match cli.command {
+        Some(Command::Start(args)) => start(args),
+        Some(Command::Run { server, detached }) => run(server, detached),
+        None if interactive() => start(cli.server),
+        None => run(cli.server, false),
+        Some(Command::Stop(dir)) => daemon::stop(&dir.data_dir),
+        Some(Command::Status(dir)) => daemon::status(&dir.data_dir, &hint(&dir.data_dir)),
+        Some(Command::Logs { data_dir, follow, lines }) => daemon::logs(&data_dir.data_dir, lines, follow),
+        Some(Command::ResetPassword(dir)) => account::reset_password(&dir.data_dir),
+    }
+}
+
+/// `ferryd run`: the server itself, until it is told to stop.
+fn run(args: ServerArgs, detached: bool) -> anyhow::Result<ExitCode> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().context("starting the runtime")?;
+    runtime.block_on(serve(args, detached))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// What the startup banner says under its title, one entry per line.
+fn summary(
+    config: &Config,
+    api_url: &str,
+    docker_version: Option<&str>,
+    docker_host: Option<&ferry_docker::HostInfo>,
+) -> Vec<String> {
+    let mut lines = vec![format!("Dashboard + API : {api_url}")];
+    lines.push(match config.dashboard_url() {
+        Some(url) => format!("Dashboard (proxy): {url}"),
+        None => format!("Dashboard (proxy): disabled (enable with --dashboard-host ferry.{})", config.base_domain),
+    });
+    lines.push(format!("Apps            : {}", config.url_for_host(&format!("<name>.{}", config.primary_domain()))));
+    lines.push(format!("Docker          : {}", docker_summary(docker_version, docker_host)));
+    lines.push(format!("Data            : {}", config.data_dir.display()));
+    lines.push(format!("Limits          : {}", limits_summary(config, docker_host)));
+    lines.push(match config.min_free_disk_mb {
+        0 => "Free disk check : off".to_string(),
+        mb => format!(
+            "Free disk check : deploys need {} free",
+            resources::format_memory_mb(u32::try_from(mb).unwrap_or(u32::MAX))
+        ),
+    });
+    lines
+}
+
+async fn serve(args: ServerArgs, detached: bool) -> anyhow::Result<()> {
+    // Colors only for a person: not in `ferryd.log`, a pipe or the journal.
+    let colors = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with_target(false)
+        .with_ansi(colors)
         .init();
     let _ = rustls::crypto::ring::default_provider().install_default();
     // The proxy sizes its connection cap from the open-file limit; raise the
@@ -498,21 +673,15 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!("could not raise the open file limit: {e}"),
     }
 
-    let args = Args::parse();
-    if args.dump_openapi {
-        println!("{}", ferry_api::openapi::document_json());
-        return Ok(());
-    }
-    if args.dump_markdown_help {
-        print!("{}", clap_markdown::help_markdown::<Args>());
-        return Ok(());
-    }
     set_oom_score_adj(args.oom_score_adj);
     let acme_directory = args.acme_directory.clone();
     let take_over = args.take_over;
     let config = Arc::new(build_config(args)?);
     // Held for the whole process lifetime.
     let _data_dir_lock = lock_data_dir(&config.data_dir)?;
+    // What `ferryd status` / `stop` read; removed when the server stops
+    // (declared after the lock, so before the lock is released).
+    let mut state = daemon::StateFile::create(&config.data_dir, detached)?;
 
     // Fail fast (before touching Docker) if a public listener can't bind.
     for (what, addr) in
@@ -524,6 +693,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let store = Store::open(&config.db_path()).await.context("opening database")?;
+    // A server without an account gets the code that creating it takes
+    // (the banner prints it in a link).
+    ferry_api::setup::ensure_code(&config, &store).await.context("preparing the first-run setup")?;
+    // The domains services are served under: the base domain of the flag
+    // and the ones connected since (DESIGN.md §21).
+    ferry_core::domains::init(&store, &config).await.context("reading the domains")?;
     let docker =
         ferry_docker::Docker::connect().await.context("cannot connect to Docker — is the Docker daemon running?")?;
     let docker_version = docker.version().await.ok();
@@ -555,6 +730,9 @@ async fn main() -> anyhow::Result<()> {
     let shutdown = CancellationToken::new();
 
     let mut proxy_config = ferry_proxy::ProxyConfig::http(config.proxy_addr);
+    // How the engine verifies that a domain reaches this server.
+    proxy_config.domain_probe_id = Some(config.domains.probe_id().to_string());
+    let mut certificates: Option<Arc<dyn Certificates>> = None;
     if config.tls_enabled() {
         let manager = ferry_tls::CertManager::new(ferry_tls::TlsConfig {
             certs_dir: config.certs_dir(),
@@ -564,8 +742,11 @@ async fn main() -> anyhow::Result<()> {
         })
         .await
         .context("starting TLS manager")?;
+        // A host that starts being routed (a new service, a verified
+        // domain) gets its certificate at once, not at the next minute.
         let hosts_routes = routes.clone();
-        manager.spawn(Arc::new(move || hosts_routes.hosts()), shutdown.clone());
+        manager.spawn_with_wake(Arc::new(move || hosts_routes.hosts()), routes.hosts_changed(), shutdown.clone());
+        certificates = Some(manager.certificates());
         proxy_config.https_addr = config.proxy_https_addr;
         proxy_config.tls = Some(manager.server_config());
         proxy_config.tls_hooks = Some(manager.hooks() as Arc<dyn TlsHooks>);
@@ -600,6 +781,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         store,
         engine: engine.clone() as Arc<dyn Engine>,
+        certificates,
         docker_version: docker_version.clone(),
         docker_cpus: docker_host.as_ref().and_then(|h| h.cpus),
         docker_memory_bytes: docker_host.as_ref().and_then(|h| h.memory_bytes),
@@ -610,28 +792,12 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("binding API address {}", config.api_addr))?;
 
     let api_url = format!("http://{}", loopback_of(config.api_addr));
+    let summary = summary(&config, &api_url, docker_version.as_deref(), docker_host.as_ref());
+    let ready = daemon::Ready { api_url, summary };
     println!();
     println!("  Ferry {} is running", ferry_core::VERSION);
-    println!("  Dashboard + API : {api_url}");
-    match config.dashboard_url() {
-        Some(url) => println!("  Dashboard (proxy): {url}"),
-        None => println!("  Dashboard (proxy): disabled (enable with --dashboard-host ferry.{})", config.base_domain),
-    }
-    println!("  Apps            : {}", config.url_for_host(&format!("<name>.{}", config.base_domain)));
-    println!("  Docker          : {}", docker_summary(docker_version.as_deref(), docker_host.as_ref()));
-    println!("  Data            : {}", config.data_dir.display());
-    println!("  Limits          : {}", limits_summary(&config, docker_host.as_ref()));
-    match config.min_free_disk_mb {
-        0 => println!("  Free disk check : off"),
-        mb => println!(
-            "  Free disk check : deploys need {} free",
-            resources::format_memory_mb(u32::try_from(mb).unwrap_or(u32::MAX))
-        ),
-    }
-    println!("  API token       : {}", config.api_token);
-    println!();
-    println!("  Log in with:  ferry login --server {api_url} --token {}", config.api_token);
-    println!();
+    daemon::print_summary(&config.data_dir, &ready);
+    state.set_ready(ready)?;
 
     // First signal: graceful shutdown. Second signal: exit immediately.
     let signal_token = shutdown.clone();
@@ -676,14 +842,88 @@ mod tests {
 
     use super::*;
 
-    fn parse(extra: &[&str]) -> Result<Args, clap::Error> {
-        Args::try_parse_from(std::iter::once("ferryd").chain(extra.iter().copied()))
+    fn parse_cli(extra: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("ferryd").chain(extra.iter().copied()))
+    }
+
+    /// The server options of a command line without a command.
+    fn parse(extra: &[&str]) -> Result<ServerArgs, clap::Error> {
+        parse_cli(extra).map(|cli| cli.server)
     }
 
     /// The first line of a clap error (the rest is usage help).
     fn error_line(extra: &[&str]) -> String {
         let err = parse(extra).expect_err("the flags should be rejected");
         err.to_string().lines().next().unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn commands_parse() {
+        // No command: the options of the server.
+        let cli = parse_cli(&["--data-dir", "/x"]).unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.server.data_dir, Path::new("/x"));
+        assert_eq!(parse(&[]).unwrap().data_dir, Path::new(DEFAULT_DATA_DIR));
+
+        // `start` and `run` take the same options.
+        match parse_cli(&["start", "--api-addr", "127.0.0.1:9000"]).unwrap().command {
+            Some(Command::Start(args)) => assert_eq!(args.api_addr.port(), 9000),
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&["run", "--api-addr", "127.0.0.1:9000"]).unwrap().command {
+            Some(Command::Run { server, detached }) => {
+                assert_eq!(server.api_addr.port(), 9000);
+                assert!(!detached);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse_cli(&["run", "--detached"]).unwrap().command,
+            Some(Command::Run { detached: true, .. })
+        ));
+
+        // The others only know the data directory.
+        match parse_cli(&["stop"]).unwrap().command {
+            Some(Command::Stop(dir)) => assert_eq!(dir.data_dir, Path::new(DEFAULT_DATA_DIR)),
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&["status", "--data-dir", "/var/lib/ferry"]).unwrap().command {
+            Some(Command::Status(dir)) => assert_eq!(dir.data_dir, Path::new("/var/lib/ferry")),
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&["logs"]).unwrap().command {
+            Some(Command::Logs { follow, lines, .. }) => assert_eq!((follow, lines), (false, 100)),
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&["logs", "-f", "-n", "20", "--data-dir", "/x"]).unwrap().command {
+            Some(Command::Logs { data_dir, follow, lines }) => {
+                assert_eq!((follow, lines), (true, 20));
+                assert_eq!(data_dir.data_dir, Path::new("/x"));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&["reset-password", "--data-dir", "/var/lib/ferry"]).unwrap().command {
+            Some(Command::ResetPassword(dir)) => assert_eq!(dir.data_dir, Path::new("/var/lib/ferry")),
+            other => panic!("{other:?}"),
+        }
+        assert!(parse_cli(&["stop", "--api-addr", "127.0.0.1:9000"]).is_err());
+        // An option in front of a command is refused, not silently dropped.
+        assert!(parse_cli(&["--data-dir", "/x", "stop"]).is_err());
+        assert!(parse_cli(&["--api-addr", "127.0.0.1:9000", "run"]).is_err());
+    }
+
+    #[test]
+    fn start_hands_its_options_to_run() {
+        let args = |argv: &[&str]| server_args(argv.iter().map(OsString::from));
+        assert_eq!(args(&["ferryd"]), Vec::<OsString>::new());
+        assert_eq!(args(&["ferryd", "--data-dir", "/x"]), ["--data-dir", "/x"]);
+        assert_eq!(args(&["ferryd", "start", "--data-dir", "/x"]), ["--data-dir", "/x"]);
+        assert_eq!(args(&["ferryd", "start", "--data-dir", "start"]), ["--data-dir", "start"]);
+        // What `start` executes parses as the same server.
+        let run = parse_cli(&["run", "--detached", "--data-dir", "/x"]).unwrap();
+        assert!(
+            matches!(run.command, Some(Command::Run { detached: true, server }) if server.data_dir == Path::new("/x"))
+        );
     }
 
     #[test]
@@ -784,7 +1024,7 @@ mod tests {
 
     #[test]
     fn limit_flags_have_env_vars() {
-        let command = Args::command();
+        let command = Cli::command();
         for (id, env) in [
             ("default_memory_limit", "FERRY_DEFAULT_MEMORY_LIMIT"),
             ("default_cpu_limit", "FERRY_DEFAULT_CPU_LIMIT"),

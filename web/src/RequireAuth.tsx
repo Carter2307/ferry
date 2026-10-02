@@ -1,15 +1,11 @@
-import { Navigate, useLocation } from 'react-router'
+import { Navigate } from 'react-router'
 
 import { AppShell } from '@/components/shell/AppShell'
-import { useAuth } from '@/stores/auth'
+import { useAuthRedirect } from '@/lib/useAuthRedirect'
 
-/** Redirects to /login?next=… when signed out. */
+/** Redirects to /setup or /login?next=… when there is no session. */
 export function RequireAuth() {
-  const token = useAuth((s) => s.token)
-  const location = useLocation()
-  if (!token) {
-    const next = `${location.pathname}${location.search}${location.hash}`
-    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />
-  }
+  const redirect = useAuthRedirect()
+  if (redirect) return <Navigate to={redirect} replace />
   return <AppShell />
 }

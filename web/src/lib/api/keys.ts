@@ -6,6 +6,12 @@
 export const keys = {
   info: () => ['info'] as const,
 
+  /** The account: its sessions, its API tokens, pending `ferry login` requests. */
+  auth: () => ['auth'] as const,
+  authSessions: () => ['auth', 'sessions'] as const,
+  authTokens: () => ['auth', 'tokens'] as const,
+  authCliLogin: (id: string) => ['auth', 'cli', id] as const,
+
   services: () => ['services'] as const,
   serviceList: () => ['services', 'list'] as const,
   service: (ref: string) => ['services', 'detail', ref] as const,
@@ -34,4 +40,16 @@ export const keys = {
   envGroups: () => ['env-groups'] as const,
   envGroupList: () => ['env-groups', 'list'] as const,
   envGroup: (ref: string) => ['env-groups', 'detail', ref] as const,
+
+  /** The server's domains, and the certificates of the hosts they give services. */
+  domains: () => ['domains'] as const,
+  domainList: () => ['domains', 'list'] as const,
+  certificates: () => ['domains', 'certificates'] as const,
+
+  /** Everything about git connections: what they can read changes with them. */
+  git: () => ['git'] as const,
+  gitConnections: () => ['git', 'connections'] as const,
+  gitRepositories: (id: string) => ['git', 'repositories', id] as const,
+  /** The branches of a repository, by its URL (whatever reads it). */
+  gitBranches: (repoUrl: string) => ['git', 'branches', repoUrl] as const,
 } as const

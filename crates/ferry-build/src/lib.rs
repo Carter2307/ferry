@@ -32,11 +32,46 @@ mod redact;
 
 use crate::git::GitError;
 
+pub use crate::git::Credentials as GitCredentials;
+pub use crate::git::RemoteBranches;
+
+/// Why a remote's branches could not be listed. Messages never contain
+/// credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteError {
+    /// The URL isn't one git can be given.
+    Invalid(String),
+    /// The remote refused, wasn't found or couldn't be reached in time.
+    Unreachable(String),
+}
+
+/// The branches of a repository and its default one, asked from the remote
+/// itself (`git ls-remote`): works for any URL a service can deploy from.
+/// `credentials` authenticate an http(s) remote as in [`BuildSource::Git`];
+/// credentials in the URL work too.
+pub async fn remote_branches(
+    repo_url: &str,
+    credentials: Option<&GitCredentials>,
+    timeout: std::time::Duration,
+) -> std::result::Result<RemoteBranches, RemoteError> {
+    git::list_remote_branches(repo_url, credentials, timeout).await.map_err(|e| match e {
+        GitError::Invalid(m) => RemoteError::Invalid(m),
+        GitError::NotFound(m) | GitError::Failed(m) => RemoteError::Unreachable(m),
+        GitError::Canceled => RemoteError::Unreachable("canceled".into()),
+    })
+}
+
 /// Where the code comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildSource {
     /// Clone `repo_url` at `branch`, or at `commit` when given.
-    Git { repo_url: String, branch: String, commit: Option<String> },
+    ///
+    /// `credentials` authenticate an http(s) remote without being part of
+    /// its URL (the token of a connected GitHub / GitLab account). Git gets
+    /// them through its environment, for the remote's own host only; they
+    /// never appear on a command line, in the git cache or in the logs.
+    /// Ignored for ssh and local repositories.
+    Git { repo_url: String, branch: String, commit: Option<String>, credentials: Option<GitCredentials> },
     /// Extract a gzipped tarball (uploaded via `ferry up`).
     Archive { path: PathBuf },
 }
@@ -118,6 +153,27 @@ pub struct DockerfileOptions {
 pub struct GeneratedDockerfile {
     pub contents: String,
     pub port_hint: Option<u16>,
+    /// The command the image starts (`None`: static sites run nginx, and a
+    /// cron job may get its command at run time).
+    pub start: Option<StartCommand>,
+}
+
+/// The start command of a generated image, for the build log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartCommand {
+    /// As it would be typed: `npm start`, `node ./dist/index.js`.
+    pub command: String,
+    /// Where it comes from: `the service's start command`, `the Procfile`,
+    /// `the "start" script of package.json`…
+    pub source: String,
+}
+
+impl StartCommand {
+    /// The line of the build log: a command nobody chose is the first thing
+    /// to look at when an instance doesn't stay up.
+    pub fn log_line(&self) -> String {
+        format!("==> Start command: {} ({})", self.command, self.source)
+    }
 }
 
 /// Name of the Dockerfile the builder writes for native runtimes.
@@ -287,16 +343,16 @@ impl Builder {
     ) -> Result<BuildOutput> {
         // 1. Fetch the source into the scratch directory.
         let (export_root, commit_sha, commit_message) = match &req.source {
-            BuildSource::Git { repo_url, branch, commit } => {
+            BuildSource::Git { repo_url, branch, commit, credentials } => {
                 let lock = self.repo_lock(&req.service_id);
                 let _guard = tokio::select! {
                     g = lock.lock() => g,
                     _ = cancel.cancelled() => return Err(Error::Canceled),
                 };
                 let cache = self.repos_dir.join(&req.service_id);
-                let co = git::checkout(&cache, repo_url, branch, commit.as_deref(), source_dir, logs, cancel)
-                    .await
-                    .map_err(git_build_error)?;
+                let source =
+                    git::Source { repo_url, credentials: credentials.as_ref(), branch, commit: commit.as_deref() };
+                let co = git::checkout(&cache, source, source_dir, logs, cancel).await.map_err(git_build_error)?;
                 for s in &co.report_skipped {
                     logs.system(format!("==> Skipped {s}"));
                 }
@@ -630,6 +686,9 @@ fn prepare_context(req: &PrepareRequest) -> std::result::Result<Prepared, String
         .map_err(|e| format!("writing the generated Dockerfile: {e}"))?;
     let name = dockerfile.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     messages.push(format!("==> Generated {name} for the {} runtime", runtime_label(used_runtime)));
+    if let Some(start) = &generated.start {
+        messages.push(start.log_line());
+    }
     let digest_line = format!("ARG {}", dockerfile::ENV_DIGEST_ARG);
     let env_digest_arg = generated.contents.lines().any(|l| l.trim() == digest_line);
     Ok(Prepared {

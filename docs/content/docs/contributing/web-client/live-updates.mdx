@@ -1,0 +1,70 @@
+---
+title: Live updates
+description: The server pushes each change through Server-Sent Events. Then the dashboard gets the changed data again.
+---
+
+<Diagram
+  nodes={[
+    { id: 'ferryd', at: [0, 0.5], icon: 'server', label: 'ferryd', note: '/api/v1/events' },
+    { id: 'events', at: [1.6, 0], icon: 'bell', label: 'events.ts', note: 'the change feed' },
+    { id: 'cache', at: [3.2, 0.5], icon: 'database', label: 'TanStack Query', note: 'the cache' },
+    { id: 'fetch', at: [1.6, 1], icon: 'restart', label: 'New request', note: 'the fresh data' },
+  ]}
+  edges={[
+    { from: 'ferryd', to: 'events', label: 'change' },
+    { from: 'events', to: 'cache', label: 'stale' },
+    { from: 'cache', to: 'fetch' },
+    { from: 'fetch', to: 'ferryd' },
+  ]}
+  steps={[
+    {
+      caption: 'The server sends a change event on the stream /api/v1/events.',
+      hide: ['fetch'],
+      flow: ['ferryd>events'],
+      tones: { events: 'primary' },
+    },
+    {
+      caption: 'events.ts marks the queries of this change as stale.',
+      hide: ['fetch'],
+      flow: ['events>cache'],
+      tones: { cache: 'warning' },
+      notes: { cache: 'stale data' },
+    },
+    {
+      caption: 'TanStack Query gets the stale data again.',
+      flow: ['cache>fetch', 'fetch>ferryd'],
+      tones: { cache: 'success' },
+      notes: { cache: 'fresh data' },
+    },
+    {
+      caption: 'While the stream is down, the queries ask the server at a fixed interval.',
+      cut: ['ferryd>events', 'events>cache'],
+      flow: ['cache>fetch', 'fetch>ferryd'],
+      tones: { events: 'danger' },
+      notes: { events: 'stream down' },
+    },
+  ]}
+/>
+
+## Two kinds of streams
+
+The server pushes data with <Term id="sse" />: the log streams, and the <Term id="change-feed" /> `/api/v1/events`.
+
+The app reads them with `fetch()` and a parser for streams, `src/lib/api/sse.ts`. The same cookie proves who you are.
+
+## The change feed
+
+`src/lib/api/events.ts` changes each `change` event into an <Term id="invalidation" /> of <Term id="tanstack-query" />.
+
+If the stream stops, the app connects again with an exponential <Term id="backoff" />, from 1 to 15 seconds.
+
+## When the stream is down
+
+While the stream is down, the queries use <Term id="polling" />:
+
+| Data | Interval |
+|---|---|
+| Lists | 5 seconds |
+| The detail on screen | 2 to 3 seconds |
+
+An older server has no change feed and answers `404`. Then the queries also use polling.

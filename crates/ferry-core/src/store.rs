@@ -14,8 +14,14 @@ use crate::env::{self, ServiceRef};
 use crate::models::*;
 use crate::{Error, Result};
 
-const MIGRATIONS: &[&str] =
-    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_resource_limits.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_resource_limits.sql"),
+    include_str!("../migrations/0003_git_connections.sql"),
+    include_str!("../migrations/0004_git_authorization.sql"),
+    include_str!("../migrations/0005_accounts.sql"),
+    include_str!("../migrations/0006_domains.sql"),
+];
 
 /// Handle to the Ferry database.
 #[derive(Clone, Debug)]
@@ -162,6 +168,109 @@ fn row_to_env_group(r: &SqliteRow) -> Result<EnvGroup> {
 
 fn row_to_env(r: &SqliteRow) -> Result<EnvVar> {
     Ok(EnvVar { key: r.try_get("key")?, value: r.try_get("value")? })
+}
+
+fn get_u64_opt(r: &SqliteRow, col: &str) -> Result<Option<u64>> {
+    Ok(r.try_get::<Option<i64>, _>(col)?.and_then(|v| u64::try_from(v).ok()))
+}
+
+fn row_to_git_connection(r: &SqliteRow) -> Result<GitConnection> {
+    let scopes: String = r.try_get("scopes")?;
+    // An app is its id, slug, page and key together.
+    let app = match (
+        get_u64_opt(r, "app_id")?,
+        r.try_get::<Option<String>, _>("app_slug")?,
+        r.try_get::<Option<String>, _>("app_url")?,
+        r.try_get::<Option<String>, _>("private_key")?,
+    ) {
+        (Some(id), Some(slug), Some(url), Some(private_key)) => {
+            Some(GithubApp { id, slug, url, private_key, webhook_secret: r.try_get("webhook_secret")? })
+        }
+        _ => None,
+    };
+    let installation = get_u64_opt(r, "installation_id")?
+        .map(|id| -> Result<GithubInstallation> {
+            Ok(GithubInstallation {
+                id,
+                url: r.try_get("installation_url")?,
+                repository_selection: r.try_get("repository_selection")?,
+            })
+        })
+        .transpose()?;
+    Ok(GitConnection {
+        id: r.try_get("id")?,
+        provider: get_enum(r, "provider")?,
+        base_url: r.try_get("base_url")?,
+        auth: get_enum(r, "auth")?,
+        account: r.try_get("account")?,
+        account_name: r.try_get("account_name")?,
+        token: r.try_get("token")?,
+        refresh_token: r.try_get("refresh_token")?,
+        scopes: serde_json::from_str(&scopes)
+            .map_err(|e| Error::internal(format!("bad git connection scopes json: {e}")))?,
+        token_expires_at: get_ts_opt(r, "token_expires_at")?,
+        client_id: r.try_get("client_id")?,
+        client_secret: r.try_get("client_secret")?,
+        app,
+        installation,
+        created_at: get_ts(r, "created_at")?,
+        updated_at: get_ts(r, "updated_at")?,
+    })
+}
+
+fn row_to_domain(r: &SqliteRow) -> Result<Domain> {
+    let checks: String = r.try_get("checks")?;
+    Ok(Domain {
+        id: r.try_get("id")?,
+        name: r.try_get("name")?,
+        source: get_enum(r, "source")?,
+        status: get_enum(r, "status")?,
+        is_default: r.try_get("is_default")?,
+        checks: serde_json::from_str(&checks).map_err(|e| Error::internal(format!("bad domain checks json: {e}")))?,
+        failures: get_u32_opt(r, "failures")?.unwrap_or(0),
+        created_at: get_ts(r, "created_at")?,
+        verified_at: get_ts_opt(r, "verified_at")?,
+        checked_at: get_ts_opt(r, "checked_at")?,
+    })
+}
+
+/// SQLite integers are signed: ids GitHub hands out fit (they are far below 2^63).
+fn row_to_user(r: &SqliteRow) -> Result<User> {
+    Ok(User {
+        id: r.try_get("id")?,
+        email: r.try_get("email")?,
+        password_hash: r.try_get("password_hash")?,
+        created_at: get_ts(r, "created_at")?,
+        updated_at: get_ts(r, "updated_at")?,
+    })
+}
+
+fn row_to_session(r: &SqliteRow) -> Result<Session> {
+    Ok(Session {
+        id: r.try_get("id")?,
+        user_id: r.try_get("user_id")?,
+        token_hash: r.try_get("token_hash")?,
+        user_agent: r.try_get("user_agent")?,
+        created_at: get_ts(r, "created_at")?,
+        last_used_at: get_ts(r, "last_used_at")?,
+        expires_at: get_ts(r, "expires_at")?,
+    })
+}
+
+fn row_to_api_token(r: &SqliteRow) -> Result<ApiToken> {
+    Ok(ApiToken {
+        id: r.try_get("id")?,
+        name: r.try_get("name")?,
+        token_hash: r.try_get("token_hash")?,
+        hint: r.try_get("hint")?,
+        created_at: get_ts(r, "created_at")?,
+        last_used_at: get_ts_opt(r, "last_used_at")?,
+        expires_at: get_ts_opt(r, "expires_at")?,
+    })
+}
+
+fn sql_u64(v: Option<u64>) -> Option<i64> {
+    v.and_then(|v| i64::try_from(v).ok())
 }
 
 impl Store {
@@ -976,6 +1085,516 @@ impl Store {
     }
 
     // -----------------------------------------------------------------------
+    // git connections
+
+    /// Insert a git connection. Conflict if the same account of the same
+    /// provider instance is already connected.
+    pub async fn create_git_connection(&self, c: &GitConnection) -> Result<()> {
+        let res = sqlx::query(
+            "INSERT INTO git_connections (id, provider, base_url, auth, account, account_name, token, refresh_token,
+                token_expires_at, scopes, client_id, client_secret, app_id, app_slug, app_url, private_key,
+                webhook_secret, installation_id, installation_url, repository_selection, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&c.id)
+        .bind(c.provider.as_str())
+        .bind(&c.base_url)
+        .bind(c.auth.as_str())
+        .bind(&c.account)
+        .bind(&c.account_name)
+        .bind(&c.token)
+        .bind(&c.refresh_token)
+        .bind(ts_opt(&c.token_expires_at))
+        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(&c.client_id)
+        .bind(&c.client_secret)
+        .bind(sql_u64(c.app.as_ref().map(|a| a.id)))
+        .bind(c.app.as_ref().map(|a| a.slug.as_str()))
+        .bind(c.app.as_ref().map(|a| a.url.as_str()))
+        .bind(c.app.as_ref().map(|a| a.private_key.as_str()))
+        .bind(c.app.as_ref().and_then(|a| a.webhook_secret.as_deref()))
+        .bind(sql_u64(c.installation.as_ref().map(|i| i.id)))
+        .bind(c.installation.as_ref().and_then(|i| i.url.as_deref()))
+        .bind(c.installation.as_ref().and_then(|i| i.repository_selection.as_deref()))
+        .bind(ts(&c.created_at))
+        .bind(ts(&c.updated_at))
+        .execute(&self.pool)
+        .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) if is_unique_violation(&e) => {
+                Err(Error::conflict(format!("the {} is already connected", c.describe())))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Persist everything a (re)authorization changes — the account, how it
+    /// is authorized and its secrets — and bump `updated_at`. Returns the
+    /// stored row. Provider and instance are immutable. Conflict if the
+    /// account became one that has another connection.
+    pub async fn update_git_connection(&self, c: &GitConnection) -> Result<GitConnection> {
+        let res = sqlx::query(
+            "UPDATE git_connections SET auth = ?, account = ?, account_name = ?, token = ?, refresh_token = ?,
+                token_expires_at = ?, scopes = ?, client_id = ?, client_secret = ?, app_id = ?, app_slug = ?,
+                app_url = ?, private_key = ?, webhook_secret = ?, installation_id = ?, installation_url = ?,
+                repository_selection = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(c.auth.as_str())
+        .bind(&c.account)
+        .bind(&c.account_name)
+        .bind(&c.token)
+        .bind(&c.refresh_token)
+        .bind(ts_opt(&c.token_expires_at))
+        .bind(serde_json::to_string(&c.scopes).unwrap_or_else(|_| "[]".into()))
+        .bind(&c.client_id)
+        .bind(&c.client_secret)
+        .bind(sql_u64(c.app.as_ref().map(|a| a.id)))
+        .bind(c.app.as_ref().map(|a| a.slug.as_str()))
+        .bind(c.app.as_ref().map(|a| a.url.as_str()))
+        .bind(c.app.as_ref().map(|a| a.private_key.as_str()))
+        .bind(c.app.as_ref().and_then(|a| a.webhook_secret.as_deref()))
+        .bind(sql_u64(c.installation.as_ref().map(|i| i.id)))
+        .bind(c.installation.as_ref().and_then(|i| i.url.as_deref()))
+        .bind(c.installation.as_ref().and_then(|i| i.repository_selection.as_deref()))
+        .bind(ts(&Utc::now()))
+        .bind(&c.id)
+        .execute(&self.pool)
+        .await;
+        let res = match res {
+            Ok(res) => res,
+            Err(e) if is_unique_violation(&e) => {
+                return Err(Error::conflict(format!("the {} is already connected", c.describe())));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("git connection", &c.id));
+        }
+        self.require_git_connection(&c.id).await
+    }
+
+    /// Store a renewed OAuth access token, with the refresh token that
+    /// replaces the one just used. Unlike [`Store::update_git_connection`]
+    /// this leaves `updated_at` alone: nothing about the connection changed
+    /// for its users.
+    pub async fn set_git_tokens(
+        &self,
+        id: &str,
+        token: &str,
+        refresh_token: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        let res =
+            sqlx::query("UPDATE git_connections SET token = ?, refresh_token = ?, token_expires_at = ? WHERE id = ?")
+                .bind(token)
+                .bind(refresh_token)
+                .bind(ts_opt(&expires_at))
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("git connection", id));
+        }
+        Ok(())
+    }
+
+    pub async fn get_git_connection(&self, id: &str) -> Result<Option<GitConnection>> {
+        sqlx::query("SELECT * FROM git_connections WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_git_connection(&r))
+            .transpose()
+    }
+
+    pub async fn require_git_connection(&self, id: &str) -> Result<GitConnection> {
+        self.get_git_connection(id).await?.ok_or_else(|| Error::not_found("git connection", id))
+    }
+
+    /// The connection of an account (its login compared case-insensitively)
+    /// on a provider instance, if any. The empty account is the instance's
+    /// OAuth application that waits for its first authorization.
+    pub async fn find_git_connection(
+        &self,
+        provider: GitProvider,
+        base_url: &str,
+        account: &str,
+    ) -> Result<Option<GitConnection>> {
+        sqlx::query("SELECT * FROM git_connections WHERE provider = ? AND base_url = ? AND account = ?")
+            .bind(provider.as_str())
+            .bind(base_url)
+            .bind(account)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_git_connection(&r))
+            .transpose()
+    }
+
+    /// All git connections, ordered by provider, instance and account.
+    pub async fn list_git_connections(&self) -> Result<Vec<GitConnection>> {
+        sqlx::query("SELECT * FROM git_connections ORDER BY provider, base_url, account")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(row_to_git_connection)
+            .collect()
+    }
+
+    /// Delete a git connection. The repositories it served are cloned
+    /// without credentials from then on.
+    pub async fn delete_git_connection(&self, id: &str) -> Result<()> {
+        let res = sqlx::query("DELETE FROM git_connections WHERE id = ?").bind(id).execute(&self.pool).await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("git connection", id));
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // domains (DESIGN.md §21)
+
+    /// Insert a domain. Conflict if a domain of that name is already there.
+    pub async fn create_domain(&self, d: &Domain) -> Result<()> {
+        let res = sqlx::query(
+            "INSERT INTO domains (id, name, source, status, is_default, checks, failures, created_at, verified_at,
+                checked_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&d.id)
+        .bind(&d.name)
+        .bind(d.source.as_str())
+        .bind(d.status.as_str())
+        .bind(d.is_default)
+        .bind(serde_json::to_string(&d.checks).unwrap_or_else(|_| "[]".into()))
+        .bind(i64::from(d.failures))
+        .bind(ts(&d.created_at))
+        .bind(ts_opt(&d.verified_at))
+        .bind(ts_opt(&d.checked_at))
+        .execute(&self.pool)
+        .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) if is_unique_violation(&e) => {
+                Err(Error::conflict(format!("domain '{}' is already connected", d.name)))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub async fn get_domain(&self, id: &str) -> Result<Option<Domain>> {
+        sqlx::query("SELECT * FROM domains WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_domain(&r))
+            .transpose()
+    }
+
+    /// A domain by id, else by name (names are stored in lowercase).
+    pub async fn find_domain(&self, id_or_name: &str) -> Result<Option<Domain>> {
+        if let Some(d) = self.get_domain(id_or_name).await? {
+            return Ok(Some(d));
+        }
+        let name = id_or_name.trim().trim_end_matches('.').to_ascii_lowercase();
+        sqlx::query("SELECT * FROM domains WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| row_to_domain(&r))
+            .transpose()
+    }
+
+    pub async fn require_domain(&self, id_or_name: &str) -> Result<Domain> {
+        self.find_domain(id_or_name).await?.ok_or_else(|| Error::not_found("domain", id_or_name))
+    }
+
+    /// Every domain: the default one first, then in the order they were added.
+    pub async fn list_domains(&self) -> Result<Vec<Domain>> {
+        sqlx::query("SELECT * FROM domains ORDER BY is_default DESC, created_at, rowid")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(row_to_domain)
+            .collect()
+    }
+
+    /// Store what a verification found: `status`, `checks`, `failures`,
+    /// `verified_at` and `checked_at` of `d`. Returns the stored row.
+    pub async fn record_domain_check(&self, d: &Domain) -> Result<Domain> {
+        let res = sqlx::query(
+            "UPDATE domains SET status = ?, checks = ?, failures = ?, verified_at = ?, checked_at = ? WHERE id = ?",
+        )
+        .bind(d.status.as_str())
+        .bind(serde_json::to_string(&d.checks).unwrap_or_else(|_| "[]".into()))
+        .bind(i64::from(d.failures))
+        .bind(ts_opt(&d.verified_at))
+        .bind(ts_opt(&d.checked_at))
+        .bind(&d.id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("domain", &d.id));
+        }
+        self.get_domain(&d.id).await?.ok_or_else(|| Error::not_found("domain", &d.id))
+    }
+
+    /// Make `id` the default domain, and no other.
+    pub async fn set_default_domain(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let found: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM domains WHERE id = ?").bind(id).fetch_one(&mut *tx).await?;
+        if found == 0 {
+            return Err(Error::not_found("domain", id));
+        }
+        sqlx::query("UPDATE domains SET is_default = 0 WHERE is_default = 1").execute(&mut *tx).await?;
+        sqlx::query("UPDATE domains SET is_default = 1 WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Delete a domain. When it was the default one, the base domain is again.
+    pub async fn delete_domain(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query("DELETE FROM domains WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("domain", id));
+        }
+        sqlx::query(
+            "UPDATE domains SET is_default = 1
+             WHERE source = ? AND NOT EXISTS (SELECT 1 FROM domains WHERE is_default = 1)",
+        )
+        .bind(DomainSource::Config.as_str())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Keep the row of the server's `--base-domain` in step with the flag,
+    /// at every start: the row of a previous value goes, a domain of that
+    /// name connected earlier becomes the base domain, and the base domain
+    /// is the default one unless another domain is. Returns its row.
+    pub async fn sync_base_domain(&self, base_domain: &str) -> Result<Domain> {
+        let name = base_domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        let config = DomainSource::Config.as_str();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM domains WHERE source = ? AND name != ?")
+            .bind(config)
+            .bind(&name)
+            .execute(&mut *tx)
+            .await?;
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT id FROM domains WHERE name = ?").bind(&name).fetch_optional(&mut *tx).await?;
+        let id = match existing {
+            Some(id) => {
+                sqlx::query("UPDATE domains SET source = ? WHERE id = ?")
+                    .bind(config)
+                    .bind(&id)
+                    .execute(&mut *tx)
+                    .await?;
+                id
+            }
+            None => {
+                let d = Domain::new(name.clone(), DomainSource::Config);
+                sqlx::query("INSERT INTO domains (id, name, source, status, created_at) VALUES (?, ?, ?, ?, ?)")
+                    .bind(&d.id)
+                    .bind(&d.name)
+                    .bind(config)
+                    .bind(d.status.as_str())
+                    .bind(ts(&d.created_at))
+                    .execute(&mut *tx)
+                    .await?;
+                d.id
+            }
+        };
+        let defaults: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM domains WHERE is_default = 1").fetch_one(&mut *tx).await?;
+        if defaults == 0 {
+            sqlx::query("UPDATE domains SET is_default = 1 WHERE id = ?").bind(&id).execute(&mut *tx).await?;
+        }
+        let row = sqlx::query("SELECT * FROM domains WHERE id = ?").bind(&id).fetch_one(&mut *tx).await?;
+        let domain = row_to_domain(&row)?;
+        tx.commit().await?;
+        Ok(domain)
+    }
+
+    // -----------------------------------------------------------------------
+    // accounts, sessions and API tokens (DESIGN.md §20)
+
+    /// The administrator's account, once the server is set up.
+    pub async fn first_user(&self) -> Result<Option<User>> {
+        let row = sqlx::query("SELECT * FROM users ORDER BY created_at, id LIMIT 1").fetch_optional(&self.pool).await?;
+        row.as_ref().map(row_to_user).transpose()
+    }
+
+    /// Create the account of a server that has none. `false` when one exists
+    /// already (nothing is written): of two setups at once, one wins.
+    pub async fn create_first_user(&self, u: &User) -> Result<bool> {
+        let res = sqlx::query(
+            "INSERT INTO users (id, email, password_hash, created_at, updated_at)
+             SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)",
+        )
+        .bind(&u.id)
+        .bind(&u.email)
+        .bind(&u.password_hash)
+        .bind(ts(&u.created_at))
+        .bind(ts(&u.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn get_user(&self, id: &str) -> Result<Option<User>> {
+        let row = sqlx::query("SELECT * FROM users WHERE id = ?").bind(id).fetch_optional(&self.pool).await?;
+        row.as_ref().map(row_to_user).transpose()
+    }
+
+    /// `email` as [`crate::auth::normalize_email`] returns it.
+    pub async fn find_user_by_email(&self, email: &str) -> Result<Option<User>> {
+        let row = sqlx::query("SELECT * FROM users WHERE email = ?").bind(email).fetch_optional(&self.pool).await?;
+        row.as_ref().map(row_to_user).transpose()
+    }
+
+    /// Replace the password of an account and bump `updated_at`.
+    pub async fn set_password(&self, user_id: &str, password_hash: &str) -> Result<()> {
+        let res = sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+            .bind(password_hash)
+            .bind(ts(&now()))
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("account", user_id));
+        }
+        Ok(())
+    }
+
+    pub async fn create_session(&self, s: &Session) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sessions (id, user_id, token_hash, user_agent, created_at, last_used_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&s.id)
+        .bind(&s.user_id)
+        .bind(&s.token_hash)
+        .bind(&s.user_agent)
+        .bind(ts(&s.created_at))
+        .bind(ts(&s.last_used_at))
+        .bind(ts(&s.expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The session of a cookie, by the digest of its value. Expired ones
+    /// are returned too: the caller decides.
+    pub async fn find_session(&self, token_hash: &str) -> Result<Option<Session>> {
+        let row = sqlx::query("SELECT * FROM sessions WHERE token_hash = ?")
+            .bind(token_hash)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(row_to_session).transpose()
+    }
+
+    /// Record that a session was used, and until when it now lasts.
+    pub async fn touch_session(&self, id: &str, used_at: DateTime<Utc>, expires_at: DateTime<Utc>) -> Result<()> {
+        sqlx::query("UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?")
+            .bind(ts(&used_at))
+            .bind(ts(&expires_at))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Sessions of an account that haven't expired, the last used first.
+    pub async fn list_sessions(&self, user_id: &str) -> Result<Vec<Session>> {
+        let rows =
+            sqlx::query("SELECT * FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_used_at DESC, id")
+                .bind(user_id)
+                .bind(ts(&now()))
+                .fetch_all(&self.pool)
+                .await?;
+        rows.iter().map(row_to_session).collect()
+    }
+
+    /// End a session; returns whether it existed.
+    pub async fn delete_session(&self, id: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM sessions WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// End every session of an account but `except`; returns how many.
+    pub async fn delete_sessions(&self, user_id: &str, except: Option<&str>) -> Result<u64> {
+        let res = sqlx::query("DELETE FROM sessions WHERE user_id = ? AND id != ?")
+            .bind(user_id)
+            .bind(except.unwrap_or_default())
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Forget the sessions that expired; returns how many.
+    pub async fn delete_expired_sessions(&self) -> Result<u64> {
+        let res =
+            sqlx::query("DELETE FROM sessions WHERE expires_at <= ?").bind(ts(&now())).execute(&self.pool).await?;
+        Ok(res.rows_affected())
+    }
+
+    pub async fn create_api_token(&self, t: &ApiToken) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO api_tokens (id, name, token_hash, hint, created_at, last_used_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&t.id)
+        .bind(&t.name)
+        .bind(&t.token_hash)
+        .bind(&t.hint)
+        .bind(ts(&t.created_at))
+        .bind(ts_opt(&t.last_used_at))
+        .bind(ts_opt(&t.expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The API token with this digest. An expired one is returned too: the
+    /// caller decides.
+    pub async fn find_api_token(&self, token_hash: &str) -> Result<Option<ApiToken>> {
+        let row = sqlx::query("SELECT * FROM api_tokens WHERE token_hash = ?")
+            .bind(token_hash)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(row_to_api_token).transpose()
+    }
+
+    pub async fn touch_api_token(&self, id: &str, used_at: DateTime<Utc>) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")
+            .bind(ts(&used_at))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Every API token, the newest first.
+    pub async fn list_api_tokens(&self) -> Result<Vec<ApiToken>> {
+        let rows = sqlx::query("SELECT * FROM api_tokens ORDER BY created_at DESC, id").fetch_all(&self.pool).await?;
+        rows.iter().map(row_to_api_token).collect()
+    }
+
+    /// Revoke an API token.
+    pub async fn delete_api_token(&self, id: &str) -> Result<()> {
+        let res = sqlx::query("DELETE FROM api_tokens WHERE id = ?").bind(id).execute(&self.pool).await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::not_found("API token", id));
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // settings (small key/value store for server-level state)
 
     pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -1112,6 +1731,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_first_account_is_the_only_one() {
+        let store = Store::open_in_memory().await.unwrap();
+        assert!(store.first_user().await.unwrap().is_none());
+        let ada = User::new("ada@example.com", "hash-1");
+        assert!(store.create_first_user(&ada).await.unwrap());
+        // A second setup changes nothing.
+        assert!(!store.create_first_user(&User::new("eve@example.com", "hash-2")).await.unwrap());
+        assert_eq!(store.first_user().await.unwrap().unwrap(), ada);
+        assert_eq!(store.get_user(&ada.id).await.unwrap().unwrap(), ada);
+        assert_eq!(store.find_user_by_email("ada@example.com").await.unwrap().unwrap().id, ada.id);
+        assert!(store.find_user_by_email("eve@example.com").await.unwrap().is_none());
+
+        store.set_password(&ada.id, "hash-3").await.unwrap();
+        let changed = store.get_user(&ada.id).await.unwrap().unwrap();
+        assert_eq!(changed.password_hash, "hash-3");
+        assert!(changed.updated_at >= ada.updated_at);
+        assert!(store.set_password("usr-missing", "x").await.is_err());
+        assert!(!format!("{changed:?}").contains("hash-3"), "no hash in debug output");
+    }
+
+    #[tokio::test]
+    async fn sessions_round_trip_and_end() {
+        let store = Store::open_in_memory().await.unwrap();
+        let user = User::new("ada@example.com", "hash");
+        store.create_first_user(&user).await.unwrap();
+        let (a, b) = (Session::new(&user.id, "secret-a", Some("Firefox")), Session::new(&user.id, "secret-b", None));
+        store.create_session(&a).await.unwrap();
+        store.create_session(&b).await.unwrap();
+        assert_eq!(store.find_session(&crate::auth::digest("secret-a")).await.unwrap().unwrap(), a);
+        assert!(store.find_session("secret-a").await.unwrap().is_none(), "found by digest only");
+        assert_eq!(store.list_sessions(&user.id).await.unwrap().len(), 2);
+
+        // An expired session is no longer listed, and is swept.
+        let past = now() - chrono::Duration::hours(1);
+        store.touch_session(&b.id, past, past).await.unwrap();
+        let found = store.find_session(&b.token_hash).await.unwrap().unwrap();
+        assert!(found.is_expired(now()) && !a.is_expired(now()));
+        assert_eq!(store.list_sessions(&user.id).await.unwrap(), vec![a.clone()]);
+        assert_eq!(store.delete_expired_sessions().await.unwrap(), 1);
+        assert!(store.find_session(&b.token_hash).await.unwrap().is_none());
+
+        let c = Session::new(&user.id, "secret-c", None);
+        store.create_session(&c).await.unwrap();
+        assert_eq!(store.delete_sessions(&user.id, Some(&a.id)).await.unwrap(), 1, "every one but `a`");
+        assert_eq!(store.list_sessions(&user.id).await.unwrap(), vec![a.clone()]);
+        assert!(store.delete_session(&a.id).await.unwrap());
+        assert!(!store.delete_session(&a.id).await.unwrap());
+        store.create_session(&c).await.unwrap();
+        assert_eq!(store.delete_sessions(&user.id, None).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn api_tokens_round_trip() {
+        let store = Store::open_in_memory().await.unwrap();
+        let token = crate::auth::new_api_token();
+        let t = ApiToken::new("CI", &token, None);
+        store.create_api_token(&t).await.unwrap();
+        assert_eq!(store.find_api_token(&crate::auth::digest(&token)).await.unwrap().unwrap(), t);
+        assert!(store.find_api_token(&token).await.unwrap().is_none(), "found by digest only");
+        assert_eq!(t.hint, token[39..]);
+
+        let used_at = now();
+        store.touch_api_token(&t.id, used_at).await.unwrap();
+        let listed = store.list_api_tokens().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].last_used_at, Some(used_at));
+
+        let old = ApiToken::new("old", &crate::auth::new_api_token(), Some(now() - chrono::Duration::days(1)));
+        assert!(old.is_expired(now()) && !t.is_expired(now()));
+        store.delete_api_token(&t.id).await.unwrap();
+        assert!(store.delete_api_token(&t.id).await.is_err());
+        assert!(store.list_api_tokens().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn service_limits_round_trip() {
         let store = Store::open_in_memory().await.unwrap();
         let mut svc = Service::new("api", ServiceType::WebService);
@@ -1145,6 +1839,217 @@ mod tests {
         for got in futures::future::join_all(reads).await {
             assert_eq!(got.unwrap().memory_limit_mb, Some(256));
         }
+    }
+
+    /// A database written before git connections existed (schema v2) gets
+    /// their table; its services are served by the connections made later.
+    #[tokio::test]
+    async fn upgrades_a_database_without_git_connections() {
+        use sqlx::Connection;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferry.db");
+        {
+            let opts = SqliteConnectOptions::new().filename(&path).create_if_missing(true).foreign_keys(true);
+            let mut conn = sqlx::SqliteConnection::connect_with(&opts).await.unwrap();
+            for sql in &MIGRATIONS[..2] {
+                sqlx::raw_sql(sql).execute(&mut conn).await.unwrap();
+            }
+            sqlx::raw_sql(
+                "PRAGMA user_version = 2;
+                 INSERT INTO services (id, name, service_type, repo_url, deploy_hook_key, created_at, updated_at)
+                 VALUES ('srv-00000000000000000001', 'old', 'web_service', 'https://github.com/a/b', 'k',
+                         '2026-01-01T00:00:00.000000Z', '2026-01-01T00:00:00.000000Z');",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            conn.close().await.unwrap();
+        }
+        let store = Store::open(&path).await.unwrap();
+        let old = store.require_service("old").await.unwrap();
+        assert_eq!(old.repo_url.as_deref(), Some("https://github.com/a/b"));
+        assert!(store.list_git_connections().await.unwrap().is_empty());
+        let conn = GitConnection::new(GitProvider::Github, "https://github.com", "a", "tok");
+        store.create_git_connection(&conn).await.unwrap();
+        // The old service's repository is served by the new connection.
+        let all = store.list_git_connections().await.unwrap();
+        assert_eq!(git_connection_for(&all, old.repo_url.as_deref().unwrap()).map(|c| &c.id), Some(&conn.id));
+    }
+
+    /// A database written when git connections were pasted tokens that
+    /// services named (schema v3): its connections are token connections,
+    /// and its services no longer name one — their repository's URL decides.
+    #[tokio::test]
+    async fn upgrades_a_database_with_token_connections() {
+        use sqlx::Connection;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferry.db");
+        {
+            let opts = SqliteConnectOptions::new().filename(&path).create_if_missing(true).foreign_keys(true);
+            let mut conn = sqlx::SqliteConnection::connect_with(&opts).await.unwrap();
+            for sql in &MIGRATIONS[..3] {
+                sqlx::raw_sql(sql).execute(&mut conn).await.unwrap();
+            }
+            sqlx::raw_sql(
+                "PRAGMA user_version = 3;
+                 INSERT INTO git_connections (id, provider, base_url, account, account_name, token, scopes,
+                                              created_at, updated_at)
+                 VALUES ('git-00000000000000000001', 'github', 'https://github.com', 'Octocat', 'The Octocat',
+                         'tok', '[\"repo\"]', '2026-01-01T00:00:00.000000Z', '2026-01-01T00:00:00.000000Z');
+                 INSERT INTO services (id, name, service_type, repo_url, git_connection_id, deploy_hook_key,
+                                       created_at, updated_at)
+                 VALUES ('srv-00000000000000000001', 'old', 'web_service', 'https://github.com/octocat/app',
+                         'git-00000000000000000001', 'k', '2026-01-01T00:00:00.000000Z',
+                         '2026-01-01T00:00:00.000000Z');",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            conn.close().await.unwrap();
+        }
+        let store = Store::open(&path).await.unwrap();
+        let all = store.list_git_connections().await.unwrap();
+        let [c] = all.as_slice() else { panic!("{all:?}") };
+        assert_eq!((c.auth, c.account.as_str(), c.token.as_str()), (GitAuth::Token, "Octocat", "tok"));
+        assert_eq!((c.account_name.as_deref(), c.scopes.as_slice()), (Some("The Octocat"), &["repo".to_string()][..]));
+        assert!(c.is_connected());
+        assert!(c.refresh_token.is_none() && c.client_id.is_none() && c.app.is_none() && c.installation.is_none());
+        // The service kept its repository, which the connection still serves.
+        let old = store.require_service("old").await.unwrap();
+        assert_eq!(old.repo_url.as_deref(), Some("https://github.com/octocat/app"));
+        assert_eq!(git_connection_for(&all, "https://github.com/octocat/app").map(|c| &c.id), Some(&c.id));
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('services')").fetch_all(store.pool()).await.unwrap();
+        assert!(!columns.iter().any(|name| name == "git_connection_id"), "{columns:?}");
+        // The connection can be authorized another way, and removed.
+        let mut again = c.clone();
+        again.auth = GitAuth::Oauth;
+        again.refresh_token = Some("renew".into());
+        again.client_id = Some("app".into());
+        let saved = store.update_git_connection(&again).await.unwrap();
+        assert_eq!((saved.auth, saved.refresh_token.as_deref()), (GitAuth::Oauth, Some("renew")));
+        store.delete_git_connection(&saved.id).await.unwrap();
+        assert_eq!(store.require_service("old").await.unwrap().repo_url, old.repo_url);
+        // Reopening applies nothing twice.
+        store.pool().close().await;
+        let store = Store::open(&path).await.unwrap();
+        assert!(store.list_git_connections().await.unwrap().is_empty());
+        assert_eq!(store.list_services().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn git_connections() {
+        let store = Store::open_in_memory().await.unwrap();
+        let mut gh = GitConnection::new(GitProvider::Github, "https://github.com", "Octocat", "ghp_first");
+        gh.scopes = vec!["repo".into(), "read:org".into()];
+        gh.token_expires_at = Some(now() + chrono::Duration::days(30));
+        store.create_git_connection(&gh).await.unwrap();
+        let gl = GitConnection::new(GitProvider::Gitlab, "https://gitlab.com", "octocat", "glpat-1");
+        store.create_git_connection(&gl).await.unwrap();
+        assert_eq!(store.require_git_connection(&gh.id).await.unwrap(), gh);
+        // One connection per account of a provider instance, whatever the case of its login.
+        let again = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "ghp_other");
+        let err = store.create_git_connection(&again).await.unwrap_err();
+        assert!(
+            matches!(&err, Error::Conflict(m) if m == "the GitHub account 'octocat' is already connected"),
+            "{err}"
+        );
+        let found = store.find_git_connection(GitProvider::Github, "https://github.com", "OCTOCAT").await.unwrap();
+        assert_eq!(found.unwrap().id, gh.id);
+        assert!(
+            store
+                .find_git_connection(GitProvider::Github, "https://ghe.example.com", "octocat")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let listed: Vec<String> = store.list_git_connections().await.unwrap().into_iter().map(|c| c.id).collect();
+        assert_eq!(listed, vec![gh.id.clone(), gl.id.clone()]);
+
+        // A new token replaces the old one (and what the provider said about it).
+        let mut renewed = gh.clone();
+        renewed.token = "ghp_second".into();
+        renewed.account_name = Some("The Octocat".into());
+        renewed.scopes = vec![];
+        renewed.token_expires_at = None;
+        let saved = store.update_git_connection(&renewed).await.unwrap();
+        assert_eq!((saved.token.as_str(), saved.account_name.as_deref()), ("ghp_second", Some("The Octocat")));
+        assert!(saved.scopes.is_empty() && saved.token_expires_at.is_none() && saved.updated_at >= gh.updated_at);
+        assert!(matches!(
+            store.update_git_connection(&GitConnection::new(GitProvider::Github, "x", "y", "z")).await,
+            Err(Error::NotFound(_))
+        ));
+
+        // Deleting a connection leaves services alone: they name no connection.
+        let mut svc = Service::new("app", ServiceType::WebService);
+        svc.repo_url = Some("https://gitlab.com/octocat/app.git".into());
+        store.create_service(&svc).await.unwrap();
+        store.delete_git_connection(&gl.id).await.unwrap();
+        assert_eq!(store.require_service("app").await.unwrap(), svc);
+        assert!(matches!(store.delete_git_connection(&gl.id).await, Err(Error::NotFound(_))));
+        assert_eq!(store.list_git_connections().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn git_connections_authorized_in_the_browser() {
+        let store = Store::open_in_memory().await.unwrap();
+        // An OAuth application waits for its authorization under the empty account.
+        let pending = GitConnection::oauth_application(GitProvider::Gitlab, "https://gitlab.com", "app-id", "app-s");
+        store.create_git_connection(&pending).await.unwrap();
+        let found = store.find_git_connection(GitProvider::Gitlab, "https://gitlab.com", "").await.unwrap().unwrap();
+        assert_eq!(found, pending);
+        assert!(!found.is_connected());
+        // Authorized: the account, its tokens and when the access token expires.
+        let mut authorized = found;
+        authorized.account = "tanuki".into();
+        authorized.token = "access-1".into();
+        authorized.refresh_token = Some("refresh-1".into());
+        authorized.token_expires_at = Some(now() + chrono::Duration::hours(2));
+        authorized.scopes = vec!["read_api".into(), "read_repository".into()];
+        let saved = store.update_git_connection(&authorized).await.unwrap();
+        assert!(saved.is_connected());
+        assert_eq!((saved.auth, saved.client_id.as_deref()), (GitAuth::Oauth, Some("app-id")));
+        assert_eq!(saved.refresh_token.as_deref(), Some("refresh-1"));
+        // Renewing the tokens doesn't count as a change of the connection.
+        let expires = now() + chrono::Duration::hours(4);
+        store.set_git_tokens(&saved.id, "access-2", Some("refresh-2"), Some(expires)).await.unwrap();
+        let renewed = store.require_git_connection(&saved.id).await.unwrap();
+        assert_eq!((renewed.token.as_str(), renewed.refresh_token.as_deref()), ("access-2", Some("refresh-2")));
+        assert_eq!((renewed.token_expires_at, renewed.updated_at), (Some(expires), saved.updated_at));
+        assert!(matches!(store.set_git_tokens("git-none", "t", None, None).await, Err(Error::NotFound(_))));
+
+        // A GitHub App: its registration, then where it is installed.
+        let app = GithubApp {
+            id: 4242,
+            slug: "ferry-test".into(),
+            url: "https://github.com/apps/ferry-test".into(),
+            private_key: "pem".into(),
+            webhook_secret: Some("hook".into()),
+        };
+        let mut gh = GitConnection::github_app("https://github.com", "octocat", app.clone(), "Iv1.abc", "s");
+        store.create_git_connection(&gh).await.unwrap();
+        let stored = store.require_git_connection(&gh.id).await.unwrap();
+        assert_eq!(stored, gh);
+        assert_eq!(
+            (stored.app.as_ref(), stored.installation.as_ref(), stored.is_connected()),
+            (Some(&app), None, false)
+        );
+        gh.installation = Some(GithubInstallation {
+            id: 99,
+            url: Some("https://github.com/settings/installations/99".into()),
+            repository_selection: Some("selected".into()),
+        });
+        let installed = store.update_git_connection(&gh).await.unwrap();
+        assert!(installed.is_connected());
+        assert_eq!(installed.installation, gh.installation);
+        assert_eq!(installed.token, "");
+
+        // An account can't end up with two connections.
+        let mut clash = GitConnection::new(GitProvider::Github, "https://github.com", "hubot", "t");
+        store.create_git_connection(&clash).await.unwrap();
+        clash.account = "OctoCat".into();
+        let err = store.update_git_connection(&clash).await.unwrap_err();
+        assert!(matches!(&err, Error::Conflict(m) if m.contains("already connected")), "{err}");
     }
 
     #[tokio::test]
@@ -1204,5 +2109,69 @@ mod tests {
         // Reopen: migrations must be idempotent.
         let store = Store::open(&dir.path().join("sub/ferry.db")).await.unwrap();
         assert_eq!(store.get_setting("k").await.unwrap().as_deref(), Some("v2"));
+    }
+
+    #[tokio::test]
+    async fn domains_roundtrip() {
+        let store = Store::open_in_memory().await.unwrap();
+        // The base domain: one row, the default one until another is.
+        let base = store.sync_base_domain("LocalHost.").await.unwrap();
+        assert_eq!(
+            (base.name.as_str(), base.source, base.status),
+            ("localhost", DomainSource::Config, DomainStatus::Active)
+        );
+        assert!(base.is_default && base.is_served());
+        assert_eq!(store.sync_base_domain("localhost").await.unwrap(), base);
+
+        let mut d = Domain::new("example.com", DomainSource::Connected);
+        assert_eq!(d.status, DomainStatus::Pending);
+        store.create_domain(&d).await.unwrap();
+        assert_eq!(store.require_domain("Example.com.").await.unwrap(), d);
+        assert_eq!(store.require_domain(&d.id).await.unwrap(), d);
+        let dup = Domain::new("example.com", DomainSource::Connected);
+        assert!(matches!(store.create_domain(&dup).await, Err(Error::Conflict(_))));
+        assert!(matches!(store.require_domain("nope.example.com").await, Err(Error::NotFound(_))));
+
+        // What a verification found.
+        d.status = DomainStatus::Active;
+        d.checks = vec![DomainCheck::new(DomainCheckKind::Dns, CheckOutcome::Passed, "resolves to 203.0.113.10")];
+        d.failures = 2;
+        d.verified_at = Some(now());
+        d.checked_at = d.verified_at;
+        assert_eq!(store.record_domain_check(&d).await.unwrap(), d);
+
+        // One default at a time; the default one is listed first.
+        store.set_default_domain(&d.id).await.unwrap();
+        let names: Vec<(String, bool)> =
+            store.list_domains().await.unwrap().into_iter().map(|d| (d.name, d.is_default)).collect();
+        assert_eq!(names, vec![("example.com".to_string(), true), ("localhost".to_string(), false)]);
+        assert!(matches!(store.set_default_domain("dom-nope").await, Err(Error::NotFound(_))));
+
+        // Removing the default domain gives the default back to the base domain.
+        let other = Domain::new("example.org", DomainSource::Connected);
+        store.create_domain(&other).await.unwrap();
+        store.set_default_domain(&other.id).await.unwrap();
+        store.delete_domain(&other.id).await.unwrap();
+        assert!(store.require_domain("localhost").await.unwrap().is_default);
+        store.set_default_domain(&d.id).await.unwrap();
+
+        // Another `--base-domain`: the old row goes, a connected domain of
+        // that name becomes the base domain and keeps what it had.
+        let base = store.sync_base_domain("example.com").await.unwrap();
+        assert_eq!(
+            (base.id.as_str(), base.source, base.status),
+            (d.id.as_str(), DomainSource::Config, DomainStatus::Active)
+        );
+        assert!(base.is_default);
+        assert_eq!(store.list_domains().await.unwrap().len(), 1);
+        // And when the default domain was the old base domain, the new one is.
+        let base = store.sync_base_domain("apps.example.org").await.unwrap();
+        assert!(base.is_default && base.is_served());
+        assert_eq!(base.status, DomainStatus::Pending);
+        assert_eq!(store.list_domains().await.unwrap(), vec![base.clone()]);
+
+        store.delete_domain(&base.id).await.unwrap();
+        assert!(matches!(store.delete_domain(&base.id).await, Err(Error::NotFound(_))));
+        assert!(matches!(store.record_domain_check(&base).await, Err(Error::NotFound(_))));
     }
 }

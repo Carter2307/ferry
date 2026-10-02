@@ -1,0 +1,59 @@
+---
+title: Resource limits
+description: A plan, or the keys memoryLimit and cpuLimit, set the memory limit and the CPU limit of each container.
+---
+
+<Diagram
+  nodes={[
+    { id: 'plan', at: [0, 0], icon: 'tag', label: 'plan' },
+    { id: 'key', at: [0, 1], icon: 'pencil', label: 'memoryLimit', note: 'cpuLimit' },
+    { id: 'none', at: [0, 2], icon: 'server', label: 'No key', note: 'server defaults' },
+    { id: 'limit', at: [1.75, 1], icon: 'gauge', label: 'Limits', note: 'of each container' },
+  ]}
+  edges={[
+    { from: 'plan', to: 'limit' },
+    { from: 'key', to: 'limit' },
+    { from: 'none', to: 'limit' },
+  ]}
+  steps={[
+    {
+      caption: 'A plan gives a memory limit and, for a service, a CPU limit.',
+      flow: ['plan>limit'],
+      tones: { plan: 'primary' },
+    },
+    {
+      caption: 'memoryLimit and cpuLimit replace the values of the plan, key by key.',
+      flow: ['key>limit'],
+      tones: { key: 'primary' },
+    },
+    {
+      caption: 'With no plan and no key, a new service or datastore gets the defaults of the server.',
+      flow: ['none>limit'],
+      tones: { none: 'primary' },
+      notes: { limit: '512 MiB, 1 CPU' },
+    },
+    {
+      caption: 'With no plan and no key, a service or datastore that exists keeps its limits.',
+      tones: { limit: 'success' },
+      notes: { limit: 'not changed' },
+    },
+  ]}
+/>
+
+Each <Term id="container" /> that Ferry runs gets a <Term id="memory-limit" /> and a <Term id="cpu-limit" />. This applies to each instance and each job run of a service, and to each datastore.
+
+## The keys
+
+| Key | Type | Default | Ferry setting and notes |
+|---|---|---|---|
+| `plan` | string | none | The instance type of Render. See [Plans of a service](/docs/reference/blueprint/plans) and [Plans of a datastore](/docs/reference/blueprint/datastore-plans). |
+| `memoryLimit` | string or integer | none | `memory_limit_mb`, a <Term id="ferry-extension" />. It replaces the memory of the plan. |
+| `cpuLimit` | string or number | none | `cpu_limit`, a Ferry key. It replaces the CPU of the plan. |
+
+An entry can have a plan, the two keys, or all three. See [memoryLimit and cpuLimit](/docs/reference/blueprint/limit-keys).
+
+## The server defaults
+
+The defaults come from `ferryd --default-memory-limit` and `--default-cpu-limit`. They are 512 <Term id="mib" /> and 1 CPU unless the operator changed them. With the value 0, there is no limit. See [Server options](/docs/reference/server-options).
+
+[Resource limits](/docs/concepts/resource-limits) explains how Ferry applies the limits.

@@ -1,0 +1,61 @@
+---
+title: Log rotation
+description: Docker keeps 3 log files of 10 MiB for each container. The log cannot fill the disk.
+---
+
+<Diagram
+  nodes={[
+    { id: 'app', at: [0, 0], icon: 'box', label: 'Container', note: 'writes lines' },
+    { id: 'f1', at: [1.25, 0], icon: 'file', label: 'Log file 1', note: 'current' },
+    { id: 'f2', at: [2.25, 0], icon: 'file', label: 'Log file 2' },
+    { id: 'f3', at: [3.25, 0], icon: 'file', label: 'Log file 3' },
+  ]}
+  edges={[
+    { from: 'app', to: 'f1' },
+    { from: 'f1', to: 'f2' },
+    { from: 'f2', to: 'f3' },
+  ]}
+  steps={[
+    {
+      caption: 'The container writes its output. Docker puts it in a log file.',
+      hide: ['f2', 'f3'],
+      flow: ['app>f1'],
+    },
+    {
+      caption: 'The file comes to 10 MiB. Docker starts a new file and keeps the old file.',
+      hide: ['f3'],
+      flow: ['app>f1', 'f1>f2'],
+      notes: { f2: '10 MiB' },
+    },
+    {
+      caption: 'Docker keeps 3 files: about 30 MiB for each container.',
+      flow: ['app>f1', 'f2>f3'],
+      notes: { f2: '10 MiB', f3: '10 MiB' },
+    },
+    {
+      caption: 'At the next rotation, Docker deletes the oldest file.',
+      flow: ['app>f1'],
+      tones: { f3: 'danger' },
+      notes: { f2: '10 MiB', f3: 'deleted' },
+    },
+  ]}
+/>
+
+<Term id="log-rotation">Log rotation</Term> keeps the log of a container small. The [runtime logs](/docs/concepts/logs/runtime-logs) go back only as far as these files.
+
+## Change the rotation
+
+| Flag of `ferryd` | Default | Meaning |
+|---|---|---|
+| `--log-max-size` | 10 MiB | The size at which Docker starts a new file |
+| `--log-max-files` | 3 | The number of files, with the current file |
+
+`--log-max-size 0` tells Ferry not to change the log settings of Docker.
+
+<Accordions>
+  <Accordion title="Other log drivers">
+    Ferry sets the rotation only when the default <Term id="log-driver" /> of Docker is `json-file`. This is the default of Docker.
+
+    If you set up Docker with a different driver (journald, syslog, fluentd, `local`…), Ferry keeps it. That driver has its own limits. Then `ferryd` prints `Docker's journald log driver (kept)` when it starts.
+  </Accordion>
+</Accordions>

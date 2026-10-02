@@ -1,0 +1,33 @@
+{
+  "title": "Troubleshooting",
+  "icon": "LifeBuoy",
+  "pages": [
+    "---Start ferryd---",
+    "docker-connect",
+    "port-in-use",
+    "permission-denied",
+    "data-directory",
+    "docker-prefix",
+    "---Sign in---",
+    "setup-code",
+    "forgot-password",
+    "too-many-attempts",
+    "---Use the CLI---",
+    "cli-cannot-reach",
+    "not-logged-in",
+    "login-expired",
+    "---Build---",
+    "runtime-not-detected",
+    "old-docker",
+    "docker-cli-missing",
+    "disk-full",
+    "---Deploy---",
+    "health-check-timeout",
+    "health-check-path",
+    "app-crashes",
+    "app-exits",
+    "out-of-memory",
+    "---Open the app---",
+    "proxy-errors"
+  ]
+}

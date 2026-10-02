@@ -23,3 +23,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 rustls.workspace = true
 rlimit = "0.11"
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+# `ferryd reset-password` reads the new password without echoing it.
+rpassword = "7"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
+[dev-dependencies]
+tempfile.workspace = true

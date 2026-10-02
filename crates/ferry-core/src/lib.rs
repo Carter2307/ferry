@@ -6,7 +6,9 @@
 //!
 //! Every other crate depends on this one; this crate depends on no other Ferry crate.
 
+pub mod auth;
 pub mod config;
+pub mod domains;
 pub mod dto;
 pub mod engine;
 pub mod env;

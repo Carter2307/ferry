@@ -18,10 +18,31 @@ import { DEFAULT_LIMIT, limitError, limitValue, type LimitField } from '@/lib/re
 
 export type SourceMode = 'git' | 'image' | 'upload'
 
+/** How the repository of a git source is given: picked from a connected account, or by URL. */
+export type RepoMode = 'account' | 'url'
+
+/** A repository picked from a connected GitHub / GitLab account. */
+export interface PickedRepository {
+  /**
+   * The git connection it was listed through. Only for the form: a service
+   * names no connection, the server clones a repository with the connection
+   * that serves its URL.
+   */
+  connectionId: string
+  fullName: string
+  cloneUrl: string
+  private: boolean
+  defaultBranch: string | null
+}
+
 export interface NewServiceForm {
   type: ServiceType
   name: string
   source: SourceMode
+  repoMode: RepoMode
+  /** The repository picked from a connected account (`repoMode` = account). */
+  repository: PickedRepository | null
+  /** The repository's URL (`repoMode` = url). */
   repoUrl: string
   branch: string
   image: string
@@ -55,6 +76,8 @@ export const INITIAL_FORM: NewServiceForm = {
   type: 'web_service',
   name: '',
   source: 'git',
+  repoMode: 'account',
+  repository: null,
   repoUrl: '',
   branch: 'main',
   image: '',
@@ -77,9 +100,80 @@ export const INITIAL_FORM: NewServiceForm = {
   cpuLimit: DEFAULT_LIMIT,
 }
 
+const DRAFT_KEY = 'ferry.new-service.draft'
+
+/**
+ * The form as it is kept while the browser is away at GitHub / GitLab
+ * (connecting an account takes it to the provider and back). A repository
+ * URL that carries credentials is left out: nothing secret is stored.
+ */
+export function draftOf(form: NewServiceForm): NewServiceForm {
+  const withCredentials = /^[a-z][a-z0-9+.-]*:\/\/[^/@]*@/i.test(form.repoUrl.trim())
+  return withCredentials ? { ...form, repoUrl: '' } : form
+}
+
+/** A stored draft read back: only fields of the expected shape are taken. */
+export function formFromDraft(raw: string | null): NewServiceForm | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+  const draft = parsed as Record<string, unknown>
+  const out: Record<string, unknown> = { ...INITIAL_FORM }
+  for (const [key, initial] of Object.entries(INITIAL_FORM)) {
+    const value = draft[key]
+    if (value === undefined) continue
+    const sameShape =
+      key === 'repository'
+        ? value === null || (typeof value === 'object' && !Array.isArray(value))
+        : Array.isArray(initial)
+          ? Array.isArray(value) && value.every((v) => typeof v === 'string')
+          : typeof value === typeof initial && value !== null && !Array.isArray(value)
+    if (sameShape) out[key] = value
+  }
+  return out as unknown as NewServiceForm
+}
+
+/** `sessionStorage` (this tab only), never throwing. */
+function session(): Storage | null {
+  try {
+    return window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+export function saveDraft(form: NewServiceForm): void {
+  try {
+    session()?.setItem(DRAFT_KEY, JSON.stringify(draftOf(form)))
+  } catch {
+    /* storage unavailable or full: the form just isn't kept */
+  }
+}
+
+export function readDraft(): NewServiceForm | null {
+  try {
+    return formFromDraft(session()?.getItem(DRAFT_KEY) ?? null)
+  } catch {
+    return null
+  }
+}
+
+export function clearDraft(): void {
+  try {
+    session()?.removeItem(DRAFT_KEY)
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export const MAX_INSTANCES = 50
 const RESERVED_NAMES = ['ferry', 'localhost']
-const ID_PREFIXES = ['srv', 'dep', 'job', 'dbs', 'evg']
+const ID_PREFIXES = ['srv', 'dep', 'job', 'dbs', 'evg', 'git']
 
 /** Which settings apply to the current type and source. */
 export function visibleFields(f: Pick<NewServiceForm, 'type' | 'source' | 'runtime'>) {
@@ -294,7 +388,8 @@ export function validateForm(
   }
   set('name', validateName(f.name, taken))
   if (v.repo) {
-    set('repoUrl', validateRepoUrl(f.repoUrl))
+    if (f.repoMode === 'account') set('repository', f.repository ? null : 'Select a repository.')
+    else set('repoUrl', validateRepoUrl(f.repoUrl))
     set('branch', validateBranch(f.branch))
   }
   if (v.image) set('image', validateImage(f.image))
@@ -322,6 +417,7 @@ export const FIELD_ORDER: FieldKey[] = [
   'type',
   'name',
   'source',
+  'repository',
   'repoUrl',
   'branch',
   'image',
@@ -353,7 +449,9 @@ export function toCreateRequest(f: NewServiceForm, env: EnvVar[]): CreateService
   const v = visibleFields(f)
   const body: CreateService = { name: f.name.trim(), type: f.type }
   if (v.repo) {
-    body.repo_url = f.repoUrl.trim()
+    // A picked repository is just its clone URL: the server clones it with
+    // the account connected for that host.
+    body.repo_url = f.repoMode === 'account' && f.repository ? f.repository.cloneUrl : f.repoUrl.trim()
     body.branch = opt(f.branch) ?? 'main'
     body.auto_deploy = f.autoDeploy
   }

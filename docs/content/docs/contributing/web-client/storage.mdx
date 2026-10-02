@@ -1,0 +1,45 @@
+---
+title: What the browser stores
+description: The session is a cookie that the page cannot read. localStorage has only the preferences of the UI.
+---
+
+<Diagram
+  nodes={[
+    { id: 'page', at: [0, 0.5], icon: 'code', label: 'Scripts', note: 'of the page' },
+    { id: 'cookie', at: [1.9, 0], icon: 'lock', label: 'Session cookie', note: 'HttpOnly' },
+    { id: 'ls', at: [1.9, 1], icon: 'save', label: 'localStorage', note: 'key ferry.ui' },
+  ]}
+  edges={[
+    { from: 'page', to: 'cookie', label: 'no access', dashed: true, tone: 'danger' },
+    { from: 'page', to: 'ls', label: 'read, write' },
+  ]}
+  steps={[
+    {
+      caption: 'The session is the cookie. The page cannot read it.',
+      cut: ['page>ls'],
+      tones: { cookie: 'success', ls: 'muted' },
+    },
+    {
+      caption: 'localStorage has only preferences: the theme, the rail and the options of the log viewer.',
+      cut: ['page>cookie'],
+      flow: ['page>ls'],
+      tones: { ls: 'primary', cookie: 'muted' },
+    },
+  ]}
+/>
+
+## No secret in localStorage
+
+The app keeps no token and no secret in <Term id="local-storage" />. The session is the <Term id="session-cookie" />, and the page cannot read it.
+
+The app stores only the preferences of the UI, under the key `ferry.ui`:
+
+- the theme
+- the rail
+- the options of the log viewer
+
+## The theme before the first paint
+
+`public/theme-init.js` applies the saved theme before the first paint.
+
+It is an external file, not a script in the HTML. Thus the app works with a strict <Term id="csp" />: `script-src 'self'`.

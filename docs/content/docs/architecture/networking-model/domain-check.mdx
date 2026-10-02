@@ -1,0 +1,65 @@
+---
+title: Verify a domain
+description: The engine makes sure that a connected domain reaches this ferryd process before Ferry serves it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'engine', at: [0, 0.5], icon: 'workflow', label: 'Engine', note: 'the verifier' },
+    { id: 'dns', at: [1.75, 0], icon: 'globe', label: 'DNS' },
+    { id: 'proxy', at: [1.75, 1], icon: 'route', label: 'Proxy', note: '203.0.113.10:80' },
+    { id: 'routes', at: [0, 1.5], icon: 'ok', label: 'Route table', note: 'shop.example.com' },
+  ]}
+  edges={[
+    { from: 'engine', to: 'dns', both: true },
+    { from: 'engine', to: 'proxy', both: true },
+    { from: 'engine', to: 'routes' },
+  ]}
+  steps={[
+    {
+      caption: 'The engine makes a new name: ferry-check-<random>.<domain>. It asks DNS for the address of this name.',
+      hide: ['routes'],
+      flow: ['engine>dns'],
+    },
+    {
+      caption: 'DNS answers with an address, here 203.0.113.10.',
+      hide: ['routes'],
+      tones: { dns: 'primary' },
+      notes: { dns: '203.0.113.10' },
+    },
+    {
+      caption: 'The engine requests /.well-known/ferry-domain-check/<token> for that name at this address, on the public HTTP port.',
+      hide: ['routes'],
+      flow: ['engine>proxy'],
+    },
+    {
+      caption: 'The proxy answers with the token, then an id. The process made this id when it started.',
+      hide: ['routes'],
+      tones: { proxy: 'primary' },
+      notes: { proxy: 'token.probe-id' },
+    },
+    {
+      caption: 'The id is correct: the request came back to this process. The domain is active, and the engine installs the routes.',
+      flow: ['engine>routes'],
+      tones: { routes: 'success' },
+    },
+  ]}
+/>
+
+The proxy answers the path of the check for each host. The id tells the engine that the answer comes from this process and not from another server.
+
+## Why a new name each time
+
+- Only a <Term id="wildcard-record" /> answers for a name that nobody made before.
+- No <Term id="dns" /> resolver has an old answer for it in its cache.
+
+## How often
+
+| State of the domain | The engine verifies it |
+|---|---|
+| Pending | Each 15 seconds |
+| Active | Each 10 minutes |
+
+After three failures in a row, an active domain gets the flag "misconfigured". Ferry continues to serve it.
+
+For the user view, see [Connect a domain](/docs/guides/domains).

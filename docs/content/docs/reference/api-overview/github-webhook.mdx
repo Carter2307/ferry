@@ -1,0 +1,37 @@
+---
+title: GitHub webhook
+description: POST /hooks/github gets the push events of GitHub. Each delivery must have a valid signature.
+---
+
+```bash title="Terminal"
+BODY='{"zen":"Keep it logically awesome."}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+curl -X POST http://127.0.0.1:7878/hooks/github \
+  -H 'X-GitHub-Event: ping' -H "X-Hub-Signature-256: sha256=$SIG" \
+  -H 'Content-Type: application/json' -d "$BODY"
+# → {"ok":true}
+```
+
+This script tests the endpoint by hand: it signs a body with your secret and sends it.
+
+## Turn it on
+
+The endpoint is off (404) until `ferryd` runs with `--github-webhook-secret`.
+
+## The settings in GitHub
+
+Open the webhook settings of the repository.
+
+| Setting | Value |
+|---|---|
+| Payload URL | `https://<dashboard host or tunnel>/hooks/github` |
+| Content type | `application/json`. The default, form-encoded, also works. |
+| Secret | The same <Term id="webhook-secret" /> |
+
+The [GitHub auto-deploy guide](/docs/guides/github-auto-deploy) shows each step.
+
+## The signature
+
+Each <Term id="delivery" /> must have the header `X-Hub-Signature-256: sha256=<hex>`. The value is the <Term id="hmac" />-SHA256 of the raw body with the secret. `ferryd` compares it with a <Term id="constant-time" />.
+
+See [Events and answers](/docs/reference/api-overview/github-events).

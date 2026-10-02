@@ -1,0 +1,40 @@
+---
+title: Resume a service
+description: A resume starts the instances of the live deploy again. There is no new deploy and no build.
+---
+
+```bash title="Terminal"
+ferry resume api
+```
+
+<Diagram
+  nodes={[
+    { id: 'proxy', at: [0, 0.5], icon: 'route', label: 'Proxy' },
+    { id: 'a', at: [1.5, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'b', at: [1.5, 1], icon: 'box', label: 'Instance 2' },
+    { id: 'live', at: [3, 0.5], icon: 'save', label: 'Live deploy', note: 'image and snapshot' },
+  ]}
+  edges={[
+    { from: 'proxy', to: 'a' },
+    { from: 'proxy', to: 'b' },
+    { from: 'live', to: 'a' },
+    { from: 'live', to: 'b' },
+  ]}
+  steps={[
+    { caption: 'The service is in the state suspended. The proxy answers 503.', hide: ['a', 'b'], tones: { proxy: 'warning' }, notes: { proxy: 'answers 503' } },
+    { caption: 'Resume: Ferry starts the instances of the live deploy again.', cut: ['proxy>a', 'proxy>b'], flow: ['live>a', 'live>b'], tones: { a: 'primary', b: 'primary' }, notes: { a: 'starts', b: 'starts' } },
+    { caption: 'An instance gets traffic when it accepts connections.', flow: ['proxy>a', 'proxy>b'], tones: { a: 'success', b: 'success' } },
+  ]}
+/>
+
+To <Term id="resume" /> a service is to start its <Term id="instance">instances</Term> again from the <Term id="live-deploy" />. Ferry builds nothing.
+
+## If the image is gone
+
+If the <Term id="image" /> of the live deploy does not exist now, Ferry refuses the resume. Then do a manual deploy with `ferry deploy NAME` or `ferry up`.
+
+```bash title="Terminal"
+ferry deploy api
+```
+
+The manual deploy deploys the service. It resumes the service when the deploy is live.

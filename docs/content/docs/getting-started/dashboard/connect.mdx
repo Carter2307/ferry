@@ -1,0 +1,54 @@
+---
+title: The Connect panel
+description: Connect shows the values that a client needs to reach this server, each with a copy button.
+---
+
+<Diagram
+  nodes={[
+    { id: 'connect', at: [0, 1], icon: 'plug', label: 'Connect', note: 'in the top bar' },
+    { id: 'login', at: [1.75, 0], icon: 'terminal', label: 'ferry login', note: 'the full command' },
+    { id: 'url', at: [1.75, 1], icon: 'link', label: 'API URL' },
+    { id: 'svc', at: [1.75, 2], icon: 'box', label: 'Service values', note: 'on a service page' },
+  ]}
+  edges={[
+    { from: 'connect', to: 'login' },
+    { from: 'connect', to: 'url' },
+    { from: 'connect', to: 'svc' },
+  ]}
+  steps={[
+    {
+      caption: 'Click Connect in the top bar. A panel opens.',
+      hide: ['login', 'url', 'svc'],
+      tones: { connect: 'primary' },
+    },
+    {
+      caption: 'The panel has the ferry login command for this server, and the API URL.',
+      hide: ['svc'],
+      flow: ['connect>login', 'connect>url'],
+      tones: { login: 'primary', url: 'primary' },
+    },
+    {
+      caption: 'On a service page, the panel also has the values of the service.',
+      flow: ['connect>svc'],
+      tones: { svc: 'primary' },
+    },
+  ]}
+/>
+
+## What the panel has
+
+| Value | Where |
+|---|---|
+| The `ferry login` command for this server | On each page |
+| The API URL | On each page |
+| The URL of the service | On a service page |
+| The private address of the service | On a service page |
+| The <Term id="deploy-hook" /> of the service | On a service page |
+
+Each value has a copy button.
+
+## Use it
+
+Click **Connect**. Copy the `ferry login` command. Paste it in a <Term id="terminal" />.
+
+The command has the address of this server. See [Log in](/docs/getting-started/cli/login).

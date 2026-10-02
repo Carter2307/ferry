@@ -1,0 +1,12 @@
+{
+  "title": "Custom domains & HTTPS",
+  "icon": "Globe",
+  "pages": [
+    "before-you-start",
+    "dns-record",
+    "add",
+    "certificate",
+    "certificates",
+    "problems"
+  ]
+}

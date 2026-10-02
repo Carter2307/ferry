@@ -1,0 +1,49 @@
+---
+title: The dashboard asks for a setup code
+description: A server with no account needs the setup code to create the account. ferryd status prints the link.
+---
+
+## What you see
+
+The dashboard opens on **Create your account**, with an empty **Setup code** field. Or it refuses the code:
+
+```text title="Dashboard" noCopy
+This is not the setup code of this server.
+```
+
+## Why it occurs
+
+The server has no <Term id="admin-account" />. To create the account, you need the <Term id="setup-code" />. Thus only a person who can read the terminal or the <Term id="data-directory" /> of the server can create it.
+
+The link that `ferryd` prints fills in the code. You opened the dashboard without that link, or with the link of another server.
+
+## How to repair it
+
+<Steps>
+<Step>
+
+### Get the link
+
+On the server, run `ferryd status` with the same `--data-dir` as the server.
+
+```bash title="Terminal"
+ferryd status
+```
+
+While the server has no account, the output ends with the link:
+
+```text title="ferryd status" noCopy
+  Create your account: http://127.0.0.1:7878/setup?code=5b0e…
+```
+
+</Step>
+<Step>
+
+### Use the link
+
+Open the link. As an alternative, copy its code into the field.
+
+</Step>
+</Steps>
+
+The code is also in the file `<data-dir>/setup_code`. See [Installation](/docs/getting-started/installation).

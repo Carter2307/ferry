@@ -1,0 +1,43 @@
+---
+title: Security checklist
+description: Keep the API private, create the account early, protect the data directory and open only three ports.
+---
+
+<Diagram
+  caption="The internet reaches three ports. The rest stays private."
+  nodes={[
+    { id: 'net', at: [0, 0.5], icon: 'globe', label: 'Internet' },
+    { id: 'web', at: [1.25, 0], icon: 'route', label: 'Ports 80, 443', note: 'your apps', tone: 'success' },
+    { id: 'ssh', at: [1.25, 1], icon: 'lock', label: 'Port 22', note: 'SSH, for you' },
+    { id: 'api', at: [2.5, 1], icon: 'monitor', label: 'API', note: '127.0.0.1 only' },
+    { id: 'db', at: [2.5, 2], icon: 'database', label: 'Datastores', note: '127.0.0.1 only' },
+  ]}
+  edges={[
+    { from: 'net', to: 'web', flow: true },
+    { from: 'net', to: 'ssh' },
+    { from: 'ssh', to: 'api', dashed: true },
+    { from: 'ssh', to: 'db', dashed: true },
+  ]}
+/>
+
+## Access to the server
+
+- [ ] **Keep the API private.** Leave `--api-addr` on `127.0.0.1` and use an <Term id="ssh-tunnel" />. Or expose it only through `--dashboard-host` **with HTTPS**.
+- [ ] **Create the account immediately after the first start.** Until it exists, each person who can read the setup link can create it. The link is in the server log and in `<data-dir>/setup_code`.
+- [ ] **Protect the <Term id="data-directory" />.** It holds the values of variables, the passwords of datastores and the credentials in repository URLs. Limit who can log in as the user `ferry`.
+- [ ] **Open only ports 22, 80 and 443.** Ferry binds the datastore ports to `127.0.0.1`, thus they are never public. Reach them over <Term id="ssh" />.
+
+<Callout type="warning" title="Treat the password and the tokens like root passwords">
+The password of the account and each <Term id="api-token" /> give full control of each app on the server.
+</Callout>
+
+Next: [tokens and secrets](/docs/guides/production/security-tokens), then [apps and servers](/docs/guides/production/security-apps).
+
+<Accordions>
+  <Accordion title="The modes of the data directory">
+    Ferry creates the data directory with <Term id="file-mode" /> `0700`. It creates `api_token`, `setup_code` and `instance_id` with mode `0600`. Keep these modes.
+  </Accordion>
+  <Accordion title="Failed sign-ins">
+    Ferry limits the failed sign-ins for the full server, not for each address. Thus a person who can reach the API can also delay your own sign-in.
+  </Accordion>
+</Accordions>

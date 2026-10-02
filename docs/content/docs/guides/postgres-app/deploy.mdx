@@ -1,0 +1,38 @@
+---
+title: Deploy with a reference
+description: The variable keeps a reference. Each container gets the real database URL when it starts.
+---
+
+Run this command from the `notes` directory.
+
+<Terminal
+  lines={[
+    "$ ferry up notes -e 'DATABASE_URL=${{datastore.notes-db.connectionString}}' --follow",
+    '==> Detected Node.js runtime',
+    '==> Generated Dockerfile.ferry for the Node.js runtime',
+    '#8 [stage-0 4/5] RUN --mount=type=secret,id=DATABASE_URL,env=DATABASE_URL     npm install --include=dev --no-audit --no-fund',
+    '#8 1.014 added 14 packages in 863ms',
+    '==> Build successful 🎉',
+    '==> Using port 10000 (default port)',
+    '==> Limits: 512 MiB memory, 1 CPU per instance',
+    '…',
+    '==> Your service is live 🎉',
+    '==> Available at http://notes.localhost:8080',
+  ]}
+/>
+
+## What the reference does
+
+`${{datastore.notes-db.connectionString}}` is a [reference](/docs/concepts/environment). The variable keeps the <Term id="reference" /> as you wrote it. Each <Term id="container" /> gets the real URL when it starts. The URL uses the <Term id="private-network" />: `notes-db:5432`.
+
+| Part | Meaning |
+|---|---|
+| `datastore` | The kind of thing |
+| `notes-db` | The name of the datastore |
+| `connectionString` | The property: the internal URL |
+
+The [Env var references](/docs/reference/env-references) page lists all the properties.
+
+<Callout type="warning" title="Keep the single quotes">
+Without the single quotes, your <Term id="shell" /> changes the text of the reference before `ferry` gets it.
+</Callout>

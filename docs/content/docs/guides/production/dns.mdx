@@ -1,0 +1,56 @@
+---
+title: Point the DNS at the server
+description: One wildcard DNS record sends each app hostname to your server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'dns', at: [1.25, 0], icon: 'globe', label: 'DNS', note: '*.apps.example.com' },
+    { id: 'server', at: [2.5, 1], icon: 'server', label: 'Your server', note: 'one IP address' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'dns' },
+    { from: 'browser', to: 'server' },
+  ]}
+  steps={[
+    {
+      caption: 'The browser asks the DNS for the address of hello.apps.example.com.',
+      cut: ['browser>server'],
+      flow: ['browser>dns'],
+    },
+    {
+      caption: 'The wildcard record answers for each name under apps.example.com. It gives the IP address of your server.',
+      cut: ['browser>server'],
+      tones: { dns: 'primary' },
+    },
+    {
+      caption: 'The browser connects to your server. A new service needs no new record.',
+      flow: ['browser>server'],
+      tones: { server: 'success' },
+    },
+  ]}
+/>
+
+## Create the records
+
+Create a <Term id="wildcard-record" /> for the apps at your <Term id="dns" /> provider. Add one record for each <Term id="custom-domain" />.
+
+| Record | Type | Value |
+|---|---|---|
+| `*.apps.example.com` | `A` (and `AAAA` for IPv6) | the IP address of the server |
+| `shop.example.com` (a custom domain) | `A`, or `CNAME` to a name that resolves to the server | the server |
+
+## What you get
+
+Each <Term id="web-service" /> and each <Term id="static-site" /> gets `<name>.apps.example.com`. The dashboard can use `ferry.apps.example.com`.
+
+Ferry asks for one <Term id="certificate" /> for each hostname through the <Term id="http-01" />. Thus the wildcard record is all the DNS that Ferry needs. You need no DNS API and no <Term id="wildcard-certificate" />.
+
+<Accordions>
+  <Accordion title="Connect the domain later, from the dashboard">
+    You can leave `--base-domain` out. When the server runs, [connect the domain from the dashboard](/docs/guides/domains). Ferry shows the record to create, with the address of the server. Ferry tells you when the DNS reaches the server. You add more domains the same way.
+
+    In that case, add `--dashboard-host none`, or a hostname of your own. The cause: a server with the default base domain also answers its dashboard on the public proxy at `ferry.localhost`.
+  </Accordion>
+</Accordions>

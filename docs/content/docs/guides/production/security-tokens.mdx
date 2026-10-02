@@ -1,0 +1,53 @@
+---
+title: Tokens and secrets
+description: Give each tool its own API token, and replace a token or a secret immediately when it leaks.
+---
+
+<Diagram
+  nodes={[
+    { id: 'cli', at: [0, 0], icon: 'terminal', label: 'Your CLI', note: 'its own token' },
+    { id: 'ci', at: [0, 1], icon: 'workflow', label: 'CI', note: 'its own token' },
+    { id: 'script', at: [0, 2], icon: 'file-code', label: 'A script', note: 'its own token' },
+    { id: 'api', at: [1.75, 1], icon: 'key', label: 'Ferry API' },
+  ]}
+  edges={[
+    { from: 'cli', to: 'api' },
+    { from: 'ci', to: 'api' },
+    { from: 'script', to: 'api' },
+  ]}
+  steps={[
+    {
+      caption: 'Each tool has its own token. Each token gives full access.',
+      flow: ['cli>api', 'ci>api', 'script>api'],
+    },
+    {
+      caption: 'The token of the CI leaks. You revoke it in the dashboard, and it stops immediately.',
+      cut: ['ci>api'],
+      flow: ['cli>api', 'script>api'],
+      tones: { ci: 'danger' },
+      notes: { ci: 'revoked' },
+    },
+    {
+      caption: 'The other tokens continue to work. You make a new token for the CI.',
+      flow: ['cli>api', 'ci>api', 'script>api'],
+      tones: { ci: 'success' },
+      notes: { ci: 'new token' },
+    },
+  ]}
+/>
+
+## The checklist
+
+- [ ] **Give <Term id="ci" /> its own token.** Create a named API token with an expiry for each pipeline or script. Do not share the <Term id="server-token" />. Then you can revoke one token and leave the others.
+- [ ] **Use secrets for hooks.** Set a random `--github-webhook-secret`.
+- [ ] **Revoke a leaked token.** Use the table below.
+
+## If a secret leaks
+
+| Secret | What to do |
+|---|---|
+| An API token | Revoke it under **Server → Account** in the dashboard. It stops immediately. |
+| The server token | Stop `ferryd`, delete `<data-dir>/api_token` and start `ferryd` again. It makes a new token. |
+| A token from `--api-token` or `FERRY_API_TOKEN` | Change the value. |
+| The password | Change it under **Server → Account**. Ferry signs out each other browser. |
+| A <Term id="deploy-hook" /> | Rotate it with `ferry deploy-hook rotate NAME`. |

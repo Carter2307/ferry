@@ -16,10 +16,12 @@
 //! (suspend/resume/scale/delete), `jobs` (one-off jobs + cron),
 //! `datastores`, `status` (status + runtime logs), `logs` (deploy/job log
 //! hub), `images` (pull policy + retention), `limits` (container resource
-//! limits, OOM messages, free-disk check).
+//! limits, OOM messages, free-disk check), `domains` (the domains services
+//! are served under, and their verification).
 
 mod datastores;
 mod deploy;
+mod domains;
 mod health;
 mod images;
 mod instances;
@@ -43,8 +45,8 @@ use async_trait::async_trait;
 use ferry_build::Builder;
 use ferry_core::dto::RuntimeStatus;
 use ferry_core::{
-    CancellationToken, Config, Deploy, DeployRequest, DeployTrigger, Engine, Error, JobRun, JobTrigger, LogOptions,
-    LogStream, Result, Store,
+    CancellationToken, Config, Deploy, DeployRequest, DeployTrigger, Domain, Engine, Error, JobRun, JobTrigger,
+    LogOptions, LogStream, Result, Store,
 };
 use ferry_docker::Docker;
 use ferry_proxy::RouteTable;
@@ -68,13 +70,15 @@ impl FerryEngine {
     /// `shutdown` is cancelled; [`FerryEngine::stopped`] waits for them):
     /// 1. ensure the Docker network and data directories exist;
     /// 2. mark deploys/jobs interrupted by a previous crash as failed;
-    /// 3. install the routes of every service synchronously (so they are live
+    /// 3. read the domains services are served under (the base domain and
+    ///    the connected ones, DESIGN.md §21);
+    /// 4. install the routes of every service synchronously (so they are live
     ///    before the proxy starts serving); the rest of the boot convergence
     ///    (stopping stale instances, starting missing ones) continues in the
     ///    background;
-    /// 4. spawn deploy workers, the reconcile loop, the route and OOM
-    ///    watchers, the cron scheduler and datastore provisioning for rows
-    ///    still `creating`.
+    /// 5. spawn deploy workers, the reconcile loop, the route and OOM
+    ///    watchers, the cron scheduler, the domain verifier and datastore
+    ///    provisioning for rows still `creating`.
     ///
     /// Calling it twice is a `Conflict` error.
     pub async fn start(self: &Arc<Self>, shutdown: CancellationToken) -> Result<()> {
@@ -108,12 +112,15 @@ impl FerryEngine {
         // No build runs yet: scratch directories are leftovers of a crash.
         remove_stale_build_dirs(&config.builds_dir()).await;
         deploy::recover_interrupted(inner).await?;
+        // Before any route: a service's hostnames come from the domains.
+        ferry_core::domains::init(&inner.store, config).await?;
         reconcile::reconcile_all(inner, reconcile::Pass::Boot).await?;
 
         inner.spawn(reconcile::run_loop(inner.clone()));
         inner.spawn(reconcile::watch_routes(inner.clone()));
         inner.spawn(reconcile::watch_oom(inner.clone()));
         inner.spawn(jobs::run_scheduler(inner.clone()));
+        inner.spawn(domains::run_verifier(inner.clone()));
         inner.spawn(deploy::fail_queued_on_shutdown(inner.clone()));
         datastores::resume_provisioning(inner).await?;
         info!(prefix = %inner.naming.prefix(), "engine started");
@@ -235,5 +242,17 @@ impl Engine for FerryEngine {
 
     async fn update_datastore_limits(&self, datastore_id: &str) -> Result<()> {
         datastores::update_limits(&self.inner, datastore_id).await
+    }
+
+    async fn refresh_domains(&self) -> Result<()> {
+        domains::refresh(&self.inner).await
+    }
+
+    async fn verify_domain(&self, domain_id: &str) -> Result<Domain> {
+        domains::verify(&self.inner, domain_id).await
+    }
+
+    async fn public_addresses(&self) -> Vec<std::net::IpAddr> {
+        domains::public_addresses(&self.inner).await
     }
 }

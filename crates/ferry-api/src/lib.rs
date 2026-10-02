@@ -1,7 +1,8 @@
 //! # ferry-api
 //!
 //! The control plane's HTTP surface (axum):
-//! * `/api/v1/...` — REST API (bearer token), see DESIGN.md §API;
+//! * `/api/v1/...` — REST API (an API token or the dashboard's session, see
+//!   [`auth`] and DESIGN.md §20);
 //! * `/hooks/github` and `/hooks/deploy/{service_id}` — webhooks;
 //! * `/api/v1/events` — SSE change feed for the web client;
 //! * `/api/openapi.json` and `/api/docs` — the OpenAPI document and Swagger
@@ -18,6 +19,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
+use ferry_core::tls::Certificates;
 use ferry_core::{CancellationToken, Config, Engine, Store};
 use tower_http::trace::TraceLayer;
 
@@ -33,6 +35,7 @@ pub mod openapi;
 mod ops;
 mod routes;
 mod runtime;
+pub mod setup;
 mod sse;
 mod views;
 pub mod web;
@@ -51,6 +54,9 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub store: Store,
     pub engine: Arc<dyn Engine>,
+    /// Where the certificate of each host stands (for `/api/v1/certificates`).
+    /// `None` when the server runs without HTTPS.
+    pub certificates: Option<Arc<dyn Certificates>>,
     /// Docker server version (for `/api/v1/info`).
     pub docker_version: Option<String>,
     /// CPUs of the Docker host (for `/api/v1/info`).
@@ -67,6 +73,19 @@ pub fn router(state: AppState) -> axum::Router {
     use routes::*;
 
     let hub = events::Hub::new(state.store.clone(), state.shutdown.clone());
+    let auth_runtime = crate::auth::Runtime::new();
+    // The account, its sessions and its API tokens: the dashboard's session
+    // only, whatever the request says otherwise.
+    let account = Router::new()
+        .route("/v1/auth/password", post(auth::change_password))
+        .route("/v1/auth/sessions", get(auth::list_sessions))
+        .route("/v1/auth/sessions/{id}", axum::routing::delete(auth::delete_session))
+        .route("/v1/auth/tokens", get(auth::list_tokens).post(auth::create_token))
+        .route("/v1/auth/tokens/{id}", axum::routing::delete(auth::delete_token))
+        .route("/v1/auth/cli/{id}", get(auth::cli_get))
+        .route("/v1/auth/cli/{id}/approve", post(auth::cli_approve))
+        .route("/v1/auth/cli/{id}/deny", post(auth::cli_deny))
+        .layer(axum::middleware::from_fn(crate::auth::require_session));
     let api = Router::new()
         .route("/v1/info", get(info::info))
         .route("/v1/events", get(events::stream).layer(axum::Extension(hub.clone())))
@@ -92,8 +111,13 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/services/{id}/env-groups", post(env::link_group))
         .route("/v1/services/{id}/env-groups/{group}", axum::routing::delete(env::unlink_group))
         // custom domains
-        .route("/v1/services/{id}/domains", get(domains::list).post(domains::add))
-        .route("/v1/services/{id}/domains/{domain}", axum::routing::delete(domains::remove))
+        .route("/v1/services/{id}/domains", get(custom_domains::list).post(custom_domains::add))
+        .route("/v1/services/{id}/domains/{domain}", axum::routing::delete(custom_domains::remove))
+        // the domains services are served under, and certificates
+        .route("/v1/domains", get(domains::list).post(domains::connect))
+        .route("/v1/domains/{id}", get(domains::get).patch(domains::update).delete(domains::disconnect))
+        .route("/v1/domains/{id}/verify", post(domains::verify))
+        .route("/v1/certificates", get(domains::certificates))
         // jobs
         .route("/v1/services/{id}/jobs", get(jobs::list).post(jobs::run))
         .route("/v1/jobs/{job_id}", get(jobs::get))
@@ -106,11 +130,30 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/env-groups", get(env_groups::list).post(env_groups::create))
         .route("/v1/env-groups/{id}", get(env_groups::get).delete(env_groups::delete))
         .route("/v1/env-groups/{id}/env", axum::routing::put(env_groups::replace_env).patch(env_groups::patch_env))
+        // git connections
+        .route("/v1/git/connections", get(git::list).post(git::connect))
+        .route("/v1/git/connections/{id}", get(git::get).delete(git::delete))
+        .route("/v1/git/connections/{id}/repositories", get(git::repositories))
+        .route("/v1/git/authorize", post(git::authorize))
+        .route("/v1/git/callback", post(git::callback))
+        .route("/v1/git/branches", get(git::branches))
         // blueprints
         .route("/v1/blueprints/apply", post(blueprints::apply))
+        .merge(account)
         .method_not_allowed_fallback(info::method_not_allowed)
         .fallback(info::api_not_found)
-        .layer(axum::middleware::from_fn_with_state(state.clone(), auth::require_token));
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::auth::require_auth));
+
+    // What a browser or a terminal calls before it is authenticated.
+    let public_api = Router::new()
+        .route("/v1/auth/status", get(auth::status))
+        .route("/v1/auth/setup", post(auth::setup))
+        .route("/v1/auth/login", post(auth::login))
+        .route("/v1/auth/logout", post(auth::logout))
+        .route("/v1/auth/cli", post(auth::cli_start))
+        .route("/v1/auth/cli/{id}/token", post(auth::cli_token))
+        .method_not_allowed_fallback(info::method_not_allowed);
+    let api = api.merge(public_api).layer(axum::Extension(auth_runtime));
 
     let hooks = Router::new()
         .route("/hooks/deploy/{service_id}", get(hooks::deploy_hook_get).post(hooks::deploy_hook))

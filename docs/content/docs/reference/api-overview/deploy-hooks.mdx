@@ -1,0 +1,42 @@
+---
+title: Deploy hooks
+description: A request to the secret deploy hook URL of a service puts a deploy in the queue.
+---
+
+```bash title="Terminal"
+curl -X POST "http://127.0.0.1:7878/hooks/deploy/srv-60f5973b037e4478ae7b?key=<key>"
+```
+
+Each service has a secret <Term id="deploy-hook" /> URL. A request to it puts in the queue a deploy of the source in the settings of the service. The trigger is `deploy_hook`.
+
+## Get the URL
+
+```bash title="Terminal"
+ferry deploy-hook show NAME
+```
+
+The command prints the full URL. In the API, the field `deploy_hook_path` of the service has the path.
+
+## The answers
+
+| Status | Meaning |
+|---|---|
+| 202 | The deploy is in the queue. The body is the deploy. Ferry hides the credentials in the URL of the repository. |
+| 400 | The service has no source to deploy. |
+| 401 | An unknown service id or a wrong key. The answer is the same for the two. Thus nobody can use the hook to find services. |
+| 409 | The service is in the state suspended, or a delete is in progress. |
+
+## Replace the key
+
+```bash title="Terminal"
+ferry deploy-hook rotate NAME
+```
+
+The old URL stops immediately. The API has [`POST /api/v1/services/{id}/deploy-hook/rotate`](/docs/reference/api/services#rotate-the-deploy-hook-key).
+
+<Accordions>
+  <Accordion title="GET and the service id">
+    - `GET` works too, for tools that can only send `GET`.
+    - The path takes only the **id** of the service, because a person can guess a name.
+  </Accordion>
+</Accordions>

@@ -1,0 +1,63 @@
+---
+title: Deploy a change
+description: Change the code and run ferry up again. The old version answers until the new version is ready.
+---
+
+<Steps>
+<Step>
+
+### Change the code
+
+Edit the text in `server.js`.
+
+```js title="server.js"
+res.end(`Hello from Ferry (node)! service=…`); // [!code --]
+res.end(`Hello again from Ferry! service=…`); // [!code ++]
+```
+
+</Step>
+<Step>
+
+### Run the same command
+
+<Terminal
+  lines={[
+    '$ ferry up --follow',
+    'Packing /home/you/ferry/examples/node-hello …',
+    'Packed 2 file(s), 581 B',
+    'Uploading 581 B …',
+    'Deploy dep-ba5a7fce730d4061aaa7 queued (upload), streaming logs…',
+    '09:36:39 ==> Starting deploy dep-ba5a7fce730d4061aaa7 (trigger: upload)',
+    '…',
+    '09:36:40 ==> Started instance e5725a (port 10000, published on 127.0.0.1:62742)',
+    '09:36:40 ==> Waiting for 1 instance(s) to become healthy: the port must accept TCP connections (timeout 120s)',
+    '09:36:40 [e5725a] node-hello listening on :10000',
+    '09:36:41 ==> Health check passed',
+    '09:36:41 ==> Routing traffic to the new instance(s)',
+    '09:36:43 ==> Stopping 1 old instance(s)',
+    '09:36:43 ==> Your service is live 🎉',
+    '09:36:43 ==> Available at http://node-hello.localhost:8080',
+    'Deploy dep-ba5a7fce730d4061aaa7 is live at http://node-hello.localhost:8080',
+  ]}
+/>
+
+</Step>
+<Step>
+
+### See the change
+
+```bash title="Terminal"
+curl http://node-hello.localhost:8080
+# Hello again from Ferry! service=node-hello deploy=dep-ba5a7fce730d4061aaa7
+```
+
+</Step>
+</Steps>
+
+## What Ferry did
+
+The service exists already. Thus `ferry up` only uploads and deploys.
+
+The old container answered until the new container passed its <Term id="health-check" />. Then the proxy moved the traffic, and Ferry stopped the old container.
+
+This is a blue-green deploy with <Term id="zero-downtime" />. See [Deploys](/docs/concepts/deploys).

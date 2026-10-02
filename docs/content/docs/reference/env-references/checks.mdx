@@ -1,0 +1,26 @@
+---
+title: Where Ferry checks a reference
+description: Ferry checks a reference at each step, from the command to the deploy.
+---
+
+<Flow
+  steps={[
+    { icon: 'terminal', title: 'Command', text: 'The CLI checks the syntax, the kind and the property. A fault stops the command.', tone: 'warning' },
+    { icon: 'save', title: 'Save', text: 'After the save, the CLI checks the names against the server. A fault gives a warning.' },
+    { icon: 'deploy', title: 'Deploy', text: 'Ferry resolves each reference. A fault fails the deploy.', tone: 'danger' },
+  ]}
+/>
+
+Ferry checks at many points. Thus you find a broken <Term id="reference" /> as early as possible.
+
+## The checks
+
+| Where | What Ferry checks | Result |
+|---|---|---|
+| `ferry env set`, `ferry env-group set`, `--env` flags | The syntax, the kind and the property, with no call to the server | The command fails (exit code 2). It saves nothing. |
+| The same commands, after the save | The names, against the datastores and services of the server | A warning: `warning: X: reference to unknown datastore 'missing'; deploys fail until it resolves`. |
+| Blueprints (`fromDatabase`, `fromService`) | The target exists on the server or in the file. It has the correct kind and gives the property. | The apply fails with a 400 before each write. |
+| The REST API and the dashboard | Only the size limits. They accept each value. | Ferry checks at the deploy. |
+| Deploy, restart, rollback | Each reference | The deploy fails with the status `deploy_failed`. The instances that run continue to answer. |
+
+See [Error messages](/docs/reference/env-references/errors).

@@ -1,0 +1,62 @@
+---
+title: HTTPS
+description: With two options, ferryd gets a certificate for each public hostname and renews it.
+---
+
+<Diagram
+  nodes={[
+    { id: 'routes', at: [0, 0], icon: 'route', label: 'Route table', note: 'a new hostname' },
+    { id: 'tls', at: [1.5, 0], icon: 'certificate', label: 'ferry-tls' },
+    { id: 'ca', at: [3, 0], icon: 'shield-check', label: "Let's Encrypt" },
+    { id: 'proxy', at: [1.5, 1], icon: 'switch', label: 'Proxy', note: 'port 80 and 443' },
+  ]}
+  edges={[
+    { from: 'routes', to: 'tls' },
+    { from: 'tls', to: 'ca' },
+    { from: 'ca', to: 'proxy' },
+    { from: 'tls', to: 'proxy' },
+  ]}
+  steps={[
+    {
+      caption: 'A public hostname gets a route. The route table wakes the certificate loop of ferry-tls.',
+      flow: ['routes>tls'],
+      cut: ['ca>proxy'],
+    },
+    {
+      caption: "A few seconds later, ferry-tls requests a certificate from Let's Encrypt (ACME HTTP-01).",
+      flow: ['tls>ca'],
+      cut: ['ca>proxy'],
+      tones: { tls: 'primary' },
+    },
+    {
+      caption: "Let's Encrypt calls /.well-known/acme-challenge/ on plain HTTP. The proxy answers.",
+      flow: ['ca>proxy'],
+      tones: { proxy: 'primary' },
+    },
+    {
+      caption: 'ferry-tls keeps the certificate in <data-dir>/certs. The proxy uses it for the TLS connections.',
+      flow: ['tls>proxy'],
+      cut: ['ca>proxy'],
+      tones: { tls: 'success', proxy: 'success' },
+    },
+    {
+      caption: 'ferry-tls renews each certificate that expires in less than 30 days.',
+      flow: ['tls>ca'],
+      cut: ['ca>proxy'],
+      tones: { tls: 'success' },
+    },
+  ]}
+/>
+
+<Term id="https" /> needs two options of `ferryd`: `--https-addr` and `--acme-email`. With them, the proxy also does the <Term id="tls" /> work.
+
+The <Term id="certificate">certificates</Term> come from <Term id="lets-encrypt" />, through <Term id="acme" /> with the <Term id="http-01" />.
+
+## The rules
+
+| Case | What the proxy does |
+|---|---|
+| A plain HTTP request to a host that has a certificate | It answers `308`: a redirect to HTTPS. |
+| A local hostname: `*.localhost`, `.local`, `.internal`, `.test`, or an IP address | The host never gets a certificate. It stays on HTTP. |
+
+For the full setup, see [Custom domains and HTTPS](/docs/guides/custom-domains-https).

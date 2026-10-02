@@ -1,0 +1,34 @@
+---
+title: envVarGroups
+description: Each entry of envVarGroups creates one env group. A service links to it with fromGroup.
+---
+
+```yaml title="ferry.yaml"
+envVarGroups:
+  - name: shared-settings
+    envVars:
+      - key: APP_ENV
+        value: production
+
+services:
+  - type: web
+    name: hello
+    envVars:
+      - fromGroup: shared-settings   # the link to the group
+```
+
+An <Term id="env-group" /> is a set of variables that many services share. See [Env groups](/docs/concepts/environment/env-groups).
+
+## The keys
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `name` | string | required | The name of the env group: 1 to 64 letters, digits, `-`, `_` or `.`. |
+| `envVars` | list | none | The variables of the group. They have the same forms as the variables of a service, but not `fromGroup`. See [envVars entries](/docs/reference/blueprint/env-vars). |
+
+## Which value wins
+
+- The own variables of a service win over the variables of its groups.
+- A group with a later link wins over a group with an earlier link.
+
+See [Which value wins](/docs/concepts/environment/precedence).

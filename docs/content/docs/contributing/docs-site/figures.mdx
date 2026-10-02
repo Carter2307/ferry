@@ -1,0 +1,38 @@
+---
+title: Figures
+description: Four components draw the pictures of a page. A fifth component explains a technical name.
+---
+
+<Flow
+  caption="This figure is a Flow"
+  steps={[
+    { icon: 'network', title: 'Diagram', text: 'Things and what goes between them: boxes, arrows and dots that move.' },
+    { icon: 'queue', title: 'Flow', text: 'What happens, in order. One step is lit at a time.' },
+    { icon: 'terminal', title: 'Terminal', text: 'A session in a terminal that plays.' },
+    { icon: 'workflow', title: 'Mermaid', text: 'State machines and sequences.' },
+    { icon: 'book', title: 'Term', text: 'A technical name with its definition.' },
+  ]}
+/>
+
+## The figures
+
+| Component | Props | Use |
+|---|---|---|
+| `<Diagram>` | `nodes`, `edges`, `groups`, `steps`, `caption` | Boxes and arrows on a grid. Dots move along the arrows, and `steps` play in a loop. |
+| `<Flow>` | `steps` | What happens, in order: one step is lit at a time. |
+| `<Terminal>` | `lines`, `title` | A session in a terminal that plays. The component types the `$ ` lines. The other lines are output. |
+| `<Term>` | `id` | A technical name with its definition from `lib/glossary/`. |
+| `<Mermaid>` | `chart` | State machines and sequences. A `mermaid` code block does the same. |
+
+Each page can use them with no import. `docs/AUTHORING.md` gives an example and the limits of each figure.
+
+## Mermaid
+
+Write a code block with the language `mermaid`: a flowchart, a sequence or a state diagram. The browser draws the <Term id="mermaid" /> diagram in the colors of Ferry, in light and dark mode.
+
+- For more than about four nodes, use `flowchart TB`. Then the diagram fits the column of 760 pixels.
+- `<br/>` works in labels.
+
+## SVG files
+
+Put an SVG file that you made by hand in `public/`. Refer to it as `/file.svg`.

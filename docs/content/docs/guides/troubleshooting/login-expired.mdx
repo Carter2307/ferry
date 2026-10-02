@@ -1,0 +1,46 @@
+---
+title: ferry login does not finish
+description: ferry login waits until you approve its request in the dashboard. A request expires after 10 minutes.
+---
+
+## What you see
+
+```text title="ferry" noCopy
+error: the login request expired before it was approved: run 'ferry login' again
+```
+
+## Why it occurs
+
+<Flow
+  steps={[
+    { icon: 'terminal', title: 'ferry login', text: 'The command prints the address of a page and a code.' },
+    { icon: 'login', title: 'Sign in', text: 'You open the page and sign in to the dashboard.' },
+    { icon: 'eye', title: 'Compare the code', text: 'The page must show the code of your terminal.' },
+    { icon: 'ok', title: 'Approve', text: 'You click Approve. The login is complete.', tone: 'success' },
+    { icon: 'timer', title: '10 minutes', text: 'With no approval after 10 minutes, the request expires.', tone: 'danger' },
+  ]}
+/>
+
+`ferry login` waits until you approve its request in the <Term id="dashboard" />.
+
+## How to repair it
+
+1. Run `ferry login` again.
+2. Open the page that it prints.
+3. Sign in.
+4. Make sure that the page shows the code of your terminal.
+5. Click **Approve**.
+
+If nobody can open the dashboard (<Term id="ci" />, a script), log in with a token. See [Set up the CLI](/docs/getting-started/cli).
+
+<Accordions>
+  <Accordion title="On a new server">
+    On a new server, `ferry login` stops immediately with this message:
+
+    ```text title="ferry" noCopy
+    error: this server has no account yet: create it in the dashboard first (`ferryd status` prints the link) (conflict)
+    ```
+
+    Create the account first. See [Installation](/docs/getting-started/installation).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,47 @@
+---
+title: "Service: Overview"
+description: The Overview page shows what runs now for one service, and has the main actions.
+---
+
+<Diagram
+  caption="The four parts of the Overview page"
+  nodes={[
+    { id: 'tiles', at: [0, 0], icon: 'info', label: 'Info tiles', note: 'the facts' },
+    { id: 'graph', at: [1.5, 0], icon: 'network', label: 'Graph', note: 'what it uses' },
+    { id: 'inst', at: [0, 1], icon: 'cpu', label: 'Instances', note: 'CPU and memory' },
+    { id: 'avail', at: [1.5, 1], label: 'Service availability', note: 'the actions' },
+  ]}
+  steps={[
+    {
+      caption: 'The info tiles give the facts of the service, for example its status and its address.',
+      tones: { tiles: 'primary' },
+    },
+    {
+      caption: 'The graph shows the env groups, datastores and services that this service uses.',
+      tones: { graph: 'primary' },
+    },
+    {
+      caption: 'Instances shows the CPU and the memory of each container, live.',
+      tones: { inst: 'primary' },
+    },
+    {
+      caption: 'Service availability has the actions: deploy, restart, scale, run a job, suspend.',
+      tones: { avail: 'primary' },
+    },
+  ]}
+/>
+
+## What each part shows
+
+| Part | Content |
+|---|---|
+| Info tiles | Status, instances that run, private address (`name:port`), source, latest deploy, runtime, domains and creation date. |
+| Graph | The env groups that the service links. The datastores and services that its variables reference, for example `app-db` with the label `via DATABASE_URL`. |
+| **Instances** | The live CPU and memory of each <Term id="container" />, next to its limits. The **Scale** button changes the number of instances. |
+| **Service availability** | Manual deploy (with a **Clear build cache** option), restart, scale, run a one-off job, suspend or resume. |
+
+## If an instance used too much memory
+
+The system stops an <Term id="instance" /> that goes above its memory limit. This is an <Term id="oom" />.
+
+The instance gets an **OOM killed** badge with its exit code. The **Raise the limit** link opens **Settings** → **Resources**. See [Resource limits](/docs/concepts/resource-limits).

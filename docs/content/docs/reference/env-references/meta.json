@@ -1,0 +1,18 @@
+{
+  "title": "Env var references",
+  "icon": "Variable",
+  "pages": [
+    "syntax",
+    "datastore",
+    "service",
+    "resolve",
+    "builds",
+    "port-wait",
+    "precedence",
+    "escaping",
+    "blueprints",
+    "checks",
+    "errors",
+    "delete"
+  ]
+}

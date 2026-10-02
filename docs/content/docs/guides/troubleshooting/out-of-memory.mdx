@@ -1,0 +1,49 @@
+---
+title: The app runs out of memory
+description: The new instance used more memory than its limit, and the system stopped it.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+==> Deploy failed: instance d1c6b8 ran out of memory (limit 512 MiB) — raise the service's memory limit
+```
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'app', at: [0, 0], icon: 'box', label: 'New instance', note: 'uses more memory' },
+    { id: 'limit', at: [1.75, 0], icon: 'memory', label: 'Memory limit', note: '512 MiB', tone: 'warning' },
+    { id: 'kill', at: [3.25, 0], icon: 'skull', label: 'OOM kill', note: 'by the kernel', tone: 'danger' },
+  ]}
+  edges={[
+    { from: 'app', to: 'limit', flow: true },
+    { from: 'limit', to: 'kill' },
+  ]}
+/>
+
+The new instance used more memory than its <Term id="memory-limit" />. Then the <Term id="kernel" /> stopped it: an <Term id="oom" />.
+
+The limit is the default of the server, 512 MiB, unless the service sets its own limit.
+
+## How to repair it
+
+Increase the limit, then deploy again.
+
+```bash title="Terminal"
+ferry update NAME --memory 1G
+ferry deploy NAME
+```
+
+For local code, use `ferry up NAME` for the deploy.
+
+<Accordions>
+  <Accordion title="The live instances stop again and again">
+    After a deploy is live, the same kill makes Docker restart the instance. `ferry status NAME` shows it as `restarting (OOM killed, exit code 137)`, and `ferryd` writes it in its log.
+
+    Increase the limit with `ferry update NAME --memory 1G`. Then run `ferry restart NAME`. The live instances get the new limit, and Ferry builds nothing.
+
+    See [Resource limits](/docs/concepts/resource-limits).
+  </Accordion>
+</Accordions>

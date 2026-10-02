@@ -1,0 +1,43 @@
+---
+title: The store
+description: The store is the part of ferry-core that reads and writes the SQLite database of Ferry.
+---
+
+<Diagram
+  caption="The API and the engine use the same store"
+  nodes={[
+    { id: 'api', at: [0, 0], icon: 'plug', label: 'API' },
+    { id: 'engine', at: [0, 1], icon: 'workflow', label: 'Engine' },
+    { id: 'store', at: [1.5, 0.5], icon: 'database', label: 'Store', note: 'ferry-core', tone: 'primary' },
+    { id: 'db', at: [3, 0.5], icon: 'file', label: 'ferry.db', note: 'SQLite' },
+  ]}
+  edges={[
+    { from: 'api', to: 'store', flow: true },
+    { from: 'engine', to: 'store', flow: true },
+    { from: 'store', to: 'db', both: true },
+  ]}
+/>
+
+The <Term id="store" /> has the <Term id="desired-state" />. It says what must run:
+
+- Which <Term id="deploy" /> is live for each service.
+- How many instances the service wants.
+- If you suspended the service.
+- Which datastores exist.
+
+Docker says what runs. The [reconciler](/docs/architecture/reconciler) compares the two.
+
+The file is `ferry.db`, a <Term id="sqlite" /> database, in the [data directory](/docs/architecture/overview/data-directory). The proxy never reads it on the request path.
+
+## The crate ferry-core
+
+`ferry-core` is a library. It has the types and the rules that all the other crates share. It depends on no other Ferry crate.
+
+| In `ferry-core` | |
+|---|---|
+| Models | The domain models. The types of the API requests and responses. |
+| Configuration | The configuration. Validation. The ranges of the resource limits and how to parse them. |
+| Environment | How to merge env vars and how to resolve [references](/docs/reference/env-references). |
+| Storage | The SQLite `Store`. |
+| Names and time | Docker names. Cron schedules. |
+| Traits | `Engine` and `TlsHooks`, which keep the other crates apart. |

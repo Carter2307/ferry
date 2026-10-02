@@ -1,0 +1,37 @@
+---
+title: Frontmatter and headings
+description: The frontmatter gives the title and the description of a page. The headings make the table of contents.
+---
+
+```mdx title="content/docs/concepts/deploys/index.mdx"
+---
+title: Deploys
+description: How a deploy goes from queued to live with zero downtime.
+icon: Rocket
+---
+
+The body, in Markdown, with the components below.
+
+## Health checks
+
+…
+```
+
+The <Term id="frontmatter" /> is the block between the two `---` lines.
+
+## The fields
+
+| Field | Value |
+|---|---|
+| `title` | Required. |
+| `description` | One sentence of plain text, with no Markdown. It shows under the title, in the search and in the <Term id="open-graph" /> images. |
+| `icon` | Optional. The name of a [lucide](https://lucide.dev/icons) icon. |
+| `full: true` | Optional. It makes a wide page. |
+
+Do not write the title again as a `#` heading.
+
+## Headings
+
+`##` and `###` headings make the "On this page" table of contents.
+
+Each heading gets an <Term id="anchor" />: its text in lower case, with `-` for each space. For example, `## Health checks` becomes `#health-checks`.

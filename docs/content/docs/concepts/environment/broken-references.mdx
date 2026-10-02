@@ -1,0 +1,37 @@
+---
+title: If a reference does not resolve
+description: A reference that Ferry cannot resolve fails the deploy or the restart. The live deploy continues to answer.
+---
+
+<Terminal
+  lines={[
+    "$ ferry env set api 'X=${{datastore.nope.host}}'",
+    "warning: X: reference to unknown datastore 'nope'; deploys fail until it resolves",
+    '…',
+    "Saved. Restarting 'api' with the new environment.",
+    '$ ferry deploys api',
+    'ID                         STATUS          TRIGGER      COMMIT   CREATED   DURATION',
+    'dep-10a070fcab46468a84e8   deploy_failed   env_change   -        8s ago    0s',
+    'dep-cff0ad1231bc4c74b9d5   live            create       -        27s ago   5s',
+  ]}
+/>
+
+Ferry cannot resolve a <Term id="reference" /> in these cases:
+
+- the kind, the name or the property is unknown
+- the service has no public URL
+
+Then the <Term id="deploy" /> or the <Term id="restart" /> fails with a clear error. The live deploy continues to answer.
+
+## What the CLI checks
+
+- The <Term id="cli" /> checks the syntax before it saves.
+- The CLI gives a warning for a name that does not exist yet.
+
+The [reference syntax page](/docs/reference/env-references) lists the errors.
+
+## Delete a datastore or a service that others use
+
+Ferry refuses to delete a <Term id="datastore" /> or a service that other services reference. The error lists who uses it.
+
+`--force` deletes it anyway. Then the services that reference it fail at their next deploy or restart.

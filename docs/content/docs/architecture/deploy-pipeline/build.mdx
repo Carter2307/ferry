@@ -1,0 +1,79 @@
+---
+title: The build step
+description: In the state building, the engine gets an image in one of three ways.
+---
+
+<Diagram
+  nodes={[
+    { id: 'git', at: [0, 0], icon: 'branch', label: 'Git or upload' },
+    { id: 'image', at: [0, 1], icon: 'package', label: 'Image' },
+    { id: 'again', at: [0, 2], icon: 'rollback', label: 'Restart', note: 'or rollback' },
+    { id: 'build', at: [1.5, 0], icon: 'hammer', label: 'Build', note: 'docker build' },
+    { id: 'pull', at: [1.5, 1], icon: 'pull', label: 'Pull and pin' },
+    { id: 'reuse', at: [1.5, 2], icon: 'repeat', label: 'Use again', note: 'no build' },
+    { id: 'ready', at: [3, 1], icon: 'ok', label: 'Image ready' },
+  ]}
+  edges={[
+    { from: 'git', to: 'build' },
+    { from: 'image', to: 'pull' },
+    { from: 'again', to: 'reuse' },
+    { from: 'build', to: 'ready' },
+    { from: 'pull', to: 'ready' },
+    { from: 'reuse', to: 'ready' },
+  ]}
+  steps={[
+    {
+      caption: 'Git and uploads: ferry-build gets the code and runs docker build.',
+      flow: ['git>build', 'build>ready'],
+      tones: { build: 'primary' },
+    },
+    {
+      caption: 'Images: the engine pulls the image, then pins it with a tag of its own.',
+      flow: ['image>pull', 'pull>ready'],
+      tones: { pull: 'primary' },
+    },
+    {
+      caption: 'Restarts and rollbacks: the engine makes sure that the image still exists, then uses it again.',
+      flow: ['again>reuse', 'reuse>ready'],
+      tones: { reuse: 'primary' },
+    },
+  ]}
+/>
+
+## The free disk check
+
+Before a git, upload or image deploy, the engine checks the free space of two places:
+
+- The filesystem of the <Term id="data-directory" />.
+- The root directory of Docker, when Docker is on the same machine.
+
+Below `--min-free-disk` (default 1 GiB), the deploy fails immediately as `build_failed`. The error also tells you how to free space.
+
+```text title="Error" noCopy
+not enough free disk space on <path>: … free, Ferry needs at least 1 GiB
+```
+
+Restarts and rollbacks have no check, because they need no space.
+
+<Accordions>
+  <Accordion title="Git and uploads">
+    - `ferry-build` fetches the commit, or extracts the archive. It detects the runtime and writes a Dockerfile for native runtimes.
+    - It runs `docker build` with <Term id="buildkit" />. Each line of output goes into the deploy log.
+    - The engine records the commit and its message on the deploy immediately after the checkout. Thus a failed build shows them too.
+    - The environment of the service reaches the build as BuildKit secrets. It is never a build argument of a Dockerfile that Ferry wrote. See [the security model](/docs/architecture/security).
+    - See [Builds and runtimes](/docs/concepts/builds).
+  </Accordion>
+  <Accordion title="Images">
+    - The engine pulls an image with no tag or with the tag `latest` at each deploy, because the tag can move.
+    - It pulls other tags and digests only when the image is not on the server.
+    - If a pull fails but a local copy exists, the engine uses the local copy.
+    - Then it gives the image the tag `<prefix>/<service>:<deploy id>`. This is a <Term id="pinned-image" />. Restarts, rollbacks and crash replacements of this deploy run exactly this image, even after the tag moves.
+  </Accordion>
+  <Accordion title="Cron jobs stop here">
+    A cron job has no instance that runs all the time. Its deploy goes live with its image, its command and its limits. At each run, the scheduler starts a container from it.
+
+    ```text title="Deploy log" noCopy
+    ==> Limits: 512 MiB memory, 1 CPU per run
+    ```
+  </Accordion>
+</Accordions>

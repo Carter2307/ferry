@@ -1,0 +1,42 @@
+---
+title: Deploy logs
+description: A deploy log has the build output and the steps of one deploy.
+---
+
+<Terminal
+  title="Deploy log (excerpt)"
+  lines={[
+    '$ ferry logs --deploy dep-285c0c8495fe459db551 -f',
+    '09:38:30 ==> Build successful 🎉',
+    '09:38:31 ==> Using port 8000 (EXPOSEd by the image)',
+    '09:38:31 ==> Limits: 512 MiB memory, 1 CPU per instance',
+    '09:38:31 ==> Starting 1 instance(s)',
+    '09:38:31 ==> Started instance 2fa90d (port 8000, published on 127.0.0.1:63012)',
+    '09:38:31 ==> Waiting for 1 instance(s) to become healthy: GET /healthz must answer with a status below 400 (timeout 120s)',
+    '09:38:31 [2fa90d] docker-echo listening on :8000',
+    '09:38:32 ==> Health check passed',
+    '09:38:32 ==> Routing traffic to the new instance(s)',
+    '09:38:32 ==> Your service is live 🎉',
+    '09:38:32 ==> Available at http://echo.localhost:8080',
+  ]}
+/>
+
+A <Term id="deploy-log" /> starts when the deploy goes into the queue. It ends when the deploy is live, failed or canceled.
+
+## Read a deploy log
+
+```bash title="Terminal"
+ferry deploy api --follow              # trigger a deploy and stream its log
+ferry logs --deploy dep-285c0c8495fe459db551 -f
+ferry logs --deploy dep-285c0c8495fe459db551 > deploy.log   # the stored log
+```
+
+If the deploy fails, `--follow` exits with code 1.
+
+## The output of the new instances
+
+While the new <Term id="instance">instances</Term> start, Ferry copies their output into the deploy log. The `[2fa90d]` line above is such a line.
+
+If an instance crashes during the <Term id="health-check" />, Ferry copies its last 50 lines. Thus you see the cause in the same log.
+
+See also [History and logs](/docs/concepts/deploys/history) of a deploy.

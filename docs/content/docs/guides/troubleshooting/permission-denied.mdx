@@ -1,0 +1,35 @@
+---
+title: Permission denied on port 80 or 443
+description: On Linux, a program needs a special right to listen on a port below 1024.
+---
+
+## What you see
+
+```text title="ferryd" noCopy
+Error: cannot listen on 0.0.0.0:80 (proxy address)
+
+Caused by:
+    Permission denied (os error 13)
+```
+
+## Why it occurs
+
+On Linux, only a program with special rights can listen on a <Term id="port" /> below 1024.
+
+## How to repair it
+
+Do not run `ferryd` as <Term id="root" />. Give it the <Term id="capability" /> `CAP_NET_BIND_SERVICE`.
+
+With <Term id="systemd" />, add this line to the <Term id="systemd-unit" /> of `ferryd`. See [Production setup](/docs/guides/production).
+
+```ini title="systemd unit"
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+```
+
+As an alternative, set the capability on the file of the program.
+
+```bash title="Terminal"
+sudo setcap cap_net_bind_service=+ep /usr/local/bin/ferryd
+```
+
+Run `setcap` again after each upgrade of `ferryd`.

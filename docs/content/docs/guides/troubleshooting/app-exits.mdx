@@ -1,0 +1,49 @@
+---
+title: The app exits immediately
+description: The command of the instance ends without an error, but a web service must continue to run.
+---
+
+## What you see
+
+```text title="Deploy log" noCopy
+==> Start command: node ./dist/index.js (package.json has no "start" script: its "main" file is run)
+…
+==> Deploy failed: instance 2e58a7 exited with code 0: its command `node ./dist/index.js` ended without an error, but a web service must keep running and listen on port 10000
+==> Hint: the service has no start command, so Ferry picked this one from the project (see "==> Start command" in the build log). If the project is an app, set the start command that runs its server. If it only builds files (a static site, a component library), create it as a static site instead.
+```
+
+## Why it occurs
+
+<Diagram
+  nodes={[
+    { id: 'cmd', at: [0, 0], icon: 'terminal', label: 'Command', note: 'of the instance' },
+    { id: 'app', at: [1.75, 0], icon: 'box', label: 'Instance', note: 'port 10000' },
+  ]}
+  edges={[{ from: 'cmd', to: 'app' }]}
+  steps={[
+    {
+      caption: 'A server command continues to run and listens on the port.',
+      flow: ['cmd>app'],
+      tones: { app: 'success' },
+      notes: { app: 'listens' },
+    },
+    {
+      caption: 'This command ends with the code 0. Nothing listens on the port.',
+      cut: ['cmd>app'],
+      tones: { app: 'danger' },
+      notes: { app: 'exited with code 0' },
+    },
+  ]}
+/>
+
+The command ended without an error, and frequently printed nothing. It did not start a server. The message names the command. The hint tells where the command comes from.
+
+## How to repair it
+
+| The command is | Usual case | Repair |
+|---|---|---|
+| From the project, because the service has no <Term id="start-command" /> | A library, or a site that only builds files. Its `main` file loads and returns. | Create the service as a **static site** with its <Term id="build-command" /> and <Term id="publish-directory" />. Or set the start command of the server of the app. |
+| The start command of the service | It only builds (`npm run build`). Or it starts a program in the <Term id="background" /> and returns. | Put the build steps in the build command. Start the server in the <Term id="foreground" />. |
+| The command of the image | An image for tasks that run one time | Set a start command on the service. |
+
+A <Term id="worker" /> that ends gets the same message. A task that runs and ends belongs in a [cron job or a one-off job](/docs/concepts/jobs) (`ferry run`).

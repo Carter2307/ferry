@@ -1,0 +1,72 @@
+---
+title: Public URLs
+description: Web services and static sites answer at one public URL under each domain of the server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'name', at: [0, 0], icon: 'box', label: 'Service name', note: 'shop' },
+    { id: 'domain', at: [1.25, 0], icon: 'globe', label: 'Domain', note: 'localhost' },
+    { id: 'port', at: [2.5, 0], icon: 'plug', label: 'Proxy port', note: '8080' },
+    { id: 'url', at: [1.25, 1], icon: 'link', label: 'Public URL', note: 'name.domain:port' },
+  ]}
+  edges={[
+    { from: 'name', to: 'url' },
+    { from: 'domain', to: 'url' },
+    { from: 'port', to: 'url' },
+  ]}
+  steps={[
+    {
+      caption: 'The URL starts with the name of the service: shop.',
+      flow: ['name>url'],
+      tones: { name: 'primary' },
+    },
+    {
+      caption: 'Then comes a domain of the server. The first one is localhost.',
+      flow: ['domain>url'],
+      tones: { domain: 'primary' },
+    },
+    {
+      caption: 'The port of the proxy comes last: http://shop.localhost:8080.',
+      flow: ['port>url'],
+      tones: { port: 'primary', url: 'success' },
+    },
+    {
+      caption: 'With a public domain and HTTPS, the URL has no port: https://shop.example.com.',
+      tones: { url: 'success', port: 'muted' },
+      notes: { domain: 'example.com', port: 'no port', url: 'https, no port' },
+    },
+  ]}
+/>
+
+<Term id="web-service">Web services</Term> and <Term id="static-site">static sites</Term> are public. Each one answers at `<name>.<domain>` under each <Term id="server-domain" />, and at the <Term id="custom-domain">custom domains</Term> that you add.
+
+A server starts with one domain: its <Term id="base-domain" />. It comes from `ferryd --base-domain`, and the default is `localhost`. Browsers send each `*.localhost` name to `127.0.0.1`, thus you need no <Term id="dns" /> setup on your machine.
+
+## Who has a public URL
+
+| Service type | <Term id="public-url">Public URL</Term> | Address for the other services |
+|---|---|---|
+| Web service | `<name>.<domain>` for each domain of the server, and custom domains | `<name>:<port>` |
+| Static site | `<name>.<domain>` for each domain of the server, and custom domains | `<name>:80` |
+| Private service | none | `<name>:<port>` |
+| Background worker | none | No port. It can open connections. |
+| Cron job | none | No port. Each run joins the network. |
+
+<Callout type="info" title="Your app must listen on 0.0.0.0 and $PORT">
+Ferry publishes the <Term id="port" /> of each container on `127.0.0.1` of the server and sends the requests there. In the container, your app must listen on all interfaces (`0.0.0.0`), not on `127.0.0.1`. Ferry gives the port in [`PORT`](/docs/concepts/environment/port).
+</Callout>
+
+<Accordions>
+  <Accordion title="The port in the URL">
+    - The port is the port of the proxy: `--proxy-addr`, default `8080`.
+    - If clients reach the proxy on a different port, set `--public-port`. An example is a router that sends a different port to the proxy.
+    - Ferry leaves the port out when it is `80`.
+    - When automatic <Term id="https" /> is on, public URLs use `https://` with no port. A <Term id="local-name" /> never gets a <Term id="certificate" /> and stays on `http://`.
+  </Accordion>
+  <Accordion title="The address of the dashboard">
+    If the base domain is local (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.test`), Ferry also routes `ferry.<base-domain>` to the <Term id="dashboard" /> and the <Term id="api" />.
+
+    On a public base domain, this route is off unless you set `--dashboard-host`. Read [Production setup](/docs/guides/production) before you set it.
+  </Accordion>
+</Accordions>

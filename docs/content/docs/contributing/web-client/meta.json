@@ -1,0 +1,21 @@
+{
+  "title": "Web client",
+  "icon": "LayoutDashboard",
+  "pages": [
+    "---Develop---",
+    "dev-loop",
+    "scripts",
+    "stack",
+    "layout",
+    "add-endpoint",
+    "design-tokens",
+    "---How it works---",
+    "dev-proxy",
+    "embed",
+    "serving",
+    "api",
+    "sign-in",
+    "live-updates",
+    "storage"
+  ]
+}

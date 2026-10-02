@@ -1,0 +1,53 @@
+---
+title: The OOM watcher
+description: The OOM watcher writes a warning in the server log each time the kernel kills a container for memory.
+---
+
+<Diagram
+  nodes={[
+    { id: 'box', at: [0, 0], icon: 'box', label: 'Instance', note: 'limit 512 MiB' },
+    { id: 'docker', at: [1.25, 0], icon: 'container', label: 'Docker' },
+    { id: 'watcher', at: [2.5, 0], icon: 'eye', label: 'OOM watcher' },
+    { id: 'log', at: [2.5, 1], icon: 'logs', label: 'Server log' },
+  ]}
+  edges={[
+    { from: 'box', to: 'docker' },
+    { from: 'docker', to: 'watcher', label: 'oom' },
+    { from: 'watcher', to: 'log' },
+  ]}
+  steps={[
+    {
+      caption: 'A container goes over its memory limit. The kernel kills it.',
+      tones: { box: 'danger' },
+      notes: { box: 'OOM kill' },
+    },
+    {
+      caption: 'Docker sends an oom event.',
+      flow: ['box>docker', 'docker>watcher'],
+      tones: { box: 'danger' },
+      notes: { box: 'OOM kill' },
+    },
+    {
+      caption: 'The watcher writes a warning in the server log. The warning names the service or the datastore, and the limit.',
+      flow: ['watcher>log'],
+      tones: { watcher: 'primary', log: 'warning' },
+    },
+    {
+      caption: 'Docker restarts the container. When the container runs again, Docker clears its out-of-memory flag.',
+      tones: { box: 'success' },
+      notes: { box: 'runs again' },
+    },
+  ]}
+/>
+
+The <Term id="oom-watcher" /> follows the `oom` events of Docker for the containers of this server.
+
+```text title="Server log" noCopy
+instance a1b2c3 of service 'web' ran out of memory (limit 512 MiB) — raise the service's memory limit
+```
+
+## Why it exists
+
+The <Term id="kernel" /> does the <Term id="oom" />. Docker then restarts the container by itself. Then Docker clears the flag that tells about the kill.
+
+Without the watcher, nobody sees a container that crashes again and again at its memory limit.

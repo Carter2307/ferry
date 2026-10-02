@@ -1,0 +1,41 @@
+---
+title: The life of a certificate
+description: Ferry requests, renews and tries again each certificate with no action from you.
+---
+
+<Flow
+  steps={[
+    { icon: 'route', title: 'New hostname', text: 'The proxy routes a new hostname. The hostname gets its certificate in seconds.' },
+    { icon: 'repeat', title: 'Each 60 seconds', text: 'A loop also orders the certificates that are not there: 2 orders at a time at most.' },
+    { icon: 'alert', title: 'If it fails', text: 'Ferry waits 5 minutes before the next try for that host, then 10, 20, and more, up to 6 hours.', tone: 'warning' },
+    { icon: 'certificate', title: 'Issued', text: 'The host has its certificate. Plain HTTP requests to it get a 308 redirect to HTTPS.', tone: 'success' },
+    { icon: 'restart', title: 'Renew', text: 'The loop renews each certificate in its last 30 days.' },
+  ]}
+/>
+
+## See the certificates
+
+<Terminal
+  lines={[
+    '$ ferry certificates',
+    'HOST               SERVICE   CERTIFICATE',
+    'shop.example.com   shop      issued        expires in 2mo',
+  ]}
+/>
+
+In the dashboard, open **Server → Domains**. The list has each <Term id="hostname" /> with the state of its <Term id="certificate" />.
+
+| State | Meaning |
+|---|---|
+| Issued | The host has its certificate. Ferry shows the date when it ends. |
+| In request | Ferry requests the certificate now. |
+| Failed | The request failed. Ferry shows the cause and the time of the next try. |
+
+<Accordions>
+  <Accordion title="Before the certificate is there">
+    A host with no certificate yet answers HTTPS with a <Term id="self-signed" />. Thus the <Term id="tls" /> handshake never fails hard.
+  </Accordion>
+  <Accordion title="Where Ferry keeps the certificates">
+    The ACME account and the certificates are in `<data-dir>/certs`. The private keys have the mode `0600`. Ferry loads them again at startup.
+  </Accordion>
+</Accordions>

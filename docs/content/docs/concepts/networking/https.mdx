@@ -1,0 +1,86 @@
+---
+title: Automatic HTTPS
+description: Ferry gets one certificate for each public hostname from Let's Encrypt, with the HTTP-01 challenge.
+---
+
+<Diagram
+  nodes={[
+    { id: 'proxy', at: [0, 0], icon: 'ship', label: 'Ferry', note: 'proxy on port 80' },
+    { id: 'ca', at: [1.75, 0], icon: 'shield-check', label: "Let's Encrypt", note: 'or an ACME CA' },
+    { id: 'cert', at: [0, 1], icon: 'certificate', label: 'Certificate', note: 'shop.example.com' },
+    { id: 'browser', at: [1.75, 1], icon: 'browser', label: 'Browser' },
+  ]}
+  edges={[
+    { id: 'order', from: 'proxy', to: 'ca', label: 'order' },
+    { id: 'challenge', from: 'ca', to: 'proxy', label: 'challenge' },
+    { from: 'proxy', to: 'cert' },
+    { from: 'browser', to: 'proxy', label: 'https://' },
+  ]}
+  steps={[
+    {
+      caption: "The proxy routes a new hostname. Ferry orders a certificate from Let's Encrypt.",
+      hide: ['cert', 'browser'],
+      cut: ['challenge'],
+      flow: ['order'],
+    },
+    {
+      caption: "Let's Encrypt connects to the hostname on port 80. The proxy answers the challenge.",
+      hide: ['cert', 'browser'],
+      cut: ['order'],
+      flow: ['challenge'],
+      tones: { ca: 'primary' },
+    },
+    {
+      caption: 'The answer is correct. Ferry gets the certificate of this hostname.',
+      hide: ['browser'],
+      cut: ['order', 'challenge'],
+      flow: ['proxy>cert'],
+      tones: { cert: 'success' },
+    },
+    {
+      caption: 'Browsers now use HTTPS. The proxy redirects plain HTTP to HTTPS with a 308.',
+      cut: ['order', 'challenge'],
+      flow: ['browser>proxy'],
+      tones: { cert: 'success', browser: 'success' },
+    },
+  ]}
+/>
+
+Ferry gets each <Term id="certificate" /> from <Term id="lets-encrypt" />, or from a different <Term id="acme" /> <Term id="certificate-authority">CA</Term>. It uses the <Term id="http-01" />.
+
+## Turn it on
+
+```bash title="Terminal"
+ferryd --base-domain apps.example.com \
+  --proxy-addr 0.0.0.0:80 --https-addr 0.0.0.0:443 \
+  --acme-email you@example.com
+```
+
+The two options `--https-addr` and `--acme-email` are necessary. `--https-addr` alone does not start an <Term id="https" /> listener.
+
+- The HTTP listener must be reachable from the internet on port 80.
+- The DNS name must point at the server.
+
+<Callout type="warning" title="Use port 443">
+With HTTPS on, Ferry prints public URLs as `https://host` with no port. Listen on `0.0.0.0:443`. Then these URLs work.
+</Callout>
+
+## Which hosts get a certificate
+
+Each host that the proxy routes, but not a <Term id="local-name" /> and not an IP address:
+
+- the host of each web service and static site, under each domain of the server
+- each custom domain
+- the dashboard host, if you set one
+
+Each host gets its own certificate. Ferry does not request wildcard certificates.
+
+<Accordions>
+  <Accordion title="A different certificate authority">
+    - `--acme-staging` uses the staging environment of Let's Encrypt: untrusted certificates, generous rate limits.
+    - `--acme-directory` points at a different ACME CA.
+    - When you change the CA, Ferry replaces the certificates of the previous CA.
+
+    See each option on [Server options](/docs/reference/server-options). For a full server, follow [Production setup](/docs/guides/production).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,51 @@
+---
+title: The three logs
+description: Ferry has a deploy log, a runtime log and a job log. Each one has its own place.
+---
+
+<Diagram
+  caption="Where each log is"
+  nodes={[
+    { id: 'dlog', at: [0, 0], icon: 'logs', label: 'Deploy log', note: 'one for a deploy' },
+    { id: 'jlog', at: [0, 1], icon: 'logs', label: 'Job log', note: 'one for a run' },
+    { id: 'rlog', at: [0, 2.25], icon: 'logs', label: 'Runtime log', note: 'of the containers' },
+    { id: 'data', at: [1.75, 0.5], icon: 'folder', label: 'Data directory', note: 'files of Ferry' },
+    { id: 'docker', at: [1.75, 2.25], icon: 'container', label: 'Docker', note: 'with the container' },
+  ]}
+  edges={[
+    { from: 'dlog', to: 'data', flow: true },
+    { from: 'jlog', to: 'data', flow: true },
+    { from: 'rlog', to: 'docker', flow: true },
+  ]}
+/>
+
+| Log | What it has | Read it |
+|---|---|---|
+| <Term id="deploy-log">Deploy log</Term> | The build output and the deploy steps of one deploy | `ferry logs --deploy ID` |
+| <Term id="runtime-log">Runtime log</Term> | What the containers of the service write to <Term id="stdout" /> and <Term id="stderr" /> | `ferry logs NAME` |
+| <Term id="job-log">Job log</Term> | The output of one job run | `ferry logs --job ID` |
+
+## Where a log is, and how long
+
+| Log | Place | Kept |
+|---|---|---|
+| Deploy log | `<data-dir>/logs/deploys/<deploy id>.log` | Until you delete the service |
+| Runtime log | In Docker | As long as the containers exist. Docker rotates it at 10 MiB × 3 files for each container (the default). |
+| Job log | `<data-dir>/logs/jobs/<job id>.log` | For the newest 100 runs of each service |
+
+## The parts of a line
+
+```text title="Deploy log" noCopy
+09:38:31 ==> Starting 1 instance(s)
+09:38:31 [2fa90d] docker-echo listening on :8000
+```
+
+Each line has a <Term id="timestamp" /> and a stream: `stdout`, `stderr` or `system`. A line of a runtime log also has its instance.
+
+The messages of Ferry are `system` lines. They start with `==> `.
+
+<Accordions>
+  <Accordion title="Live logs">
+    Ferry can stream each of the three logs live with Server-Sent Events. See [Stream logs with the API](/docs/concepts/logs/api-streams).
+  </Accordion>
+</Accordions>

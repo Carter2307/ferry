@@ -1,0 +1,26 @@
+---
+title: Lints and formatting
+description: Two commands check the layout of the Rust code and look for common errors. The two must pass.
+---
+
+<Flow
+  steps={[
+    { icon: 'pencil', title: 'cargo fmt', text: 'It compares the layout of the code with the standard layout. It changes no file.' },
+    { icon: 'search', title: 'cargo clippy', text: 'It looks for common errors in each crate. A warning is a failure.', tone: 'warning' },
+    { icon: 'check', title: 'Pass', text: 'The two commands end with no error.', tone: 'success' },
+  ]}
+/>
+
+## Run the two commands
+
+```bash title="Terminal"
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+| Part of the command | Effect |
+|---|---|
+| `--check` | The <Term id="formatter" /> only reports a difference. |
+| `-D warnings` | Each warning of a <Term id="lint" /> stops the command with an error. |
+
+The two commands must pass. See the [coding rules](/docs/contributing/development/coding-rules).

@@ -12,6 +12,9 @@ const apiTarget = process.env.FERRY_API_URL ?? 'http://127.0.0.1:7878'
 const proxy: ProxyOptions = {
   target: apiTarget,
   changeOrigin: true,
+  // Tell ferryd which host the browser used: it compares it with the Origin
+  // of requests that carry the session cookie.
+  xfwd: true,
   // Server-Sent Events (log streams, change feed) must reach the browser
   // unbuffered and uncompressed.
   configure: (p) => {

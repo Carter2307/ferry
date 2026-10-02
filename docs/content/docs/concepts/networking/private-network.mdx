@@ -1,0 +1,70 @@
+---
+title: Private network
+description: All containers of a server share one Docker network, where they call each other by name.
+---
+
+<Diagram
+  nodes={[
+    { id: 'shop', at: [0, 0], icon: 'box', label: 'shop', note: 'web service' },
+    { id: 'api', at: [1.5, 0], icon: 'box', label: 'api', note: 'private service' },
+    { id: 'db', at: [3, 0], icon: 'database', label: 'app-db', note: 'datastore' },
+    { id: 'job', at: [1.5, 1], icon: 'terminal', label: 'Job', note: 'one-off or cron' },
+  ]}
+  edges={[
+    { from: 'shop', to: 'api', label: 'api:3000' },
+    { from: 'api', to: 'db', label: 'app-db:5432' },
+    { from: 'job', to: 'db' },
+  ]}
+  groups={[{ label: 'Private network "ferry"', around: ['shop', 'api', 'db', 'job'] }]}
+  steps={[
+    {
+      caption: 'Each container of the server joins one Docker network.',
+      tones: { shop: 'primary', api: 'primary', db: 'primary', job: 'primary' },
+    },
+    {
+      caption: 'The name of a service or a datastore is its address on this network.',
+      notes: { api: 'name: api', db: 'name: app-db', shop: 'name: shop' },
+    },
+    {
+      caption: 'shop calls api at http://api:3000. The request does not go through the proxy.',
+      flow: ['shop>api'],
+      tones: { api: 'success' },
+    },
+    {
+      caption: 'api and the jobs connect to the datastore at app-db:5432.',
+      flow: ['api>db', 'job>db'],
+      tones: { db: 'success' },
+    },
+  ]}
+/>
+
+Ferry makes one Docker <Term id="bridge-network" /> for each server. Its name is the name prefix: `ferry` by default. This is the <Term id="private-network" />. Each <Term id="container" /> of the server joins it: service instances, one-off <Term id="job">jobs</Term>, <Term id="cron-job">cron jobs</Term> and datastores.
+
+Each service <Term id="instance" /> gets a DNS <Term id="alias" /> equal to the name of the service. Each <Term id="datastore" /> gets an alias equal to its name.
+
+## Call a service by its name
+
+```bash
+curl http://api:3000/health        # a private service named "api" listening on 3000
+psql postgresql://…@app-db:5432/…  # a datastore named "app-db"
+```
+
+Do not write hosts and ports in your code. Use a <Term id="reference" /> ([References](/docs/concepts/environment/references)): `${{service.api.hostport}}` becomes `api:3000` when the service starts.
+
+## Private services
+
+A <Term id="private-service" /> is reachable only here. It also needs a <Term id="port" />: Ferry finds it the same way as for a web service. `ferry show NAME` prints it as the internal address.
+
+```text title="ferry show api (excerpt)" noCopy
+Internal address:  api:3000
+```
+
+<Callout type="warning" title="No isolation between services">
+All services of one server share this network. Ferry does not isolate the services from each other on it.
+</Callout>
+
+<Accordions>
+  <Accordion title="A service with more than one instance">
+    The alias resolves to the addresses of all the instances. The DNS of Docker answers. Ferry does not balance this traffic.
+  </Accordion>
+</Accordions>

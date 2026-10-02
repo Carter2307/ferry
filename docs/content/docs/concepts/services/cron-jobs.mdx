@@ -1,0 +1,46 @@
+---
+title: Cron jobs
+description: A cron job is a command that runs on a schedule, then exits.
+---
+
+<Flow
+  steps={[
+    { icon: 'hammer', title: 'Deploy', text: 'The deploy builds or pulls the image. It starts no container.' },
+    { icon: 'clock', title: 'Schedule', text: 'Ferry waits for the next time of the schedule.' },
+    { icon: 'play', title: 'New container', text: 'Ferry starts a new container from the image of the live deploy.' },
+    { icon: 'terminal', title: 'Command', text: 'The container runs the command with sh -c.' },
+    { icon: 'trash', title: 'Remove', text: 'The command exits. Ferry removes the container.', tone: 'success' },
+  ]}
+/>
+
+A <Term id="cron-job" /> has no instance that runs all the time. Each run is a new <Term id="container" />.
+
+## Create a cron job
+
+```bash title="Terminal"
+ferry create nightly --type cron --image busybox:stable --schedule "0 3 * * *" --start-cmd 'echo hello'
+ferry run nightly --follow
+```
+
+`ferry run <name>` starts a run immediately.
+
+## The schedule
+
+The <Term id="cron-schedule" /> is a <Term id="cron-expression" /> of 5 fields: `minute hour day-of-month month day-of-week`. An alias such as `@daily` or `@hourly` is also correct.
+
+<Callout type="warning" title="The schedule is in UTC">
+Ferry reads the schedule in <Term id="utc" />, not in your local time.
+</Callout>
+
+<Accordions>
+  <Accordion title="The command">
+    The command is the start command of the service. If the default command of the image does the work, a cron job needs no start command.
+  </Accordion>
+  <Accordion title="Runs that Ferry skips">
+    - Ferry skips the runs that it missed while the server was down.
+    - Ferry skips a run when the previous run is not complete.
+  </Accordion>
+  <Accordion title="Runs, logs and one-off jobs">
+    See [Jobs & cron](/docs/concepts/jobs).
+  </Accordion>
+</Accordions>

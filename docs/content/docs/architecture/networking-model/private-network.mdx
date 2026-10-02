@@ -1,0 +1,60 @@
+---
+title: The private network
+description: Each server makes one Docker bridge network where each container has a name.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'box', label: 'web', note: 'alias: web' },
+    { id: 'api', at: [1.5, 0], icon: 'box', label: 'api', note: 'alias: api' },
+    { id: 'db', at: [3, 0], icon: 'database', label: 'app-db', note: 'alias: app-db' },
+    { id: 'job', at: [0, 1], icon: 'calendar', label: 'Job run', note: 'cron or one-off' },
+  ]}
+  edges={[
+    { from: 'web', to: 'api', label: 'api:8000' },
+    { from: 'api', to: 'db', label: 'app-db:5432' },
+    { from: 'job', to: 'api' },
+  ]}
+  groups={[{ label: 'Bridge network: ferry', around: ['web', 'api', 'db', 'job'] }]}
+  steps={[
+    {
+      caption: 'Each server creates one bridge network. Its name is the prefix of the server: ferry by default.',
+      hide: ['job'],
+    },
+    {
+      caption: 'Each service container and each datastore joins the network. Its DNS alias is its name.',
+      hide: ['job'],
+      tones: { web: 'primary', api: 'primary', db: 'primary' },
+    },
+    {
+      caption: 'web calls api at http://api:8000. api calls the datastore at app-db:5432.',
+      hide: ['job'],
+      flow: ['web>api', 'api>db'],
+    },
+    {
+      caption: 'Job runs join the same network. Thus they reach the private services and the datastores too.',
+      flow: ['job>api'],
+      tones: { job: 'primary' },
+    },
+  ]}
+/>
+
+The network is a user-defined <Term id="bridge-network" />. The option `--name-prefix` sets its name. On it, the DNS of Docker changes an <Term id="alias" /> into the address of a container.
+
+## The addresses
+
+| To reach | Address |
+|---|---|
+| A service | `http://NAME:PORT`, for example `http://api:8000` |
+| A datastore | `NAME:5432` (Postgres) or `NAME:6379` (Redis), or its full <Term id="connection-string" /> |
+
+All the instances of a service share the alias. The DNS of Docker answers with the addresses of all of them.
+
+## Do not write the addresses by hand
+
+Use [env var references](/docs/reference/env-references):
+
+```text title="Variables" noCopy
+${{service.api.internalUrl}}
+${{datastore.app-db.connectionString}}
+```

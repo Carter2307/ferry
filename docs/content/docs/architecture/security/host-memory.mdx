@@ -1,0 +1,58 @@
+---
+title: If the host has no more memory
+description: The limits are caps, not reservations. If the host has no more memory, containers stop before ferryd.
+---
+
+<Diagram
+  nodes={[
+    { id: 'oom', at: [0, 0.5], icon: 'skull', label: 'OOM killer', note: 'of the kernel' },
+    { id: 'ferryd', at: [1.75, 0], icon: 'server', label: 'ferryd', note: 'adjustment -500' },
+    { id: 'ctr', at: [1.75, 1], icon: 'box', label: 'Containers', note: 'no adjustment' },
+  ]}
+  edges={[
+    { from: 'oom', to: 'ferryd' },
+    { from: 'oom', to: 'ctr' },
+  ]}
+  steps={[
+    {
+      caption: 'The sum of the limits can be more than the memory of the host. Nothing tests it.',
+      cut: ['oom>ferryd', 'oom>ctr'],
+      tones: { oom: 'muted' },
+    },
+    {
+      caption: 'The host has no more memory. The OOM killer of the kernel chooses one process among all.',
+      cut: ['oom>ferryd'],
+      tones: { oom: 'danger' },
+    },
+    {
+      caption: 'At startup, ferryd lowered its own score. Thus the containers go first.',
+      flow: ['oom>ctr'],
+      cut: ['oom>ferryd'],
+      tones: { oom: 'danger', ctr: 'danger', ferryd: 'success' },
+      notes: { ctr: 'stops first', ferryd: 'continues' },
+    },
+  ]}
+/>
+
+A <Term id="resource-limit" /> is a cap. It does not reserve memory. If the host itself has no more memory, the <Term id="oom-killer" /> chooses a process to stop among all the processes.
+
+## Who goes first
+
+| Process | <Term id="oom-score">OOM score</Term> adjustment |
+|---|---|
+| `ferryd`, on Linux | `--oom-score-adj`, default `-500`: the containers go first |
+| `git` and the `docker` CLI, which `ferryd` starts | Reset to 0. A runaway `git` does not survive at the cost of apps and databases. |
+| Containers | They never inherit the score, because Docker starts them. |
+
+## What to do
+
+Make sure that the limits fit the host. See [Resource limits](/docs/concepts/resource-limits) and [Production setup](/docs/guides/production).
+
+<Accordions>
+  <Accordion title="If ferryd does not run as root">
+    To lower the score, `ferryd` must be root or have `CAP_SYS_RESOURCE`. Without them, `ferryd` writes a warning in its log. The warning tells you to set `OOMScoreAdjust=` in the systemd unit of `ferryd`.
+  </Accordion>
+  <Accordion title="A value from the service manager">
+    A service manager can set a lower value, for example with `OOMScoreAdjust=` of systemd. `ferryd` never raises that value.
+  </Accordion>
+</Accordions>

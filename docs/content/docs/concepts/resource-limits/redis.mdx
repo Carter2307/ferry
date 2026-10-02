@@ -1,0 +1,54 @@
+---
+title: Redis and its memory limit
+description: Ferry tells Redis to use 3/4 of its memory limit for data.
+---
+
+<Diagram
+  nodes={[
+    { id: 'reserve', at: [0, 0], icon: 'save', label: 'Reserve', note: 'the other quarter' },
+    { id: 'data', at: [1, 0], icon: 'database', label: 'Data', note: '192 MiB', tone: 'primary' },
+    { id: 'client', at: [2.75, 0], icon: 'terminal', label: 'Your app' },
+  ]}
+  edges={[{ from: 'client', to: 'data', label: 'write' }]}
+  groups={[{ label: 'Memory limit of Redis: 256 MiB', around: ['reserve', 'data'] }]}
+  steps={[
+    {
+      caption: 'Ferry sets maxmemory to 3/4 of the limit: 192 MiB for a limit of 256 MiB.',
+      flow: ['client>data'],
+    },
+    {
+      caption: 'The data fills the 192 MiB. Redis refuses new writes.',
+      cut: ['client>data'],
+      tones: { data: 'warning', client: 'warning' },
+      notes: { data: 'full', client: 'write refused' },
+    },
+    {
+      caption: 'Redis stays below its limit. The kernel does not stop it.',
+      cut: ['client>data'],
+      tones: { data: 'warning', reserve: 'success' },
+      notes: { data: 'full' },
+    },
+  ]}
+/>
+
+<Term id="maxmemory" /> is a setting of Redis. With it, a full Redis refuses writes. Without it, the kernel stops Redis at the memory limit.
+
+Redis uses the other quarter to save its append-only file and for the buffers of clients.
+
+## Change it
+
+Change the memory limit of the datastore. Ferry sets `maxmemory` again.
+
+```bash title="Terminal"
+ferry db create cache --kind redis --memory 256M
+ferry db update cache --memory 512M
+```
+
+<Accordions>
+  <Accordion title="When Ferry sets maxmemory">
+    - When Redis starts.
+    - When you change the memory limit.
+
+    A Redis with no memory limit gets no `maxmemory`.
+  </Accordion>
+</Accordions>

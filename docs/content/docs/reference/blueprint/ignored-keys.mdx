@@ -1,0 +1,38 @@
+---
+title: What Ferry ignores
+description: Ferry ignores each key that it does not support. Most of the time, it gives a warning.
+---
+
+```json title="The warnings of a dry run"
+"warnings": [
+  "blueprint: ignoring unsupported key 'x-defaults'",
+  "service 'queue': ignoring unsupported key 'region'",
+  "key value 'sessions': ignoring unsupported key 'ipAllowList'"
+]
+```
+
+Ferry supports a part of the `render.yaml` format. A key that Ferry does not support is never an error. Thus a `render.yaml` that you have applies as it is.
+
+## With a warning
+
+| Where | Ignored |
+|---|---|
+| Top level | Each key that is not `envVarGroups`, `databases`, `services` or `projects`. This includes the `x-` keys. |
+| A service | Keys that Ferry does not support, such as `region`, `scaling`, `previews` or `preDeployCommand`. |
+| A service with an `image` | `runtime` and `image.creds`. |
+| A service with `rootDir` | `dockerContext`. |
+| A cron job | `numInstances`. |
+| A Redis entry | Each key that is not `type`, `name`, `plan`, `memoryLimit` or `cpuLimit`: `ipAllowList`, `maxmemoryPolicy`… |
+| A database | Other keys: `region`, `ipAllowList`, `diskSizeGB`… |
+| An `envVars` entry | Keys that only Render uses, such as `previewValue`. |
+
+The warning has this form: `service 'api': ignoring unsupported key 'region'`.
+
+## With no warning
+
+| Where | Ignored |
+|---|---|
+| `disk` | `name` and `sizeGB`. Ferry accepts them. |
+| A static site | `plan`. Static sites have no plans on Render. |
+
+See [Warnings](/docs/reference/blueprint/warnings) for each message.

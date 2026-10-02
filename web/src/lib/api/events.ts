@@ -9,7 +9,7 @@ import { useEffect } from 'react'
 import { useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { create } from 'zustand'
 
-import { useAuth } from '@/stores/auth'
+import { useSignedIn } from '@/stores/auth'
 
 import { ApiError } from './client'
 import { streamPaths } from './endpoints'
@@ -42,7 +42,15 @@ export function usePollInterval(ms: number, opts: { always?: boolean } = {}): nu
   return mode === 'live' ? false : ms
 }
 
-const CHANGE_KINDS: readonly ChangeKind[] = ['service', 'deploy', 'datastore', 'env_group', 'job']
+const CHANGE_KINDS: readonly ChangeKind[] = [
+  'service',
+  'deploy',
+  'datastore',
+  'env_group',
+  'job',
+  'git_connection',
+  'domain',
+]
 
 function isChangeEvent(v: unknown): v is ChangeEvent {
   if (typeof v !== 'object' || v === null) return false
@@ -68,6 +76,13 @@ export function invalidationsForChange(change: ChangeEvent): Invalidation[] {
       return [keys.datastores()]
     case 'env_group':
       return change.action === 'deleted' ? [keys.envGroups(), keys.services()] : [keys.envGroups()]
+    case 'git_connection':
+      // the accounts, and what they let the server read (repositories, branches)
+      return [keys.git()]
+    case 'domain':
+      // the domains and their certificates, the default domain of /info, and
+      // the hosts and URL of every service
+      return [keys.domains(), keys.info(), keys.services()]
   }
 }
 
@@ -87,15 +102,14 @@ function invalidate(qc: QueryClient, batch: Invalidation[]): void {
 
 /**
  * Mount once (AppShell). Keeps a change-feed subscription open while signed
- * in, reconnecting with exponential backoff (1s → 15s); resubscribes when the
- * token changes and stops on sign-out.
+ * in, reconnecting with exponential backoff (1s → 15s), and stops on sign-out.
  */
 export function useChangeFeed(): void {
   const qc = useQueryClient()
-  const token = useAuth((s) => s.token)
+  const signedIn = useSignedIn()
 
   useEffect(() => {
-    if (!token) {
+    if (!signedIn) {
       setMode('off')
       return
     }
@@ -165,5 +179,5 @@ export function useChangeFeed(): void {
       ctrl.abort()
       if (flushTimer) clearTimeout(flushTimer)
     }
-  }, [qc, token])
+  }, [qc, signedIn])
 }

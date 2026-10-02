@@ -1,0 +1,61 @@
+---
+title: Add the domain to the service
+description: Add the custom domain with the CLI, the API or a blueprint. The proxy routes it immediately.
+---
+
+<Tabs items={['CLI', 'API', 'Blueprint']} groupId="interface" persist>
+<Tab value="CLI">
+
+```bash title="Terminal"
+ferry domains add shop shop.example.com
+# Added shop.example.com. Point its DNS (A/AAAA or CNAME) at this server.
+ferry domains add shop www.example.com
+```
+
+You can also give `--domain` to `ferry create`, `ferry update` and `ferry up`. You can repeat it.
+
+</Tab>
+<Tab value="API">
+
+```bash title="Terminal"
+curl -X POST http://127.0.0.1:7878/api/v1/services/shop/domains \
+  -H "Authorization: Bearer $FERRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"domain": "shop.example.com"}'
+# ["shop.example.com"]
+```
+
+See [Domains](/docs/reference/api/domains) in the API reference.
+
+</Tab>
+<Tab value="Blueprint">
+
+```yaml title="ferry.yaml"
+services:
+  - type: web
+    name: shop
+    domains:
+      - shop.example.com
+      - www.example.com
+```
+
+</Tab>
+</Tabs>
+
+The <Term id="proxy" /> routes the domain immediately. No <Term id="deploy" /> is necessary.
+
+## Domains that Ferry refuses
+
+- A name that is not valid.
+- An <Term id="ip-address" />.
+- The default host of a service: `<name>.<domain>` under a [domain of the server](/docs/guides/domains).
+- The <Term id="dashboard" /> host.
+- A domain that another service has.
+
+## Remove a domain
+
+```bash title="Terminal"
+ferry domains rm shop www.example.com
+```
+
+The proxy stops the route immediately.

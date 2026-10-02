@@ -1,0 +1,49 @@
+---
+title: What you can run
+description: Ferry runs the five service types of Render, and Postgres and Redis.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0], icon: 'globe', label: 'Web service' },
+    { id: 'private', at: [1, 0], icon: 'lock', label: 'Private service' },
+    { id: 'worker', at: [2, 0], icon: 'repeat', label: 'Worker' },
+    { id: 'cron', at: [3, 0], icon: 'calendar', label: 'Cron job' },
+    { id: 'static', at: [0, 1], icon: 'file-code', label: 'Static site' },
+    { id: 'pg', at: [1, 1], icon: 'database', label: 'Postgres' },
+    { id: 'redis', at: [2, 1], icon: 'database', label: 'Redis', note: 'Key Value' },
+    { id: 'disk', at: [3, 1], icon: 'disk', label: 'Disk' },
+  ]}
+  steps={[
+    {
+      caption: 'Ferry has the five service types of Render.',
+      tones: { web: 'primary', private: 'primary', worker: 'primary', cron: 'primary', static: 'primary', pg: 'muted', redis: 'muted', disk: 'muted' },
+    },
+    {
+      caption: 'Ferry runs Postgres and Redis. Render names its Redis "Key Value".',
+      tones: { pg: 'primary', redis: 'primary', web: 'muted', private: 'muted', worker: 'muted', cron: 'muted', static: 'muted', disk: 'muted' },
+    },
+    {
+      caption: 'A service can keep its files on a disk.',
+      tones: { disk: 'primary', web: 'muted', private: 'muted', worker: 'muted', cron: 'muted', static: 'muted', pg: 'muted', redis: 'muted' },
+    },
+  ]}
+/>
+
+| Render feature | In Ferry |
+|---|---|
+| Web services, private services, background workers, cron jobs, static sites | Yes, all five [service types](/docs/concepts/services) |
+| Native runtimes (Node, Python, Go, Rust, Ruby, static) and Dockerfiles | Yes: Ferry detects the <Term id="runtime" /> and writes the <Term id="dockerfile" /> |
+| A prebuilt Docker <Term id="image" /> | Yes (`--image`) |
+| Managed Postgres, Key Value (Redis) | Yes: containers with <Term id="volume">volumes</Term>, internal and external URLs |
+| Persistent <Term id="disk">disks</Term> | Yes: a named volume. A service with a disk has 1 instance. A deploy stops the old instance first. |
+| <Term id="one-off-job">One-off jobs</Term> | Yes (`ferry run`) |
+| <Term id="blueprint">Blueprints</Term> (`render.yaml`) | Yes: `ferry blueprint apply`, the same schema (a subset) |
+
+## Example: a service from an image
+
+```bash title="Terminal"
+ferry create hello --image nginx:alpine --port 80
+```
+
+Read more: [Builds & runtimes](/docs/concepts/builds), [Datastores](/docs/concepts/datastores), [Jobs](/docs/concepts/jobs) and the [blueprint reference](/docs/reference/blueprint).

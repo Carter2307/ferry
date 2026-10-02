@@ -1,0 +1,40 @@
+---
+title: JSON output
+description: With --json, ferry prints the exact answer of the API. Use it in scripts.
+---
+
+<Terminal
+  lines={[
+    '$ ferry --json services | jq -r \'.[] | "\\(.name) \\(.state)"\'',
+    'docker-echo live',
+    'echo-worker live',
+    'nightly live',
+    'node-hello live',
+    'python-hello live',
+  ]}
+/>
+
+Add `--json` to a command. `ferry` then prints <Term id="json" />, not text for people.
+
+The JSON is exactly what the [REST API](/docs/reference/api) sends. In the example, the `jq` program reads it and prints two fields.
+
+## Logs: one object for each line
+
+For a log, `--json` prints one JSON object on each line. This applies to `ferry logs`, and to `--follow` on deploys and jobs.
+
+```bash title="Terminal"
+ferry --json logs echo-worker --tail 2
+```
+
+```json title="Output" noCopy
+{"ts":"2026-09-27T07:42:26.092974420Z","stream":"stdout","instance":"4e772d","line":"tick"}
+{"ts":"2026-09-27T07:42:31.100289672Z","stream":"stdout","instance":"4e772d","line":"tick"}
+```
+
+## The values of stream
+
+| `stream` | The line comes from |
+|---|---|
+| `stdout` | The standard output of the instance |
+| `stderr` | The standard error of the instance |
+| `system` | Ferry: the `==>` messages |

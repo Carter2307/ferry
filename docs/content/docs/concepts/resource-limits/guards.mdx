@@ -1,0 +1,75 @@
+---
+title: The five guards
+description: Five guards stop a container that uses too much of the server.
+---
+
+<Diagram
+  nodes={[
+    { id: 'mem', at: [0, 0], icon: 'memory', label: 'Memory', note: '512 MiB' },
+    { id: 'cpu', at: [0, 1], icon: 'cpu', label: 'CPU', note: '1 CPU' },
+    { id: 'pids', at: [0, 2], icon: 'layers', label: 'Processes', note: '1024' },
+    { id: 'app', at: [1.5, 1], icon: 'box', label: 'Container', tone: 'primary' },
+    { id: 'logs', at: [3, 0.5], icon: 'logs', label: 'Logs', note: '10 MiB × 3 files' },
+    { id: 'disk', at: [3, 1.5], icon: 'disk', label: 'Free disk', note: '1 GiB free' },
+  ]}
+  edges={[
+    { from: 'mem', to: 'app' },
+    { from: 'cpu', to: 'app' },
+    { from: 'pids', to: 'app' },
+    { from: 'logs', to: 'app' },
+    { from: 'disk', to: 'app' },
+  ]}
+  steps={[
+    {
+      caption: 'Too much memory: the kernel stops the process. Then Docker starts it again.',
+      flow: ['mem>app'],
+      tones: { mem: 'warning' },
+    },
+    {
+      caption: 'Too much CPU: the container gets slower. The other cores stay free.',
+      flow: ['cpu>app'],
+      tones: { cpu: 'warning' },
+    },
+    {
+      caption: 'Too many processes: the container cannot start a new one.',
+      flow: ['pids>app'],
+      tones: { pids: 'warning' },
+    },
+    {
+      caption: 'Too many log lines: Docker deletes the oldest lines.',
+      flow: ['logs>app'],
+      tones: { logs: 'warning' },
+    },
+    {
+      caption: 'A disk that is almost full: the deploy fails before the build.',
+      flow: ['disk>app'],
+      tones: { disk: 'warning' },
+    },
+  ]}
+/>
+
+Ferry puts five guards around each <Term id="container" /> that it starts. Each guard has a default value.
+
+## The defaults
+
+| Guard | Default | Set with |
+|---|---|---|
+| [Memory](/docs/concepts/resource-limits/memory) | 512 MiB | The service or the datastore. If not set: `--default-memory-limit` |
+| [CPU](/docs/concepts/resource-limits/cpu) | 1 CPU | The service or the datastore. If not set: `--default-cpu-limit` |
+| [Processes](/docs/concepts/resource-limits/processes) | 1024 | `--pids-limit` |
+| [Logs](/docs/concepts/resource-limits/log-rotation) | 10 MiB × 3 files | `--log-max-size`, `--log-max-files` |
+| [Free disk](/docs/concepts/resource-limits/free-disk) | 1 GiB free | `--min-free-disk` |
+
+The flags are options of `ferryd`. See [Server defaults](/docs/concepts/resource-limits/defaults).
+
+## A limit is for one container
+
+Containers do not share a limit. A <Term id="service" /> with 3 <Term id="instance">instances</Term> can use 3 times its limit, plus the limit of each job that runs.
+
+A limit is a cap. It does not reserve memory or CPU. Ferry does not make sure that all the limits together fit on the server.
+
+<Accordions>
+  <Accordion title="What has no limit">
+    A build has no limit of memory or CPU. See [What Ferry does not limit](/docs/concepts/resource-limits/not-limited).
+  </Accordion>
+</Accordions>

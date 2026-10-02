@@ -1,0 +1,69 @@
+---
+title: Stop and start again
+description: When ferryd stops, your containers continue to run, but their public URLs do not answer.
+---
+
+<Diagram
+  nodes={[
+    { id: 'web', at: [0, 0.5], icon: 'browser', label: 'Browser' },
+    { id: 'ferryd', at: [1.5, 0.5], icon: 'server', label: 'ferryd', note: 'with the proxy' },
+    { id: 'app', at: [3, 0], icon: 'box', label: 'App container' },
+    { id: 'db', at: [3, 1], icon: 'database', label: 'Datastore' },
+  ]}
+  edges={[
+    { from: 'web', to: 'ferryd' },
+    { from: 'ferryd', to: 'app' },
+  ]}
+  groups={[{ label: 'Docker', around: ['app', 'db'] }]}
+  steps={[
+    {
+      caption: 'ferryd runs. Its proxy sends each request to your app.',
+      flow: ['web>ferryd', 'ferryd>app'],
+      tones: { ferryd: 'success' },
+    },
+    {
+      caption: 'You stop ferryd. Your containers continue to run in Docker.',
+      cut: ['web>ferryd', 'ferryd>app'],
+      tones: { ferryd: 'muted', app: 'success', db: 'success' },
+      notes: { ferryd: 'stopped', app: 'runs', db: 'runs' },
+    },
+    {
+      caption: 'But the proxy is a part of ferryd. The public URLs do not answer.',
+      cut: ['web>ferryd', 'ferryd>app'],
+      tones: { ferryd: 'muted', web: 'danger' },
+      notes: { ferryd: 'stopped', web: 'no answer' },
+    },
+    {
+      caption: 'You start ferryd again. It puts the routes back.',
+      flow: ['web>ferryd', 'ferryd>app'],
+      tones: { ferryd: 'success' },
+    },
+  ]}
+/>
+
+```bash title="Terminal"
+ferryd stop   # stop the server
+ferryd        # start it again
+```
+
+For a server in the foreground, press <kbd>Ctrl</kbd>+<kbd>C</kbd> in its terminal.
+
+At the next start, `ferryd` reads the same data directory. It puts the routes back and brings each service back to its <Term id="desired-state" />. See [Self-healing](/docs/concepts/self-healing).
+
+## What a stop does
+
+The stop is a <Term id="graceful-shutdown" />.
+
+| What | During the stop |
+|---|---|
+| Open API requests | They get up to 10 seconds. |
+| Jobs in progress | The engine stops them. |
+| Deploys in progress | The engine records them as [interrupted](/docs/concepts/deploys/interrupted). |
+
+The engine does its part in 25 seconds at most.
+
+<Accordions>
+  <Accordion title="Stop immediately">
+    Run `ferryd stop` a second time, or press <kbd>Ctrl</kbd>+<kbd>C</kbd> a second time, while the server stops. The server exits immediately.
+  </Accordion>
+</Accordions>

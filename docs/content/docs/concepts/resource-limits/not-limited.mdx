@@ -1,0 +1,56 @@
+---
+title: What Ferry does not limit
+description: Builds, disk space, I/O and the network have no limit.
+---
+
+<Diagram
+  nodes={[
+    { id: 'mem', at: [0, 0], icon: 'memory', label: 'Memory', tone: 'success' },
+    { id: 'cpu', at: [1, 0], icon: 'cpu', label: 'CPU', tone: 'success' },
+    { id: 'pids', at: [2, 0], icon: 'layers', label: 'Processes', tone: 'success' },
+    { id: 'logs', at: [3, 0], icon: 'logs', label: 'Logs', tone: 'success' },
+    { id: 'builds', at: [0, 1.4], icon: 'hammer', label: 'Builds', tone: 'warning' },
+    { id: 'disk', at: [1, 1.4], icon: 'disk', label: 'Disk space', tone: 'warning' },
+    { id: 'io', at: [2, 1.4], icon: 'activity', label: 'I/O', tone: 'warning' },
+    { id: 'net', at: [3, 1.4], icon: 'network', label: 'Network', tone: 'warning' },
+  ]}
+  groups={[
+    { label: 'Each container has a limit', around: ['mem', 'cpu', 'pids', 'logs'] },
+    { label: 'No limit', around: ['builds', 'disk', 'io', 'net'] },
+  ]}
+/>
+
+A <Term id="resource-limit" /> covers memory, CPU, processes and logs. Ferry sets no limit on four other things.
+
+## The four things with no limit
+
+| No limit on | What it means |
+|---|---|
+| Builds | `docker build` runs in <Term id="buildkit" />. BuildKit has no limit of memory or CPU for one build. A build can use all the memory and CPU of the server. |
+| Disk space | Volumes, the filesystems of containers, images and the build cache have no quota. |
+| Disk and network I/O | Ferry sets no limit on I/O or on bandwidth. |
+| The network | All services and datastores share one [private network](/docs/concepts/networking). Each container can reach each other container by its name. |
+
+## What you can do
+
+```bash title="Terminal"
+docker image prune
+docker builder prune
+```
+
+These commands remove the images and the build cache that Docker does not use.
+
+<Accordions>
+  <Accordion title="The guards that help">
+    - `--build-concurrency` (default 2) limits the number of builds at the same time.
+    - The [free-disk check](/docs/concepts/resource-limits/free-disk) runs before a build, not during the build. It stops only new deploys and new datastores.
+    - `--keep-images` limits the images that Ferry made. You must remove the other images.
+    - Only its password protects a datastore on the private network.
+  </Accordion>
+  <Accordion title="Volumes">
+    The volumes with no quota are the volumes of datastores and the [disks of services](/docs/concepts/scaling).
+  </Accordion>
+  <Accordion title="The total of the limits">
+    Ferry does not make sure that all the limits together fit on the server. See [When the server has no free memory](/docs/concepts/resource-limits/host-memory).
+  </Accordion>
+</Accordions>

@@ -1,0 +1,38 @@
+---
+title: Not in Ferry v1
+description: Seven features of Render are not in the first version of Ferry.
+---
+
+<Diagram
+  caption="Render has these features. Ferry v1 does not have them."
+  nodes={[
+    { id: 'nodes', at: [0, 0], icon: 'ban', label: 'Multiple nodes', tone: 'muted' },
+    { id: 'auto', at: [1, 0], icon: 'ban', label: 'Autoscaling', tone: 'muted' },
+    { id: 'pr', at: [2, 0], icon: 'ban', label: 'PR previews', tone: 'muted' },
+    { id: 'registry', at: [3, 0], icon: 'ban', label: 'Registry login', note: 'private registry', tone: 'muted' },
+    { id: 'files', at: [0.5, 1], icon: 'ban', label: 'Secret files', tone: 'muted' },
+    { id: 'ip', at: [1.5, 1], icon: 'ban', label: 'IP allow lists', tone: 'muted' },
+    { id: 'teams', at: [2.5, 1], icon: 'ban', label: 'Teams and roles', tone: 'muted' },
+  ]}
+/>
+
+| Not in Ferry v1 | What it is |
+|---|---|
+| Multiple nodes | More than one server for the same apps |
+| <Term id="autoscaling">Autoscaling</Term> | The host changes the number of instances when the load changes |
+| <Term id="pr-preview">Pull request previews</Term> | A temporary copy of the app for each pull request |
+| Private registry authentication | A login to pull an image from a private <Term id="registry" /> |
+| <Term id="secret-file">Secret files</Term> | A file with secret text in the container |
+| <Term id="ip-allow-list">IP allow lists</Term> | Only the addresses on the list can connect |
+| Teams, or <Term id="rbac" /> | More than one user, each with a role |
+
+## What Ferry has
+
+- One server runs all your apps.
+- Environment variables and env groups hold your secret values.
+- A Ferry server has one administrator account. It has no other users.
+- You set the number of instances by hand:
+
+```bash title="Terminal"
+ferry scale api 2
+```

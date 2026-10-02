@@ -36,9 +36,10 @@ const TAG_TITLES = {
   deploys: 'Deploys',
   env: 'Environment variables',
   'env-groups': 'Env groups',
-  domains: 'Custom domains',
+  domains: 'Domains',
   jobs: 'Jobs',
   datastores: 'Datastores',
+  git: 'Git connections',
   blueprints: 'Blueprints',
   events: 'Change feed',
   hooks: 'Webhooks',
@@ -79,6 +80,18 @@ const PATH_ORDER = [
   '/api/v1/env-groups/{id}/env',
   '/api/v1/services/{id}/env-groups',
   '/api/v1/services/{id}/env-groups/{group}',
+  '/api/v1/domains',
+  '/api/v1/domains/{id}',
+  '/api/v1/domains/{id}/verify',
+  '/api/v1/certificates',
+  '/api/v1/services/{id}/domains',
+  '/api/v1/services/{id}/domains/{domain}',
+  '/api/v1/git/authorize',
+  '/api/v1/git/callback',
+  '/api/v1/git/connections',
+  '/api/v1/git/connections/{id}',
+  '/api/v1/git/connections/{id}/repositories',
+  '/api/v1/git/branches',
 ];
 
 /** The document with its paths in PATH_ORDER (only used to lay out the pages). */
@@ -236,16 +249,27 @@ function clapMarkdownToMdx(md, { keepOverview }) {
     .trim();
 }
 
-/** `ferryd --help` → { '--data-dir': 'FERRY_DATA_DIR', … } */
+/**
+ * `ferryd --help` → { '--data-dir': 'FERRY_DATA_DIR', … }: the options of the
+ * server (the ones listed without a command) and their environment variables.
+ * An option without a variable maps to `undefined`.
+ */
 function ferrydEnvVars(help) {
   const env = {};
+  const isFlag = (line) => /^\s+(?:-\w, )?(--[a-z0-9-]+)(?: <[A-Z_]+>)?\s*$/.exec(line);
   const lines = help.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    const flag = /^\s+(?:-\w, )?(--[a-z0-9-]+)(?: <[A-Z_]+>)?\s*$/.exec(lines[i]);
+    const flag = isFlag(lines[i]);
     if (!flag) continue;
-    const next = lines[i + 1] ?? '';
-    const m = /\[env: ([A-Z0-9_]+)=?[^\]]*\]/.exec(next);
-    if (m) env[flag[1]] = m[1];
+    env[flag[1]] = undefined;
+    // The description follows, then (after a blank line in the long help) `[env: …]`.
+    for (let j = i + 1; j < lines.length && !isFlag(lines[j]); j++) {
+      const m = /\[env: ([A-Z0-9_]+)=?[^\]]*\]/.exec(lines[j]);
+      if (m) {
+        env[flag[1]] = m[1];
+        break;
+      }
+    }
   }
   return env;
 }
@@ -330,7 +354,7 @@ function optionListsToTables(mdx, env) {
     out.push('', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows, '');
   }
   if (env) {
-    const missing = Object.keys(env).filter((f) => !seenEnv.has(f));
+    const missing = Object.keys(env).filter((f) => env[f] && !seenEnv.has(f));
     if (missing.length > 0) {
       throw new Error(`ferryd options with an env var but no entry in --dump-markdown-help: ${missing.join(', ')}`);
     }
@@ -352,36 +376,54 @@ function cliPage(markdownHelp) {
 This page lists every \`ferry\` command with its arguments and options. It is generated from the CLI's own help (\`ferry markdown-help\`), so it matches the binary built from this repository. In a terminal, \`ferry <command> --help\` prints the same text.
 
 <Callout title="Connecting to a server">
-Every command talks to a Ferry server. \`ferry login --server URL --token TOKEN\` verifies both and saves them in \`~/.config/ferry/config.json\` (\`$XDG_CONFIG_HOME/ferry/config.json\` when that variable is set). The \`--server\` / \`--token\` flags, then the \`FERRY_SERVER\` / \`FERRY_TOKEN\` variables, take precedence over the saved values. See [Set up the CLI](/docs/getting-started/cli).
+Every command talks to a Ferry server. \`ferry login --server URL\` opens the dashboard, where you approve the terminal; it then gets an API token of its own, saved with the server in \`~/.config/ferry/config.json\` (\`$XDG_CONFIG_HOME/ferry/config.json\` when that variable is set). With \`--token TOKEN\`, that token is verified and saved instead. The \`--server\` / \`--token\` flags, then the \`FERRY_SERVER\` / \`FERRY_TOKEN\` variables, take precedence over the saved values. See [Set up the CLI](/docs/getting-started/cli).
 </Callout>
 
 ${optionListsToTables(clapMarkdownToMdx(markdownHelp, { keepOverview: true })).mdx}
 `;
 }
 
+/**
+ * `ferryd start` and `ferryd run` take the options of `ferryd` itself:
+ * their copies of the table become one sentence.
+ */
+function dedupeServerOptions(mdx) {
+  const table = /\*\*Options\*\*\n\n((?:\|.*\n)+)/.exec(mdx);
+  if (!table) throw new Error('no **Options** table in the ferryd reference');
+  const first = table.index + table[0].length;
+  const copies = mdx.slice(first).split(table[1]);
+  if (copies.length !== 3) {
+    throw new Error(`expected the server options twice more (ferryd start, ferryd run), found ${copies.length - 1}`);
+  }
+  return mdx.slice(0, first) + copies.join('The same options as [`ferryd`](#ferryd) without a command.\n');
+}
+
 function serverOptionsPage(markdownHelp, help) {
-  const { mdx: body, withoutEnv } = optionListsToTables(
-    clapMarkdownToMdx(markdownHelp, { keepOverview: false }),
-    ferrydEnvVars(help),
-  );
+  const env = ferrydEnvVars(help);
+  const { mdx, withoutEnv } = optionListsToTables(clapMarkdownToMdx(markdownHelp, { keepOverview: false }), env);
+  const body = dedupeServerOptions(mdx);
+  // Of the server's own options (not the ones of `ferryd logs`).
+  const serverWithoutEnv = [...new Set(withoutEnv)].filter((f) => f in env);
   const flagList = (flags) => flags.map((f) => `\`${f}\``).join(', ').replace(/, ([^,]+)$/, ' and $1');
   const envSentence =
-    withoutEnv.length === 0
-      ? 'Each option can also be set with the environment variable shown under it.'
-      : `Every option except ${flagList(withoutEnv)} can also be set with the environment variable shown under it.`;
+    serverWithoutEnv.length === 0
+      ? 'Each option of the server can also be set with the environment variable shown under it.'
+      : `Every option of the server except ${flagList(serverWithoutEnv)} can also be set with the environment variable shown under it.`;
   return `${frontmatter({
     title: 'Server options',
-    description: 'Every ferryd command-line option with its environment variable and default, generated from the server itself.',
+    description: 'Every ferryd command and option, with its environment variable and default, generated from the server itself.',
     icon: 'Server',
   })}
 {/* ${GENERATED_NOTE} Source: \`cargo run -p ferryd -- --dump-markdown-help\` and \`ferryd --help\`. */}
 
-\`ferryd\` is the Ferry server: one process that runs the REST API and the dashboard, the public reverse proxy, the build and deploy engine and the reconciler. This page lists all of its options. It is generated from \`ferryd --dump-markdown-help\` and \`ferryd --help\`, so it matches the binary built from this repository.
+\`ferryd\` is the Ferry server: one process that runs the REST API and the dashboard, the public reverse proxy, the build and deploy engine and the reconciler. This page lists its commands and all of its options. It is generated from \`ferryd --dump-markdown-help\` and \`ferryd --help\`, so it matches the binary built from this repository.
+
+\`ferryd\` alone starts the server: in the background when you run it from a terminal (like \`ferryd start\`), in the foreground otherwise (like \`ferryd run\`). \`ferryd stop\`, \`ferryd status\` and \`ferryd logs\` find that server through its data directory. See [Background and foreground](/docs/getting-started/installation/background).
 
 ${envSentence} When both are set, the command-line flag wins.
 
 <Callout type="warning" title="One data directory per server">
-Only one \`ferryd\` can use a data directory at a time, and each Docker name prefix (\`--name-prefix\`) belongs to one data directory. A server refuses to start on a prefix that another data directory owns unless you pass \`--take-over\`. A data directory you moved keeps its \`instance_id\` and starts with the same \`--name-prefix\` without \`--take-over\`: the flag is only for a data directory that lost its \`instance_id\`, and never while another server uses the prefix, since the server that takes over removes the other one's containers. See [Multiple servers](/docs/guides/multiple-servers#move-a-server-to-another-data-directory).
+Only one \`ferryd\` can use a data directory at a time, and each Docker name prefix (\`--name-prefix\`) belongs to one data directory. A server refuses to start on a prefix that another data directory owns unless you pass \`--take-over\`. A data directory you moved keeps its \`instance_id\` and starts with the same \`--name-prefix\` without \`--take-over\`: the flag is only for a data directory that lost its \`instance_id\`, and never while another server uses the prefix, since the server that takes over removes the other one's containers. See [Multiple servers](/docs/guides/multiple-servers/move).
 </Callout>
 
 ${body}
@@ -406,7 +448,7 @@ function apiIndexPage(tags) {
 These pages are generated from Ferry's OpenAPI 3.1 document: \`ferryd --dump-openapi\` prints it, and every server serves it at \`GET /api/openapi.json\`. The \`ferry\` CLI and the dashboard use exactly this API. Read the [API overview](/docs/reference/api-overview) for authentication, errors and streaming.
 
 <Callout title="Authentication">
-Every \`/api/v1\` route needs the server's API token as \`Authorization: Bearer <token>\`. \`ferryd\` prints the token on first start and stores it in \`<data-dir>/api_token\`. Webhooks (\`/hooks/…\`) use their own secrets, and \`/healthz\` and the OpenAPI document need no token.
+Every \`/api/v1\` route needs an API token as \`Authorization: Bearer <token>\`: one created in the dashboard (Server → Account) or by \`ferry login\`, or the server token in \`<data-dir>/api_token\`. The operations of the \`auth\` tag are the exception: those of the account itself only accept the dashboard's session, and the ones called before signing in need nothing. Webhooks (\`/hooks/…\`) use their own secrets, and \`/healthz\` and the OpenAPI document need no token.
 </Callout>
 
 The request examples target \`http://127.0.0.1:7878\`, the default \`--api-addr\` (docs builds can change it with \`FERRY_DOCS_SERVER_URL\`), and read the token from the \`FERRY_TOKEN\` environment variable, like the \`ferry\` CLI: \`export FERRY_TOKEN=$(cat <data-dir>/api_token)\`. To send requests from a browser, open the Swagger UI that your own server serves at \`/api/docs\` and paste the token under **Authorize**.

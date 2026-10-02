@@ -1,0 +1,49 @@
+---
+title: Apply the file again
+description: You can change the file and apply it again. Ferry updates what changed and deletes nothing.
+---
+
+<Diagram
+  nodes={[
+    { id: 'file', at: [0, 1.5], icon: 'file-code', label: 'render.yaml', note: 'applied again' },
+    { id: 'create', at: [1.75, 0], icon: 'ok', label: 'create', note: 'new in the file', tone: 'success' },
+    { id: 'update', at: [1.75, 1], icon: 'pencil', label: 'update', note: 'with the changes', tone: 'primary' },
+    { id: 'same', at: [1.75, 2], icon: 'check', label: 'unchanged', note: 'the same' },
+    { id: 'kept', at: [1.75, 3], icon: 'save', label: 'Not deleted', note: 'no longer in file', tone: 'muted' },
+  ]}
+  edges={[
+    { from: 'file', to: 'create' },
+    { from: 'file', to: 'update' },
+    { from: 'file', to: 'same' },
+    { from: 'file', to: 'kept', dashed: true },
+  ]}
+/>
+
+The result lists each resource as `create`, `update` or `unchanged`. Ferry deletes nothing: a resource that you remove from the file stays on the server.
+
+## What Ferry does for each change
+
+| Change in the file | Ferry |
+|---|---|
+| Build or deploy settings of a service | Deploys the service again. |
+| Only the limits (`plan`, `memoryLimit`, `cpuLimit`) or the variables of a service | <Term id="restart">Restarts</Term> the service, if it is live. Ferry builds nothing. |
+| No `plan`, `memoryLimit` or `cpuLimit` in the file | Keeps the limits, like `numInstances`. |
+| Version, database name or user of a <Term id="datastore" /> | Keeps the old values and shows a warning. |
+| Limits of a datastore | Changes them in place, without a restart. |
+
+## Preview first
+
+```bash title="Terminal"
+ferry blueprint apply render.yaml --dry-run
+```
+
+The <Term id="dry-run" /> shows all these changes and changes nothing. It also shows limit changes, such as `memory_limit: 512 MiB → 2 GiB`.
+
+<Accordions>
+  <Accordion title="Limits that you set by hand">
+    The file sets no limit. Then the changes that you made with `ferry update --memory` or in the dashboard stay.
+  </Accordion>
+  <Accordion title="All the keys">
+    The [blueprint reference](/docs/reference/blueprint) describes each key, and how to use the `ferry.yaml` of Ferry.
+  </Accordion>
+</Accordions>

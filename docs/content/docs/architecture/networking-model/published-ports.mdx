@@ -1,0 +1,55 @@
+---
+title: Published ports
+description: Each container that listens publishes its port on 127.0.0.1 with a random host port.
+---
+
+<Diagram
+  nodes={[
+    { id: 'proxy', at: [0, 0], icon: 'route', label: 'Proxy' },
+    { id: 'health', at: [0, 1], icon: 'health', label: 'Health check' },
+    { id: 'port', at: [1.5, 0.5], icon: 'plug', label: '127.0.0.1:63120', note: 'random host port' },
+    { id: 'box', at: [3, 0.5], icon: 'box', label: 'Instance', note: 'listens on port 80' },
+  ]}
+  edges={[
+    { from: 'proxy', to: 'port' },
+    { from: 'health', to: 'port' },
+    { from: 'port', to: 'box' },
+  ]}
+  steps={[
+    {
+      caption: 'The app listens on its container port, here 80.',
+      cut: ['proxy>port', 'health>port', 'port>box'],
+      tones: { box: 'primary' },
+    },
+    {
+      caption: 'Docker publishes this port on 127.0.0.1. Docker chooses a random host port, here 63120.',
+      cut: ['proxy>port', 'health>port'],
+      flow: ['port>box'],
+      tones: { port: 'primary' },
+    },
+    {
+      caption: 'The proxy and the health checks connect to this address. They never use the IP address of the container.',
+      flow: ['proxy>port', 'health>port', 'port>box'],
+      tones: { port: 'primary' },
+    },
+  ]}
+/>
+
+The deploy log shows the <Term id="published-port" /> of each instance:
+
+```text title="Deploy log" noCopy
+==> Started instance 9c5087 (port 80, published on 127.0.0.1:63120)
+```
+
+## Who publishes a port
+
+| Container | Published port |
+|---|---|
+| Web services, private services, static sites | The container port, on `127.0.0.1:<random port>` |
+| Background workers, cron jobs, job runs | None |
+
+## The container port
+
+At each deploy, Ferry chooses the container port and gives it to the app in `PORT`. The app must listen on that port on `0.0.0.0`. An app that listens on `127.0.0.1` in its container fails the health check. See [The port of your app](/docs/concepts/deploys/ports).
+
+To know why the address is `127.0.0.1`, see [Why 127.0.0.1](/docs/architecture/networking-model/why-localhost).

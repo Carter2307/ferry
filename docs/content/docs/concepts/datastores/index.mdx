@@ -1,0 +1,67 @@
+---
+title: Datastores
+description: A datastore is a Postgres or Redis database that Ferry runs for you, with one container and one volume.
+icon: Database
+---
+
+<Diagram
+  caption="A datastore and its two addresses"
+  nodes={[
+    { id: 'api', at: [0, 0], icon: 'box', label: 'Service', note: 'api' },
+    { id: 'you', at: [0, 1], icon: 'terminal', label: 'You', note: 'on the server' },
+    { id: 'ds', at: [1.5, 0.5], icon: 'database', label: 'Container', note: 'app-db:5432' },
+    { id: 'vol', at: [3, 0.5], icon: 'disk', label: 'Volume', note: 'the data' },
+  ]}
+  edges={[
+    { from: 'api', to: 'ds', label: 'internal URL' },
+    { from: 'you', to: 'ds', label: 'external URL' },
+    { from: 'ds', to: 'vol', both: true },
+  ]}
+  steps={[
+    {
+      caption: 'A datastore is one container. Its data is on one volume.',
+      hide: ['api', 'you'],
+      flow: ['ds>vol'],
+      tones: { ds: 'primary' },
+    },
+    {
+      caption: 'Your services reach it by name on the private network. This is the internal URL.',
+      hide: ['you'],
+      flow: ['api>ds', 'ds>vol'],
+      tones: { api: 'primary' },
+    },
+    {
+      caption: 'On the server itself, you reach it at 127.0.0.1. This is the external URL.',
+      hide: ['api'],
+      flow: ['you>ds', 'ds>vol'],
+      tones: { you: 'primary' },
+      notes: { ds: '127.0.0.1:62975' },
+    },
+    {
+      caption: 'If the container stops, Ferry starts it again. The volume keeps the data.',
+      tones: { ds: 'warning', vol: 'success' },
+      notes: { ds: 'starts again', vol: 'data is safe' },
+    },
+  ]}
+/>
+
+A <Term id="datastore" /> is a <Term id="postgres" /> or <Term id="redis" /> server that Ferry runs for you. It is one <Term id="container" /> with its data on one Docker <Term id="volume" />. It has its own memory and CPU limits.
+
+Your services use its <Term id="internal-url" /> on the <Term id="private-network" />. On the server, you use its <Term id="external-url" />.
+
+Compare it with an office. The container is the clerk who answers. The volume is the cabinet that keeps the papers. A new clerk finds the same papers.
+
+## Create a datastore
+
+```bash title="Terminal"
+ferry db create app-db --wait
+```
+
+## In this section
+
+<Cards>
+  <Card title="Create a datastore" href="/docs/concepts/datastores/create" description="With the CLI, the API or a blueprint." />
+  <Card title="Connect a service" href="/docs/concepts/datastores/connect" description="Give the URL to your app with a reference." />
+  <Card title="Back up a datastore" href="/docs/concepts/datastores/backup" description="Ferry makes no backup. Do it yourself." />
+  <Card title="Delete a datastore" href="/docs/concepts/datastores/delete" description="The container and its data go away." />
+</Cards>

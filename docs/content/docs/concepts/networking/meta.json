@@ -1,0 +1,20 @@
+{
+  "title": "Networking, domains & TLS",
+  "icon": "Network",
+  "pages": [
+    "public-urls",
+    "routing",
+    "load-balancing",
+    "error-pages",
+    "private-network",
+    "datastore-ports",
+    "server-domains",
+    "domain-status",
+    "custom-domains",
+    "https",
+    "certificates",
+    "headers",
+    "streaming",
+    "limits"
+  ]
+}

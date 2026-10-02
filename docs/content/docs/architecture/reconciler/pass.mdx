@@ -1,0 +1,27 @@
+---
+title: One pass
+description: One pass lists the containers, then repairs services, routes, datastores and orphans in a fixed order.
+---
+
+<Flow
+  steps={[
+    { icon: 'search', title: 'List', text: 'The reconciler lists each container that has the label of this server prefix.' },
+    { icon: 'boxes', title: 'Services', text: 'It reconciles each service, 8 services at a time at most.' },
+    { icon: 'route', title: 'Deleted services', text: 'It removes the routes of the deleted services.' },
+    { icon: 'database', title: 'Datastores', text: 'It makes sure that each datastore container runs.' },
+    { icon: 'trash', title: 'Orphans', text: 'It removes the orphan containers.' },
+  ]}
+/>
+
+## The list comes first
+
+The reconciler lists the containers before it reads the <Term id="store" />. A resource that you create during the pass is then in the store but not in the list. Thus the reconciler never sees a new resource as an <Term id="orphan" />.
+
+## The steps in detail
+
+| Step | Page |
+|---|---|
+| Services | [A pass for one service](/docs/architecture/reconciler/services) |
+| Routes | [Routes](/docs/architecture/reconciler/routes) |
+| Datastores | [Datastores](/docs/architecture/reconciler/datastores) |
+| Orphans | [Orphans](/docs/architecture/reconciler/orphans) |

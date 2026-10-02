@@ -69,15 +69,7 @@ pub(crate) async fn serve_on(
     let tasks = TaskTracker::new();
     // Cancelled when the drain deadline passes: connections still open are dropped.
     let force = CancellationToken::new();
-    let proxy = Arc::new(Proxy::new(
-        routes,
-        config.tls_hooks.clone(),
-        config.redirect_https,
-        https_port,
-        config.limits.request_body_timeout,
-        tasks.clone(),
-        shutdown.clone(),
-    ));
+    let proxy = Arc::new(Proxy::new(config, routes, https_port, tasks.clone(), shutdown.clone()));
     let limits = Arc::new(config.limits.clone());
     let limiter = ConnLimiter::new(&limits);
     let builder = Arc::new(connection_builder(&limits));

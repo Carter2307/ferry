@@ -9,7 +9,7 @@ icon: "Terminal"
 This page lists every `ferry` command with its arguments and options. It is generated from the CLI's own help (`ferry markdown-help`), so it matches the binary built from this repository. In a terminal, `ferry <command> --help` prints the same text.
 
 <Callout title="Connecting to a server">
-Every command talks to a Ferry server. `ferry login --server URL --token TOKEN` verifies both and saves them in `~/.config/ferry/config.json` (`$XDG_CONFIG_HOME/ferry/config.json` when that variable is set). The `--server` / `--token` flags, then the `FERRY_SERVER` / `FERRY_TOKEN` variables, take precedence over the saved values. See [Set up the CLI](/docs/getting-started/cli).
+Every command talks to a Ferry server. `ferry login --server URL` opens the dashboard, where you approve the terminal; it then gets an API token of its own, saved with the server in `~/.config/ferry/config.json` (`$XDG_CONFIG_HOME/ferry/config.json` when that variable is set). With `--token TOKEN`, that token is verified and saved instead. The `--server` / `--token` flags, then the `FERRY_SERVER` / `FERRY_TOKEN` variables, take precedence over the saved values. See [Set up the CLI](/docs/getting-started/cli).
 </Callout>
 
 ## Command overview
@@ -38,9 +38,14 @@ Every command talks to a Ferry server. `ferry login --server URL --token TOKEN` 
 * [`ferry env set`](#ferry-env-set)
 * [`ferry env unset`](#ferry-env-unset)
 * [`ferry domains`](#ferry-domains)
+* [`ferry domains connect`](#ferry-domains-connect)
+* [`ferry domains verify`](#ferry-domains-verify)
+* [`ferry domains default`](#ferry-domains-default)
+* [`ferry domains disconnect`](#ferry-domains-disconnect)
 * [`ferry domains ls`](#ferry-domains-ls)
 * [`ferry domains add`](#ferry-domains-add)
 * [`ferry domains rm`](#ferry-domains-rm)
+* [`ferry certificates`](#ferry-certificates)
 * [`ferry run`](#ferry-run)
 * [`ferry jobs`](#ferry-jobs)
 * [`ferry jobs ls`](#ferry-jobs-ls)
@@ -77,11 +82,11 @@ Command-line client for Ferry, a self-hosted Render alternative
 ferry [OPTIONS] <COMMAND>
 ```
 
-Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the config saved by 'ferry login'.
+Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the server and token saved by 'ferry login'.
 
 **Subcommands**
 
-* `login` — Verify the server URL and token (from --server/--token) and save them
+* `login` — Connect this terminal to a server and save the connection
 * `info` — Show server information
 * `services` — List services
 * `create` — Create a service
@@ -100,7 +105,8 @@ Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the conf
 * `status` — Show running instances with CPU and memory usage
 * `logs` — Show runtime, deploy or job logs
 * `env` — List or change a service's environment variables
-* `domains` — List or change a service's custom domains
+* `domains` — The server's domains (services are served at \<service>.\<domain>), or a service's custom domains
+* `certificates` — Show the certificate of every hostname the server routes
 * `run` — Run a one-off job (or trigger a cron job now)
 * `jobs` — List a service's job runs, or cancel one
 * `db` — Manage Postgres and Redis datastores
@@ -119,13 +125,21 @@ Connection: --server/--token flags, else FERRY_SERVER/FERRY_TOKEN, else the conf
 
 ## `ferry login`
 
-Verify the server URL and token (from --server/--token) and save them
+Connect this terminal to a server and save the connection
+
+Without a token, opens the dashboard to approve the login there: sign in, check that the page shows the code the terminal prints, approve. The server then gives this terminal an API token of its own, which you can revoke in the dashboard. With --token (or FERRY_TOKEN), that token is verified and saved instead: for servers without a browser at hand, scripts and CI.
 
 **Usage**
 
 ```text
-ferry login
+ferry login [OPTIONS]
 ```
+
+**Options**
+
+| Option | Description |
+|---|---|
+| `--no-browser` | Only print the page to open, without opening a browser |
 
 ## `ferry info`
 
@@ -619,30 +633,104 @@ ferry env unset [OPTIONS] <NAME> <KEY>...
 
 ## `ferry domains`
 
-List or change a service's custom domains
+The server's domains (services are served at \<service>.\<domain>), or a service's custom domains
 
 **Usage**
 
 ```text
-ferry domains <NAME>
+ferry domains [NAME]
 ferry domains <COMMAND>
 ```
 
 **Subcommands**
 
-* `ls` — List custom domains
-* `add` — Add a custom domain
-* `rm` — Remove a custom domain
+* `connect` — Connect a domain to the server: services are then served at \<service>.DOMAIN. Prints the DNS record to create
+* `verify` — Check now whether a domain's DNS points at this server (exit 1 while it doesn't)
+* `default` — Make a domain the default one: the domain of the URL services are shown with
+* `disconnect` — Disconnect a domain from the server: services stop being served under it
+* `ls` — List a service's custom domains
+* `add` — Add a custom domain to a service
+* `rm` — Remove a custom domain from a service
 
 **Arguments**
 
 | Argument | Description |
 |---|---|
-| `<NAME>` | Service name or id (lists its custom domains) |
+| `<NAME>` | Service name or id: lists its custom domains. Without it: the server's domains |
+
+## `ferry domains connect`
+
+Connect a domain to the server: services are then served at \<service>.DOMAIN. Prints the DNS record to create
+
+**Usage**
+
+```text
+ferry domains connect <DOMAIN>
+```
+
+**Arguments**
+
+| Argument | Description |
+|---|---|
+| `<DOMAIN>` | Domain name, e.g. example.com |
+
+## `ferry domains verify`
+
+Check now whether a domain's DNS points at this server (exit 1 while it doesn't)
+
+**Usage**
+
+```text
+ferry domains verify <DOMAIN>
+```
+
+**Arguments**
+
+| Argument | Description |
+|---|---|
+| `<DOMAIN>` | Domain name, e.g. example.com |
+
+## `ferry domains default`
+
+Make a domain the default one: the domain of the URL services are shown with
+
+**Usage**
+
+```text
+ferry domains default <DOMAIN>
+```
+
+**Arguments**
+
+| Argument | Description |
+|---|---|
+| `<DOMAIN>` | Domain name, e.g. example.com |
+
+## `ferry domains disconnect`
+
+Disconnect a domain from the server: services stop being served under it
+
+**Usage**
+
+```text
+ferry domains disconnect [OPTIONS] <DOMAIN>
+```
+
+**Arguments**
+
+| Argument | Description |
+|---|---|
+| `<DOMAIN>` | Domain name, e.g. example.com |
+
+**Options**
+
+| Option | Description |
+|---|---|
+| `-y`, `--yes` | Don't ask for confirmation |
 
 ## `ferry domains ls`
 
-List custom domains
+List a service's custom domains
 
 **Usage**
 
@@ -660,7 +748,7 @@ ferry domains ls <NAME>
 
 ## `ferry domains add`
 
-Add a custom domain
+Add a custom domain to a service
 
 **Usage**
 
@@ -677,7 +765,7 @@ ferry domains add <NAME> <DOMAIN>
 
 ## `ferry domains rm`
 
-Remove a custom domain
+Remove a custom domain from a service
 
 **Usage**
 
@@ -693,6 +781,18 @@ ferry domains rm <NAME> <DOMAIN>
 |---|---|
 | `<NAME>` | Service name or id |
 | `<DOMAIN>` | Domain name, e.g. app.example.com |
+
+## `ferry certificates`
+
+Show the certificate of every hostname the server routes
+
+**Usage**
+
+```text
+ferry certificates
+```
+
+**Command Alias:** `certs`
 
 ## `ferry run`
 

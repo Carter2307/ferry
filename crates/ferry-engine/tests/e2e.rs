@@ -933,6 +933,64 @@ async fn live_deploys_keep_their_launch_spec() {
 
 /// Image deploys are pinned to what was pulled: a moved tag changes neither
 /// the live deploy's crash replacements nor a rollback.
+/// An instance whose command ends without an error (a library started as a
+/// web service, a start command that only builds) says what ran, why ending
+/// is a failure, and what to change.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_that_ends_is_explained() {
+    require_e2e!();
+    let h = harness(|_| {}).await;
+    // The image's own command: busybox runs `sh`, which ends at once.
+    let svc = h.create_service("oneshot", ServiceType::WebService, |s| s.image = Some("busybox:stable".into())).await;
+    let d = h.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Create)).await.unwrap();
+    let d = h.expect(&d, DeployStatus::DeployFailed).await;
+    let port = d.port.expect("a web service has a port");
+    let error = d.error.clone().unwrap_or_default();
+    let explained = format!(
+        " exited with code 0: its command `sh` ended without an error, but a web service must keep running and \
+         listen on port {port}"
+    );
+    assert!(error.starts_with("instance ") && error.ends_with(&explained), "{error}");
+    let log = h.deploy_log(&d.id).await;
+    let failed = log.find("==> Deploy failed: instance ").unwrap_or_else(|| panic!("no failure line:\n{log}"));
+    let hint = log
+        .find("==> Hint: this is the image's own command (its CMD or ENTRYPOINT): it must start a server")
+        .unwrap_or_else(|| panic!("no hint:\n{log}"));
+    assert!(failed < hint, "the hint comes after the failure:\n{log}");
+    assert!(h.containers(&format!("ferry.deploy={}", d.id)).is_empty(), "the instance is removed");
+
+    // The service's own start command: it is named, with what it printed.
+    let mut own = h.store.require_service(&svc.id).await.unwrap();
+    own.start_command = Some("echo built-and-done".into());
+    h.store.update_service(&own).await.unwrap();
+    let d = h.engine.deploy(&svc.id, DeployRequest::new(DeployTrigger::Manual)).await.unwrap();
+    let d = h.expect(&d, DeployStatus::DeployFailed).await;
+    let error = d.error.clone().unwrap_or_default();
+    assert!(error.contains("exited with code 0: its command `echo built-and-done` ended without an error"), "{error}");
+    let log = h.deploy_log(&d.id).await;
+    assert!(log.lines().any(|l| l == "built-and-done"), "the instance's output is in the log:\n{log}");
+    assert!(log.contains("==> Hint: this is the service's start command: it must start a server"), "{log}");
+
+    // A worker that ends: what runs and ends is a job.
+    let worker = h
+        .create_service("once", ServiceType::BackgroundWorker, |s| {
+            s.image = Some("busybox:stable".into());
+            s.start_command = Some("true".into());
+        })
+        .await;
+    let d = h.engine.deploy(&worker.id, DeployRequest::new(DeployTrigger::Create)).await.unwrap();
+    let d = h.expect(&d, DeployStatus::DeployFailed).await;
+    let error = d.error.clone().unwrap_or_default();
+    assert!(
+        error.ends_with(
+            "exited with code 0: its command `true` ended without an error, but a background worker must keep running"
+        ),
+        "{error}"
+    );
+    let log = h.deploy_log(&d.id).await;
+    assert!(log.contains("belongs in a cron job or a one-off job (`ferry run`)."), "{log}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn image_deploys_are_pinned() {
     require_e2e!();
@@ -1293,6 +1351,26 @@ async fn boot_removes_the_instance_of_an_interrupted_recreate_at_once() {
 }
 
 /// The lines of a job's log so far (or all of them once it is finished).
+/// Seconds since the epoch, a little early: Docker's event timestamps are its
+/// own clock's.
+fn epoch_secs() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    now.as_secs().saturating_sub(1)
+}
+
+/// Docker's events for the container of a job since `since` (seconds since
+/// the epoch), one per line: what a failed assertion shows when the engine
+/// and Docker tell how a job ended differently (`oom`: the kernel's OOM
+/// killer; `kill`: someone asked Docker to).
+fn job_events(job_id: &str, since: u64) -> String {
+    let (since, until) = (since.to_string(), (epoch_secs() + 2).to_string());
+    let label = format!("label=ferry.job={job_id}");
+    let format = "{{.TimeNano}} {{.Action}} {{.Actor.Attributes}}";
+    let args = ["events", "--since", &since, "--until", &until, "--filter", "type=container"];
+    let (ok, out) = docker_cli(&[&args[..], &["--filter", &label, "--format", format]].concat());
+    if ok && !out.is_empty() { out } else { "(none in Docker's event log)".to_string() }
+}
+
 async fn job_lines(h: &Harness, id: &str, follow: bool) -> Vec<String> {
     let stream = h.engine.job_logs(id, follow).await.unwrap().collect::<Vec<LogLine>>();
     let lines = tokio::time::timeout(Duration::from_secs(60), stream).await.expect("the job log ends");
@@ -1632,13 +1710,22 @@ async fn out_of_memory_kills_are_reported() {
         })
         .await;
     h.deploy_live(&calm, DeployRequest::new(DeployTrigger::Create)).await;
-    let job = h.engine.run_job(&calm.id, Some("tail /dev/zero".into()), JobTrigger::Manual).await.unwrap();
+    // The shell outlives the kill of `tail` for a moment, then ends with its
+    // exit code. Docker learns of an OOM kill from the container's cgroup,
+    // and on Linux CI it did not always record the kill of a container whose
+    // only process was killed and which was gone at once: the engine can
+    // then only say "exited with code 137" (DESIGN.md §14).
+    let since = epoch_secs();
+    let hungry = "tail /dev/zero; code=$?; sleep 1; exit $code";
+    let job = h.engine.run_job(&calm.id, Some(hungry.into()), JobTrigger::Manual).await.unwrap();
     let job = h.wait_job(&job.id).await;
     assert_eq!(job.status, JobStatus::Failed);
     assert_eq!(job.exit_code, Some(137));
     assert_eq!(
         job.error.as_deref(),
-        Some("the job ran out of memory (limit 32 MiB) — raise the service's memory limit")
+        Some("the job ran out of memory (limit 32 MiB) — raise the service's memory limit"),
+        "what Docker recorded for the job's container:\n{}",
+        job_events(&job.id, since)
     );
     let lines = job_lines(&h, &job.id, true).await;
     assert!(lines.last().is_some_and(|l| l.contains("ran out of memory")), "{lines:?}");

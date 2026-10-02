@@ -1,0 +1,18 @@
+{
+  "title": "Deploys",
+  "icon": "CloudUpload",
+  "pages": [
+    "steps",
+    "triggers",
+    "deploy-hooks",
+    "statuses",
+    "health-checks",
+    "ports",
+    "snapshot",
+    "restarts",
+    "rollbacks",
+    "cancel",
+    "interrupted",
+    "history"
+  ]
+}

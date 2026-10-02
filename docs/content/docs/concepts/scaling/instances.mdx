@@ -1,0 +1,51 @@
+---
+title: Instances and the proxy
+description: The proxy gives each new request to the next instance in turn. All instances share the work.
+---
+
+<Diagram
+  nodes={[
+    { id: 'browser', at: [0, 1], icon: 'browser', label: 'Browser' },
+    { id: 'proxy', at: [1.25, 1], icon: 'route', label: 'Proxy' },
+    { id: 'i1', at: [2.5, 0], icon: 'box', label: 'Instance 1' },
+    { id: 'i2', at: [2.5, 1], icon: 'box', label: 'Instance 2' },
+    { id: 'i3', at: [2.5, 2], icon: 'box', label: 'Instance 3' },
+  ]}
+  edges={[
+    { from: 'browser', to: 'proxy' },
+    { from: 'proxy', to: 'i1' },
+    { from: 'proxy', to: 'i2' },
+    { from: 'proxy', to: 'i3' },
+  ]}
+  steps={[
+    { caption: 'The proxy sends the first request to instance 1.', flow: ['browser>proxy', 'proxy>i1'], tones: { i1: 'primary' }, notes: { i1: 'request 1' } },
+    { caption: 'The next request goes to instance 2.', flow: ['browser>proxy', 'proxy>i2'], tones: { i2: 'primary' }, notes: { i2: 'request 2' } },
+    { caption: 'The next request goes to instance 3.', flow: ['browser>proxy', 'proxy>i3'], tones: { i3: 'primary' }, notes: { i3: 'request 3' } },
+    { caption: 'Then the proxy starts again with instance 1.', flow: ['browser>proxy', 'proxy>i1'], tones: { i1: 'primary' }, notes: { i1: 'request 4' } },
+  ]}
+/>
+
+An <Term id="instance" /> is one container of a service. All the instances of a service do the same work.
+
+The <Term id="proxy" /> shares the requests of a <Term id="web-service" /> or a <Term id="static-site" />. The rule is <Term id="round-robin" />: each instance gets a request in turn.
+
+On the <Term id="private-network" />, the name of the service gives the addresses of all its instances. See [Networking](/docs/concepts/networking).
+
+## The limits are for each instance
+
+Each instance has the memory and CPU limits of the service: 512 MiB and 1 CPU, unless you set other values. Thus 3 instances can use 3 times the limit.
+
+`ferry status` shows the use of each instance. See [Resource limits](/docs/concepts/resource-limits).
+
+<Callout type="info" title="Manual scaling only">
+Ferry has no <Term id="autoscaling" />. You choose the number of instances.
+</Callout>
+
+<Accordions>
+  <Accordion title="The state degraded">
+    The state of a service is <Term id="degraded" /> while it has fewer instances than you asked for. An example is the moment after a crash. The state is `live` again when the [reconciler](/docs/concepts/self-healing) replaced them.
+  </Accordion>
+  <Accordion title="The logs of each instance">
+    See [Logs & events](/docs/concepts/logs).
+  </Accordion>
+</Accordions>

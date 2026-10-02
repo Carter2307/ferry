@@ -1,0 +1,61 @@
+---
+title: The dashboard on a hostname
+description: The proxy can serve the dashboard and the API on a hostname. Do this only with HTTPS.
+---
+
+<Diagram
+  nodes={[
+    { id: 'net', at: [0, 0], icon: 'globe', label: 'Internet' },
+    { id: 'proxy', at: [1.5, 0], icon: 'route', label: 'Proxy', note: 'dashboard host' },
+    { id: 'api', at: [3, 0], icon: 'shield-check', label: 'API + dashboard' },
+  ]}
+  edges={[
+    { from: 'net', to: 'proxy' },
+    { from: 'proxy', to: 'api' },
+  ]}
+  steps={[
+    {
+      caption: 'With a dashboard host, the proxy serves the dashboard and the full API on one hostname.',
+      flow: ['net>proxy', 'proxy>api'],
+    },
+    {
+      caption: 'Over plain HTTP, the password, the session cookie and the API tokens cross the network in clear text.',
+      flow: ['net>proxy', 'proxy>api'],
+      tones: { proxy: 'danger' },
+      notes: { proxy: 'HTTP: clear text' },
+    },
+    {
+      caption: 'HTTPS encrypts all of them.',
+      flow: ['net>proxy', 'proxy>api'],
+      tones: { proxy: 'success' },
+      notes: { proxy: 'HTTPS: encrypted' },
+    },
+  ]}
+/>
+
+`--dashboard-host` sets the <Term id="dashboard-host" />. Use it only with <Term id="https" />: `--https-addr` and `--acme-email`. The safer default for a production server is [an SSH tunnel](/docs/architecture/security/ssh-tunnel).
+
+## The default
+
+| <Term id="base-domain">Base domain</Term> | Dashboard on the proxy |
+|---|---|
+| Local: `localhost`, `.local`, `.internal`, `.test`, an IP address | On, at `ferry.<base-domain>` |
+| A public domain | Off. You must enable it explicitly. |
+
+<Callout type="danger" title="A public server with no --base-domain">
+The base domain is then `localhost`, and the dashboard is at `ferry.localhost` on the public proxy. Each person can ask for it: they send that `Host` header. Start such a server with `--dashboard-host none`, or with a hostname of your own and HTTPS.
+</Callout>
+
+## Turn it off
+
+```bash title="On the server"
+ferryd --dashboard-host none
+```
+
+[Production setup](/docs/guides/production) shows a hostname of your own with HTTPS.
+
+<Accordions>
+  <Accordion title="If you connect a domain later">
+    You can connect a [domain](/docs/guides/domains) to a server that has a local base domain. This does not move the dashboard: it stays where `--dashboard-host` put it.
+  </Accordion>
+</Accordions>

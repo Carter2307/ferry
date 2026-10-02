@@ -1,0 +1,51 @@
+---
+title: Components
+description: Each page can use these components with no import, from callouts and tabs to file trees.
+---
+
+```mdx title="Example"
+<Callout type="warning" title="Back up the data directory">
+It holds every secret of the server.
+</Callout>
+
+<Tabs items={['CLI', 'API']} groupId="interface" persist>
+  <Tab value="CLI">`ferry scale api 3`</Tab>
+  <Tab value="API">`POST /api/v1/services/api/scale`</Tab>
+</Tabs>
+```
+
+The example gives this result:
+
+<Callout type="warning" title="Back up the data directory">
+It holds every secret of the server.
+</Callout>
+
+<Tabs items={['CLI', 'API']} groupId="interface" persist>
+  <Tab value="CLI">`ferry scale api 3`</Tab>
+  <Tab value="API">`POST /api/v1/services/api/scale`</Tab>
+</Tabs>
+
+## The components
+
+| Component | Props | Use |
+|---|---|---|
+| `<Callout>` | `type`: `info` (default), `tip`, `success`, `warning`, `danger` · `title` | Notes and warnings |
+| `<Cards>` / `<Card>` | `Cards`: `cols` 2 (default) or 3 · `Card`: `title`, `description`, `href`, `icon`, `external` | Link grids |
+| `<Steps>` / `<Step>` | Start each step with a `###` heading | Procedures |
+| `<Tabs>` / `<Tab>` | `Tabs`: `items`, `groupId`, `persist`, `defaultIndex` · `Tab`: `value` | CLI, API and dashboard variants |
+| `<Accordions>` / `<Accordion>` | `Accordion`: `title` | FAQs |
+| `<Files>` / `<Folder>` / `<File>` | `name`, `defaultOpen` | File trees |
+| `<TypeTable>` | `type`: `{ field: { type, description, default, required } }` | Object shapes |
+| `<Badge>` | `variant`: `neutral`, `primary`, `success`, `warning`, `danger` | Inline pills |
+
+[Figures](/docs/contributing/docs-site/figures) lists the components that draw pictures. `docs/AUTHORING.md` tells you when to use each component.
+
+## Icons for cards
+
+The icons of the cards come from `lucide-react`.
+
+```mdx title="A page with a card icon"
+import { Rocket } from 'lucide-react';
+
+<Card title="Deploys" href="/docs/concepts/deploys" icon={<Rocket />} />
+```

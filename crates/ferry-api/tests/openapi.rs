@@ -13,7 +13,7 @@ use axum::body::Body;
 use common::{TOKEN, TestApp};
 use http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 /// Every operation of the router, as documented (method, OpenAPI path).
@@ -22,6 +22,22 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/openapi.json"),
     ("GET", "/api/v1/info"),
     ("GET", "/api/v1/events"),
+    // the account, its sessions and API tokens, `ferry login`
+    ("GET", "/api/v1/auth/status"),
+    ("POST", "/api/v1/auth/setup"),
+    ("POST", "/api/v1/auth/login"),
+    ("POST", "/api/v1/auth/logout"),
+    ("POST", "/api/v1/auth/password"),
+    ("GET", "/api/v1/auth/sessions"),
+    ("DELETE", "/api/v1/auth/sessions/{id}"),
+    ("GET", "/api/v1/auth/tokens"),
+    ("POST", "/api/v1/auth/tokens"),
+    ("DELETE", "/api/v1/auth/tokens/{id}"),
+    ("POST", "/api/v1/auth/cli"),
+    ("GET", "/api/v1/auth/cli/{id}"),
+    ("POST", "/api/v1/auth/cli/{id}/approve"),
+    ("POST", "/api/v1/auth/cli/{id}/deny"),
+    ("POST", "/api/v1/auth/cli/{id}/token"),
     // services
     ("GET", "/api/v1/services"),
     ("POST", "/api/v1/services"),
@@ -53,6 +69,14 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/services/{id}/domains"),
     ("POST", "/api/v1/services/{id}/domains"),
     ("DELETE", "/api/v1/services/{id}/domains/{domain}"),
+    // the domains services are served under, and certificates
+    ("GET", "/api/v1/domains"),
+    ("POST", "/api/v1/domains"),
+    ("GET", "/api/v1/domains/{id}"),
+    ("PATCH", "/api/v1/domains/{id}"),
+    ("DELETE", "/api/v1/domains/{id}"),
+    ("POST", "/api/v1/domains/{id}/verify"),
+    ("GET", "/api/v1/certificates"),
     // jobs
     ("GET", "/api/v1/services/{id}/jobs"),
     ("POST", "/api/v1/services/{id}/jobs"),
@@ -72,6 +96,15 @@ const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/env-groups/{id}"),
     ("PUT", "/api/v1/env-groups/{id}/env"),
     ("PATCH", "/api/v1/env-groups/{id}/env"),
+    // git connections
+    ("GET", "/api/v1/git/connections"),
+    ("POST", "/api/v1/git/connections"),
+    ("GET", "/api/v1/git/connections/{id}"),
+    ("DELETE", "/api/v1/git/connections/{id}"),
+    ("GET", "/api/v1/git/connections/{id}/repositories"),
+    ("POST", "/api/v1/git/authorize"),
+    ("POST", "/api/v1/git/callback"),
+    ("GET", "/api/v1/git/branches"),
     // blueprints
     ("POST", "/api/v1/blueprints/apply"),
     // webhooks
@@ -83,8 +116,19 @@ const ROUTES: &[(&str, &str)] = &[
 /// Documented routes that aren't `.route(...)` lines of `src/lib.rs`.
 const NOT_IN_LIB_RS: &[(&str, &str)] = &[("GET", "/api/openapi.json")];
 
+/// The `/api/v1` operations that need no authentication.
+const PUBLIC: &[&str] = &[
+    "/api/v1/auth/status",
+    "/api/v1/auth/setup",
+    "/api/v1/auth/login",
+    "/api/v1/auth/logout",
+    "/api/v1/auth/cli",
+    "/api/v1/auth/cli/{id}/token",
+];
+
 const TAGS: &[&str] = &[
     "info",
+    "auth",
     "services",
     "deploys",
     "env",
@@ -92,6 +136,7 @@ const TAGS: &[&str] = &[
     "domains",
     "jobs",
     "datastores",
+    "git",
     "blueprints",
     "events",
     "hooks",
@@ -167,13 +212,17 @@ async fn the_document_is_openapi_3_1_with_info_schemas_and_security() {
     for field in ["kind", "id", "service_id", "action"] {
         assert!(change["properties"].get(field).is_some(), "ChangeEvent.{field}: {change}");
     }
-    assert!(serde_json::to_string(&schemas["ChangeKind"]).unwrap().contains("env_group"));
+    let kinds = serde_json::to_string(&schemas["ChangeKind"]).unwrap();
+    assert!(kinds.contains("env_group") && kinds.contains("git_connection"), "{kinds}");
 
-    // One bearer scheme, which Swagger UI's Authorize button fills in.
+    // The bearer scheme, which Swagger UI's Authorize button fills in, and
+    // the dashboard's session cookie.
     let schemes = doc["components"]["securitySchemes"].as_object().unwrap();
-    assert_eq!(schemes.keys().collect::<Vec<_>>(), ["bearer"]);
+    assert_eq!(schemes.keys().collect::<Vec<_>>(), ["bearer", "session"]);
     assert_eq!(schemes["bearer"]["type"], "http");
     assert_eq!(schemes["bearer"]["scheme"], "bearer");
+    assert_eq!(schemes["session"]["type"], "apiKey");
+    assert_eq!((&schemes["session"]["in"], &schemes["session"]["name"]), (&json!("cookie"), &json!("ferry_session")));
 
     let tags: Vec<&str> = doc["tags"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(tags, TAGS);
@@ -242,10 +291,19 @@ async fn every_route_is_documented_and_nothing_else() {
             }
         }
 
-        // The API needs the bearer token (and says 401 without it); the rest needs none.
-        if path.starts_with("/api/v1/") {
-            assert_eq!(op["security"], serde_json::json!([{"bearer": []}]), "{what}");
+        // The API needs an API token or the dashboard's session (and says 401
+        // without); the account itself only takes the session; the rest needs none.
+        if path.starts_with("/api/v1/") && !PUBLIC.contains(&path.as_str()) {
+            let expected = if path.starts_with("/api/v1/auth/") {
+                json!([{"session": []}])
+            } else {
+                json!([{"bearer": []}, {"session": []}])
+            };
+            assert_eq!(op["security"], expected, "{what}");
             assert!(responses.contains_key("401"), "{what}: no 401");
+            if path.starts_with("/api/v1/auth/") {
+                assert!(responses.contains_key("403"), "{what}: no 403 for an API token");
+            }
         } else {
             assert!(op.get("security").is_none(), "{what}: {}", op["security"]);
         }
@@ -404,6 +462,125 @@ async fn resource_limits_are_documented() {
     assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
     let description = op("POST", "/api/v1/datastores")["description"].as_str().unwrap().to_string();
     assert!(description.contains("memory_limit_mb") && description.contains("server default"), "{description}");
+}
+
+#[tokio::test]
+async fn accounts_are_documented_without_their_secrets() {
+    let app = TestApp::new().await;
+    let doc = document(&app).await;
+    let ops = operations(&doc);
+    let op = |m: &str, p: &str| ops[&(m.to_string(), p.to_string())].clone();
+    let schemas = &doc["components"]["schemas"];
+    let body = |op: &Value, status: &str| op["responses"][status]["content"]["application/json"]["schema"].clone();
+    let request = |op: &Value| op["requestBody"]["content"]["application/json"]["schema"]["$ref"].clone();
+
+    for (method, path, takes, status, gives) in [
+        ("POST", "/api/v1/auth/setup", "SetupAccount", "201", "AuthStatus"),
+        ("POST", "/api/v1/auth/login", "Login", "200", "AuthStatus"),
+        ("POST", "/api/v1/auth/tokens", "CreateApiToken", "201", "CreatedApiToken"),
+        ("POST", "/api/v1/auth/cli", "StartCliLogin", "201", "CliLoginStarted"),
+        ("POST", "/api/v1/auth/cli/{id}/token", "CliLoginPoll", "200", "CliLoginResult"),
+    ] {
+        let operation = op(method, path);
+        assert_eq!(request(&operation), format!("#/components/schemas/{takes}"), "{path}");
+        assert_eq!(body(&operation, status)["$ref"], format!("#/components/schemas/{gives}"), "{path}");
+    }
+    assert_eq!(body(&op("GET", "/api/v1/auth/status"), "200")["$ref"], "#/components/schemas/AuthStatus");
+    assert_eq!(schemas["AuthKind"]["enum"], json!(["session", "token"]));
+    assert_eq!(schemas["CliLoginStatus"]["enum"], json!(["pending", "approved", "denied"]));
+    assert_eq!(schemas["SetupAccount"]["required"], json!(["email", "password", "code"]));
+    for status in ["401", "429"] {
+        assert!(op("POST", "/api/v1/auth/login")["responses"].get(status).is_some(), "{status}");
+    }
+    for status in ["403", "409", "429"] {
+        assert!(op("POST", "/api/v1/auth/setup")["responses"].get(status).is_some(), "{status}");
+    }
+
+    // What the API says about an account, a session or a token is never a secret.
+    let fields = |schema: &str| schemas[schema]["properties"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(fields("UserView"), ["created_at", "email", "id"]);
+    for view in ["SessionView", "ApiTokenView", "CliLoginView"] {
+        for secret in ["token", "token_hash", "secret", "password_hash"] {
+            assert!(!fields(view).iter().any(|f| f == secret), "{view}.{secret}");
+        }
+    }
+    // The token itself only where it is handed over.
+    assert!(fields("CreatedApiToken").iter().any(|f| f == "token"));
+    assert!(fields("CliLoginResult").iter().any(|f| f == "token"));
+}
+
+#[tokio::test]
+async fn git_connections_are_documented_without_their_secrets() {
+    let app = TestApp::new().await;
+    let doc = document(&app).await;
+    let ops = operations(&doc);
+    let op = |m: &str, p: &str| ops[&(m.to_string(), p.to_string())].clone();
+    let schemas = &doc["components"]["schemas"];
+    let body = |op: &Value, status: &str| op["responses"][status]["content"]["application/json"]["schema"].clone();
+    let request = |op: &Value| op["requestBody"]["content"]["application/json"]["schema"]["$ref"].clone();
+
+    // Authorizing in the browser: where to send it, then what it came back with.
+    let authorize = op("POST", "/api/v1/git/authorize");
+    let callback = op("POST", "/api/v1/git/callback");
+    assert_eq!((&authorize["operationId"], &callback["operationId"]), (&json!("authorizeGit"), &json!("gitCallback")));
+    assert_eq!(request(&authorize), "#/components/schemas/AuthorizeGit");
+    assert_eq!(request(&callback), "#/components/schemas/GitCallback");
+    for operation in [&authorize, &callback] {
+        assert_eq!(body(operation, "200")["$ref"], "#/components/schemas/GitAuthorization");
+        for status in ["400", "502"] {
+            assert!(operation["responses"].get(status).is_some(), "{status}: {operation}");
+        }
+    }
+    assert_eq!(schemas["AuthorizeGit"]["required"], json!(["redirect_uri"]));
+    assert_eq!(schemas["GitCallback"]["required"], json!(["state"]));
+    assert_eq!(schemas["GitAuthorizationStatus"]["enum"], json!(["redirect", "connected"]));
+    assert_eq!(schemas["GitRedirectMethod"]["enum"], json!(["get", "post"]));
+    assert_eq!(schemas["GitAuth"]["enum"], json!(["github_app", "oauth", "token"]));
+    assert_eq!(schemas["GitConnectionStatus"]["enum"], json!(["connected", "pending"]));
+
+    // Connecting with a token takes one; nothing ever returns a secret.
+    let connect = op("POST", "/api/v1/git/connections");
+    assert_eq!(connect["operationId"], "connectGit");
+    assert_eq!(
+        connect["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ConnectGit"
+    );
+    for status in ["200", "201"] {
+        assert_eq!(body(&connect, status)["$ref"], "#/components/schemas/GitConnectionView", "{status}");
+    }
+    for status in ["400", "502"] {
+        assert!(connect["responses"].get(status).is_some(), "{status}: {connect}");
+    }
+    assert!(schemas["ConnectGit"]["properties"].get("token").is_some());
+    let view = schemas["GitConnectionView"]["properties"].as_object().unwrap();
+    for shown in ["auth", "status", "token_hint", "client_id", "app_slug", "manage_url", "services"] {
+        assert!(view.contains_key(shown), "{shown}: {view:?}");
+    }
+    for secret in ["token", "refresh_token", "client_secret", "private_key", "webhook_secret"] {
+        assert!(!view.contains_key(secret), "{secret}: {view:?}");
+    }
+    assert_eq!(schemas["GitProvider"]["enum"], json!(["github", "gitlab"]));
+
+    let repositories = op("GET", "/api/v1/git/connections/{id}/repositories");
+    assert_eq!(body(&repositories, "200")["$ref"], "#/components/schemas/GitRepositoryList");
+    for status in ["404", "409", "502"] {
+        assert!(repositories["responses"].get(status).is_some(), "{status}: {repositories}");
+    }
+    // Branches are asked by repository URL, whatever reads it.
+    let branches = op("GET", "/api/v1/git/branches");
+    assert_eq!(body(&branches, "200")["$ref"], "#/components/schemas/GitBranches");
+    let repo_url = branches["parameters"].as_array().unwrap().iter().find(|p| p["name"] == "repo_url").unwrap();
+    assert_eq!((&repo_url["in"], &repo_url["required"]), (&json!("query"), &json!(true)));
+    for status in ["400", "502"] {
+        assert!(branches["responses"].get(status).is_some(), "{status}: {branches}");
+    }
+    let delete = op("DELETE", "/api/v1/git/connections/{id}");
+    assert!(delete["parameters"].as_array().unwrap().iter().any(|p| p["name"] == "force" && p["in"] == "query"));
+
+    // Connections belong to the server: services name none.
+    for schema in ["Service", "CreateService", "UpdateService"] {
+        assert!(schemas[schema]["properties"].get("git_connection_id").is_none(), "{schema}.git_connection_id");
+    }
 }
 
 /// `.route("<path>", <method routers>)` calls of `src/lib.rs` (each on one
