@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import { BlueprintFile } from './BlueprintFile'
 import { DashboardMock } from './DashboardMock'
 import { DeployTerminal } from './deploy/DeployTerminal'
-import { HarborScene } from './deploy/HarborScene'
+import { HarborFigure } from './deploy/HarborFigure'
 import { DONE, TYPE_END, typedChars, visibleLines } from './deploy/timeline'
 import { useDeployClock, type ClockStatus } from './deploy/useDeployClock'
 import { Reveal } from './Reveal'
@@ -17,7 +17,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 
 const NOTES: Record<TabId, string> = {
-  cli: 'ferry up packs the folder, builds it and starts the new deploy next to the live one. Once its health check passes, the proxy sends it every new request in one step, and the old deploy stops after answering the requests it already had.',
+  cli: 'ferry up packs the folder, builds it and starts the new deploy next to the live one. Once its health check passes, the proxy sends it every new request in one step, and the old deploy stops after answering the requests it already had. Put the pointer on the harbor to slow the deploy down.',
   dashboard:
     'The dashboard ships inside ferryd: services, deploys, logs, environment variables and datastores, updated live.',
   blueprint:
@@ -66,23 +66,16 @@ function PlaybackButton({
   )
 }
 
-const PHONE = '(max-width: 639px)'
-const subscribePhone = (onChange: () => void) => {
-  const mq = window.matchMedia(PHONE)
-  mq.addEventListener('change', onChange)
-  return () => mq.removeEventListener('change', onChange)
-}
-const isPhone = () => window.matchMedia(PHONE).matches
-
 /**
  * The product at work, right under the headline: the `ferry up` demo, the dashboard and a
  * blueprint, in one window.
  */
 export function Showcase() {
-  const phone = useSyncExternalStore(subscribePhone, isPhone)
   const [tab, setTab] = useState<TabId>('cli')
   const frame = useRef<HTMLDivElement>(null)
-  const clock = useDeployClock(DONE, frame)
+  // The harbor figure slows the clock while the pointer is on it.
+  const rate = useRef(() => 1)
+  const clock = useDeployClock(DONE, frame, rate)
   const { t, status, pause, play } = clock
 
   // The demo only runs while its tab is showing: leaving the tab pauses a run,
@@ -159,7 +152,7 @@ export function Showcase() {
                   className="border-border max-lg:order-2 max-lg:border-t lg:border-r"
                 />
                 <div className="relative min-h-0 overflow-hidden bg-surface-75">
-                  <HarborScene t={t} compact={phone} className="absolute inset-0 h-full w-full" />
+                  <HarborFigure t={t} rate={rate} className="absolute inset-0" />
                 </div>
               </div>
             )}

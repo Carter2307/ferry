@@ -247,23 +247,6 @@
     animation: blink 1.05s steps(1) infinite;
   }
 
-  /* SVG text in the harbor scene (sizes in scene units). */
-  .scene-caption {
-    font-family: var(--font-sans);
-    font-size: 17px;
-    font-weight: 500;
-  }
-  .scene-label {
-    font-family: var(--font-sans);
-    font-size: 17px;
-    font-weight: 500;
-  }
-  .scene-fill {
-    transition:
-      fill 300ms,
-      stroke 300ms;
-  }
-
 }
 
 /*
@@ -329,6 +312,27 @@
     height: 8rem;
     background: linear-gradient(to bottom, transparent, var(--beam-color) 75%, transparent);
   }
+}
+
+/*
+ * The harbor figure of the deploy demo (deploy/HarborFigure.tsx), a Hairline figure. The kernel
+ * that draws it brings its own stylesheet, which is in no layer, so it wins over the layers above:
+ * this rule is outside the layers too.
+ *
+ * The kernel gives a figure the 5:4 box of its drawing: here the figure fills its panel, and the
+ * drawing is centered in it. The colors are Ferry's tokens: the plates take the color of the
+ * panel, the lines the greys of the page, and the one bright stroke is the blue of what is live.
+ */
+.harbor-figure {
+  position: absolute;
+  inset: 0;
+  aspect-ratio: auto;
+  --hairline-plate: var(--surface-75);
+  --hairline-hi: var(--primary);
+  --hairline-edge: var(--foreground-muted);
+  --hairline-mid: var(--border-stronger);
+  --hairline-lo: var(--border-strong);
+  --hairline-stroke: 1;
 }
 
 @keyframes blink {

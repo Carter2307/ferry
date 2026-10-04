@@ -14,11 +14,12 @@ function initialState(end: number): { t: number; status: ClockStatus } {
 }
 
 /**
- * The demo's clock, in ms. It starts the first time `target` (the hero) is on screen,
+ * The demo's clock, in ms. It starts the first time `target` (the demo's window) is on screen,
  * runs once up to `end`, and can be paused or replayed. With reduced motion it
- * stays on the final frame.
+ * stays on the final frame. `rate` gives how fast it runs on each frame: the harbor figure
+ * slows it while the pointer is on it.
  */
-export function useDeployClock(end: number, target: RefObject<Element | null>) {
+export function useDeployClock(end: number, target: RefObject<Element | null>, rate: RefObject<() => number>) {
   const [reduced] = useState(reducedMotion)
   const [start] = useState(() => initialState(end))
   const [t, setT] = useState(start.t)
@@ -44,7 +45,7 @@ export function useDeployClock(end: number, target: RefObject<Element | null>) {
     let last = performance.now()
     const tick = (now: number) => {
       // Clamp the step so a background tab doesn't skip half the deploy.
-      time.current = Math.min(time.current + Math.min(now - last, 64), end)
+      time.current = Math.min(time.current + Math.min(now - last, 64) * rate.current(), end)
       last = now
       setT(time.current)
       if (time.current >= end) setStatus('done')
@@ -52,7 +53,7 @@ export function useDeployClock(end: number, target: RefObject<Element | null>) {
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
-  }, [status, end])
+  }, [status, end, rate])
 
   const pause = useCallback(() => setStatus((s) => (s === 'playing' ? 'paused' : s)), [])
   const play = useCallback(() => setStatus((s) => (s === 'paused' || s === 'waiting' ? 'playing' : s)), [])
