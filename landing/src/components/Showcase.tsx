@@ -144,7 +144,7 @@ export function Showcase() {
           </div>
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="h-[36rem] sm:h-[32rem]">
             {tab === 'cli' && (
-              <div className="grid h-full grid-rows-[13rem_minmax(0,1fr)] lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-1">
+              <div className="grid h-full grid-rows-[15rem_minmax(0,1fr)] sm:grid-rows-[16rem_minmax(0,1fr)] lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-1">
                 <DeployTerminal
                   typed={typedChars(t)}
                   shown={visibleLines(t)}
