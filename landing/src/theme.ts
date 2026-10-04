@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
 
 const KEY = 'ferry-landing-theme'
-type Theme = 'light' | 'dark'
+export type Theme = 'light' | 'dark'
 
-const systemTheme = (): Theme => (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+const systemQuery = window.matchMedia('(prefers-color-scheme: dark)')
+const systemTheme = (): Theme => (systemQuery.matches ? 'dark' : 'light')
 
 function savedTheme(): Theme | null {
   try {
@@ -14,37 +15,42 @@ function savedTheme(): Theme | null {
   }
 }
 
+// One theme for the whole page: the header and the footer both have the switch, and the pixel
+// fields read it for their colors. public/theme-init.js has already put the class on <html>.
+let theme: Theme = savedTheme() ?? systemTheme()
+const listeners = new Set<() => void>()
+
+function setTheme(next: Theme) {
+  theme = next
+  document.documentElement.classList.toggle('dark', next === 'dark')
+  for (const listener of listeners) listener()
+}
+
+systemQuery.addEventListener('change', () => {
+  if (!savedTheme()) setTheme(systemTheme())
+})
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+function toggle() {
+  const next = theme === 'dark' ? 'light' : 'dark'
+  try {
+    localStorage.setItem(KEY, next)
+  } catch {
+    // Not persisted (private mode, blocked storage): still applies for this visit.
+  }
+  setTheme(next)
+}
+
 /**
  * Light or dark, following the system until the visitor picks one (then
  * remembered in this browser). public/theme-init.js applies it before paint.
  */
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => savedTheme() ?? systemTheme())
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-  }, [theme])
-
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const follow = () => {
-      if (!savedTheme()) setTheme(systemTheme())
-    }
-    mq.addEventListener('change', follow)
-    return () => mq.removeEventListener('change', follow)
-  }, [])
-
-  const toggle = useCallback(() => {
-    setTheme((t) => {
-      const next = t === 'dark' ? 'light' : 'dark'
-      try {
-        localStorage.setItem(KEY, next)
-      } catch {
-        // Not persisted (private mode, blocked storage): still applies for this visit.
-      }
-      return next
-    })
-  }, [])
-
-  return { theme, toggle }
+  return { theme: useSyncExternalStore(subscribe, () => theme), toggle }
 }

@@ -6,6 +6,7 @@ import { links } from '@/config'
 
 import { BrandIcon } from './BrandIcon'
 import { CopyButton, Transcript } from './code'
+import { Reveal } from './Reveal'
 import { Heading, Section } from './ui'
 
 // Output as the ferry CLI prints it (crates/ferry-cli, crates/ferry-engine, crates/ferry-build).
@@ -85,20 +86,26 @@ export function Sources() {
   }
 
   return (
-    <Section labelledBy="sources-title" className="grid gap-12 lg:grid-cols-2 lg:gap-16">
+    <Section labelledBy="sources-title" beam="-9s" className="grid gap-12 lg:grid-cols-2 lg:gap-16">
       <div>
         <Heading id="sources-title" quietFirst quiet="Deploy from" strong={source.heading} />
-        <p className="mt-5 max-w-[28rem] text-foreground-lighter">{source.text}</p>
-        <p className="mt-4 max-w-[28rem] text-foreground-lighter">
-          No Dockerfile needed: Ferry detects Node.js, Python, Go, Rust, Ruby and static sites, and uses your Dockerfile
-          when there is one.
-        </p>
-        <a className="text-link mt-6 inline-block text-sm" href={links.builds}>
-          How builds work
-        </a>
+        <Reveal delay={0.12}>
+          <p className="mt-5 max-w-[28rem] text-foreground-lighter">{source.text}</p>
+          <p className="mt-4 max-w-[28rem] text-foreground-lighter">
+            No Dockerfile needed: Ferry detects Node.js, Python, Go, Rust, Ruby and static sites, and uses your
+            Dockerfile when there is one.
+          </p>
+          <a className="text-link mt-6 inline-block text-sm" href={links.builds}>
+            How builds work
+          </a>
+        </Reveal>
       </div>
 
-      <div className="min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface-100">
+      <Reveal
+        delay={0.1}
+        y={18}
+        className="min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface-100"
+      >
         <div role="tablist" aria-label="Where the code comes from" className="grid grid-cols-3 border-b border-border">
           {SOURCES.map((s, i) => {
             const Icon = s.icon
@@ -141,7 +148,7 @@ export function Sources() {
           <Transcript command={source.command} output={source.output} />
           <CopyButton text={source.command} label="Copy the command" className="absolute top-2.5 right-2.5" />
         </div>
-      </div>
+      </Reveal>
     </Section>
   )
 }
