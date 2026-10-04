@@ -55,7 +55,7 @@ ferry deploy api --commit <sha>
 
 ## Auto-deploy
 
-<Term id="auto-deploy">Auto-deploy</Term> is on by default. If you set up the [GitHub webhook](/docs/guides/github-auto-deploy), a push to the branch deploys the service. To turn it off, use `--no-auto-deploy`.
+<Term id="auto-deploy">Auto-deploy</Term> is on by default. If GitHub tells Ferry about the pushes, a push to the branch deploys the service. A [connected GitHub account](/docs/guides/github-auto-deploy) does that. To turn auto-deploy off, use `--no-auto-deploy`.
 
 <Accordions>
   <Accordion title="Repository URLs">

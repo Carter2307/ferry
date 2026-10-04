@@ -62,7 +62,11 @@ _openapi:
           private GitHub App for this server (on the user's account, or in
           `organization`) and then asks the account which repositories the app
           may read. No token is ever typed: the app's key mints short-lived
-          tokens.
+          tokens. When the dashboard is used at an address on the internet (the
+          origin of `redirect_uri`, else the server's dashboard URL), the app
+          also gets a webhook: GitHub delivers the pushes of those repositories
+          to `/hooks/github`, and services with auto-deploy deploy on push with
+          nothing to set up on a repository (`push_events` of the connection).
 
 
           **GitLab**: the account authorizes an OAuth application created for

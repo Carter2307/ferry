@@ -1,6 +1,6 @@
 ---
-title: Set up the webhook
-description: Give ferryd a secret, create the service, add the webhook in GitHub, then push.
+title: Add a webhook by hand
+description: For a repository of an account that is not connected, give ferryd a secret and add the webhook in GitHub.
 ---
 
 <Flow
@@ -11,6 +11,8 @@ description: Give ferryd a secret, create the service, add the webhook in GitHub
     { icon: 'branch', title: 'Push', text: 'You push a commit. Ferry deploys it.', tone: 'success' },
   ]}
 />
+
+A [connected GitHub account](/docs/guides/github-auto-deploy/connect) needs none of these steps. Use this page if you do not connect the account, or if you connected it with an access token.
 
 <Steps>
 <Step>
@@ -89,6 +91,9 @@ The new deploy has the <Term id="trigger" /> `webhook`. It builds the exact <Ter
 </Steps>
 
 <Accordions>
+  <Accordion title="One way for each repository">
+    Do not add this webhook to a repository of an account that deploys on push. GitHub then sends each push two times, and Ferry deploys two times.
+  </Accordion>
   <Accordion title="The commit in your app">
     The app gets the commit and the branch in the variables `FERRY_GIT_COMMIT` and `FERRY_GIT_BRANCH`.
   </Accordion>

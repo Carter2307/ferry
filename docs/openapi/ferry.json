@@ -2828,7 +2828,7 @@
           "git"
         ],
         "summary": "Authorize a git account in the browser",
-        "description": "Starts connecting an account on the provider's own pages and answers with where to send the browser (`status: redirect`): a URL to navigate to (`method: get`) or to submit a form with `fields` to (`method: post`). When the provider is done it sends the browser back to `redirect_uri` (the dashboard's `/git/callback` page) with query parameters to hand to `POST /api/v1/git/callback`.\n\n**GitHub**: the browser posts a manifest to GitHub, which registers a private GitHub App for this server (on the user's account, or in `organization`) and then asks the account which repositories the app may read. No token is ever typed: the app's key mints short-lived tokens.\n\n**GitLab**: the account authorizes an OAuth application created for this server (scopes `read_api` and `read_repository`, redirect URI = `redirect_uri`). Give its `client_id` and `client_secret` the first time (400 `git_application_required` otherwise); they are kept for later authorizations.\n\nWith `connection_id`, resumes a `pending` connection or authorizes a connection again; the answer is `status: connected` when nothing is left to do (a GitHub App that is already installed).",
+        "description": "Starts connecting an account on the provider's own pages and answers with where to send the browser (`status: redirect`): a URL to navigate to (`method: get`) or to submit a form with `fields` to (`method: post`). When the provider is done it sends the browser back to `redirect_uri` (the dashboard's `/git/callback` page) with query parameters to hand to `POST /api/v1/git/callback`.\n\n**GitHub**: the browser posts a manifest to GitHub, which registers a private GitHub App for this server (on the user's account, or in `organization`) and then asks the account which repositories the app may read. No token is ever typed: the app's key mints short-lived tokens. When the dashboard is used at an address on the internet (the origin of `redirect_uri`, else the server's dashboard URL), the app also gets a webhook: GitHub delivers the pushes of those repositories to `/hooks/github`, and services with auto-deploy deploy on push with nothing to set up on a repository (`push_events` of the connection).\n\n**GitLab**: the account authorizes an OAuth application created for this server (scopes `read_api` and `read_repository`, redirect URI = `redirect_uri`). Give its `client_id` and `client_secret` the first time (400 `git_application_required` otherwise); they are kept for later authorizations.\n\nWith `connection_id`, resumes a `pending` connection or authorizes a connection again; the answer is `status: connected` when nothing is left to do (a GitHub App that is already installed).",
         "operationId": "authorizeGit",
         "requestBody": {
           "content": {
@@ -3472,7 +3472,7 @@
           "info"
         ],
         "summary": "Server info",
-        "description": "Version, base domain and default domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
+        "description": "Version, base domain and default domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token. `github_webhook_enabled` says whether pushes can reach the server at all: through the app of a connected GitHub account, or through a webhook added to a repository with the server's own secret (`github_webhook_secret_set`).",
         "operationId": "getServerInfo",
         "responses": {
           "200": {
@@ -6212,13 +6212,13 @@
           "hooks"
         ],
         "summary": "GitHub webhook",
-        "description": "Set it up in GitHub with the server's webhook secret (`github_webhook_secret`). A `push` deploys (trigger `webhook`, commit = `after`) every auto-deploy service whose repository and branch match; `ping` answers `{\"ok\": true}`; other events are ignored. Replayed deliveries (same body or delivery id) are ignored too.",
+        "description": "Where GitHub delivers events. A GitHub account connected in the browser from an address GitHub can reach needs nothing else: its GitHub App has this endpoint as its webhook, with a secret of its own (`push_events` of the git connection). For other repositories, add a webhook to the repository with the server's webhook secret (`github_webhook_secret`). A `push` deploys (trigger `webhook`, commit = `after`) every auto-deploy service whose repository and branch match; `ping` answers `{\"ok\": true}`; other events are ignored. Replayed deliveries (same body or delivery id) are ignored too.",
         "operationId": "githubWebhook",
         "parameters": [
           {
             "name": "X-Hub-Signature-256",
             "in": "header",
-            "description": "`sha256=<hex HMAC-SHA256 of the raw body>` with the webhook secret.",
+            "description": "`sha256=<hex HMAC-SHA256 of the raw body>` with the secret of a connected GitHub App's webhook, or with the server's webhook secret.",
             "required": true,
             "schema": {
               "type": "string"
@@ -6290,7 +6290,7 @@
             }
           },
           "404": {
-            "description": "GitHub webhooks are not enabled (no webhook secret configured).",
+            "description": "GitHub webhooks are not enabled: no connected GitHub App has a webhook, and no webhook secret is configured.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7989,6 +7989,10 @@
           "provider": {
             "$ref": "#/components/schemas/GitProvider"
           },
+          "push_events": {
+            "type": "boolean",
+            "description": "GitHub delivers the pushes of the account's repositories to this\nserver (the app was registered with a webhook, from an address GitHub\ncan reach): services with auto-deploy deploy on push, with nothing\nto set up on a repository. `false` for the other kinds of connection."
+          },
           "repository_selection": {
             "type": [
               "string",
@@ -8602,7 +8606,12 @@
             "description": "Docker server version, if reachable."
           },
           "github_webhook_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "`/hooks/github` takes deliveries: a connected GitHub account's app\nhas a webhook (§18), or the server has a webhook secret of its own."
+          },
+          "github_webhook_secret_set": {
+            "type": "boolean",
+            "description": "The server was started with a webhook secret of its own\n(`--github-webhook-secret`): webhooks added to repositories by hand\nare accepted."
           },
           "proxy_url": {
             "type": "string",

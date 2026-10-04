@@ -24,9 +24,12 @@ _openapi:
       - content: This OpenAPI document
         id: this-openapi-document
     contents:
-      - content: Version, base domain and default domain, proxy and dashboard URLs, TLS
+      - content: "Version, base domain and default domain, proxy and dashboard URLs, TLS
           and GitHub webhook status, Docker version. Clients use it to validate
-          a token.
+          a token. `github_webhook_enabled` says whether pushes can reach the
+          server at all: through the app of a connected GitHub account, or
+          through a webhook added to a repository with the server's own secret
+          (`github_webhook_secret_set`)."
         heading: server-info
       - content: Answers `ok` while the server runs. No token needed.
         heading: liveness-probe

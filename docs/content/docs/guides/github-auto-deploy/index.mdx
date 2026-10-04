@@ -50,13 +50,14 @@ When you <Term id="git-push">push</Term> to a <Term id="branch" />, GitHub sends
 ferry create api --repo https://github.com/you/api --branch main --follow
 ```
 
-<Term id="auto-deploy">Auto-deploy</Term> is on by default. The server also needs a <Term id="webhook-secret" />, and GitHub needs the address of the webhook.
+<Term id="auto-deploy">Auto-deploy</Term> is on by default. GitHub must also tell Ferry about each push. If you connect your GitHub account from the public address of the server, GitHub does that. You add nothing to the repository.
 
 ## In this section
 
 <Cards>
   <Card title="Before you start" href="/docs/guides/github-auto-deploy/requirements" description="What GitHub must reach on your server." />
-  <Card title="Set up the webhook" href="/docs/guides/github-auto-deploy/setup" description="The secret, the service, the webhook, the first push." />
+  <Card title="Connect the account" href="/docs/guides/github-auto-deploy/connect" description="A connected GitHub account deploys on each push." />
+  <Card title="Add a webhook by hand" href="/docs/guides/github-auto-deploy/setup" description="For a repository of an account that is not connected." />
   <Card title="Which services a push deploys" href="/docs/guides/github-auto-deploy/matching" description="The four conditions, and what Ferry ignores." />
   <Card title="Deploy hooks" href="/docs/guides/github-auto-deploy/deploy-hooks" description="Deploy from your CI after the tests pass." />
 </Cards>
