@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowLeft, Box, ChevronDown, GitBranch, Rocket, Upload }
 import { toast } from 'sonner'
 
 import { BranchSelect } from '@/components/git/BranchSelect'
+import { PushDeliveryHint } from '@/components/git/PushDeliveryHint'
 import { CodeBlock } from '@/components/patterns/Copy'
 import { Callout } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
@@ -18,10 +19,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { errorMessage } from '@/lib/api/client'
-import { useCreateService, useDatastores, useServerInfo, useServices } from '@/lib/api/queries'
+import { useCreateService, useDatastores, useGitConnections, useServerInfo, useServices } from '@/lib/api/queries'
 import { RUNTIMES, type GitRepository, type Runtime, type ServiceType } from '@/lib/api/types'
 import { RUNTIME_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
-import { serviceNameFromRepository } from '@/lib/git'
+import { pushDelivery, serviceNameFromRepository } from '@/lib/git'
 import { connectedFromState } from '@/lib/gitAuthorize'
 import { LIMIT_DEFAULT, limitValue, memoryHostWarning, type LimitField } from '@/lib/resources'
 import { cn } from '@/lib/utils'
@@ -131,6 +132,7 @@ export function NewServicePage() {
   const location = useLocation()
   const create = useCreateService()
   const info = useServerInfo()
+  const accounts = useGitConnections()
   const services = useServices()
   const datastores = useDatastores()
   const env = useKeyValueRows([])
@@ -445,14 +447,16 @@ export function NewServicePage() {
                   label="Auto-deploy"
                   htmlFor={fieldId('autoDeploy')}
                   description={
-                    info.data && !info.data.github_webhook_enabled ? (
-                      <>
-                        Redeploy on every push to the branch. GitHub webhooks aren't configured on this server yet, so
-                        use the deploy hook or <code className="font-mono">ferry deploy</code> meanwhile.
-                      </>
-                    ) : (
-                      'Redeploy on every push to the branch.'
-                    )
+                    <>
+                      Redeploy on every push to the branch.{' '}
+                      <PushDeliveryHint
+                        delivery={pushDelivery(
+                          accounts.data?.find((c) => c.id === picked?.connectionId),
+                          accounts.data,
+                          info.data,
+                        )}
+                      />
+                    </>
                   }
                 >
                   <Switch

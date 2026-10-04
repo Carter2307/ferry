@@ -13,6 +13,9 @@ import {
   instanceUrlError,
   isBranchName,
   parseHttpUrl,
+  publicOrigin,
+  pushAddress,
+  pushDelivery,
   savedApplication,
   scopeWarning,
   serviceNameFromRepository,
@@ -65,6 +68,92 @@ describe('parseHttpUrl (mirror of ferry_core::git::parse_http_url)', () => {
     ]) {
       expect(parseHttpUrl(bad), bad).toBeNull()
     }
+  })
+})
+
+describe('publicOrigin (mirror of ferry_scm::github_app::public_origin)', () => {
+  it('keeps the origin of addresses on the internet', () => {
+    for (const [address, origin] of [
+      ['https://ferry.example.com/git/callback', 'https://ferry.example.com'],
+      ['https://Ferry.Apps.Example.com:8443/', 'https://ferry.apps.example.com:8443'],
+      ['http://8.8.8.8:7878/git/callback', 'http://8.8.8.8:7878'],
+      ['https://[2606:4700::1111]/x', 'https://[2606:4700::1111]'],
+    ] as const) {
+      expect(publicOrigin(address), address).toBe(origin)
+    }
+  })
+
+  it('refuses what only this machine or its network knows', () => {
+    for (const local of [
+      'http://localhost:7878/git/callback',
+      'http://ferry.localhost:8080',
+      'http://127.0.0.1:7878',
+      'http://[::1]:7878',
+      'http://10.0.0.5',
+      'http://172.20.1.1',
+      'http://192.168.1.20:7878',
+      'http://169.254.10.1',
+      'http://100.101.102.103',
+      'http://0.0.0.0:7878',
+      'http://203.0.113.7:7878',
+      'http://[::ffff:10.0.0.5]',
+      'http://[fd12:3456::1]',
+      'http://[fe80::1]',
+      'http://myserver:7878',
+      'http://ferry.local',
+      'http://ferry.internal',
+      'http://nas.lan',
+      'http://ferry.test',
+      'https://ferry.example',
+      'ssh://ferry.example.com',
+      'not a url',
+    ]) {
+      expect(publicOrigin(local), local).toBeNull()
+    }
+  })
+
+  it('finds where GitHub can deliver pushes to this server', () => {
+    const none = { dashboard_url: null }
+    const local = { dashboard_url: 'http://ferry.localhost:8080' }
+    const hosted = { dashboard_url: 'https://ferry.apps.example.com' }
+    expect(pushAddress('http://localhost:7878', none)).toBeNull()
+    expect(pushAddress('http://localhost:7878', local)).toBeNull()
+    expect(pushAddress('http://localhost:7878', undefined)).toBeNull()
+    // The address the dashboard is used at first, else the server's own.
+    expect(pushAddress('https://ferry.example.org', hosted)).toBe('https://ferry.example.org')
+    expect(pushAddress('http://localhost:7878', hosted)).toBe('https://ferry.apps.example.com')
+  })
+})
+
+describe('pushDelivery', () => {
+  const on = { github_webhook_secret_set: true }
+  const off = { github_webhook_secret_set: false }
+  const app = { provider: 'github', push_events: true } as const
+  const plain = { provider: 'github', push_events: false } as const
+  const gitlab = { provider: 'gitlab', push_events: false } as const
+
+  it('goes through the app of the account that clones the repository', () => {
+    expect(pushDelivery(app, [app], off)).toBe('app')
+    expect(pushDelivery(app, [app], on)).toBe('app')
+  })
+
+  it('falls back to a webhook added by hand, for GitHub only', () => {
+    expect(pushDelivery(plain, [plain], on)).toBe('webhook')
+    expect(pushDelivery(null, [], on)).toBe('webhook')
+    expect(pushDelivery(gitlab, [gitlab, app], on)).toBe('none')
+  })
+
+  it('says none when nothing delivers pushes', () => {
+    expect(pushDelivery(plain, [plain, app], off)).toBe('none')
+    expect(pushDelivery(null, [plain], off)).toBe('none')
+    expect(pushDelivery(null, [], off)).toBe('none')
+  })
+
+  it('does not guess for a repository whose account is not known', () => {
+    expect(pushDelivery(null, [plain, app], off)).toBe('unknown')
+    // Nothing loaded yet.
+    expect(pushDelivery(null, undefined, off)).toBe('unknown')
+    expect(pushDelivery(plain, [plain], undefined)).toBe('unknown')
   })
 })
 
