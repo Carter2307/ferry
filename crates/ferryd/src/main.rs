@@ -143,7 +143,9 @@ struct ServerArgs {
     /// <data-dir>/api_token.
     #[arg(long, env = "FERRY_API_TOKEN", hide_env_values = true)]
     api_token: Option<String>,
-    /// Secret for GitHub webhook signatures (enables POST /hooks/github).
+    /// Secret of the GitHub webhooks added to repositories by hand (POST
+    /// /hooks/github). A GitHub account connected in the dashboard from a
+    /// public address needs none: its pushes arrive signed by its own app.
     #[arg(long, env = "FERRY_GITHUB_WEBHOOK_SECRET", hide_env_values = true)]
     github_webhook_secret: Option<String>,
     /// Email for Let's Encrypt; enables automatic HTTPS with --https-addr.

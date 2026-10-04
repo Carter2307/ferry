@@ -7,7 +7,7 @@ use axum::extract::{OriginalUri, State};
 use ferry_core::dto::ServerInfo;
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, ApiResult};
 
 /// `http://<host>[:port]` for a listen address; unspecified IPs become `localhost`.
 pub fn url_for_addr(addr: SocketAddr) -> String {
@@ -28,25 +28,34 @@ pub fn url_for_addr(addr: SocketAddr) -> String {
     tag = "info",
     operation_id = "getServerInfo",
     summary = "Server info",
-    description = "Version, base domain and default domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token.",
+    description = "Version, base domain and default domain, proxy and dashboard URLs, TLS and GitHub webhook status, Docker version. Clients use it to validate a token. `github_webhook_enabled` says whether pushes can reach the server at all: through the app of a connected GitHub account, or through a webhook added to a repository with the server's own secret (`github_webhook_secret_set`).",
     responses((status = 200, description = "Server info.", body = ServerInfo)),
 )]
-pub async fn info(State(st): State<AppState>) -> Json<ServerInfo> {
+pub async fn info(State(st): State<AppState>) -> ApiResult<Json<ServerInfo>> {
     let cfg = &st.config;
-    Json(ServerInfo {
+    let github_webhook_secret_set = cfg.github_webhook_secret.as_deref().is_some_and(|s| !s.is_empty());
+    // The webhook of a connected GitHub account's app delivers pushes too.
+    let app_webhooks = st
+        .store
+        .list_git_connections()
+        .await?
+        .iter()
+        .any(|c| c.app.as_ref().is_some_and(|app| app.webhook_secret.as_deref().is_some_and(|s| !s.is_empty())));
+    Ok(Json(ServerInfo {
         version: ferry_core::VERSION.to_string(),
         base_domain: cfg.base_domain.clone(),
         default_domain: cfg.primary_domain(),
         proxy_url: url_for_addr(cfg.proxy_addr),
         tls_enabled: cfg.tls_enabled(),
         dashboard_url: cfg.dashboard_url(),
-        github_webhook_enabled: cfg.github_webhook_secret.as_deref().is_some_and(|s| !s.is_empty()),
+        github_webhook_enabled: github_webhook_secret_set || app_webhooks,
+        github_webhook_secret_set,
         docker_version: st.docker_version.clone(),
         default_memory_limit_mb: cfg.default_memory_limit_mb,
         default_cpu_limit: cfg.default_cpu_limit,
         docker_cpus: st.docker_cpus,
         docker_memory_bytes: st.docker_memory_bytes,
-    })
+    }))
 }
 
 /// `GET /healthz`

@@ -15,7 +15,7 @@ use ferry_core::dto::{
     ApiErrorBody, AuthorizeGit, ConnectGit, GitAuthorization, GitBranches, GitCallback, GitConnectionView,
     GitRepositoryList,
 };
-use ferry_core::{Error, validate};
+use ferry_core::{Config, Error, validate};
 use ferry_scm::{FlowError, ProviderError, Step};
 use http::StatusCode;
 use serde::Deserialize;
@@ -24,6 +24,7 @@ use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery, DeleteQuery};
 use crate::locks;
+use crate::routes::hooks;
 use crate::views::{git_connection_users, git_connection_view, git_connection_view_of};
 
 /// Error code: the provider refused an authorization — the one being made
@@ -85,6 +86,19 @@ fn flow_error(e: FlowError) -> ApiError {
     }
 }
 
+/// Where GitHub can deliver the pushes of an account's repositories to this
+/// server: the GitHub webhook endpoint on the address the dashboard is used
+/// at (the origin of `redirect_uri`), else on the server's dashboard URL —
+/// whichever is on the internet. `None` for a server GitHub can't reach.
+fn github_webhook_url(config: &Config, redirect_uri: &str) -> Option<String> {
+    let dashboard = config.dashboard_url();
+    [Some(redirect_uri), dashboard.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(ferry_scm::github_app::public_origin)
+        .map(|origin| format!("{origin}{}", hooks::GITHUB_PATH))
+}
+
 /// The API's answer for a step of a browser authorization.
 async fn authorization(st: &AppState, step: Step) -> ApiResult<GitAuthorization> {
     Ok(match step {
@@ -126,7 +140,7 @@ pub async fn list(State(st): State<AppState>) -> ApiResult<Json<Vec<GitConnectio
     tag = "git",
     operation_id = "authorizeGit",
     summary = "Authorize a git account in the browser",
-    description = "Starts connecting an account on the provider's own pages and answers with where to send the browser (`status: redirect`): a URL to navigate to (`method: get`) or to submit a form with `fields` to (`method: post`). When the provider is done it sends the browser back to `redirect_uri` (the dashboard's `/git/callback` page) with query parameters to hand to `POST /api/v1/git/callback`.\n\n**GitHub**: the browser posts a manifest to GitHub, which registers a private GitHub App for this server (on the user's account, or in `organization`) and then asks the account which repositories the app may read. No token is ever typed: the app's key mints short-lived tokens.\n\n**GitLab**: the account authorizes an OAuth application created for this server (scopes `read_api` and `read_repository`, redirect URI = `redirect_uri`). Give its `client_id` and `client_secret` the first time (400 `git_application_required` otherwise); they are kept for later authorizations.\n\nWith `connection_id`, resumes a `pending` connection or authorizes a connection again; the answer is `status: connected` when nothing is left to do (a GitHub App that is already installed).",
+    description = "Starts connecting an account on the provider's own pages and answers with where to send the browser (`status: redirect`): a URL to navigate to (`method: get`) or to submit a form with `fields` to (`method: post`). When the provider is done it sends the browser back to `redirect_uri` (the dashboard's `/git/callback` page) with query parameters to hand to `POST /api/v1/git/callback`.\n\n**GitHub**: the browser posts a manifest to GitHub, which registers a private GitHub App for this server (on the user's account, or in `organization`) and then asks the account which repositories the app may read. No token is ever typed: the app's key mints short-lived tokens. When the dashboard is used at an address on the internet (the origin of `redirect_uri`, else the server's dashboard URL), the app also gets a webhook: GitHub delivers the pushes of those repositories to `/hooks/github`, and services with auto-deploy deploy on push with nothing to set up on a repository (`push_events` of the connection).\n\n**GitLab**: the account authorizes an OAuth application created for this server (scopes `read_api` and `read_repository`, redirect URI = `redirect_uri`). Give its `client_id` and `client_secret` the first time (400 `git_application_required` otherwise); they are kept for later authorizations.\n\nWith `connection_id`, resumes a `pending` connection or authorizes a connection again; the answer is `status: connected` when nothing is left to do (a GitHub App that is already installed).",
     request_body = AuthorizeGit,
     responses(
         (status = 200, description = "Where to send the browser, or the connection when it is already complete.", body = GitAuthorization),
@@ -141,7 +155,8 @@ pub async fn authorize(
 ) -> ApiResult<Json<GitAuthorization>> {
     // The provider's answer and the row: finish even if the client goes away.
     locks::detached(async move {
-        let step = ferry_scm::start(&st.store, &req).await.map_err(flow_error)?;
+        let webhook_url = github_webhook_url(&st.config, &req.redirect_uri);
+        let step = ferry_scm::start(&st.store, &req, webhook_url.as_deref()).await.map_err(flow_error)?;
         Ok(Json(authorization(&st, step).await?))
     })
     .await
@@ -394,6 +409,35 @@ mod tests {
         // Ferry's own failures are 500s.
         let broken = stored_error(ProviderError::Internal("the GitHub App's private key can't be read".into()));
         assert_eq!(broken.status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn github_delivers_pushes_to_an_address_on_the_internet() {
+        let hook = |config: &Config, redirect: &str| github_webhook_url(config, redirect);
+        // A server on a laptop: nothing GitHub could reach.
+        let local = Config::default();
+        assert_eq!(hook(&local, "http://localhost:7878/git/callback"), None);
+        assert_eq!(hook(&local, "http://192.168.1.20:7878/git/callback"), None);
+        // The address the dashboard is used at.
+        assert_eq!(
+            hook(&local, "https://ferry.example.com/git/callback").as_deref(),
+            Some("https://ferry.example.com/hooks/github")
+        );
+        // The dashboard reached through a tunnel: the server's own address.
+        let public = Config {
+            dashboard_host: Some("ferry.apps.example.com".into()),
+            acme_email: Some("ops@example.com".into()),
+            proxy_https_addr: Some("0.0.0.0:443".parse().unwrap()),
+            ..Config::default()
+        };
+        assert_eq!(
+            hook(&public, "http://localhost:7878/git/callback").as_deref(),
+            Some("https://ferry.apps.example.com/hooks/github")
+        );
+        assert_eq!(
+            hook(&public, "https://ferry.example.org:8443/git/callback").as_deref(),
+            Some("https://ferry.example.org:8443/hooks/github")
+        );
     }
 
     #[test]

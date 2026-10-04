@@ -195,7 +195,7 @@ async fn server_info() {
     assert_eq!(v["proxy_url"], "http://localhost:8080");
     assert_eq!(v["tls_enabled"], false);
     assert_eq!(v["dashboard_url"], "http://ferry.localhost:8080");
-    assert_eq!(v["github_webhook_enabled"], true);
+    assert_eq!((&v["github_webhook_enabled"], &v["github_webhook_secret_set"]), (&json!(true), &json!(true)));
     assert_eq!(v["docker_version"], "27.0.0");
     // resource limits: the server defaults and the Docker host's capacity
     assert_eq!(v["default_memory_limit_mb"], 512);
@@ -204,7 +204,8 @@ async fn server_info() {
     assert_eq!(v["docker_memory_bytes"], 8u64 << 30);
 
     let app = TestApp::new().await;
-    assert_eq!(app.get("/api/v1/info").await.json()["github_webhook_enabled"], false);
+    let v = app.get("/api/v1/info").await.json();
+    assert_eq!((&v["github_webhook_enabled"], &v["github_webhook_secret_set"]), (&json!(false), &json!(false)));
 
     // 0 = unlimited
     let app = TestApp::with_config(|c| {

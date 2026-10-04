@@ -29,7 +29,14 @@ pub struct ServerInfo {
     pub proxy_url: String,
     pub tls_enabled: bool,
     pub dashboard_url: Option<String>,
+    /// `/hooks/github` takes deliveries: a connected GitHub account's app
+    /// has a webhook (§18), or the server has a webhook secret of its own.
     pub github_webhook_enabled: bool,
+    /// The server was started with a webhook secret of its own
+    /// (`--github-webhook-secret`): webhooks added to repositories by hand
+    /// are accepted.
+    #[serde(default)]
+    pub github_webhook_secret_set: bool,
     /// Docker server version, if reachable.
     pub docker_version: Option<String>,
     /// Memory limit (MiB) of containers that set none. 0 = unlimited.
@@ -501,6 +508,12 @@ pub struct GitConnectionView {
     pub manage_url: Option<String>,
     /// GitHub App: `all` or `selected` repositories of the account.
     pub repository_selection: Option<String>,
+    /// GitHub delivers the pushes of the account's repositories to this
+    /// server (the app was registered with a webhook, from an address GitHub
+    /// can reach): services with auto-deploy deploy on push, with nothing
+    /// to set up on a repository. `false` for the other kinds of connection.
+    #[serde(default)]
+    pub push_events: bool,
     /// Names of the services whose repository is cloned with this
     /// connection.
     pub services: Vec<String>,

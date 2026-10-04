@@ -20,7 +20,7 @@ code).
 | Render feature | Ferry |
 |---|---|
 | Web services, private services, background workers, cron jobs, static sites | ✅ `ServiceType` |
-| Deploy from Git (auto-deploy on push) | ✅ GitHub webhook `/hooks/github`, any git URL incl. local paths |
+| Deploy from Git (auto-deploy on push) | ✅ a connected GitHub account deploys on push with nothing to set up on a repository: its GitHub App delivers the pushes to `/hooks/github` (§18); a webhook added to a repository by hand works too; any git URL incl. local paths |
 | Connect GitHub / GitLab, pick a repository and a branch, deploy private repositories | ✅ git connections: the account authorizes the server on the provider's own pages — a GitHub App, a GitLab OAuth application — or with an access token (§18) |
 | Deploy prebuilt Docker image | ✅ `image` / runtime `image` |
 | Native runtimes (Node, Python, Go, Rust, Ruby, static) + Dockerfile | ✅ builder detection + generated Dockerfiles |
@@ -415,7 +415,7 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /api/v1/auth/cli/{id}` | `CliLoginView` `{id, name, code, status, created_at, expires_at}`: what the approval page shows |
 | `POST /api/v1/auth/cli/{id}/approve` · `/deny` | `CliLoginView`; approving creates the API token the terminal collects |
 | `POST /api/v1/auth/cli/{id}/token` | `CliLoginPoll` `{secret}` → `CliLoginResult` `{status, token?}` (no auth): `pending`, `denied`, or `approved` with the token, once. 401 for another secret, 404 once expired or collected |
-| `GET /api/v1/info` | `ServerInfo` (including `base_domain`, the `default_domain` service URLs are shown with (§21), the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, and the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown) |
+| `GET /api/v1/info` | `ServerInfo` (including `base_domain`, the `default_domain` service URLs are shown with (§21), the default limits `default_memory_limit_mb` / `default_cpu_limit`, 0 = unlimited, the Docker host's `docker_cpus` / `docker_memory_bytes`, `null` when unknown, `github_webhook_enabled` — `/hooks/github` takes deliveries: a connected GitHub account's app has a webhook (§18), or the server has a webhook secret — and `github_webhook_secret_set`, the second case alone) |
 | `GET /api/v1/events` | SSE change feed: `event: ready` (`data: {}`) once the feed watches the store (refetch after it), then `event: change` with `ChangeEvent` `{kind, id, service_id, action}` — `kind` ∈ `service`/`deploy`/`datastore`/`env_group`/`job`/`git_connection`/`domain`, `action` ∈ `created`/`updated`/`deleted`, `service_id` set for services (own id), deploys and jobs; a lagging subscriber gets `{kind:"all", id:"*", service_id:null, action:"resync"}` (refetch everything). The store is polled every second while someone listens and nudged after every API/webhook write |
 | `GET /api/v1/services` | `[ServiceView]` |
 | `POST /api/v1/services` | `CreateService` → 201 `ServiceView` (queues a `create` deploy when it has a repo/image, unless `deploy:false`) |
@@ -471,7 +471,7 @@ routes and checks that the document, the router and `lib.rs` agree.
 | `GET /api/v1/git/branches?repo_url=` | `GitBranches` `{default_branch, branches, connection_id}`: the branches of any repository a service can deploy from, read from its remote (`git ls-remote`, 20 s) the way a deploy would clone it; the default branch first, then by name. 400 for a malformed URL, 502 `git_remote_unreachable` |
 | `POST /api/v1/blueprints/apply` | `ApplyBlueprint` JSON, or raw YAML (`Content-Type: application/yaml` / `text/yaml`, `?dry_run=`) → `BlueprintResult` |
 | `GET\|POST /hooks/deploy/{service_id}?key=` | 202 minimal deploy summary (trigger `deploy_hook`, credentials redacted); service **id** only; unknown id or wrong key → the same 401 (no enumeration) |
-| `POST /hooks/github` | GitHub webhook. 404 unless `github_webhook_secret` set; verify `X-Hub-Signature-256` (HMAC-SHA256, constant-time) → 401; `ping` → 200; `push` → deploy (trigger `webhook`, commit = `after`) every service with `auto_deploy`, matching `git::normalize_repo_url` of `repository.clone_url`/`ssh_url`/`html_url`, and `refs/heads/<branch>`; deleted-branch pushes ignored → 200 `{"deploys": [...]}` |
+| `POST /hooks/github` | GitHub webhook. A delivery is signed with the webhook secret of a GitHub App registered for this server (§18: nothing was set up on the repository) or with the server's `github_webhook_secret` (a webhook added to a repository by hand); 404 while neither exists; verify `X-Hub-Signature-256` against each of them (HMAC-SHA256, constant-time) → 401; `ping` → 200; `push` → deploy (trigger `webhook`, commit = `after`) every service with `auto_deploy`, matching `git::normalize_repo_url` of `repository.clone_url`/`ssh_url`/`html_url`, and `refs/heads/<branch>`; deleted-branch pushes ignored → 200 `{"deploys": [...]}` |
 
 Name rules: `validate::resource_name` for services/datastores (names shared
 between both; id-shaped names are rejected), `validate::env_group_name`,
@@ -1158,9 +1158,10 @@ never used. The type is not serializable: the API returns
 `GitConnectionView` — `status` (`connected` / `pending`), `auth`, the
 account, `client_id`, `app_slug` / `app_url`, `manage_url` (GitHub's page
 of the installation, where its repositories are chosen),
-`repository_selection` (`all` / `selected`), the names of the `services`
-it clones for, and for a personal token `token_hint` (its end), `scopes`
-and `token_expires_at` — and no secret.
+`repository_selection` (`all` / `selected`), `push_events` (GitHub
+delivers the account's pushes to this server: see **Pushes**), the names
+of the `services` it clones for, and for a personal token `token_hint`
+(its end), `scopes` and `token_expires_at` — and no secret.
 
 **Authorizing in the browser** takes two calls, made by the dashboard:
 
@@ -1184,10 +1185,11 @@ again.
   `/organizations/<organization>/settings/apps/new`, since a private app
   only reads the repositories of the account or organization that owns
   it). The manifest describes a private app named `ferry-<host>-<random>`
-  with read access to contents and metadata, no webhook, and
+  with read access to contents and metadata, and
   `redirect_url`, `setup_url` and `callback_urls` all set to
   `redirect_uri` (`setup_on_update`: GitHub also comes back after an
-  installation's repositories were changed). GitHub redirects with
+  installation's repositories were changed). On a server GitHub can reach
+  it also asks for a webhook (see **Pushes** below). GitHub redirects with
   `?code=`; the callback converts it (`POST
   /app-manifests/{code}/conversions`) into the app's id, slug, client id
   and secret and private key, saves them as the pending connection of the
@@ -1218,6 +1220,33 @@ again.
   request brings one; a connection made with a token takes a new token
   instead. Connecting an account that is already connected, by any of the
   three ways, replaces what connected it.
+
+**Pushes.** A GitHub App can have a webhook: GitHub then delivers the
+events of every repository the app is installed on, so nothing has to be
+added to a repository for its services to deploy on push — what Render
+or Vercel do. The manifest asks for one when GitHub can reach the server:
+`hook_attributes: {url: <origin>/hooks/github, active: true}` and
+`default_events: ["push"]` (the app's read access to contents allows that
+event). `<origin>` is the first of these that is on the internet
+(`github_app::public_origin`): the origin of `redirect_uri` — the address
+the dashboard is used at — else the server's dashboard URL
+(`--dashboard-host`). Not on the internet: `localhost`, a host name without
+a dot or under a private suffix (`.local`, `.internal`, `.lan`, `.test`...),
+and loopback, private, link-local, carrier-grade NAT or documentation
+addresses. Without such an address the app is registered without a
+webhook, as before. GitHub makes up the secret that signs the deliveries
+and hands it back with the registration (`webhook_secret`); if it hands
+none back, the server gives the webhook one as the app (`PATCH
+/app/hook/config`), and if that fails too the account is connected without
+push deliveries. An app registered without a webhook never keeps a
+secret, so `GithubApp::webhook_secret` says whether GitHub delivers the
+pushes: `push_events` of `GitConnectionView` (once the app is installed).
+`/hooks/github` (§10) accepts what any of these secrets signs; a removed
+connection's secret stops working with it. Events cannot be added to an
+app through GitHub's API: an account connected before, or from an address
+GitHub can't reach, gets push deliveries by connecting it again from the
+server's public address (a new app replaces the connection's; the old one
+stays on GitHub until it is deleted there).
 
 **Tokens** (`ferry_scm::access`). A personal token is used as it is. An
 OAuth access token is renewed with its refresh token 5 minutes before it
@@ -1310,8 +1339,12 @@ authorized stays on the provider until it is removed there: the GitHub App
 fingerprinted by `id` and `updated_at` only: a renewed token is not a
 change.
 
-Not covered: registering webhooks on the provider (the GitHub App has
-none; auto-deploy still needs the GitHub webhook of §10 or a deploy hook),
+Not covered: pushes from GitLab (no webhook is registered there and
+`/hooks` has no GitLab endpoint: a GitLab repository deploys on push
+through a deploy hook called from its CI), moving an app's webhook when
+the server's public address changes (connect the account again), a
+repository that both an app and a hand-made webhook deliver for (each
+delivery deploys),
 encrypting the stored secrets beyond the data directory's permissions
 (§15), and connecting accounts from the CLI or a blueprint (both deploy
 repositories through the server's connections, like the API).

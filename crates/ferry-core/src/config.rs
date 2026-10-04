@@ -41,7 +41,9 @@ pub struct Config {
     pub name_prefix: String,
     /// Bearer token required by the API.
     pub api_token: String,
-    /// Secret used to verify GitHub `X-Hub-Signature-256` webhook signatures.
+    /// Secret used to verify the `X-Hub-Signature-256` signature of GitHub
+    /// webhooks added to repositories by hand. The webhook of a connected
+    /// account's GitHub App has a secret of its own (DESIGN.md §18).
     pub github_webhook_secret: Option<String>,
     /// Enables automatic HTTPS (Let's Encrypt, HTTP-01) for custom domains.
     pub acme_email: Option<String>,
