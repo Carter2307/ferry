@@ -1,11 +1,11 @@
-import { Moon, Sun } from 'lucide-react'
 import { siGithub } from 'simple-icons'
 
 import { docs, githubUrl, links } from '@/config'
-import { useTheme } from '@/theme'
 
+import { Divider } from './backdrop'
 import { BrandIcon } from './BrandIcon'
 import { Wordmark } from './FerryMark'
+import { ThemeToggle } from './ThemeToggle'
 
 const COLUMNS = [
   {
@@ -50,9 +50,10 @@ const COLUMNS = [
 ]
 
 export function Footer() {
-  const { theme, toggle } = useTheme()
   return (
-    <footer className="border-t border-border">
+    // No background: the pixel field of the end of the page shows through the footer.
+    <footer>
+      <Divider delay="-5s" />
       <div className="container-page grid gap-12 py-16 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))]">
         <div>
           <a href="/" aria-label="Ferry home" className="inline-block rounded-md">
@@ -86,21 +87,12 @@ export function Footer() {
           ))}
         </div>
       </div>
-      <div className="container-page flex items-center justify-between border-t border-border py-6 text-[13px] text-foreground-lighter">
+      <div className="container-page flex items-center justify-between border-t border-border py-5 text-[13px] text-foreground-lighter">
         <span>Ferry is open source under the MIT license.</span>
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
-          className="grid size-8 place-items-center rounded-md border border-transparent transition-colors hover:border-border-strong hover:bg-surface-300 hover:text-foreground"
-        >
-          {theme === 'dark' ? (
-            <Sun className="size-4" aria-hidden="true" />
-          ) : (
-            <Moon className="size-4" aria-hidden="true" />
-          )}
-        </button>
+        <ThemeToggle />
       </div>
+      {/* A free band at the end of the page: the pixel field (PageEndBackdrop) is dense here. */}
+      <div aria-hidden="true" className="h-36 sm:h-48" />
     </footer>
   )
 }

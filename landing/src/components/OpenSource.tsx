@@ -3,6 +3,7 @@ import { siGithub } from 'simple-icons'
 import { githubUrl, links } from '@/config'
 
 import { BrandIcon } from './BrandIcon'
+import { Reveal } from './Reveal'
 import { Heading, Section } from './ui'
 
 /** The Rust workspace (DESIGN.md §2). */
@@ -20,14 +21,16 @@ const CRATES = [
 
 export function OpenSource() {
   return (
-    <Section labelledBy="oss-title" className="grid gap-12 lg:grid-cols-2 lg:gap-16">
+    <Section labelledBy="oss-title" beam="-13s" reverse className="grid gap-12 lg:grid-cols-2 lg:gap-16">
       <div>
         <Heading id="oss-title" strong="Open source, MIT licensed" quiet="Read it, run it, change it" />
-        <p className="mt-5 max-w-[28rem] text-foreground-lighter">
-          Ferry is built in the open, in Rust. Your apps run as plain Docker containers and your data stays in Docker
-          volumes on your own machine.
-        </p>
-        <div className="mt-8 flex flex-wrap items-center gap-5">
+        <Reveal delay={0.12}>
+          <p className="mt-5 max-w-[28rem] text-foreground-lighter">
+            Ferry is built in the open, in Rust. Your apps run as plain Docker containers and your data stays in Docker
+            volumes on your own machine.
+          </p>
+        </Reveal>
+        <Reveal delay={0.18} className="mt-8 flex flex-wrap items-center gap-5">
           <a className="btn btn-secondary" href={githubUrl}>
             <BrandIcon icon={siGithub} />
             View on GitHub
@@ -35,10 +38,10 @@ export function OpenSource() {
           <a className="text-link text-sm" href={links.architecture}>
             How it’s built
           </a>
-        </div>
+        </Reveal>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border-strong bg-surface-100">
+      <Reveal delay={0.1} y={18} className="overflow-hidden rounded-xl border border-border-strong bg-surface-100">
         <div className="flex h-11 items-center border-b border-border px-5 text-[13px] text-foreground-lighter">
           Nine crates, one workspace
         </div>
@@ -53,7 +56,7 @@ export function OpenSource() {
             </li>
           ))}
         </ul>
-      </div>
+      </Reveal>
     </Section>
   )
 }

@@ -176,6 +176,18 @@
       border-color: var(--border-stronger);
     }
   }
+  /* No border and no fill until hover: the header's links and icon buttons. */
+  .btn-ghost {
+    color: var(--foreground-light);
+    &:hover {
+      background: var(--surface-200);
+      color: var(--foreground);
+    }
+  }
+  .btn-icon {
+    aspect-ratio: 1;
+    padding-inline: 0;
+  }
 
   /* Cards: a 1px gradient edge around a surface panel. */
   .card-frame {
@@ -251,6 +263,72 @@
       fill 300ms,
       stroke 300ms;
   }
+
+}
+
+/*
+ * The page background (backdrop.tsx): the pixel fields at the top and at the end of the page, and
+ * the beams that run along the hairlines.
+ */
+@layer components {
+  /* The shader fades the pixels out itself. This mask makes sure the far edge never shows. */
+  .pixel-field {
+    --shader-fade: 1000ms;
+    mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  }
+  .pixel-field[data-from='bottom'] {
+    mask-image: linear-gradient(to top, #000 85%, transparent);
+  }
+
+  /* No WebGPU: a still grid of the same 3px pixels, faded with a gradient. */
+  .pixel-fallback {
+    --fade: linear-gradient(to bottom, #000, transparent 78%);
+    background-color: color-mix(in oklab, var(--foreground) 13%, transparent);
+    mask-image:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect x='1' y='1' width='3' height='3'/%3E%3C/svg%3E"),
+      var(--fade);
+    mask-size:
+      4px 4px,
+      100% 100%;
+    mask-repeat: repeat, no-repeat;
+    mask-composite: intersect;
+  }
+  .pixel-field[data-from='bottom'] .pixel-fallback {
+    --fade: linear-gradient(to top, #000, transparent 78%);
+  }
+
+  .beam,
+  .beam-segment {
+    --beam-color: color-mix(in oklab, var(--primary-bright) 85%, transparent);
+    position: absolute;
+    display: block;
+  }
+  .beam-x {
+    left: 0;
+    height: 1px;
+    width: 9rem;
+    background: linear-gradient(to right, transparent, var(--beam-color) 75%, transparent);
+    animation: beam-x var(--duration, 16s) linear var(--delay, 0s) infinite;
+  }
+  .beam-x.beam-reverse {
+    background: linear-gradient(to left, transparent, var(--beam-color) 75%, transparent);
+    animation-direction: reverse;
+  }
+
+  /* A rail is as tall as the page: the runner has the height of the rail and slides down by its
+     own height, which carries the short segment at its top from above the page to below it. */
+  .rail-runner {
+    position: absolute;
+    inset: 0;
+    animation: rail-run var(--duration, 84s) linear var(--delay, 0s) infinite;
+  }
+  .beam-segment {
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 8rem;
+    background: linear-gradient(to bottom, transparent, var(--beam-color) 75%, transparent);
+  }
 }
 
 @keyframes blink {
@@ -258,8 +336,30 @@
     opacity: 0;
   }
 }
+@keyframes beam-x {
+  from {
+    transform: translateX(-10rem);
+  }
+  to {
+    transform: translateX(var(--travel, 100vw));
+  }
+}
+@keyframes rail-run {
+  from {
+    transform: translateY(-3%);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
+  /* The lines stay, the beams do not run. */
+  .beam,
+  .rail-runner {
+    display: none;
+  }
+
   *,
   *::before,
   *::after {

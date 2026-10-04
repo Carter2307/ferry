@@ -1,19 +1,28 @@
 import type { ReactNode } from 'react'
 
-/** A page section: full-width hairline on top, content in the page container. */
+import { Divider } from './backdrop'
+import { Reveal } from './Reveal'
+
+/** A page section: a full-width hairline on top (with its beam), the content in the page container. */
 export function Section({
   id,
   labelledBy,
+  beam = '0s',
+  reverse = false,
   className = '',
   children,
 }: {
   id?: string
   labelledBy: string
+  /** When the beam of the hairline starts (see `Divider`). */
+  beam?: string
+  reverse?: boolean
   className?: string
   children: ReactNode
 }) {
   return (
-    <section id={id} aria-labelledby={labelledBy} className="border-t border-border">
+    <section id={id} aria-labelledby={labelledBy}>
+      <Divider delay={beam} reverse={reverse} />
       <div className={`container-page py-20 lg:py-28 ${className}`}>{children}</div>
     </section>
   )
@@ -33,19 +42,27 @@ export function Heading({
   quietFirst?: boolean
   className?: string
 }) {
-  const a = <span className="block text-foreground">{strong}</span>
-  const b = <span className="block text-foreground-lighter">{quiet}</span>
+  const a = (delay: number) => (
+    <Reveal as="span" delay={delay} className="block text-foreground">
+      {strong}
+    </Reveal>
+  )
+  const b = (delay: number) => (
+    <Reveal as="span" delay={delay} className="block text-foreground-lighter">
+      {quiet}
+    </Reveal>
+  )
   return (
     <h2 id={id} className={`heading-section ${className}`}>
       {quietFirst ? (
         <>
-          {b}
-          {a}
+          {b(0)}
+          {a(0.07)}
         </>
       ) : (
         <>
-          {a}
-          {b}
+          {a(0)}
+          {b(0.07)}
         </>
       )}
     </h2>
