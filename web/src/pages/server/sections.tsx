@@ -77,6 +77,8 @@ function InfoRowsSkeleton() {
 }
 
 function ServerInfoCard({ info }: { info: ServerInfo }) {
+  // Through the app of a connected GitHub account, or a webhook added to a repository by hand.
+  const deploysOnPush = info.github_webhook_enabled
   return (
     <FormCard asDiv>
       <FormRow label="Ferry version" description="Version of the ferryd server this dashboard talks to.">
@@ -170,14 +172,17 @@ function ServerInfoCard({ info }: { info: ServerInfo }) {
           <RowValue className="text-foreground-lighter">Not configured</RowValue>
         )}
       </FormRow>
-      <FormRow label="GitHub webhook" description="Deploys services with auto-deploy on every push.">
+      <FormRow
+        label="Deploy on push"
+        description="GitHub tells this server about pushes: services with auto-deploy deploy on every push."
+      >
         <RowValue>
-          <OnOffPill on={info.github_webhook_enabled} />
+          <OnOffPill on={deploysOnPush} />
           <Link
             to="/server?section=connections"
             className="rounded-sm text-[13px] text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {info.github_webhook_enabled ? 'Webhook settings' : 'How to enable'}
+            {deploysOnPush ? 'Git accounts' : 'How to enable'}
           </Link>
         </RowValue>
       </FormRow>
@@ -267,11 +272,11 @@ export function ConnectionsSection() {
       <GitAccountsSection />
 
       <PageSection
-        title="GitHub webhook"
-        description="Push to a branch and every service tracking it with auto-deploy is deployed."
+        title="Repository webhook"
+        description="A GitHub account that deploys on push needs none of this. For a GitHub repository no such account reads, add this webhook to the repository by hand."
       >
-        {!isLoading && info && !info.github_webhook_enabled && (
-          <Callout tone="info" icon={<Info />} title="GitHub webhooks are off">
+        {!isLoading && info && !info.github_webhook_secret_set && (
+          <Callout tone="info" icon={<Info />} title="Repository webhooks are off">
             Start ferryd with <code className="font-mono text-[12.5px]">--github-webhook-secret &lt;secret&gt;</code>{' '}
             (or <code className="font-mono text-[12.5px]">FERRY_GITHUB_WEBHOOK_SECRET</code>), then add the webhook
             below to your repositories.
@@ -280,7 +285,7 @@ export function ConnectionsSection() {
         <FormCard asDiv>
           <FormRow label="Status">
             <RowValue>
-              {isLoading ? <Skeleton className="h-5 w-20" /> : <OnOffPill on={Boolean(info?.github_webhook_enabled)} />}
+              {isLoading ? <Skeleton className="h-5 w-20" /> : <OnOffPill on={Boolean(info?.github_webhook_secret_set)} />}
             </RowValue>
           </FormRow>
           <FormRow

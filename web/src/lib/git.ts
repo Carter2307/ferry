@@ -4,7 +4,7 @@
  * described, and repository search.
  */
 
-import type { GitAuth, GitConnectionView, GitProvider, GitRepository } from '@/lib/api/types'
+import type { GitAuth, GitConnectionView, GitProvider, GitRepository, ServerInfo } from '@/lib/api/types'
 
 export const GIT_PROVIDER_LABELS: Record<GitProvider, string> = {
   github: 'GitHub',
@@ -81,6 +81,89 @@ export function parseHttpUrl(url: string): HttpUrl | null {
   const port = parts[2] === undefined ? (scheme === 'https' ? 443 : 80) : Number(parts[2])
   if (port < 1 || port > 65535) return null
   return { scheme, host: (parts[1] ?? '').toLowerCase(), port, path: m[3] ?? '' }
+}
+
+const PRIVATE_SUFFIXES = ['localhost', 'local', 'internal', 'lan', 'home', 'test', 'example', 'invalid', 'arpa']
+
+function isPublicIpv4(host: string): boolean {
+  const [a = 0, b = 0, c = 0, d = 0] = host.split('.').map(Number)
+  const local =
+    a === 0 || // "this network", 0.0.0.0 included
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b < 128) || // carrier-grade NAT
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b < 32) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && c === 2) || // the three documentation ranges
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
+    (a === 255 && b === 255 && c === 255 && d === 255)
+  return !local
+}
+
+function isPublicHost(host: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return isPublicIpv4(host)
+  if (host.includes(':')) {
+    const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host)
+    if (mapped?.[1]) return isPublicIpv4(mapped[1])
+    // Loopback and unspecified (`::1`, `::`), unique local (fc00::/7), link-local (fe80::/10).
+    if (host.startsWith('::')) return false
+    const first = parseInt(host.split(':')[0] ?? '', 16)
+    return !((first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80)
+  }
+  const labels = host.replace(/\.+$/, '').split('.')
+  return labels.length > 1 && !PRIVATE_SUFFIXES.includes(labels[labels.length - 1] ?? '')
+}
+
+/**
+ * `ferry_scm::github_app::public_origin`: the origin of an http(s) address
+ * GitHub can deliver webhooks to (one on the internet), else `null` —
+ * `localhost`, names without a dot or under a private suffix, and loopback
+ * or private addresses.
+ */
+export function publicOrigin(address: string): string | null {
+  const url = parseHttpUrl(address)
+  if (!url || !isPublicHost(url.host.replace(/^\[|\]$/g, ''))) return null
+  const port = url.port === (url.scheme === 'https' ? 443 : 80) ? '' : `:${url.port}`
+  return `${url.scheme}://${url.host}${port}`
+}
+
+/**
+ * Where GitHub can deliver the pushes of an account connected now: the
+ * address this dashboard is used at, else the server's dashboard URL,
+ * whichever is on the internet (what `POST /api/v1/git/authorize` does).
+ * `null`: the GitHub App of an account connected from here gets no webhook.
+ */
+export function pushAddress(origin: string, info: Pick<ServerInfo, 'dashboard_url'> | undefined): string | null {
+  return publicOrigin(origin) ?? (info?.dashboard_url ? publicOrigin(info.dashboard_url) : null)
+}
+
+/**
+ * How a push to a service's repository reaches this server:
+ * - `app`: GitHub delivers it through the app of the account that clones
+ *   the repository (nothing to set up);
+ * - `webhook`: through a webhook added to the repository by hand (the
+ *   server has a webhook secret);
+ * - `unknown`: the account that clones it isn't known here, and some
+ *   account delivers pushes;
+ * - `none`: nothing delivers it.
+ */
+export type PushDelivery = 'app' | 'webhook' | 'unknown' | 'none'
+
+export function pushDelivery(
+  /** The account that clones the repository, when it is known. */
+  account: Pick<GitConnectionView, 'provider' | 'push_events'> | null | undefined,
+  accounts: readonly Pick<GitConnectionView, 'push_events'>[] | undefined,
+  info: Pick<ServerInfo, 'github_webhook_secret_set'> | undefined,
+): PushDelivery {
+  if (account?.push_events) return 'app'
+  // Only GitHub's pushes are taken in.
+  if (account && account.provider !== 'github') return 'none'
+  if (info?.github_webhook_secret_set) return 'webhook'
+  // Still loading: say nothing wrong.
+  if (!info || !accounts) return 'unknown'
+  return !account && accounts.some((c) => c.push_events) ? 'unknown' : 'none'
 }
 
 /**

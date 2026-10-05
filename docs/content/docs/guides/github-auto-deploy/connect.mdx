@@ -1,0 +1,67 @@
+---
+title: Connect the account
+description: A GitHub account that you connect from the public address of the server deploys on each push.
+---
+
+<Flow
+  steps={[
+    { icon: 'plug', title: 'Connect', text: 'You connect your GitHub account in the dashboard.' },
+    { icon: 'box', title: 'Service', text: 'You create a service from a repository of the account.' },
+    { icon: 'branch', title: 'Push', text: 'You push a commit. GitHub tells Ferry. Ferry deploys it.', tone: 'success' },
+  ]}
+/>
+
+When you connect a GitHub account, Ferry creates a <Term id="github-app" /> for your server. If GitHub can reach the server, the app gets a <Term id="webhook" />. Then GitHub sends Ferry each push to the repositories of the app. You add nothing to a repository.
+
+## Do it
+
+<Steps>
+<Step>
+
+### Open the dashboard at its public address
+
+Open the <Term id="dashboard-host" /> of the server, for example `https://ferry.apps.example.com`. Do not use `localhost` or an SSH tunnel for this step.
+
+</Step>
+<Step>
+
+### Connect GitHub
+
+Open **Server → Connections**. Click **Connect GitHub**. [Connect GitHub](/docs/guides/git-accounts/github) shows each page of GitHub.
+
+The account then shows `deploys on push`.
+
+</Step>
+<Step>
+
+### Create a service from the account
+
+Click **+ New service**. Choose a repository of the account and a <Term id="branch" />. <Term id="auto-deploy">Auto-deploy</Term> is on by default.
+
+</Step>
+<Step>
+
+### Push
+
+Push a commit to the branch. Then list the deploys:
+
+```bash title="Terminal"
+ferry deploys api
+```
+
+The new deploy has the <Term id="trigger" /> `webhook`. It builds the exact <Term id="commit" /> of the push.
+
+</Step>
+</Steps>
+
+<Accordions>
+  <Accordion title="The account does not show deploys on push">
+    GitHub could not reach the address that you used when you connected the account. For example, you used `localhost`. Open the dashboard at its public address. Click **Connect again** next to the account. Ferry creates a new app that has a webhook. You can delete the old app on GitHub.
+  </Accordion>
+  <Accordion title="The address that GitHub uses">
+    If the address of your browser is public, Ferry gives it to GitHub. If not, Ferry gives the dashboard URL of the server (`--dashboard-host`). GitHub sends the pushes to `/hooks/github` at that address.
+  </Accordion>
+  <Accordion title="GitLab">
+    GitLab does not send pushes to Ferry. Call the [deploy hook](/docs/guides/github-auto-deploy/deploy-hooks) of the service from GitLab CI.
+  </Accordion>
+</Accordions>

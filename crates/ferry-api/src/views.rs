@@ -109,6 +109,9 @@ pub fn git_connection_view(connection: GitConnection, services: Vec<String>) -> 
         Some(ref app) => (Some(app.slug.clone()), Some(app.url.clone())),
         None => (None, None),
     };
+    // The app's webhook delivers them, once the app is installed.
+    let push_events =
+        connection.is_connected() && connection.app.as_ref().is_some_and(|app| app.webhook_secret.is_some());
     let (manage_url, repository_selection) = match connection.installation {
         Some(ref installation) => (installation.url.clone(), installation.repository_selection.clone()),
         None => (None, None),
@@ -129,6 +132,7 @@ pub fn git_connection_view(connection: GitConnection, services: Vec<String>) -> 
         app_url,
         manage_url,
         repository_selection,
+        push_events,
         services,
         created_at: connection.created_at,
         updated_at: connection.updated_at,

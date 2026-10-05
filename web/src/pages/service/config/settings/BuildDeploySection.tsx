@@ -4,6 +4,7 @@ import { Info } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { BranchSelect } from '@/components/git/BranchSelect'
+import { PushDeliveryHint } from '@/components/git/PushDeliveryHint'
 import { CodeBlock } from '@/components/patterns/Copy'
 import { Callout } from '@/components/patterns/EmptyState'
 import { FormCard, FormRow } from '@/components/patterns/FormCard'
@@ -15,7 +16,7 @@ import { errorMessage } from '@/lib/api/client'
 import { useGitConnections, useServerInfo, useTriggerDeploy, useUpdateService } from '@/lib/api/queries'
 import type { ServiceView, SourceKind } from '@/lib/api/types'
 import { RUNTIME_LABELS } from '@/lib/format'
-import { connectionLabel, GIT_PROVIDER_LABELS } from '@/lib/git'
+import { connectionLabel, GIT_PROVIDER_LABELS, pushDelivery } from '@/lib/git'
 
 import { servicePath } from '../../context'
 import { useReportDirty, useSyncedForm } from '../hooks'
@@ -341,10 +342,8 @@ export function BuildDeploySection({
             htmlFor={id('auto_deploy')}
             description={
               <>
-                Deploy on every push to <code className="font-mono">{f.branch || 'the branch'}</code>.
-                {info.data && !info.data.github_webhook_enabled && (
-                  <> Needs the GitHub webhook, which is not configured on this server.</>
-                )}
+                Deploy on every push to <code className="font-mono">{f.branch || 'the branch'}</code>.{' '}
+                <PushDeliveryHint delivery={pushDelivery(cloner, accounts.data, info.data)} />
               </>
             }
           >

@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { errorMessage } from '@/lib/api/client'
-import { useConnectGit, useGitConnections } from '@/lib/api/queries'
+import { useConnectGit, useGitConnections, useServerInfo } from '@/lib/api/queries'
 import { GIT_PROVIDERS, type GitConnectionView, type GitProvider } from '@/lib/api/types'
 import {
   accountName,
@@ -27,6 +27,7 @@ import {
   GITLAB_APPLICATION_SCOPES,
   instanceUrl,
   instanceUrlError,
+  pushAddress,
   savedApplication,
   tokenPageUrl,
 } from '@/lib/git'
@@ -117,6 +118,9 @@ function ConnectGitForm({
     redirect: React.useId(),
   }
   const connections = useGitConnections()
+  const info = useServerInfo()
+  // Whether GitHub can deliver pushes here: the app then gets a webhook.
+  const reachable = pushAddress(window.location.origin, info.data) !== null
   const [provider, setProvider] = React.useState<GitProvider>(connection?.provider ?? initial ?? 'github')
   // A connection made with a token is given another token; everything else goes through the provider.
   const [withToken, setWithToken] = React.useState(connection?.auth === 'token')
@@ -327,6 +331,20 @@ function ConnectGitForm({
             <Step n={2}>
               You choose the repositories the app may read. GitHub sends you back here, and no token is ever typed.
             </Step>
+            {!connection &&
+              (reachable ? (
+                <Step n={3}>
+                  From then on GitHub tells this server about every push to those repositories: services with
+                  auto-deploy deploy on push, with nothing to add on GitHub.
+                </Step>
+              ) : (
+                info.data && (
+                  <li className="text-[12.5px] text-foreground-lighter">
+                    GitHub can’t reach this server at <Code>{window.location.host}</Code>, so pushes will not deploy by
+                    themselves. For deploys on push, connect the account from the server’s public address.
+                  </li>
+                )
+              ))}
           </ol>
         ) : needsApplication ? (
           <div className="flex flex-col gap-4">

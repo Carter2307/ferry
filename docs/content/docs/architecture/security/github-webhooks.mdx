@@ -15,7 +15,7 @@ description: GitHub signs each delivery with a shared secret. Ferry refuses a ba
   ]}
   steps={[
     {
-      caption: 'With no --github-webhook-secret, the endpoint answers 404.',
+      caption: 'With no secret, the endpoint answers 404.',
       hide: ['copy'],
       tones: { ferry: 'muted' },
       notes: { ferry: '404' },
@@ -46,14 +46,19 @@ A GitHub <Term id="webhook" /> does not use the account or an API token. Its pro
 
 | Rule | Detail |
 |---|---|
-| Off by default | The endpoint answers 404 until you set `--github-webhook-secret`. |
+| Off by default | The endpoint answers 404 until a connected account deploys on push, or until you set `--github-webhook-secret`. |
+| One secret for each sender | The <Term id="github-app" /> of each connected account has its own secret. GitHub makes it. The secret of `--github-webhook-secret` is for the webhooks that you add by hand. |
 | Signature | `X-Hub-Signature-256`: HMAC-SHA256 of the raw body, compared in <Term id="constant-time">constant time</Term>. |
 | No <Term id="replay" /> | Ferry ignores a delivery if it processed the same body or the same delivery id before. |
 
 ## Turn it on
 
+Connect a GitHub account from the public address of the server. GitHub and Ferry then share a secret, and you type nothing. See [Connect the account](/docs/guides/github-auto-deploy/connect).
+
+For a webhook that you add by hand, give `ferryd` a secret:
+
 ```bash title="On the server"
 ferryd --github-webhook-secret <secret>
 ```
 
-Give the same secret to GitHub. [GitHub auto-deploy](/docs/guides/github-auto-deploy) shows each step. The [API overview](/docs/reference/api-overview/github-webhook) has the details.
+Give the same secret to GitHub. [Add a webhook by hand](/docs/guides/github-auto-deploy/setup) shows each step. The [API overview](/docs/reference/api-overview/github-webhook) has the details.

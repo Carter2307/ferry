@@ -20,7 +20,7 @@ ferry up                      # deploy the current directory → http://my-app.l
 | **Sources** | any git URL (GitHub, GitLab, ssh, local path), `ferry up` from a local folder, prebuilt images |
 | **Builds** | your Dockerfile, or auto-detected Node / Python / Go / Rust / Ruby / static (no Dockerfile needed) |
 | **Deploys** | zero-downtime blue/green with health checks, deploy history, one-click rollbacks, cancel |
-| **Triggers** | CLI / dashboard / API, GitHub push webhooks (auto-deploy), secret deploy-hook URLs, blueprints |
+| **Triggers** | CLI / dashboard / API, a push to a connected GitHub account's repository (auto-deploy, nothing to add to the repository), secret deploy-hook URLs, blueprints |
 | **Networking** | built-in reverse proxy (HTTP/1.1, HTTP/2, websockets), `<service>.<your-domain>` under the domains you connect (Ferry checks their DNS), custom domains, Let's Encrypt HTTPS, private network (`http://api:3000`) |
 | **Data** | managed Postgres & Redis, persistent disks, env vars with references (`${{datastore.db.connectionString}}`), env groups |
 | **Ops** | instance scaling, suspend/resume, restart, self-healing reconciler, live build & runtime logs, CPU/memory, one-off jobs |
@@ -103,7 +103,7 @@ ferry db update app-db --memory 1G                   # datastores: applied right
      --base-domain apps.example.com \
      --proxy-addr 0.0.0.0:80 --https-addr 0.0.0.0:443 \
      --acme-email you@example.com \
-     --github-webhook-secret <random>
+     --dashboard-host ferry.apps.example.com
    Restart=always
    # When the host runs out of memory, let the kernel kill containers before ferryd.
    # (ferryd also sets -500 itself when it runs as root; see --oom-score-adj.)
@@ -121,13 +121,22 @@ ferry db update app-db --memory 1G                   # datastores: applied right
    `--default-memory-limit` or per service instead (see
    [Resource limits](#resource-limits)).
 
-3. Keep the API on localhost and reach it over SSH (`ssh -L 7878:127.0.0.1:7878 host`).
-   You can also expose the dashboard through the proxy with
-   `--dashboard-host ferry.apps.example.com`, but only with HTTPS enabled,
-   because it serves the full admin API.
-4. For GitHub auto-deploys, add a webhook to your repo:
-   `https://ferry.apps.example.com/hooks/github`, content type JSON, with the
-   same secret.
+3. `--dashboard-host ferry.apps.example.com` serves the dashboard and the
+   API through the proxy, which GitHub needs to reach for auto-deploys. Only
+   use it with HTTPS enabled, because it serves the full admin API. Without
+   it, keep the API on localhost and reach it over SSH
+   (`ssh -L 7878:127.0.0.1:7878 host`).
+4. For GitHub auto-deploys, open the dashboard at that address and connect
+   your GitHub account (Server → Connections → Connect GitHub). Ferry
+   registers a GitHub App for the server with a webhook, so every push to
+   the repositories you let it read reaches `/hooks/github`: services with
+   auto-deploy deploy on push, and nothing is added to a repository. An
+   account connected from `localhost` gets no webhook (GitHub can't reach
+   it): connect it again from the public address. For a repository no
+   connected account reads, start `ferryd` with `--github-webhook-secret
+   <random>` and add a webhook to the repository by hand
+   (`https://ferry.apps.example.com/hooks/github`, content type JSON, the
+   same secret).
 
 ### Domains
 
@@ -237,7 +246,7 @@ Every flag also has an environment variable. `ferryd --help` shows the full list
 | `--dashboard-host` `FERRY_DASHBOARD_HOST` | `ferry.<base-domain>` for local domains, otherwise off | serve the dashboard + API through the public proxy (`none` disables it). On a public domain, only enable it together with HTTPS. |
 | `--acme-email` `FERRY_ACME_EMAIL` | – | enables Let's Encrypt |
 | `--acme-staging` / `--acme-directory` | – | Let's Encrypt staging, or a custom ACME CA |
-| `--github-webhook-secret` | – | enables `/hooks/github` |
+| `--github-webhook-secret` `FERRY_GITHUB_WEBHOOK_SECRET` | – | secret of the GitHub webhooks added to repositories by hand. A GitHub account connected from a public address needs none |
 | `--api-token` `FERRY_API_TOKEN` | generated | the server token: an API token that always works, for scripts on the server itself. Stored in `<data-dir>/api_token` (`0600`), never printed |
 | `--name-prefix` `FERRY_NAME_PREFIX` | `ferry` | Docker resource prefix. Each Ferry server needs its own; a server refuses to start on a prefix owned by another data dir |
 | `--take-over` | – | adopt the Docker resources of a prefix owned by another data dir (e.g. after moving it) |
