@@ -6,7 +6,9 @@
 //! page, or with the connection once the account is connected.
 //!
 //! * **GitHub**: register a GitHub App for this server from a manifest
-//!   (`?code=`), then install it on the account (`?installation_id=`).
+//!   (`?code=`), then install it on the account (`?installation_id=`). A
+//!   server GitHub can reach registers the app with a webhook, so pushes to
+//!   the account's repositories are delivered to it.
 //! * **GitLab**: authorize the OAuth application created for this server
 //!   (`?code=`).
 //!
@@ -79,7 +81,8 @@ impl Step {
 #[derive(Debug, Clone)]
 enum Pending {
     /// GitHub registers the app: it answers with a manifest `code`.
-    GithubApp { base_url: String },
+    /// `webhook`: the manifest asked for a webhook.
+    GithubApp { base_url: String, webhook: bool },
     /// GitHub installs this connection's app: it answers with an
     /// `installation_id`.
     GithubInstall { connection_id: String },
@@ -152,7 +155,12 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
 
 /// Start authorizing an account (or resume / repeat the authorization of
 /// `connection_id`).
-pub async fn start(store: &Store, req: &AuthorizeGit) -> Result<Step, FlowError> {
+///
+/// `webhook_url` is where GitHub can deliver the pushes of the account's
+/// repositories (this server's GitHub webhook endpoint, at an address on
+/// the internet): a GitHub App registered now gets it as its webhook.
+/// `None` for a server GitHub can't reach.
+pub async fn start(store: &Store, req: &AuthorizeGit, webhook_url: Option<&str>) -> Result<Step, FlowError> {
     let redirect_uri = validate::git_redirect_uri(&req.redirect_uri)?;
     if let Some(id) = non_empty(&req.connection_id) {
         let connection = store.require_git_connection(id).await?;
@@ -179,8 +187,9 @@ pub async fn start(store: &Store, req: &AuthorizeGit) -> Result<Step, FlowError>
     match provider {
         GitProvider::Github => {
             let organization = non_empty(&req.organization).map(validate::git_organization).transpose()?;
-            let state = remember(Pending::GithubApp { base_url: base_url.clone() });
-            let fields = BTreeMap::from([("manifest".to_string(), github_app::manifest(redirect_uri).to_string())]);
+            let state = remember(Pending::GithubApp { base_url: base_url.clone(), webhook: webhook_url.is_some() });
+            let manifest = github_app::manifest(redirect_uri, webhook_url);
+            let fields = BTreeMap::from([("manifest".to_string(), manifest.to_string())]);
             Ok(Step::Form { url: github_app::registration_url(&base_url, organization, &state), fields })
         }
         GitProvider::Gitlab => {
@@ -336,6 +345,41 @@ async fn adopt(
     Ok(saved)
 }
 
+/// The secret that signs the deliveries of a new app's webhook: the one
+/// GitHub made up for it, else one given to the app now. `None` for an app
+/// registered without a webhook, and when no secret can be set: the account
+/// is connected all the same, but its pushes are not accepted here.
+async fn webhook_secret(base_url: &str, registration: &AppRegistration, webhook: bool) -> Option<String> {
+    if !webhook {
+        return None;
+    }
+    if let Some(secret) = &registration.webhook_secret {
+        return Some(secret.clone());
+    }
+    let app = GithubApp {
+        id: registration.id,
+        slug: registration.slug.clone(),
+        url: registration.url.clone(),
+        private_key: registration.private_key.clone(),
+        webhook_secret: None,
+    };
+    let secret = ids::random_secret(48);
+    let set = match github_app::jwt(&app, Utc::now()) {
+        Ok(jwt) => Provider::new(GitProvider::Github, base_url, &jwt).set_app_webhook_secret(&secret).await,
+        Err(e) => Err(e),
+    };
+    match set {
+        Ok(()) => Some(secret),
+        Err(e) => {
+            tracing::warn!(
+                app = %app.slug,
+                "GitHub gave the app's webhook no secret and took none: its pushes will not deploy anything ({e})"
+            );
+            None
+        }
+    }
+}
+
 /// Keep the app GitHub just registered: as the connection of its owner,
 /// replacing whatever connected that account before.
 async fn save_app(store: &Store, base_url: &str, registration: AppRegistration) -> Result<GitConnection, FlowError> {
@@ -467,8 +511,10 @@ pub async fn callback(store: &Store, cb: &GitCallback) -> Result<Step, FlowError
     }
     let code = || non_empty(&cb.code).ok_or_else(|| invalid(format!("{label} sent no code back")));
     match pending {
-        Pending::GithubApp { base_url } => {
-            let registration = Provider::anonymous(GitProvider::Github, &base_url).convert_manifest(code()?).await?;
+        Pending::GithubApp { base_url, webhook } => {
+            let mut registration =
+                Provider::anonymous(GitProvider::Github, &base_url).convert_manifest(code()?).await?;
+            registration.webhook_secret = webhook_secret(&base_url, &registration, webhook).await;
             let connection = save_app(store, &base_url, registration).await?;
             install(store, connection).await
         }
@@ -613,7 +659,7 @@ mod tests {
     fn states_work_once_and_are_forgotten_when_there_are_too_many() {
         // Its own table: the tests of this module share the global one.
         let flows = Flows::default();
-        let state = flows.remember(Pending::GithubApp { base_url: "https://github.com".into() });
+        let state = flows.remember(Pending::GithubApp { base_url: "https://github.com".into(), webhook: false });
         assert_eq!(state.len(), 48);
         assert!(matches!(flows.take(&state), Some(Pending::GithubApp { .. })));
         assert!(flows.take(&state).is_none());
@@ -632,23 +678,34 @@ mod tests {
     #[tokio::test]
     async fn github_starts_with_a_manifest_posted_to_github() {
         let store = Store::open_in_memory().await.unwrap();
-        let Step::Form { url, fields } = start(&store, &request(GitProvider::Github)).await.unwrap() else {
+        let Step::Form { url, fields } = start(&store, &request(GitProvider::Github), None).await.unwrap() else {
             panic!("expected a form");
         };
         assert!(url.starts_with("https://github.com/settings/apps/new?state="), "{url}");
         let manifest: serde_json::Value = serde_json::from_str(&fields["manifest"]).unwrap();
         assert_eq!(manifest["redirect_url"], "http://localhost:7878/git/callback");
-        assert!(
-            matches!(take(&state_of(&url)), Some(Pending::GithubApp { base_url }) if base_url == "https://github.com")
-        );
+        assert!(manifest.get("hook_attributes").is_none(), "{manifest}");
+        assert!(matches!(
+            take(&state_of(&url)),
+            Some(Pending::GithubApp { base_url, webhook: false }) if base_url == "https://github.com"
+        ));
+        // A server GitHub can reach: the app is registered with its webhook.
+        let hook = "https://ferry.example.com/hooks/github";
+        let Step::Form { url, fields } = start(&store, &request(GitProvider::Github), Some(hook)).await.unwrap() else {
+            panic!("expected a form");
+        };
+        let manifest: serde_json::Value = serde_json::from_str(&fields["manifest"]).unwrap();
+        assert_eq!(manifest["hook_attributes"]["url"], hook);
+        assert_eq!(manifest["default_events"], serde_json::json!(["push"]));
+        assert!(matches!(take(&state_of(&url)), Some(Pending::GithubApp { webhook: true, .. })));
         // In an organization, on a GitHub Enterprise Server.
         let mut req = request(GitProvider::Github);
         req.organization = Some(" acme ".into());
         req.base_url = Some("ghe.example.com".into());
-        let Step::Form { url, .. } = start(&store, &req).await.unwrap() else { panic!("expected a form") };
+        let Step::Form { url, .. } = start(&store, &req, None).await.unwrap() else { panic!("expected a form") };
         assert!(url.starts_with("https://ghe.example.com/organizations/acme/settings/apps/new?state="), "{url}");
         req.organization = Some("acme/../x".into());
-        assert!(matches!(start(&store, &req).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
+        assert!(matches!(start(&store, &req, None).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
         // Nothing is stored before GitHub answers.
         assert!(store.list_git_connections().await.unwrap().is_empty());
     }
@@ -656,34 +713,36 @@ mod tests {
     #[tokio::test]
     async fn gitlab_needs_an_application_then_remembers_it() {
         let store = Store::open_in_memory().await.unwrap();
-        let err = start(&store, &request(GitProvider::Gitlab)).await.unwrap_err();
+        let err = start(&store, &request(GitProvider::Gitlab), None).await.unwrap_err();
         assert!(
             matches!(&err, FlowError::ApplicationRequired(m) if m.contains("read_api, read_repository")),
             "{err:?}"
         );
         let mut req = request(GitProvider::Gitlab);
         req.client_id = Some("app-id".into());
-        assert!(matches!(start(&store, &req).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
+        assert!(matches!(start(&store, &req, None).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
         req.client_secret = Some("app-s".into());
-        let Step::Redirect(url) = start(&store, &req).await.unwrap() else { panic!("expected a redirect") };
+        let Step::Redirect(url) = start(&store, &req, None).await.unwrap() else { panic!("expected a redirect") };
         assert!(url.starts_with("https://gitlab.com/oauth/authorize?client_id=app-id&redirect_uri="), "{url}");
         // The application waits as a pending connection...
         let pending = store.find_git_connection(GitProvider::Gitlab, "https://gitlab.com", "").await.unwrap().unwrap();
         assert_eq!((pending.auth, pending.is_connected()), (GitAuth::Oauth, false));
         // ...which later authorizations reuse, and a new application replaces.
-        let Step::Redirect(again) = start(&store, &request(GitProvider::Gitlab)).await.unwrap() else {
+        let Step::Redirect(again) = start(&store, &request(GitProvider::Gitlab), None).await.unwrap() else {
             panic!("expected a redirect")
         };
         assert!(again.contains("client_id=app-id&") && state_of(&again) != state_of(&url), "{again}");
         req.client_id = Some("other-id".into());
-        let Step::Redirect(replaced) = start(&store, &req).await.unwrap() else { panic!("expected a redirect") };
+        let Step::Redirect(replaced) = start(&store, &req, None).await.unwrap() else { panic!("expected a redirect") };
         assert!(replaced.contains("client_id=other-id&"), "{replaced}");
         assert_eq!(store.list_git_connections().await.unwrap().len(), 1);
         // Resuming it by id works too.
         let mut resume = request(GitProvider::Gitlab);
         resume.provider = None;
         resume.connection_id = Some(pending.id.clone());
-        assert!(matches!(start(&store, &resume).await, Ok(Step::Redirect(u)) if u.contains("client_id=other-id&")));
+        assert!(
+            matches!(start(&store, &resume, None).await, Ok(Step::Redirect(u)) if u.contains("client_id=other-id&"))
+        );
     }
 
     #[tokio::test]
@@ -697,7 +756,7 @@ mod tests {
         );
         assert!(matches!(callback(&store, &cb("  ")).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
         // The provider reports that the user refused: said as it is, and the state is spent.
-        let Step::Form { url, .. } = start(&store, &request(GitProvider::Github)).await.unwrap() else {
+        let Step::Form { url, .. } = start(&store, &request(GitProvider::Github), None).await.unwrap() else {
             panic!("expected a form")
         };
         let denied = GitCallback {
@@ -715,15 +774,15 @@ mod tests {
         // Bad requests.
         let mut req = request(GitProvider::Github);
         req.redirect_uri = "javascript:alert(1)".into();
-        assert!(matches!(start(&store, &req).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
+        assert!(matches!(start(&store, &req, None).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
         let mut req = request(GitProvider::Github);
         req.provider = None;
-        assert!(matches!(start(&store, &req).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
+        assert!(matches!(start(&store, &req, None).await, Err(FlowError::Core(ferry_core::Error::Invalid(_)))));
         // A token connection has nothing to authorize in the browser.
         let pat = GitConnection::new(GitProvider::Github, "https://github.com", "octocat", "t");
         store.create_git_connection(&pat).await.unwrap();
         req.connection_id = Some(pat.id.clone());
-        let err = start(&store, &req).await.unwrap_err();
+        let err = start(&store, &req, None).await.unwrap_err();
         assert!(
             matches!(&err, FlowError::Core(ferry_core::Error::Invalid(m)) if m.contains("connected with an access token")),
             "{err:?}"

@@ -506,6 +506,14 @@ impl<'a> Provider<'a> {
         Ok(Installation::from(self.json::<GithubInstallationWire>(response).await?))
     }
 
+    /// Have GitHub sign the deliveries of the GitHub App's webhook with
+    /// `secret` (the token is the app's JWT).
+    pub async fn set_app_webhook_secret(&self, secret: &str) -> Result<(), ProviderError> {
+        let url = self.endpoint(&["app", "hook", "config"], &[])?;
+        let request = self.client()?.patch(url.clone()).json(&serde_json::json!({ "secret": secret }));
+        self.send(request, &url).await.map(|_| ())
+    }
+
     /// A token of an installation of the GitHub App (the token is the
     /// app's JWT), good for an hour.
     pub async fn installation_token(&self, id: u64) -> Result<InstallationToken, ProviderError> {

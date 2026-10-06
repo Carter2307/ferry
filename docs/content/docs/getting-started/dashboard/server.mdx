@@ -27,10 +27,10 @@ Click **Server** in the icon rail. A side menu shows the five sections.
 
 | Section | Content |
 |---|---|
-| **General** | The versions of Ferry and Docker. The default limits of a container, with the CPUs and the memory of the Docker host. The default domain, the proxy URL and the dashboard URL. If TLS and the GitHub webhook are on. The state of the live updates. The theme. |
+| **General** | The versions of Ferry and Docker. The default limits of a container, with the CPUs and the memory of the Docker host. The default domain, the proxy URL and the dashboard URL. If TLS and the deploys on push are on. The state of the live updates. The theme. |
 | **Domains** | See [Server: Domains](/docs/getting-started/dashboard/server-domains). |
 | **Account** | See [Server: Account](/docs/getting-started/dashboard/server-account). |
-| **Connections** | The `ferry login` command. The `FERRY_SERVER` and `FERRY_TOKEN` variables for CI. The connected GitHub and GitLab accounts. The settings of the GitHub webhook. A link to the deploy hooks of the services. |
+| **Connections** | The `ferry login` command. The `FERRY_SERVER` and `FERRY_TOKEN` variables for CI. The connected GitHub and GitLab accounts, and which of them deploy on push. The settings of a webhook that you add to a repository by hand. A link to the deploy hooks of the services. |
 | **API** | The base URL. How to authenticate: an <Term id="api-token" /> as a bearer token. An example request. Links to the <Term id="swagger-ui" /> at `/api/docs` and to the <Term id="openapi" />. The streams of <Term id="sse" />. |
 
 <Accordions>
@@ -44,7 +44,7 @@ Click **Server** in the icon rail. A side menu shows the five sections.
 
     See [Connect GitHub or GitLab](/docs/guides/git-accounts).
   </Accordion>
-  <Accordion title="Connections: the GitHub webhook">
-    The section shows the values to paste into GitHub: the payload URL, the content type and the events. See [Auto-deploy from GitHub](/docs/guides/github-auto-deploy).
+  <Accordion title="Connections: the repository webhook">
+    A GitHub account that deploys on push needs no webhook. For a different repository, the section shows the values to paste into GitHub: the payload URL, the content type and the events. See [Add a webhook by hand](/docs/guides/github-auto-deploy/setup).
   </Accordion>
 </Accordions>

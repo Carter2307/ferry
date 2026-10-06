@@ -4,12 +4,15 @@ mod common;
 
 use axum::body::Body;
 use common::TestApp;
+use ferry_core::{GitConnection, GithubApp, GithubInstallation};
 use hmac::{Hmac, Mac};
 use http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
 use sha2::Sha256;
 
 const SECRET: &str = "gh-webhook-secret";
+/// What GitHub signs the deliveries of a connected account's app with.
+const APP_SECRET: &str = "secret-of-the-apps-webhook";
 
 #[tokio::test]
 async fn deploy_hook_needs_the_right_key() {
@@ -135,6 +138,66 @@ async fn github_signature_is_verified() {
                 .unwrap(),
         )
         .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+}
+
+/// A GitHub App installed on `account`, as the store keeps it, with or
+/// without a webhook.
+fn app_connection(account: &str, hook_secret: Option<&str>) -> GitConnection {
+    let app = GithubApp {
+        id: 7,
+        slug: format!("ferry-{account}"),
+        url: format!("https://github.com/apps/ferry-{account}"),
+        private_key: String::new(),
+        webhook_secret: hook_secret.map(str::to_string),
+    };
+    let mut connection = GitConnection::github_app("https://github.com", account, app, "Iv1.app", "");
+    connection.installation = Some(GithubInstallation { id: 1, url: None, repository_selection: None });
+    connection
+}
+
+#[tokio::test]
+async fn github_apps_sign_their_deliveries_with_a_secret_of_their_own() {
+    let ping = json!({"zen": "hi"});
+    let ping_bytes = serde_json::to_vec(&ping).unwrap();
+    // An app without a webhook delivers nothing: the endpoint stays off.
+    let app = TestApp::new().await;
+    app.store.create_git_connection(&app_connection("acme", None)).await.unwrap();
+    let r = app.send(github_req("ping", &ping, Some(sign(APP_SECRET, &ping_bytes)))).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text());
+    assert!(r.text().contains("no connected GitHub App has a webhook"), "{}", r.text());
+    assert_eq!(app.get("/api/v1/info").await.json()["github_webhook_enabled"], false);
+
+    // An app with one: what it signs is accepted, on a server that was
+    // started without a webhook secret.
+    app.store.create_git_connection(&app_connection("octocat", Some(APP_SECRET))).await.unwrap();
+    let r = app.send(github_req("ping", &ping, Some(sign(APP_SECRET, &ping_bytes)))).await;
+    assert_eq!((r.status, r.json()), (StatusCode::OK, json!({"ok": true})));
+    // The server says so: pushes reach it, without a secret of its own.
+    let info = app.get("/api/v1/info").await.json();
+    assert_eq!((&info["github_webhook_enabled"], &info["github_webhook_secret_set"]), (&json!(true), &json!(false)));
+    for sig in [sign(SECRET, &ping_bytes), sign("", &ping_bytes), "sha256=00".to_string()] {
+        let r = app.send(github_req("ping", &ping, Some(sig))).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    }
+    let svc =
+        app.create_service(json!({"name": "web", "repo_url": "https://github.com/acme/app", "deploy": false})).await;
+    let body = push("main", false);
+    let r = app.send(github_req("push", &body, Some(sign(APP_SECRET, &serde_json::to_vec(&body).unwrap())))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let deploys = r.json()["deploys"].as_array().unwrap().clone();
+    assert_eq!(deploys.len(), 1, "{deploys:?}");
+    assert_eq!((&deploys[0]["service_id"], &deploys[0]["trigger"]), (&svc["id"], &json!("webhook")));
+
+    // Next to the server's own secret (webhooks added to repositories by
+    // hand): each signs its own deliveries.
+    let app = app_with_secret().await;
+    app.store.create_git_connection(&app_connection("octocat", Some(APP_SECRET))).await.unwrap();
+    for secret in [SECRET, APP_SECRET] {
+        let r = app.send(github_req("ping", &ping, Some(sign(secret, &ping_bytes)))).await;
+        assert_eq!(r.status, StatusCode::OK, "{secret}");
+    }
+    let r = app.send(github_req("ping", &ping, Some(sign("neither", &ping_bytes)))).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 

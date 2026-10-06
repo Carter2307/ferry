@@ -62,8 +62,8 @@ Click **Create and deploy**. Ferry <Term id="clone">clones</Term> the repository
 </Step>
 </Steps>
 
-<Callout title="Auto-deploy is separate">
-A connection lets Ferry read repositories. It does not make the provider tell Ferry about a push. To deploy on each push, set up the [GitHub webhook](/docs/guides/github-auto-deploy). Or call the [deploy hook](/docs/guides/github-auto-deploy/deploy-hooks) of the service from your CI.
+<Callout title="Deploy on each push">
+A GitHub account that you connect from the public address of the server also tells Ferry about each push. See [Connect the account](/docs/guides/github-auto-deploy/connect). GitLab does not: call the [deploy hook](/docs/guides/github-auto-deploy/deploy-hooks) of the service from your CI.
 </Callout>
 
 <Accordions>

@@ -10,10 +10,15 @@
 //!    tokens (see [`crate::access`]).
 //!
 //! No application has to exist beforehand, so this works for any server,
-//! whatever its address.
+//! whatever its address. A server GitHub can reach ([`public_origin`]) also
+//! gives the app a **webhook**: GitHub then tells it about every push to the
+//! repositories the app may read, and nothing has to be set up on a
+//! repository for its services to deploy on push.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use std::net::IpAddr;
+
 use chrono::{DateTime, Utc};
 use ferry_core::{GithubApp, ids};
 use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
@@ -45,16 +50,67 @@ fn app_name(redirect_uri: &str) -> String {
     if slug.is_empty() { format!("ferry-{suffix}") } else { format!("ferry-{slug}-{suffix}") }
 }
 
+/// The origin (`scheme://host[:port]`) of an http(s) address GitHub can
+/// deliver webhooks to: one on the internet. `None` for what only this
+/// machine or its network knows: `localhost`, names without a dot or under
+/// a private suffix (`.local`, `.internal`, `.lan`, `.test`...), and
+/// loopback, private, link-local or carrier-grade NAT addresses.
+pub fn public_origin(address: &str) -> Option<String> {
+    let url = ferry_core::git::parse_http_url(address)?;
+    let host = url.host.trim_start_matches('[').trim_end_matches(']');
+    let public = match host.parse::<IpAddr>() {
+        Ok(ip) => is_public_ip(ip),
+        Err(_) => {
+            const PRIVATE: [&str; 9] =
+                ["localhost", "local", "internal", "lan", "home", "test", "example", "invalid", "arpa"];
+            let name = host.trim_end_matches('.');
+            name.rsplit_once('.').is_some_and(|(_, top)| !PRIVATE.contains(&top))
+        }
+    };
+    public.then(|| url.origin())
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, ..] = ip.octets();
+            !(ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                // Carrier-grade NAT (100.64.0.0/10), where VPN meshes live too.
+                || (a == 100 && (64..128).contains(&b)))
+        }
+        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(v4) => is_public_ip(IpAddr::V4(v4)),
+            None => {
+                let first = ip.segments()[0];
+                // Unique local (fc00::/7) and link-local (fe80::/10) addresses.
+                !(ip.is_loopback() || ip.is_unspecified() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80)
+            }
+        },
+    }
+}
+
 /// The manifest of the app: private to its owner, read access to code and
 /// metadata, and every redirect back to `redirect_uri` (the dashboard's
 /// `/git/callback` page), after the registration (`?code=`), after an
 /// installation and after its repositories were changed (`?installation_id=`).
-pub fn manifest(redirect_uri: &str) -> serde_json::Value {
+///
+/// With `webhook_url` (this server's GitHub webhook endpoint, at an address
+/// GitHub can reach) the app also gets a webhook for the `push` event, which
+/// its read access to code allows: GitHub delivers the pushes of every
+/// repository the app is installed on, signed with a secret it hands back
+/// with the registration.
+pub fn manifest(redirect_uri: &str, webhook_url: Option<&str>) -> serde_json::Value {
     let home = ferry_core::git::parse_http_url(redirect_uri).map(|u| u.origin()).unwrap_or_else(|| redirect_uri.into());
-    json!({
+    let purpose = if webhook_url.is_some() { " and deploy them when they are pushed to" } else { "" };
+    let mut manifest = json!({
         "name": app_name(redirect_uri),
         "url": home,
-        "description": format!("Lets the Ferry server at {home} read the repositories it deploys."),
+        "description": format!("Lets the Ferry server at {home} read the repositories it deploys{purpose}."),
         "redirect_url": redirect_uri,
         "callback_urls": [redirect_uri],
         "setup_url": redirect_uri,
@@ -62,7 +118,12 @@ pub fn manifest(redirect_uri: &str) -> serde_json::Value {
         "public": false,
         "request_oauth_on_install": false,
         "default_permissions": { "contents": "read", "metadata": "read" },
-    })
+    });
+    if let Some(url) = webhook_url {
+        manifest["hook_attributes"] = json!({ "url": url, "active": true });
+        manifest["default_events"] = json!(["push"]);
+    }
+    manifest
 }
 
 /// GitHub's page that registers an app from a manifest (posted to it as the
@@ -194,7 +255,7 @@ pub(crate) mod tests {
 
     #[test]
     fn manifests_send_every_redirect_to_the_dashboard() {
-        let m = manifest("https://ferry.example.com/git/callback");
+        let m = manifest("https://ferry.example.com/git/callback", None);
         assert_eq!(m["url"], "https://ferry.example.com");
         for key in ["redirect_url", "setup_url"] {
             assert_eq!(m[key], "https://ferry.example.com/git/callback", "{key}");
@@ -203,10 +264,63 @@ pub(crate) mod tests {
         assert_eq!(m["public"], false);
         assert_eq!(m["setup_on_update"], true);
         assert_eq!(m["default_permissions"], json!({"contents": "read", "metadata": "read"}));
-        // No webhook: nothing GitHub would have to reach.
+        // No webhook without an address GitHub can reach.
         assert!(m.get("hook_attributes").is_none() && m.get("default_events").is_none());
+        assert_eq!(
+            m["description"],
+            "Lets the Ferry server at https://ferry.example.com read the repositories it deploys."
+        );
         let name = m["name"].as_str().unwrap();
         assert!(name.starts_with("ferry-ferry-example-com-") && name.len() <= MAX_NAME, "{name}");
+    }
+
+    #[test]
+    fn manifests_with_a_webhook_ask_for_pushes() {
+        let m = manifest("https://ferry.example.com/git/callback", Some("https://ferry.example.com/hooks/github"));
+        assert_eq!(m["hook_attributes"], json!({"url": "https://ferry.example.com/hooks/github", "active": true}));
+        assert_eq!(m["default_events"], json!(["push"]));
+        // Pushes need no more than the read access the app already asks for.
+        assert_eq!(m["default_permissions"], json!({"contents": "read", "metadata": "read"}));
+        assert!(m["description"].as_str().unwrap().ends_with("and deploy them when they are pushed to."), "{m}");
+    }
+
+    #[test]
+    fn only_addresses_on_the_internet_get_webhooks() {
+        for (address, origin) in [
+            ("https://ferry.example.com/git/callback", "https://ferry.example.com"),
+            ("https://Ferry.Apps.Example.com:8443/", "https://ferry.apps.example.com:8443"),
+            ("http://8.8.8.8:7878/git/callback", "http://8.8.8.8:7878"),
+            ("https://[2606:4700::1111]/x", "https://[2606:4700::1111]"),
+        ] {
+            assert_eq!(public_origin(address).as_deref(), Some(origin), "{address}");
+        }
+        for local in [
+            "http://localhost:7878/git/callback",
+            "http://ferry.localhost:8080",
+            "http://127.0.0.1:7878",
+            "http://[::1]:7878",
+            "http://10.0.0.5",
+            "http://172.20.1.1",
+            "http://192.168.1.20:7878",
+            "http://169.254.10.1",
+            "http://100.101.102.103",
+            "http://0.0.0.0:7878",
+            // Reserved for documentation.
+            "http://203.0.113.7:7878",
+            "http://[::ffff:10.0.0.5]",
+            "http://[fd12:3456::1]",
+            "http://[fe80::1]",
+            "http://myserver:7878",
+            "http://ferry.local",
+            "http://ferry.internal",
+            "http://nas.lan",
+            "http://ferry.test",
+            "https://ferry.example",
+            "ssh://ferry.example.com",
+            "not a url",
+        ] {
+            assert_eq!(public_origin(local), None, "{local}");
+        }
     }
 
     #[test]

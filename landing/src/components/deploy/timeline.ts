@@ -1,6 +1,6 @@
 // The hero demo: one `ferry up --follow` run, in milliseconds from the start.
 // The terminal lines are ferry's real output (crates/ferry-cli/src/commands/up.rs,
-// crates/ferry-engine/src/pipeline.rs, crates/ferry-build); the harbor scene
+// crates/ferry-engine/src/pipeline.rs, crates/ferry-build); the harbor figure
 // reads the same clock, so both always show the same moment of the deploy.
 
 export const COMMAND = 'ferry up --follow'
@@ -44,30 +44,25 @@ export const LINES: readonly TerminalLine[] = [
   { at: 9500, tone: 'ok', text: '==> Available at https://my-app.example.com' },
 ]
 
-/** Moments of the harbor scene. A is the live deploy, B the new one. */
+/**
+ * Moments of the harbor figure. A is the live deploy, B the new one. The figure
+ * (hairline/slip.js) is one self-contained file with its own copy of these numbers:
+ * change both together.
+ */
 export const SCENE = {
   boatBEnter: 2600,
   boatBDock: 4950,
-  /** B's image is built: its containers are loaded, then started. */
-  loadB: [3750, 4200],
-  startB: [5100, 5300],
   healthStart: 5450,
   healthy: 7000,
   /** The proxy switches in one step: requests arriving after this go to B. */
   switchAt: 7300,
-  /** A stops once the requests it already accepted are answered. */
-  stopA: [8650, 8800],
-  boatALeave: 8950,
+  /** A has stopped: the requests it already accepted are answered. */
+  stopA: 8800,
   boatAGone: 11200,
-  /** Requests: one enters the gate every `spawnEvery` ms and takes `tripMs` to board. */
-  trafficStart: -1600,
-  trafficEnd: 12400,
-  spawnEvery: 200,
-  tripMs: 1250,
 } as const
 
-/** When everything has settled: the clock stops here. */
-export const DONE = SCENE.trafficEnd + SCENE.tripMs + 100
+/** When everything has settled: the clock stops here. It is also the length of one handover of the figure. */
+export const DONE = 13750
 
 export const typedChars = (t: number) =>
   Math.max(0, Math.min(COMMAND.length, Math.floor((t - TYPE_START) / TYPE_STEP) + 1))

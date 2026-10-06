@@ -213,7 +213,10 @@ export interface ServerInfo {
   proxy_url: string
   tls_enabled: boolean
   dashboard_url: string | null
+  /** `/hooks/github` takes deliveries: from a connected GitHub account's app, or signed with the server's own secret. */
   github_webhook_enabled: boolean
+  /** The server has a webhook secret of its own, for webhooks added to repositories by hand. Absent on servers that predate it. */
+  github_webhook_secret_set?: boolean
   docker_version: string | null
   /** Memory limit (MiB) of containers that set none. 0 = unlimited. */
   default_memory_limit_mb: number
@@ -482,6 +485,12 @@ export interface GitConnectionView {
   manage_url: string | null
   /** GitHub App: `all` or `selected` repositories. */
   repository_selection: string | null
+  /**
+   * GitHub delivers the pushes of the account's repositories to this server
+   * (its app has a webhook): services with auto-deploy deploy on push, with
+   * nothing to set up on a repository. Absent on servers that predate it.
+   */
+  push_events?: boolean
   /** Names of the services whose repository is cloned with this connection. */
   services: string[]
   created_at: Timestamp

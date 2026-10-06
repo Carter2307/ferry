@@ -61,7 +61,7 @@ curl -s https://ferry.apps.example.com/hooks/github \
 | `200 {"deploys":[…]}` | Ferry processed a `push`. An empty list means that no service matched. |
 | `200 {"deploys":[],"ignored":true,"reason":"…"}` | A replayed or duplicate delivery. |
 | `401` `invalid or missing X-Hub-Signature-256` | The secret is different, or the request is not from GitHub. |
-| `404` | The server has no webhook secret. |
+| `404` | No connected account deploys on push, and the server has no webhook secret. |
 | `413` | The payload is larger than 25 MiB. |
 
 ## If a push deploys nothing

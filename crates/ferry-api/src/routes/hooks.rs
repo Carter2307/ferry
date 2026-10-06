@@ -1,5 +1,10 @@
 //! Webhooks: secret deploy hooks and GitHub push events. No bearer token.
 //!
+//! GitHub's deliveries come from two places, told apart by the secret that
+//! signs them: the webhook of a connected account's GitHub App (registered
+//! with the app, nothing to set up: DESIGN.md §18), and webhooks added to a
+//! repository by hand with the server's own `github_webhook_secret`.
+//!
 //! Responses never reveal more than the caller already proved it may know:
 //! the deploy hook answers the same 401 for unknown services and wrong keys,
 //! and returned deploys have credentials redacted ([`public_deploy`]).
@@ -97,6 +102,22 @@ pub async fn deploy_hook_get(
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Path of the GitHub webhook endpoint ([`github`]), for the address a
+/// GitHub App is told to deliver to.
+pub const GITHUB_PATH: &str = "/hooks/github";
+
+/// The secrets a delivery may be signed with: the server's own (for the
+/// webhooks added to repositories by hand) and the one of the webhook of
+/// every GitHub App registered for this server.
+async fn github_secrets(st: &AppState) -> ApiResult<Vec<String>> {
+    let mut secrets: Vec<String> = st.config.github_webhook_secret.iter().cloned().collect();
+    for connection in st.store.list_git_connections().await? {
+        secrets.extend(connection.app.and_then(|app| app.webhook_secret));
+    }
+    secrets.retain(|s| !s.is_empty());
+    Ok(secrets)
+}
+
 /// Verify `X-Hub-Signature-256: sha256=<hex>` over the raw body (constant time).
 pub fn verify_github_signature(secret: &str, body: &[u8], header: Option<&str>) -> bool {
     let Some(sig) = header.map(str::trim).and_then(|h| h.strip_prefix("sha256=")) else {
@@ -143,9 +164,9 @@ fn github_payload(headers: &HeaderMap, body: &[u8]) -> Result<Value, ApiError> {
     tag = "hooks",
     operation_id = "githubWebhook",
     summary = "GitHub webhook",
-    description = "Set it up in GitHub with the server's webhook secret (`github_webhook_secret`). A `push` deploys (trigger `webhook`, commit = `after`) every auto-deploy service whose repository and branch match; `ping` answers `{\"ok\": true}`; other events are ignored. Replayed deliveries (same body or delivery id) are ignored too.",
+    description = "Where GitHub delivers events. A GitHub account connected in the browser from an address GitHub can reach needs nothing else: its GitHub App has this endpoint as its webhook, with a secret of its own (`push_events` of the git connection). For other repositories, add a webhook to the repository with the server's webhook secret (`github_webhook_secret`). A `push` deploys (trigger `webhook`, commit = `after`) every auto-deploy service whose repository and branch match; `ping` answers `{\"ok\": true}`; other events are ignored. Replayed deliveries (same body or delivery id) are ignored too.",
     params(
-        ("X-Hub-Signature-256" = String, Header, description = "`sha256=<hex HMAC-SHA256 of the raw body>` with the webhook secret."),
+        ("X-Hub-Signature-256" = String, Header, description = "`sha256=<hex HMAC-SHA256 of the raw body>` with the secret of a connected GitHub App's webhook, or with the server's webhook secret."),
         ("X-GitHub-Event" = String, Header, description = "`push`, `ping`, ..."),
         ("X-GitHub-Delivery" = Option<String>, Header, description = "Delivery id (used to ignore redeliveries)."),
     ),
@@ -160,25 +181,28 @@ fn github_payload(headers: &HeaderMap, body: &[u8]) -> Result<Value, ApiError> {
         (status = 200, description = "Processed (see which fields are set).", body = crate::openapi::GithubHookResponse),
         (status = 400, description = "Invalid payload.", body = ApiErrorBody),
         (status = 401, description = "Missing or invalid signature.", body = ApiErrorBody),
-        (status = 404, description = "GitHub webhooks are not enabled (no webhook secret configured).", body = ApiErrorBody),
+        (status = 404, description = "GitHub webhooks are not enabled: no connected GitHub App has a webhook, and no webhook secret is configured.", body = ApiErrorBody),
         (status = 413, description = "The payload exceeds 25 MiB.", body = ApiErrorBody),
     ),
 )]
 pub async fn github(State(st): State<AppState>, headers: HeaderMap, ApiBytes(body): ApiBytes) -> ApiResult<Response> {
-    let Some(secret) = st.config.github_webhook_secret.as_deref().filter(|s| !s.is_empty()) else {
+    let secrets = github_secrets(&st).await?;
+    if secrets.is_empty() {
         return Err(ApiError::not_found(
-            "GitHub webhooks are not enabled on this server (no webhook secret configured)",
+            "GitHub webhooks are not enabled on this server (no connected GitHub App has a webhook, and no webhook \
+             secret is configured)",
         ));
-    };
+    }
     let signature = header_str(&headers, "x-hub-signature-256").map(str::to_string);
+    let signed = move |body: &[u8]| secrets.iter().any(|s| verify_github_signature(s, body, signature.as_deref()));
     let valid = if body.len() > 1024 * 1024 {
         // Hash big payloads off the async worker threads.
-        let (secret, body) = (secret.to_string(), body.clone());
-        tokio::task::spawn_blocking(move || verify_github_signature(&secret, &body, signature.as_deref()))
+        let body = body.clone();
+        tokio::task::spawn_blocking(move || signed(&body))
             .await
             .map_err(|e| ferry_core::Error::internal(format!("verifying the webhook signature: {e}")))?
     } else {
-        verify_github_signature(secret, &body, signature.as_deref())
+        signed(&body)
     };
     if !valid {
         tracing::warn!("rejected GitHub webhook with a missing or invalid signature");

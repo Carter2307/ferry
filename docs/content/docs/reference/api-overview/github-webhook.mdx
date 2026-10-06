@@ -16,11 +16,14 @@ This script tests the endpoint by hand: it signs a body with your secret and sen
 
 ## Turn it on
 
-The endpoint is off (404) until `ferryd` runs with `--github-webhook-secret`.
+The endpoint is off (404) until one of these is true:
+
+- A [connected GitHub account](/docs/guides/github-auto-deploy/connect) deploys on push. Its <Term id="github-app" /> signs each delivery with its own secret.
+- `ferryd` runs with `--github-webhook-secret`, for a webhook that you add by hand.
 
 ## The settings in GitHub
 
-Open the webhook settings of the repository.
+A connected account needs no settings. For a webhook that you add by hand, open the webhook settings of the repository.
 
 | Setting | Value |
 |---|---|
@@ -28,7 +31,7 @@ Open the webhook settings of the repository.
 | Content type | `application/json`. The default, form-encoded, also works. |
 | Secret | The same <Term id="webhook-secret" /> |
 
-The [GitHub auto-deploy guide](/docs/guides/github-auto-deploy) shows each step.
+[Add a webhook by hand](/docs/guides/github-auto-deploy/setup) shows each step.
 
 ## The signature
 

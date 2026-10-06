@@ -12,10 +12,18 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useDisconnectGit, useGitConnections } from '@/lib/api/queries'
+import { useDisconnectGit, useGitConnections, useServerInfo } from '@/lib/api/queries'
 import { GIT_PROVIDERS, type GitConnectionView, type GitProvider } from '@/lib/api/types'
 import { plural, relativeTime } from '@/lib/format'
-import { accountName, connectionHost, GIT_AUTH_LABELS, GIT_PROVIDER_LABELS, scopeWarning, tokenExpiry } from '@/lib/git'
+import {
+  accountName,
+  connectionHost,
+  GIT_AUTH_LABELS,
+  GIT_PROVIDER_LABELS,
+  pushAddress,
+  scopeWarning,
+  tokenExpiry,
+} from '@/lib/git'
 import { cn } from '@/lib/utils'
 
 type DialogState = { provider?: GitProvider; connection?: GitConnectionView } | null
@@ -77,6 +85,7 @@ function Authorization({ connection }: { connection: GitConnectionView }) {
           <>
             {' · '}
             {connection.repository_selection === 'all' ? 'all repositories' : 'selected repositories'}
+            {connection.push_events && ' · deploys on push'}
             {' · '}
             {saved}
           </>
@@ -122,17 +131,25 @@ function Authorization({ connection }: { connection: GitConnectionView }) {
 
 function AccountRow({
   connection,
+  reachable,
   onAuthorize,
+  onReconnect,
   onDisconnect,
 }: {
   connection: GitConnectionView
+  /** GitHub can deliver pushes to this server: an account connected now deploys on push. */
+  reachable: boolean
   onAuthorize: () => void
+  /** Connect the account from scratch (GitHub registers a new app). */
+  onReconnect: () => void
   onDisconnect: () => void
 }) {
   const label = GIT_PROVIDER_LABELS[connection.provider]
   const host = connectionHost(connection)
   const warning = scopeWarning(connection)
   const pending = connection.status === 'pending'
+  // A GitHub App registered without a webhook: GitHub tells this server nothing.
+  const silent = connection.auth === 'github_app' && !pending && !connection.push_events
   return (
     <li className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center md:px-6">
       <span
@@ -168,8 +185,20 @@ function AccountRow({
           )}
         </p>
         {warning && <p className="text-[12.5px] text-warning">{warning}</p>}
+        {silent && (
+          <p className="text-[12.5px] text-foreground-lighter">
+            {reachable
+              ? 'GitHub does not send this account’s pushes to this server yet. Connect it again to deploy on push.'
+              : 'GitHub can’t reach this server at its address, so pushes do not deploy by themselves. Connect the account from the server’s public address for that.'}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
+        {silent && reachable && (
+          <Button size="tiny" variant="primary" icon={<RefreshCw />} onClick={onReconnect}>
+            Connect again
+          </Button>
+        )}
         {pending ? (
           <Button size="tiny" variant="primary" onClick={onAuthorize}>
             Finish connecting
@@ -217,7 +246,9 @@ function leftBehind(connection: GitConnectionView): string {
  */
 export function GitAccountsSection() {
   const connections = useGitConnections()
+  const info = useServerInfo()
   const disconnect = useDisconnectGit()
+  const reachable = pushAddress(window.location.origin, info.data) !== null
   const [dialog, setDialog] = React.useState<DialogState>(null)
   const [leaving, setLeaving] = React.useState<GitConnectionView | null>(null)
   const list = connections.data ?? []
@@ -226,7 +257,7 @@ export function GitAccountsSection() {
     <PageSection
       id="git"
       title="Git accounts"
-      description="GitHub and GitLab accounts this server is authorized to read: pick their repositories when you create a service, private ones included. Every service whose repository is on an account’s host is cloned with it."
+      description="GitHub and GitLab accounts this server is authorized to read: pick their repositories when you create a service, private ones included. Every service whose repository is on an account’s host is cloned with it, and a GitHub account connected from the server’s public address deploys its services on push."
       actions={list.length > 0 ? <ConnectButtons size="sm" onConnect={(provider) => setDialog({ provider })} /> : undefined}
     >
       {connections.isPending ? (
@@ -251,7 +282,9 @@ export function GitAccountsSection() {
               <AccountRow
                 key={c.id}
                 connection={c}
+                reachable={reachable}
                 onAuthorize={() => setDialog({ connection: c })}
+                onReconnect={() => setDialog({ provider: c.provider })}
                 onDisconnect={() => setLeaving(c)}
               />
             ))}

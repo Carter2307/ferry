@@ -30,7 +30,11 @@ _openapi:
           (`deploy_hook_path` of the service) is the secret: no token needed.
           Rotate it with `POST /api/v1/services/{id}/deploy-hook/rotate`."
         heading: deploy-hook
-      - content: 'Set it up in GitHub with the server''s webhook secret
+      - content: 'Where GitHub delivers events. A GitHub account connected in the
+          browser from an address GitHub can reach needs nothing else: its
+          GitHub App has this endpoint as its webhook, with a secret of its own
+          (`push_events` of the git connection). For other repositories, add a
+          webhook to the repository with the server''s webhook secret
           (`github_webhook_secret`). A `push` deploys (trigger `webhook`, commit
           = `after`) every auto-deploy service whose repository and branch
           match; `ping` answers `{"ok": true}`; other events are ignored.

@@ -11,15 +11,17 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Form, Router};
 use base64::Engine as _;
 use chrono::Utc;
 use common::TestApp;
 use ferry_core::{GitAuth, GitConnection, GitProvider};
-use http::{HeaderMap, StatusCode};
+use hmac::{Hmac, Mac};
+use http::{HeaderMap, Method, Request, StatusCode};
 use serde_json::{Value, json};
 
 const GH_TOKEN: &str = "ghp_validTokenOfOctocat0001";
@@ -30,6 +32,10 @@ const NO_SCOPE: &str = "glpat-withoutTheApiScope";
 
 /// Where the providers send the browser back (the dashboard's callback page).
 const REDIRECT: &str = "http://localhost:7878/git/callback";
+/// The same page of a server that is used at an address on the internet.
+const PUBLIC_REDIRECT: &str = "https://ferry.example.com/git/callback";
+/// What the fake GitHub makes up to sign the deliveries of an app's webhook.
+const HOOK_SECRET: &str = "hook-secret-made-up-by-the-fake-github";
 /// The GitHub App the fake registers.
 const APP_ID: u64 = 4242;
 const APP_SLUG: &str = "ferry-test-app";
@@ -54,6 +60,10 @@ struct Fake {
     manifest_codes: Mutex<HashMap<String, String>>,
     /// Installations of the app, as GitHub describes them.
     installations: Mutex<Vec<Value>>,
+    /// The secret GitHub hands back with an app it registers (`None`: none).
+    hook_secret: Mutex<Option<String>>,
+    /// The secrets the app gave its webhook afterwards (`PATCH /app/hook/config`).
+    hook_secrets_set: Mutex<Vec<String>>,
     /// Authorization codes GitLab would hand back → the account that authorized.
     oauth_codes: Mutex<HashMap<String, String>>,
     /// Refresh tokens that still work → login.
@@ -223,7 +233,7 @@ async fn gh_manifest(State(fake): FakeState, headers: HeaderMap, Path(code): Pat
         "html_url": format!("{base}/apps/{APP_SLUG}"),
         "client_id": "Iv1.clientIdOfTheFakeApp",
         "client_secret": format!("{}{}", "app-client-", "s3cretOfTheFake"),
-        "webhook_secret": null,
+        "webhook_secret": fake.hook_secret.lock().unwrap().clone(),
         "pem": app_key().expect("openssl"),
         "permissions": {"contents": "read", "metadata": "read"},
         "events": [],
@@ -252,6 +262,18 @@ fn is_app(headers: &HeaderMap) -> bool {
         && claims["iss"].as_str().and_then(|iss| iss.parse().ok()) == Some(APP_ID)
         && claims["iat"].as_i64().is_some_and(|iat| iat <= now)
         && claims["exp"].as_i64().is_some_and(|exp| exp > now && exp <= now + 600)
+}
+
+/// `PATCH /app/hook/config`: the app changes the configuration of its webhook.
+async fn gh_hook_config(State(fake): FakeState, headers: HeaderMap, axum::Json(body): axum::Json<Value>) -> Response {
+    if !is_app(&headers) {
+        return github_denied();
+    }
+    if let Some(secret) = body["secret"].as_str() {
+        fake.hook_secrets_set.lock().unwrap().push(secret.to_string());
+    }
+    axum::Json(json!({"content_type": "json", "insecure_ssl": "0", "secret": "********", "url": "https://hook"}))
+        .into_response()
 }
 
 async fn gh_installations(State(fake): FakeState, headers: HeaderMap) -> Response {
@@ -494,6 +516,8 @@ async fn fake_provider() -> (Arc<Fake>, String) {
         requests: Mutex::default(),
         manifest_codes: Mutex::default(),
         installations: Mutex::default(),
+        hook_secret: Mutex::default(),
+        hook_secrets_set: Mutex::default(),
         oauth_codes: Mutex::default(),
         refresh_tokens: Mutex::default(),
         issued: AtomicUsize::new(0),
@@ -504,6 +528,7 @@ async fn fake_provider() -> (Arc<Fake>, String) {
         .route("/api/v3/user", get(gh_user))
         .route("/api/v3/user/repos", get(gh_repos))
         .route("/api/v3/app-manifests/{code}/conversions", post(gh_manifest))
+        .route("/api/v3/app/hook/config", patch(gh_hook_config))
         .route("/api/v3/app/installations", get(gh_installations))
         .route("/api/v3/app/installations/{id}", get(gh_installation))
         .route("/api/v3/app/installations/{id}/access_tokens", post(gh_installation_token))
@@ -796,6 +821,8 @@ async fn github_is_authorized_by_registering_an_app_and_installing_it() {
     assert_eq!((&manifest["redirect_url"], &manifest["setup_url"]), (&json!(REDIRECT), &json!(REDIRECT)));
     assert_eq!(manifest["public"], false);
     assert_eq!(manifest["default_permissions"], json!({"contents": "read", "metadata": "read"}));
+    // A dashboard used on localhost: no webhook GitHub could deliver to.
+    assert!(manifest.get("hook_attributes").is_none() && manifest.get("default_events").is_none(), "{manifest}");
     // Nothing is stored, and GitHub wasn't asked anything yet.
     assert_eq!(app.get("/api/v1/git/connections").await.json(), json!([]));
     assert!(fake.requests().is_empty(), "{:?}", fake.requests());
@@ -867,6 +894,7 @@ async fn github_is_authorized_by_registering_an_app_and_installing_it() {
     assert_eq!((&connection["id"], &connection["status"]), (&json!(id), &json!("connected")));
     assert_eq!(connection["repository_selection"], "selected");
     assert_eq!(connection["manage_url"], "https://github.example/settings/installations/77");
+    assert_eq!(connection["push_events"], false);
     assert_eq!((&connection["token_hint"], &connection["token_expires_at"]), (&Value::Null, &Value::Null));
 
     // The app's key mints an installation token, which lists what the
@@ -915,6 +943,115 @@ async fn github_is_authorized_by_registering_an_app_and_installing_it() {
 
     // No secret ever travelled in a URL.
     assert!(fake.requests().iter().all(|r| !r.contains("ghs_") && !r.contains("eyJ")), "{:?}", fake.requests());
+}
+
+/// A `push` to `main` of `repo_url`, delivered by GitHub and signed with `secret`.
+fn push_delivery(secret: &str, repo_url: &str, after: &str) -> Request<Body> {
+    let body = serde_json::to_vec(&json!({
+        "ref": "refs/heads/main",
+        "before": "1111111111111111111111111111111111111111",
+        "after": after,
+        "deleted": false,
+        "repository": {"full_name": "octocat/app", "clone_url": repo_url},
+        "installation": {"id": 77},
+    }))
+    .unwrap();
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(&body);
+    Request::builder()
+        .method(Method::POST)
+        .uri("/hooks/github")
+        .header("content-type", "application/json")
+        .header("x-github-event", "push")
+        .header("x-hub-signature-256", format!("sha256={}", hex::encode(mac.finalize().into_bytes())))
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_github_app_registered_from_the_internet_delivers_pushes() {
+    if app_key().is_none() {
+        eprintln!("skipped: openssl is not installed");
+        return;
+    }
+    let app = TestApp::new().await;
+    let (fake, base) = fake_provider().await;
+    let repo = format!("{base}/octocat/app.git");
+    let service = app.create_service(json!({"name": "web", "repo_url": repo, "deploy": false})).await;
+    let commit = |n: u8| format!("{n:040x}");
+    // Nothing signs deliveries yet: the endpoint is off.
+    let r = app.send(push_delivery(HOOK_SECRET, &repo, &commit(1))).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text());
+
+    // The dashboard is used at an address GitHub can reach: the app asks
+    // for a webhook there, for pushes.
+    let authorize = json!({"provider": "github", "base_url": base, "redirect_uri": PUBLIC_REDIRECT});
+    let r = app.post("/api/v1/git/authorize", authorize.clone()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let step = r.json();
+    let manifest: Value = serde_json::from_str(step["fields"]["manifest"].as_str().unwrap()).unwrap();
+    assert_eq!(manifest["hook_attributes"], json!({"url": "https://ferry.example.com/hooks/github", "active": true}));
+    assert_eq!(manifest["default_events"], json!(["push"]));
+    assert_eq!(manifest["default_permissions"], json!({"contents": "read", "metadata": "read"}));
+    let register = step["url"].as_str().unwrap().to_string();
+
+    // GitHub registers the app and makes up the secret of its webhook.
+    *fake.hook_secret.lock().unwrap() = Some(HOOK_SECRET.into());
+    fake.registered("code-1", "octocat");
+    fake.installed(77, "octocat", "all");
+    let r = app.post("/api/v1/git/callback", json!({"state": state_of(&register), "code": "code-1"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let done = r.json();
+    assert_eq!((&done["status"], &done["connection"]["push_events"]), (&json!("connected"), &json!(true)), "{done}");
+    let octocat = done["connection"]["id"].as_str().unwrap().to_string();
+    // GitHub's secret is kept as it is, and never returned.
+    assert_eq!(fake.requests_to("/app/hook/config"), 0, "{:?}", fake.requests());
+    let listed = app.get("/api/v1/git/connections").await;
+    assert_eq!(listed.json()[0]["push_events"], true);
+    assert!(!listed.text().contains(HOOK_SECRET), "{}", listed.text());
+
+    // A push GitHub delivers for the app deploys the service that tracks
+    // the branch: nothing was set up on the repository, and the server has
+    // no webhook secret of its own.
+    assert_eq!(app.config.github_webhook_secret, None);
+    let r = app.send(push_delivery(HOOK_SECRET, &repo, &commit(1))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let deploys = r.json()["deploys"].as_array().unwrap().clone();
+    assert_eq!(deploys.len(), 1, "{deploys:?}");
+    assert_eq!((&deploys[0]["service_id"], &deploys[0]["trigger"]), (&service["id"], &json!("webhook")));
+    assert_eq!(deploys[0]["commit_sha"], commit(1));
+    // Signed with anything else: refused, nothing is deployed.
+    let r = app.send(push_delivery("not-the-secret-of-the-app", &repo, &commit(2))).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{}", r.text());
+    assert_eq!(app.engine.calls_with("deploy ").len(), 1);
+
+    // A GitHub that hands no secret back with the app: Ferry gives the
+    // webhook one, as the app.
+    *fake.hook_secret.lock().unwrap() = None;
+    let mut in_acme = authorize.clone();
+    in_acme["organization"] = json!("acme");
+    let register = app.post("/api/v1/git/authorize", in_acme).await.json()["url"].as_str().unwrap().to_string();
+    fake.registered("code-2", "acme");
+    fake.installed(78, "acme", "all");
+    let r = app.post("/api/v1/git/callback", json!({"state": state_of(&register), "code": "code-2"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(
+        (&r.json()["connection"]["account"], &r.json()["connection"]["push_events"]),
+        (&json!("acme"), &json!(true))
+    );
+    assert_eq!(fake.requests_to("PATCH /api/v3/app/hook/config"), 1, "{:?}", fake.requests());
+    let given = fake.hook_secrets_set.lock().unwrap().clone();
+    assert_eq!((given.len(), given[0].len()), (1, 48), "{given:?}");
+    assert!(!app.get("/api/v1/git/connections").await.text().contains(&given[0]));
+    let r = app.send(push_delivery(&given[0], &repo, &commit(3))).await;
+    assert_eq!(r.json()["deploys"].as_array().unwrap().len(), 1, "{}", r.text());
+
+    // A disconnected account's app signs nothing this server accepts.
+    let r = app.delete(&format!("/api/v1/git/connections/{octocat}?force=true")).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text());
+    let r = app.send(push_delivery(HOOK_SECRET, &repo, &commit(4))).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{}", r.text());
+    assert_eq!(app.engine.calls_with("deploy ").len(), 2);
 }
 
 #[tokio::test]
